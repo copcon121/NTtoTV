@@ -5,9 +5,8 @@ its trade volume and quote activity, and selects the maximum-scoring candidate
 as the Active_Contract (Req 10.2). A manual override pins the Active_Contract
 and disables auto-resolution (Req 10.4). The resolver never synthesizes a
 continuous contract -- ``resolve()`` always returns a member of the configured
-candidate set (Req 10.5). ``needed_contracts()`` reports the set of contracts
-that require data and drives subscribe/unsubscribe Control_Commands (Req 4.6),
-which are wired in task 9.3.
+candidate set (Req 10.5). ``needed_contracts()`` reports the single active
+source contract that should be subscribed over the control plane (Req 4.6).
 
 Scoring (see the design's "Contract Resolution Scoring" section):
 
@@ -256,11 +255,9 @@ class ContractResolver:
     def needed_contracts(self) -> set[str]:
         """Set of contracts requiring data; drives Control_Commands. (Req 4.6)
 
-        In v1 all candidates remain subscribed so the resolver keeps receiving
-        per-candidate activity, and the Active_Contract (always a candidate) is
-        charted. The needed set is therefore the full candidate set. The wiring
-        that turns changes in this set into subscribe/unsubscribe commands is
-        task 9.3.
+        The frontend now charts the stable logical contract (``GC``), so keeping
+        every candidate subscribed would merge multiple source contracts into
+        one chart. Only the currently resolved source contract is needed.
         """
 
-        return set(self._candidate_set)
+        return {self.resolve()}

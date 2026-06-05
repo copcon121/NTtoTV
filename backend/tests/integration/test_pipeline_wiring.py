@@ -4,11 +4,11 @@ Covers the ingest -> engines -> registry -> frontend pipeline assembled by
 :class:`~app.pipeline.Pipeline` and the live `/ws/nt` + `/ws/chart` transport:
 
 * `/ws/nt` accept + receive of trade frames (Req 4.1);
-* an accepted Active_Contract trade drives the Bar_Aggregator, VolumeDelta,
+* an accepted NT trade drives the Bar_Aggregator, VolumeDelta,
   Footprint, and BigTrade engines, persists their outputs to the Cache_Store,
   and enqueues `/ws/chart` events on the registry (Req 9.3, 20.1);
 * raw ticks are recorded to the Tick_Store on ingestion (Req 4.5);
-* NT startup subscribes to all candidate contracts via Control_Commands (Req 1.5);
+* NT startup subscribes to the active source contract via Control_Commands (Req 1.5);
 * an NT status frame is forwarded to subscribed clients (Req 20.1, 20.3).
 """
 
@@ -45,6 +45,7 @@ def pipeline_env(tmp_path):
     cache = CacheStore(tmp_path / "app.sqlite")
     tick_store = TickStore(tmp_path / "ticks")
     resolver = ContractResolver(_CANDIDATES)
+    resolver.set_manual_override(_ACTIVE)
     registry = WebSocketRegistry()
     # Capture outbound events instead of flushing through a socket.
     captured: list[OutboundEvent] = []
@@ -83,8 +84,6 @@ def test_accepted_trade_runs_engines_persists_and_streams(pipeline_env):
     pipeline, cache, tick_store, resolver, captured = pipeline_env
 
     async def run():
-        # Force the active contract so engines fire deterministically.
-        resolver.set_manual_override(_ACTIVE)
         await pipeline.on_trade(_trade(_BASE + 1_000, 2345.0, 40, seq=0, ask=2345.0))
         await pipeline.on_trade(_trade(_BASE + 2_000, 2345.1, 5, seq=1, ask=2345.1))
 
@@ -94,21 +93,32 @@ def test_accepted_trade_runs_engines_persists_and_streams(pipeline_env):
     ticks = list(tick_store.read_range(_ACTIVE, _BASE, _BASE + 60_000))
     assert len(ticks) == 2
 
-    # Bars persisted to the Cache_Store. (Req 9.3)
+    # Chart cache is keyed by the logical GC contract. Raw ticks retain the
+    # original NT source contract, but derived history is contractless for UI.
     bars = cache.read_bars(_SYMBOL, _ACTIVE, "1m", None, None, 10)
-    assert bars and bars[-1].volume == 45
+    assert bars == []
+    chart_bars = cache.read_bars(_SYMBOL, _SYMBOL, "1m", None, None, 10)
+    assert chart_bars and chart_bars[-1].volume == 45
 
     # VolumeDelta + footprint persisted.
     vd = cache.read_volume_delta(_SYMBOL, _ACTIVE, "1m", None, None, 10)
-    assert vd and vd[-1].volume == 45
+    assert vd == []
+    chart_vd = cache.read_volume_delta(_SYMBOL, _SYMBOL, "1m", None, None, 10)
+    assert chart_vd and chart_vd[-1].volume == 45
     fp = cache.read_footprint_bars(_SYMBOL, _ACTIVE, "1m", None, None, 10)
-    assert fp
+    assert fp == []
+    chart_fp = cache.read_footprint_bars(_SYMBOL, _SYMBOL, "1m", None, None, 10)
+    assert chart_fp
 
     # Outbound events enqueued for /ws/chart, including bar + order-flow types.
     types = {e.event_type for e in captured}
     assert EventType.BAR_UPDATE in types
     assert EventType.VOLUME_DELTA_UPDATE in types
     assert EventType.FOOTPRINT_UPDATE in types
+    assert any(
+        e.event_type == EventType.BAR_UPDATE and e.payload["contract"] == _SYMBOL
+        for e in captured
+    )
 
 
 @pytest.mark.integration
@@ -116,7 +126,6 @@ def test_big_trade_emitted_after_merge_and_filter(pipeline_env):
     pipeline, cache, tick_store, resolver, captured = pipeline_env
 
     async def run():
-        resolver.set_manual_override(_ACTIVE)
         # Two same-(time,side) buys merge to 35 >= MinVolume 30 -> emit on flush
         # when a later timestamp arrives.
         await pipeline.on_trade(_trade(_BASE + 1_000, 2345.0, 20, seq=0, ask=2345.0))
@@ -126,8 +135,56 @@ def test_big_trade_emitted_after_merge_and_filter(pipeline_env):
     asyncio.run(run())
 
     big = cache.read_big_trades(_SYMBOL, _ACTIVE, None, None, 10)
-    assert big and big[0].volume == 35
+    assert big == []
+    chart_big = cache.read_big_trades(_SYMBOL, _SYMBOL, None, None, 10)
+    assert chart_big and chart_big[0].volume == 35
     assert any(e.event_type == EventType.BIG_TRADE for e in captured)
+
+
+@pytest.mark.integration
+def test_parallel_source_contract_is_recorded_but_not_charted(pipeline_env):
+    pipeline, cache, tick_store, resolver, captured = pipeline_env
+
+    async def run():
+        await pipeline.on_trade(_trade(_BASE + 1_000, 2345.0, 10, seq=0))
+        await pipeline.on_trade(
+            _trade(_BASE + 2_000, 2346.0, 15, seq=0, contract="GC 10-26")
+        )
+
+    asyncio.run(run())
+
+    assert len(list(tick_store.read_range(_ACTIVE, _BASE, _BASE + 60_000))) == 1
+    assert len(list(tick_store.read_range("GC 10-26", _BASE, _BASE + 60_000))) == 1
+    chart_bars = cache.read_bars(_SYMBOL, _SYMBOL, "1m", None, None, 10)
+    assert chart_bars and chart_bars[-1].volume == 10
+    assert all(
+        event.payload.get("contract") == _SYMBOL
+        for event in captured
+        if event.event_type in {
+            EventType.BAR_UPDATE,
+            EventType.VOLUME_DELTA_UPDATE,
+            EventType.FOOTPRINT_UPDATE,
+            EventType.BIG_TRADE,
+        }
+    )
+
+
+@pytest.mark.integration
+def test_source_contract_switch_after_active_source_goes_quiet(pipeline_env):
+    pipeline, cache, tick_store, resolver, captured = pipeline_env
+
+    async def run():
+        await pipeline.on_trade(_trade(_BASE + 1_000, 2345.0, 10, seq=0))
+        await pipeline.on_trade(
+            _trade(_BASE + 20_000, 2346.0, 15, seq=0, contract="GC 10-26")
+        )
+
+    asyncio.run(run())
+
+    assert len(list(tick_store.read_range(_ACTIVE, _BASE, _BASE + 60_000))) == 1
+    assert len(list(tick_store.read_range("GC 10-26", _BASE, _BASE + 60_000))) == 1
+    chart_bars = cache.read_bars(_SYMBOL, _SYMBOL, "1m", None, None, 10)
+    assert chart_bars and chart_bars[-1].volume == 25
 
 
 @pytest.mark.integration
@@ -154,6 +211,7 @@ def test_backend_sends_alert_text_when_no_chart_client(tmp_path):
     cache = CacheStore(tmp_path / "app.sqlite")
     tick_store = TickStore(tmp_path / "ticks")
     resolver = ContractResolver(_CANDIDATES)
+    resolver.set_manual_override(_ACTIVE)
     registry = WebSocketRegistry()
     captured: list[OutboundEvent] = []
     sent = []
@@ -177,7 +235,6 @@ def test_backend_sends_alert_text_when_no_chart_client(tmp_path):
         )
 
         async def run():
-            resolver.set_manual_override(_ACTIVE)
             await pipeline.on_trade(_trade(_BASE + 1_000, 99.0, 1, seq=0))
             await pipeline.on_trade(_trade(_BASE + 2_000, 101.0, 1, seq=1))
 
@@ -195,6 +252,7 @@ def test_backend_skips_alert_text_fallback_when_chart_client_connected(tmp_path)
     cache = CacheStore(tmp_path / "app.sqlite")
     tick_store = TickStore(tmp_path / "ticks")
     resolver = ContractResolver(_CANDIDATES)
+    resolver.set_manual_override(_ACTIVE)
     registry = WebSocketRegistry()
     captured: list[OutboundEvent] = []
     sent = []
@@ -219,7 +277,6 @@ def test_backend_skips_alert_text_fallback_when_chart_client_connected(tmp_path)
 
         async def run():
             await registry.register(ChartClient("chart-1", lambda _payload: None))
-            resolver.set_manual_override(_ACTIVE)
             await pipeline.on_trade(_trade(_BASE + 1_000, 99.0, 1, seq=0))
             await pipeline.on_trade(_trade(_BASE + 2_000, 101.0, 1, seq=1))
 
@@ -233,16 +290,16 @@ def test_backend_skips_alert_text_fallback_when_chart_client_connected(tmp_path)
 
 
 @pytest.mark.integration
-def test_control_plane_subscribes_all_candidates_on_first_sync(pipeline_env):
+def test_control_plane_subscribes_active_contract_on_first_sync(pipeline_env):
     pipeline, cache, tick_store, resolver, captured = pipeline_env
     sent: list[ControlCommand] = []
 
     async def run():
         cp = ControlPlaneCoordinator(sent.append)
         pipeline.set_control_plane(cp)
-        # First observe seeds activity; the control plane diffs {} -> all candidates.
+        # First observe seeds activity; the control plane diffs {} -> active.
         await pipeline.on_trade(_trade(_BASE + 1_000, 2345.0, 5, seq=0))
 
     asyncio.run(run())
     subscribed = {c.contract for c in sent if c.action is ControlAction.SUBSCRIBE}
-    assert subscribed == set(_CANDIDATES)
+    assert subscribed == {_ACTIVE}

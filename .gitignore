@@ -47,6 +47,7 @@ _data_backups/
 *.db-shm
 
 # Logs and ad-hoc run outputs
+_import_logs/
 *.log
 *_out.txt
 nt_test_out.txt

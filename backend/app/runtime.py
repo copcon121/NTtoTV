@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from .config import Settings
 from .config import settings as default_settings
@@ -68,6 +69,8 @@ class AppRuntime:
         self._contract_state = ContractStateStore(
             self._cache, settings=s, resolver=self._resolver
         )
+        if resolver is None and s.gc_candidate_contracts:
+            self._contract_state.set_active(self._symbol, s.gc_candidate_contracts[-1])
         # The pipeline; control plane is bound per /ws/nt connection so its
         # send_control targets the live socket.
         self._pipeline = Pipeline(
@@ -79,6 +82,7 @@ class AppRuntime:
         )
         self._flush_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._retention_task: asyncio.Task[None] | None = None
 
     # -- accessors -------------------------------------------------------------
 
@@ -129,10 +133,12 @@ class AppRuntime:
             self._flush_task = asyncio.create_task(self._registry.flush_loop())
         if self._heartbeat_task is None:
             self._heartbeat_task = asyncio.create_task(self._registry.heartbeat_loop())
+        if self._retention_task is None:
+            self._retention_task = asyncio.create_task(self._retention_loop())
 
     async def stop(self) -> None:
         """Cancel the background loops and close the stores."""
-        for task in (self._flush_task, self._heartbeat_task):
+        for task in (self._flush_task, self._heartbeat_task, self._retention_task):
             if task is not None:
                 task.cancel()
                 try:
@@ -141,7 +147,26 @@ class AppRuntime:
                     pass
         self._flush_task = None
         self._heartbeat_task = None
+        self._retention_task = None
         try:
             self._tick_store.close()
         finally:
             self._cache.close()
+
+    async def _retention_loop(self) -> None:
+        """Keep raw tick shards within the configured calendar-day retention."""
+        while True:
+            try:
+                await self._purge_expired_ticks()
+            except Exception as exc:
+                logger.warning("raw tick retention purge failed: %s", exc)
+            await asyncio.sleep(60 * 60)
+
+    async def _purge_expired_ticks(self) -> None:
+        removed = await asyncio.to_thread(
+            self._tick_store.purge_expired,
+            datetime.now(timezone.utc),
+            self._settings.tick_retention_days,
+        )
+        if removed:
+            logger.info("purged %s expired raw tick shards", len(removed))

@@ -8,7 +8,7 @@ namespace NtAddOn.Tests.Streaming
     /// <summary>
     /// Example/edge-case unit tests for the <see cref="ControlPlane"/> coordinator
     /// (task 4.10). Exercises the three responsibilities together: start-up
-    /// subscription to all Candidate_Contracts (Req 1.5), raw inbound
+    /// subscription to the active Candidate_Contract (Req 1.5), raw inbound
     /// Control_Command handling (Req 1.7, 1.8), and status emission (Req 3.4,
     /// 20.1).
     /// </summary>
@@ -18,15 +18,30 @@ namespace NtAddOn.Tests.Streaming
             new AddOnConfig(candidates);
 
         [Fact]
-        public void Start_SubscribesToAllConfiguredCandidates()
+        public void Start_SubscribesOnlyFirstConfiguredCandidate()
         {
             var subscriber = new RecordingContractSubscriber();
             var plane = new ControlPlane(subscriber, () => 1000L);
 
             var added = plane.Start(Config("GC 08-26", "GC 10-26", "GC 12-26"));
 
-            Assert.Equal(new[] { "GC 08-26", "GC 10-26", "GC 12-26" }, added);
-            Assert.Equal(new[] { "GC 08-26", "GC 10-26", "GC 12-26" }, plane.ActiveContracts);
+            Assert.Equal(new[] { "GC 08-26" }, added);
+            Assert.Equal(new[] { "GC 08-26" }, plane.ActiveContracts);
+        }
+
+        [Fact]
+        public void Start_UsesManualOverrideWhenConfigured()
+        {
+            var subscriber = new RecordingContractSubscriber();
+            var plane = new ControlPlane(subscriber, () => 1000L);
+
+            var added = plane.Start(
+                new AddOnConfig(
+                    new[] { "GC 08-26", "GC 10-26", "GC 12-26" },
+                    manualContractOverride: "GC 10-26"));
+
+            Assert.Equal(new[] { "GC 10-26" }, added);
+            Assert.Equal(new[] { "GC 10-26" }, plane.ActiveContracts);
         }
 
         [Fact]

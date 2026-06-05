@@ -24,7 +24,8 @@
 //     "backendPort": 8000,
 //     "backendPath": "/ws/nt",
 //     "outboundQueueCapacity": 200000,
-//     "dropOnOverflow": false
+//     "dropOnOverflow": false,
+//     "manualContractOverride": null
 //   }
 // When absent, the defaults below are used. EDIT the contract months to match
 // the GC contracts your data feed actually provides.
@@ -115,6 +116,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
         public string BackendPath = "/ws/nt";
         public int OutboundQueueCapacity = 20000;
         public bool DropOnOverflow = true;
+        public string ManualContractOverride = null;
 
         public Uri BuildUri()
         {
@@ -168,6 +170,10 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             bool drop;
             if (ExtractBool(json, "dropOnOverflow", out drop))
                 DropOnOverflow = drop;
+
+            string manual = ExtractString(json, "manualContractOverride");
+            if (!string.IsNullOrEmpty(manual))
+                ManualContractOverride = manual;
         }
 
         private static string ExtractString(string json, string key)
@@ -311,17 +317,19 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             };
             Connection.ConnectionStatusUpdate += connStatusHandler;
 
-            for (int i = 0; i < config.CandidateContracts.Count; i++)
-                Subscribe(config.CandidateContracts[i]);
+            string sourceContract = InitialContract();
+            if (!string.IsNullOrEmpty(sourceContract))
+                Subscribe(sourceContract);
 
-            log("started; forwarding " + string.Join(", ", config.CandidateContracts.ToArray()) +
+            log("started; forwarding " + sourceContract +
                 " to " + backendUri +
+                "; candidates=" + string.Join(", ", config.CandidateContracts.ToArray()) +
                 "; queueCapacity=" + config.OutboundQueueCapacity.ToString(CultureInfo.InvariantCulture) +
                 "; dropOnOverflow=" + config.DropOnOverflow.ToString());
         }
 
-        // Re-subscribe all contracts when a data connection (re)connects, so
-        // pause/resume of Playback (or a feed reconnect) keeps ticks flowing.
+        // Re-subscribe the active source when a data connection (re)connects,
+        // so pause/resume of Playback (or a feed reconnect) keeps ticks flowing.
         private void OnConnectionStatus(ConnectionStatusEventArgs e)
         {
             try
@@ -337,8 +345,8 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                     e.PreviousStatus == ConnectionStatus.Connected;
                 if (nowConnected && !wasConnected)
                 {
-                    log("data connection (re)connected -> re-subscribing contracts");
-                    ResubscribeAll();
+                    log("data connection (re)connected -> re-subscribing active source");
+                    ResubscribeActive();
                 }
             }
             catch (Exception ex)
@@ -347,19 +355,36 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             }
         }
 
-        private void ResubscribeAll()
+        private void ResubscribeActive()
         {
-            List<string> contracts;
+            List<string> contracts = new List<string>();
             lock (subGate)
             {
+                foreach (string key in subs.Keys)
+                    contracts.Add(key);
                 // Tear down stale requests so we don't leak or double-deliver.
                 foreach (Sub sub in subs.Values)
                     Detach(sub);
                 subs.Clear();
             }
-            contracts = config.CandidateContracts;
+            if (contracts.Count == 0)
+            {
+                string sourceContract = InitialContract();
+                if (!string.IsNullOrEmpty(sourceContract))
+                    contracts.Add(sourceContract);
+            }
             for (int i = 0; i < contracts.Count; i++)
                 Subscribe(contracts[i]);
+        }
+
+        private string InitialContract()
+        {
+            if (!string.IsNullOrEmpty(config.ManualContractOverride) &&
+                config.ManualContractOverride.Trim().Length > 0)
+                return config.ManualContractOverride.Trim();
+            if (config.CandidateContracts.Count > 0)
+                return config.CandidateContracts[0];
+            return null;
         }
 
         // Keep the /ws/nt connection alive through quiet/sparse playback gaps so

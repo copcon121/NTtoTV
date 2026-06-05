@@ -86,6 +86,21 @@ class ImportSummary:
     rebuilt_big_trades: int = 0
 
 
+@dataclass(slots=True)
+class DerivedImportSummary:
+    """Result of importing lightweight cache rows from NT Last exports only."""
+
+    symbol: str
+    contract: str
+    source_contract: str
+    range_from: int | None
+    range_to: int | None
+    trades: int = 0
+    bars: int = 0
+    volume_deltas: int = 0
+    dry_run: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class _QuoteSideEvent:
     time: int
@@ -293,6 +308,128 @@ def import_nt_export_gap(
             cache.close()
 
 
+def import_nt_export_derived_cache(
+    *,
+    last_paths: list[Path | str],
+    contract: str,
+    symbol: str = SYMBOL,
+    output_contract: str | None = None,
+    cache_db_path: Path | str,
+    frm: int | None = None,
+    to: int | None = None,
+    export_tz: tzinfo = timezone.utc,
+    dry_run: bool = False,
+    chunk_size: int = 10_000,
+    clear_derived_range: bool = False,
+) -> DerivedImportSummary:
+    """Build lightweight OHLCV + volume-delta cache rows from Last exports.
+
+    This path intentionally does not write raw ticks or quote snapshots. It is
+    for deep history where chart candles and delta are useful, but full
+    bid/ask tick replay would be too large and slow.
+    """
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be > 0")
+
+    cache_contract = output_contract or symbol
+    summary = DerivedImportSummary(
+        symbol=symbol,
+        contract=cache_contract,
+        source_contract=contract,
+        range_from=frm,
+        range_to=to,
+        dry_run=dry_run,
+    )
+    bar_engine = BarAggregator()
+    vd_engines = {tf: VolumeDeltaEngine(timeframe=tf) for tf in SUPPORTED_TFS}
+    bars: dict[tuple[str, int], BarRecord] = {}
+    volume_deltas: dict[tuple[str, int], VolumeDeltaRecord] = {}
+
+    sorted_paths = sorted(
+        (Path(path) for path in last_paths),
+        key=lambda path: _first_nt_trade_time(path, export_tz),
+    )
+    for path in sorted_paths:
+        for trade in iter_last_trades(path, symbol, contract, export_tz, frm, to):
+            summary.trades += 1
+            _include_summary_time(summary, trade.time, frm, to)
+
+            for update in bar_engine.on_trade(trade):
+                bars[(update.tf, update.bar.time)] = BarRecord(
+                    symbol=update.symbol,
+                    contract=cache_contract,
+                    timeframe=update.tf,
+                    time=update.bar.time,
+                    open=update.bar.open,
+                    high=update.bar.high,
+                    low=update.bar.low,
+                    close=update.bar.close,
+                    volume=update.bar.volume,
+                    closed=update.closed,
+                )
+            for tf, engine in vd_engines.items():
+                update = engine.on_trade(trade)
+                if update is None:
+                    continue
+                volume_deltas[(tf, update.time)] = VolumeDeltaRecord(
+                    symbol=update.symbol,
+                    contract=cache_contract,
+                    timeframe=update.tf,
+                    time=update.time,
+                    volume=update.volume,
+                    buy_volume=update.buy_volume,
+                    sell_volume=update.sell_volume,
+                    delta=update.delta,
+                    delta_high=update.delta_high,
+                    delta_low=update.delta_low,
+                    open_delta=update.open_delta,
+                    close_delta=update.close_delta,
+                )
+
+    # Historical import files are complete ranges; mark the final in-progress
+    # buckets closed so cache reads do not expose stale "open" bars.
+    for key, rec in list(bars.items()):
+        bars[key] = BarRecord(
+            symbol=rec.symbol,
+            contract=rec.contract,
+            timeframe=rec.timeframe,
+            time=rec.time,
+            open=rec.open,
+            high=rec.high,
+            low=rec.low,
+            close=rec.close,
+            volume=rec.volume,
+            closed=True,
+        )
+
+    summary.bars = len(bars)
+    summary.volume_deltas = len(volume_deltas)
+    if dry_run:
+        return summary
+
+    cache = CacheStore(cache_db_path)
+    try:
+        if (
+            clear_derived_range
+            and summary.range_from is not None
+            and summary.range_to is not None
+        ):
+            clear_bar_delta_cache(
+                cache,
+                symbol,
+                cache_contract,
+                summary.range_from,
+                summary.range_to,
+            )
+        for batch in _batched(_sorted_records(bars.values()), chunk_size):
+            cache.upsert_bars(batch)
+        for batch in _batched(_sorted_records(volume_deltas.values()), chunk_size):
+            cache.upsert_volume_deltas(batch)
+    finally:
+        cache.close()
+    return summary
+
+
 def _stream_export_records(
     *,
     paths: NtExportPaths,
@@ -345,6 +482,18 @@ def _include_stream_time(
         stats.range_from = ts if stats.range_from is None else min(stats.range_from, ts)
     if to is None:
         stats.range_to = ts if stats.range_to is None else max(stats.range_to, ts)
+
+
+def _include_summary_time(
+    summary: DerivedImportSummary,
+    ts: int,
+    frm: int | None,
+    to: int | None,
+) -> None:
+    if frm is None:
+        summary.range_from = ts if summary.range_from is None else min(summary.range_from, ts)
+    if to is None:
+        summary.range_to = ts if summary.range_to is None else max(summary.range_to, ts)
 
 
 def _apply_stream_stats(summary: ImportSummary, stats: _StreamStats) -> None:
@@ -688,6 +837,26 @@ def clear_derived_cache(
     cache.writer.write(op)
 
 
+def clear_bar_delta_cache(
+    cache: CacheStore,
+    symbol: str,
+    contract: str,
+    frm: int,
+    to: int,
+) -> None:
+    """Delete only lightweight chart rows in a range before Last-only import."""
+
+    def op(conn) -> None:
+        for table in ("bars", "orderflow_volume_delta"):
+            conn.execute(
+                f"DELETE FROM {table} "
+                "WHERE symbol = ? AND contract = ? AND time BETWEEN ? AND ?",
+                (symbol, contract, int(frm), int(to)),
+            )
+
+    cache.writer.write(op)
+
+
 def _trades_with_prevailing_quote(
     tick_store: TickStore,
     contract: str,
@@ -749,6 +918,30 @@ def _parse_required_int(value: str, path: Path, line_no: int, field: str) -> int
     return int(float(text))
 
 
+def _first_nt_trade_time(path: Path, export_tz: tzinfo) -> int:
+    with path.open("r", encoding="utf-8-sig") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            cols = line.split(";")
+            if not cols:
+                continue
+            return parse_nt_timestamp(cols[0], export_tz)
+    return 2**63 - 1
+
+
+def _batched(records, size: int):
+    batch = []
+    for rec in records:
+        batch.append(rec)
+        if len(batch) >= size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
 def _big_trade_record(bt) -> BigTradeRecord:
     return BigTradeRecord(
         symbol=bt.symbol,
@@ -795,6 +988,20 @@ def _print_summary(summary: ImportSummary) -> None:
         )
 
 
+def _print_derived_summary(summary: DerivedImportSummary) -> None:
+    def ts(value: int | None) -> str:
+        return "n/a" if value is None else from_canonical_ms(value).isoformat()
+
+    print(f"symbol={summary.symbol} contract={summary.contract} mode=derived-cache")
+    if summary.source_contract != summary.contract:
+        print(f"source_contract={summary.source_contract}")
+    print(f"dry_run={summary.dry_run}")
+    print(f"range_from={summary.range_from} ({ts(summary.range_from)})")
+    print(f"range_to={summary.range_to} ({ts(summary.range_to)})")
+    print(f"parsed_trades={summary.trades}")
+    print(f"cached={summary.bars} bars/{summary.volume_deltas} volume_delta")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Import NinjaTrader Last/Bid/Ask exports")
     parser.add_argument("--contract", required=True, help="Contract, e.g. 'GC 08-26'")
@@ -802,6 +1009,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--last", type=Path, help="Path to *.Last.txt")
     parser.add_argument("--bid", type=Path, help="Path to *.Bid.txt")
     parser.add_argument("--ask", type=Path, help="Path to *.Ask.txt")
+    parser.add_argument(
+        "--source-dir",
+        type=Path,
+        help="Folder of *.Last.txt files for --derived-only imports",
+    )
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--ticks-dir", type=Path)
     parser.add_argument("--cache-db", type=Path)
@@ -816,6 +1028,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--chunk-size", type=int, default=100_000)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-rebuild", action="store_true")
+    parser.add_argument(
+        "--derived-only",
+        action="store_true",
+        help="read Last exports and write only bars/volume-delta cache rows",
+    )
+    parser.add_argument(
+        "--output-contract",
+        help="Cache contract for --derived-only rows; defaults to the chart alias symbol",
+    )
+    parser.add_argument(
+        "--clear-derived-range",
+        action="store_true",
+        help="With --derived-only, delete existing bars/volume-delta in the imported range first",
+    )
     args = parser.parse_args(argv)
 
     export_tz = parse_utc_offset(args.utc_offset)
@@ -824,8 +1050,33 @@ def main(argv: list[str] | None = None) -> int:
     if frm is not None and to is not None and frm > to:
         parser.error("--from must be <= --to")
 
-    ticks_dir = args.ticks_dir if args.ticks_dir is not None else args.data_dir / "ticks"
     cache_db = args.cache_db if args.cache_db is not None else args.data_dir / "app.sqlite"
+    if args.derived_only:
+        if args.source_dir is not None:
+            last_paths = sorted(args.source_dir.glob("*.Last.txt"))
+        elif args.last is not None:
+            last_paths = [args.last]
+        else:
+            parser.error("--last or --source-dir is required with --derived-only")
+        if not last_paths:
+            parser.error("no *.Last.txt files found for --derived-only")
+        summary = import_nt_export_derived_cache(
+            last_paths=last_paths,
+            symbol=args.symbol,
+            contract=args.contract,
+            output_contract=args.output_contract,
+            cache_db_path=cache_db,
+            frm=frm,
+            to=to,
+            export_tz=export_tz,
+            dry_run=args.dry_run,
+            chunk_size=args.chunk_size,
+            clear_derived_range=args.clear_derived_range,
+        )
+        _print_derived_summary(summary)
+        return 0
+
+    ticks_dir = args.ticks_dir if args.ticks_dir is not None else args.data_dir / "ticks"
     summary = import_nt_export_gap(
         paths=NtExportPaths(last=args.last, bid=args.bid, ask=args.ask),
         symbol=args.symbol,

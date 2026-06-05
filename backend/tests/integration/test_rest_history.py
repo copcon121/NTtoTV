@@ -236,6 +236,36 @@ def test_history_explicit_contract_is_echoed(env):
 
 
 @pytest.mark.integration
+def test_history_chart_contract_alias_is_accepted(env):
+    client, cache, _ = env
+    cache.upsert_bar(
+        BarRecord(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            timeframe="1m",
+            time=_BASE_MS,
+            open=1.0,
+            high=2.0,
+            low=1.0,
+            close=2.0,
+            volume=10,
+            closed=True,
+        )
+    )
+
+    resp = client.get(
+        "/api/history",
+        params={"symbol": "GC", "tf": "1m", "contract": "GC"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["contract"] == "GC"
+    assert body["source"] == "cache"
+    assert body["bars"][0]["close"] == 2.0
+
+
+@pytest.mark.integration
 def test_history_unknown_symbol_is_404(env):
     client, _, _ = env
     resp = client.get("/api/history", params={"symbol": "ZZ", "tf": "1m"})

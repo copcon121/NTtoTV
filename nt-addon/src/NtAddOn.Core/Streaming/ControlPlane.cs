@@ -8,7 +8,7 @@ namespace NtAddOn.Core.Streaming
     /// The NT_AddOn control plane (task 4.10): the single platform-agnostic
     /// coordinator that the background worker's <c>/ws/nt</c> receive loop and
     /// the AddOn start path drive. It ties together the start-up subscription to
-    /// all Candidate_Contracts (Req 1.5), inbound Control_Command handling
+    /// the active Candidate_Contract (Req 1.5), inbound Control_Command handling
     /// (Req 1.7, 1.8), and connection-status emission (Req 3.4, 20.1) behind one
     /// surface so the transport layer (sender worker — task 4.7; reconnect loop —
     /// task 4.8) stays decoupled from the subscription/status semantics.
@@ -82,8 +82,9 @@ namespace NtAddOn.Core.Streaming
 
         /// <summary>
         /// Start-up subscription (Req 1.5): subscribes to the Level 1 trade and
-        /// quote feeds of every configured Candidate_Contract. Returns the
-        /// contracts that were newly subscribed.
+        /// quote feeds of the manual override when present, otherwise the first
+        /// configured Candidate_Contract. Returns the contract that was newly
+        /// subscribed.
         /// </summary>
         public IReadOnlyList<string> Start(AddOnConfig config)
         {
@@ -92,7 +93,13 @@ namespace NtAddOn.Core.Streaming
                 throw new ArgumentNullException(nameof(config));
             }
 
-            return _subscriptions.SubscribeToAll(config.CandidateContracts);
+            var sourceContract = config.HasManualOverride
+                ? config.ManualContractOverride!
+                : config.CandidateContracts[0];
+
+            return _subscriptions.Subscribe(sourceContract)
+                ? new[] { sourceContract }
+                : Array.Empty<string>();
         }
 
         /// <summary>

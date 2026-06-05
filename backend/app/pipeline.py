@@ -79,11 +79,94 @@ __all__ = ["Pipeline"]
 # OHLCV the footprint/volume-delta alerts pair against. v1 uses 1m (the
 # footprint timeframe) so all per-bar order-flow alerts share a clock.
 _ALERT_BAR_TF = FOOTPRINT_TIMEFRAME
+_SOURCE_SWITCH_QUIET_MS = 15_000
 
 
 async def _maybe_await(result: Awaitable[None] | None) -> None:
     if inspect.isawaitable(result):
         await result
+
+
+def _trade_for_contract(trade: NormalizedTrade, contract: str) -> NormalizedTrade:
+    return NormalizedTrade(
+        symbol=trade.symbol,
+        contract=contract,
+        time=trade.time,
+        price=trade.price,
+        volume=trade.volume,
+        bid=trade.bid,
+        ask=trade.ask,
+        best_bid=trade.best_bid,
+        best_ask=trade.best_ask,
+        sequence=trade.sequence,
+    )
+
+
+def _bar_update_for_contract(update: BarUpdate, contract: str) -> BarUpdate:
+    return BarUpdate(
+        symbol=update.symbol,
+        contract=contract,
+        tf=update.tf,
+        bar=update.bar,
+        closed=update.closed,
+    )
+
+
+def _volume_delta_update_for_contract(
+    update: VolumeDeltaUpdate, contract: str
+) -> VolumeDeltaUpdate:
+    return VolumeDeltaUpdate(
+        symbol=update.symbol,
+        contract=contract,
+        tf=update.tf,
+        time=update.time,
+        volume=update.volume,
+        buy_volume=update.buy_volume,
+        sell_volume=update.sell_volume,
+        delta=update.delta,
+        delta_high=update.delta_high,
+        delta_low=update.delta_low,
+        open_delta=update.open_delta,
+        close_delta=update.close_delta,
+        cumulative_delta=update.cumulative_delta,
+    )
+
+
+def _footprint_update_for_contract(
+    update: FootprintUpdate, contract: str
+) -> FootprintUpdate:
+    return FootprintUpdate(
+        symbol=update.symbol,
+        contract=contract,
+        tf=update.tf,
+        time=update.time,
+        rows=update.rows,
+        poc=update.poc,
+        bar_delta=update.bar_delta,
+        buy_pct=update.buy_pct,
+        sell_pct=update.sell_pct,
+        stacked_imbalance=update.stacked_imbalance,
+        unfinished_auction=update.unfinished_auction,
+        open=update.open,
+        high=update.high,
+        low=update.low,
+        close=update.close,
+        poc_volume=update.poc_volume,
+        vah=update.vah,
+        val=update.val,
+    )
+
+
+def _big_trade_for_contract(bt: BigTrade, contract: str) -> BigTrade:
+    return BigTrade(
+        symbol=bt.symbol,
+        contract=contract,
+        trade_id=bt.trade_id,
+        time=bt.time,
+        price=bt.price,
+        volume=bt.volume,
+        side=bt.side,
+    )
 
 
 AlertTextSender = Callable[[AlertEvent], Awaitable[None] | None]
@@ -157,6 +240,10 @@ class Pipeline:
         # for that contract so replayed data re-aggregates instead of being
         # dropped as out-of-order.
         self._last_trade_ms: dict[str, int] = {}
+        self._chart_source_contract: str | None = self._initial_source_contract()
+        self._chart_source_last_trade_ms: int | None = None
+        if self._chart_source_contract is not None:
+            self._pin_resolver_source(self._chart_source_contract)
         # Prevailing best bid/ask per contract from the most recent quote. NT's
         # 1-tick BarsRequest cannot attach same-print bid/ask to a trade, so we
         # backfill each trade from the prevailing quote and classify against the
@@ -201,19 +288,10 @@ class Pipeline:
         """Validate, record, run engines, and stream outputs for a trade.
 
         Tick recording + degraded-status happen in the coordinator (before
-        throttling). Engines run only for accepted trades on the Active_Contract,
-        and their outputs are persisted and enqueued onto the registry. (Req 4.5,
-        9.3, 20.1)
+        throttling). Accepted trades are normalized into the logical chart
+        contract (`GC`) before they enter the engines, so changing the NT
+        source contract does not stop the frontend stream. (Req 4.5, 9.3, 20.1)
         """
-        # Playback rewind detection: if this contract's time jumps backward by
-        # more than a bar, reset engine + validator state so the replayed stream
-        # re-aggregates from the earlier time instead of being dropped as
-        # out-of-order. (Live NT feeds never go backward; only Playback rewind.)
-        last = self._last_trade_ms.get(trade.contract)
-        if last is not None and trade.time < last - 60_000:
-            self._reset_contract(trade.contract)
-        self._last_trade_ms[trade.contract] = trade.time
-
         # Backfill the trade's bid/ask from the prevailing quote when NT did not
         # attach a same-print snapshot. VolumeDelta can then classify against
         # the book before its tick-rule fallback, while Footprint mirrors
@@ -235,18 +313,33 @@ class Pipeline:
         if not decision.accepted:
             return
 
-        # Feed resolver activity for every accepted trade (all candidates), then
-        # reconcile the control plane. (Req 10.2, 4.6)
-        self._resolver.observe(
-            trade.contract, trade_volume=trade.volume, quote_events=0, ts_ms=trade.time
-        )
-        await self._sync_control_plane()
-
-        # Engines chart only the Active_Contract. (Req 9.1, 13.1, 14.1, 15.1)
-        if trade.contract != self._active_contract():
+        if not self._should_chart_source_trade(trade.contract, trade.time):
             return
 
-        await self._run_trade_engines(trade)
+        # Playback rewind detection: if the chart source's time jumps backward
+        # by more than a bar, reset engine + validator state so replayed data
+        # re-aggregates instead of being dropped as out-of-order.
+        chart_contract = self._chart_contract()
+        last = self._last_trade_ms.get(chart_contract)
+        if last is not None and trade.time < last - 60_000:
+            self._reset_contract(trade.contract)
+        self._last_trade_ms[chart_contract] = trade.time
+
+        # Feed resolver activity when the source is configured. If NT is
+        # manually pointed at a contract outside the backend candidate list, keep
+        # charting/recording it instead of failing the ingest handler.
+        try:
+            self._resolver.observe(
+                trade.contract,
+                trade_volume=trade.volume,
+                quote_events=0,
+                ts_ms=trade.time,
+            )
+        except ValueError:
+            logger.info("pipeline: charting non-candidate source %s", trade.contract)
+        await self._sync_control_plane()
+
+        await self._run_trade_engines(_trade_for_contract(trade, chart_contract))
 
     async def on_quote(self, quote: NormalizedQuote) -> None:
         """Validate, record, observe resolver activity, and stream the quote."""
@@ -259,19 +352,14 @@ class Pipeline:
         # same-print bid/ask. (Req 13.2, 13.3)
         self._last_quote[quote.contract] = (quote.bid, quote.ask)
 
-        self._resolver.observe(
-            quote.contract, trade_volume=0, quote_events=1, ts_ms=quote.time
-        )
-        await self._sync_control_plane()
-
-        if quote.contract != self._active_contract():
+        if quote.contract != self._chart_source_contract:
             return
 
         await self._enqueue(
             OutboundEvent.from_message(
                 QuoteUpdate(
                     symbol=quote.symbol,
-                    contract=quote.contract,
+                    contract=self._chart_contract(),
                     time=quote.time,
                     bid=quote.bid,
                     ask=quote.ask,
@@ -320,6 +408,10 @@ class Pipeline:
         # 4) BigTrade (merge + filter). (Req 15)
         big_trades = self._bt.on_trade(trade)
 
+        footprint_updates = [
+            update for update in (fp_update,) if update is not None
+        ]
+
         # Persist the full derived snapshot in one transaction. A busy trade
         # updates every timeframe plus the M1 footprint ladder; committing each
         # row separately starves the asyncio loop that flushes UI WebSockets.
@@ -327,7 +419,7 @@ class Pipeline:
             self._persist_derived_batch,
             bar_updates,
             vd_updates,
-            fp_update,
+            footprint_updates,
             big_trades,
         )
 
@@ -335,8 +427,8 @@ class Pipeline:
             await self._enqueue(OutboundEvent.from_message(update))
         for update in vd_updates:
             await self._enqueue(OutboundEvent.from_message(update))
-        if fp_update is not None:
-            await self._enqueue(OutboundEvent.from_message(fp_update))
+        for update in footprint_updates:
+            await self._enqueue(OutboundEvent.from_message(update))
         for bt in big_trades:
             await self._enqueue(OutboundEvent.from_message(bt))
 
@@ -402,13 +494,13 @@ class Pipeline:
         self,
         bar_updates: list[BarUpdate],
         volume_delta_updates: list[VolumeDeltaUpdate],
-        footprint_update: FootprintUpdate | None,
+        footprint_updates: list[FootprintUpdate],
         big_trades: list[BigTrade],
     ) -> None:
-        footprint_bar = None
+        footprint_bars: list[FootprintBarRecord] = []
         footprint_levels: list[FootprintLevelRecord] = []
-        if footprint_update is not None:
-            footprint_bar = FootprintBarRecord(
+        for footprint_update in footprint_updates:
+            footprint_bars.append(FootprintBarRecord(
                 symbol=footprint_update.symbol,
                 contract=footprint_update.contract,
                 timeframe=footprint_update.tf,
@@ -426,8 +518,8 @@ class Pipeline:
                 sell_pct=footprint_update.sell_pct,
                 unfinished_high=footprint_update.unfinished_auction.high,
                 unfinished_low=footprint_update.unfinished_auction.low,
-            )
-            footprint_levels = [
+            ))
+            footprint_levels.extend(
                 FootprintLevelRecord(
                     symbol=footprint_update.symbol,
                     contract=footprint_update.contract,
@@ -439,7 +531,7 @@ class Pipeline:
                     imbalance=row.imbalance,
                 )
                 for row in footprint_update.rows
-            ]
+            )
 
         self._cache.upsert_derived_batch(
             bars=(
@@ -474,7 +566,7 @@ class Pipeline:
                 )
                 for u in volume_delta_updates
             ),
-            footprint_bar=footprint_bar,
+            footprint_bars=footprint_bars,
             footprint_levels=footprint_levels,
             big_trades=(
                 BigTradeRecord(
@@ -493,7 +585,64 @@ class Pipeline:
     # -- helpers ---------------------------------------------------------------
 
     def _active_contract(self) -> str:
-        return self._resolver.resolve()
+        return self._chart_source_contract or self._resolver.resolve()
+
+    def _chart_contract(self) -> str:
+        """Stable logical contract key used by the chart cache/stream."""
+        return self._symbol
+
+    def _initial_source_contract(self) -> str | None:
+        manual = self._resolver.manual_override
+        if manual is not None:
+            return manual
+        try:
+            return self._resolver.resolve()
+        except Exception:
+            return None
+
+    def _pin_resolver_source(self, contract: str) -> None:
+        if contract not in self._resolver.candidates:
+            return
+        try:
+            self._resolver.set_manual_override(contract)
+        except ValueError:
+            return
+
+    def _should_chart_source_trade(self, contract: str, time_ms: int) -> bool:
+        current = self._chart_source_contract
+        if current is None:
+            self._switch_chart_source(contract, time_ms)
+            return True
+        if contract == current:
+            self._chart_source_last_trade_ms = time_ms
+            return True
+
+        last = self._chart_source_last_trade_ms
+        if last is None:
+            logger.debug(
+                "pipeline: ignoring non-active chart source %s before %s starts",
+                contract,
+                current,
+            )
+            return False
+        if last is not None and time_ms - last <= _SOURCE_SWITCH_QUIET_MS:
+            logger.debug(
+                "pipeline: ignoring non-active chart source %s while %s is live",
+                contract,
+                current,
+            )
+            return False
+
+        self._switch_chart_source(contract, time_ms)
+        return True
+
+    def _switch_chart_source(self, contract: str, time_ms: int) -> None:
+        old = self._chart_source_contract
+        self._chart_source_contract = contract
+        self._chart_source_last_trade_ms = time_ms
+        self._pin_resolver_source(contract)
+        if old != contract:
+            logger.info("pipeline: chart source switched %s -> %s", old, contract)
 
     def _reset_contract(self, contract: str) -> None:
         """Reset all per-contract engine + validator state (playback rewind).
@@ -502,11 +651,12 @@ class Pipeline:
         validator's per-Stream high-water marks for this contract so a rewound
         (earlier-timestamp) replay re-aggregates cleanly. (Playback only.)
         """
-        self._bars.reset_contract(contract)
+        chart_contract = self._chart_contract()
+        self._bars.reset_contract(chart_contract)
         for engine in self._vds.values():
-            engine.reset_contract(contract)
-        self._fp.reset_contract(contract)
-        self._bt.reset_contract(contract)
+            engine.reset_contract(chart_contract)
+        self._fp.reset_contract(chart_contract)
+        self._bt.reset_contract(chart_contract)
         self._last_quote.pop(contract, None)
         validator = self._coordinator.validator
         for channel in (TRADE_CHANNEL, QUOTE_CHANNEL):
@@ -515,6 +665,10 @@ class Pipeline:
 
     async def _sync_control_plane(self) -> None:
         if self._control_plane is None:
+            return
+        source = self._chart_source_contract
+        if source is not None and source in self._resolver.candidates:
+            await self._control_plane.sync({source}, source)
             return
         await self._control_plane.sync_from_resolver(self._resolver)
 

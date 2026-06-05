@@ -405,6 +405,7 @@ class CacheStore:
         bars: Iterable[BarRecord] = (),
         volume_deltas: Iterable[VolumeDeltaRecord] = (),
         footprint_bar: FootprintBarRecord | None = None,
+        footprint_bars: Iterable[FootprintBarRecord] = (),
         footprint_levels: Iterable[FootprintLevelRecord] = (),
         big_trades: Iterable[BigTradeRecord] = (),
     ) -> None:
@@ -412,6 +413,7 @@ class CacheStore:
             bars=bars,
             volume_deltas=volume_deltas,
             footprint_bar=footprint_bar,
+            footprint_bars=footprint_bars,
             footprint_levels=footprint_levels,
             big_trades=big_trades,
         )

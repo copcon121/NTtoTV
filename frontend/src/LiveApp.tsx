@@ -8,7 +8,6 @@ import {
   type TelegramNotificationInput,
 } from "./alerts/types";
 import { ChartContainer } from "./chart/ChartContainer";
-import { ContractSelector } from "./chart/ContractSelector";
 import { DrawingToolbar } from "./chart/DrawingToolbar";
 import {
   IndicatorToggles,
@@ -17,6 +16,7 @@ import {
 } from "./chart/IndicatorToggles";
 import type { BigTradeSettings, FootprintSettings } from "./chart/IndicatorToggles";
 import { TimeframeSelector } from "./chart/TimeframeSelector";
+import { SymbolContractLabel } from "./chart/SymbolContractLabel";
 import { Toolbar } from "./chart/Toolbar";
 import {
   type BigTradeMarker,
@@ -55,6 +55,7 @@ import {
 } from "./chart/timezone";
 
 const SYMBOL = "GC";
+export const CHART_CONTRACT = SYMBOL;
 const DEFAULT_PROFILE_ID = "default";
 const ACTIVE_PROFILE_STORAGE_KEY = "gc-chart-platform.active-profile";
 const DEFAULT_CHART_BACKGROUND = "#101010";
@@ -323,7 +324,7 @@ export function resolveEndpoints(
  * LiveApp — the composed, runnable application.
  *
  * Wires the tested modules into a working app against a live backend:
- *   - ApiClient resolves the Active_Contract + alert list at startup;
+ *   - ApiClient loads profile/alert state while chart data uses `contract=GC`;
  *   - ChartSocket connects to `/ws/chart` and subscribes to chart events;
  *   - HistoryLoader seeds the MemoryCache, then ChartContainer renders + applies
  *     realtime bar_update events incrementally;
@@ -339,9 +340,7 @@ export function LiveApp() {
   const socket = useMemo(() => new ChartSocket({ url: endpoints.ws }), [endpoints.ws]);
 
   const [timeframe, setTimeframe] = useState<Timeframe>("1m");
-  const [contract, setContract] = useState<string | undefined>(undefined);
-  const [contractOptions, setContractOptions] = useState<readonly string[]>([]);
-  const [contractSwitching, setContractSwitching] = useState(false);
+  const contract = CHART_CONTRACT;
   const [connection, setConnection] = useState<ConnectionState>("disconnected");
   const [socketGeneration, setSocketGeneration] = useState(0);
   const [bars, setBars] = useState<readonly Bar[]>([]);
@@ -408,6 +407,7 @@ export function LiveApp() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileDeleting, setProfileDeleting] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [profileHydrated, setProfileHydrated] = useState(false);
   const profileIdRef = useRef(profileId);
   profileIdRef.current = profileId;
   const drawingsSignatureRef = useRef(drawingsSignature);
@@ -461,10 +461,8 @@ export function LiveApp() {
       { basePath: endpoints.api },
     );
   }
-  const currentSeriesKey =
-    contract === undefined ? undefined : seriesDataKey(SYMBOL, contract, timeframe);
-  const hasLoadedCurrentSeries =
-    currentSeriesKey !== undefined && loadedSeriesKey === currentSeriesKey;
+  const currentSeriesKey = seriesDataKey(SYMBOL, contract, timeframe);
+  const hasLoadedCurrentSeries = loadedSeriesKey === currentSeriesKey;
 
   // Connect the socket once and keep it for the component's lifetime. Status
   // + alert handlers are attached here; subscription management lives in its
@@ -484,13 +482,6 @@ export function LiveApp() {
     const reconnectTimer = window.setInterval(reconnect, 1500);
     const offStatus = socket.on("status", (msg) => {
       setConnection((prev) => (prev === msg.state ? prev : msg.state));
-      // Follow the backend resolver's Active_Contract switch (Req 10.3, 20.1).
-      if (msg.reason === "active_contract" && msg.contract) {
-        setContractOptions((prev) => (
-          prev.includes(msg.contract!) ? prev : [...prev, msg.contract!]
-        ));
-        setContract((prev) => (prev === msg.contract ? prev : msg.contract));
-      }
     });
     const offAlert = socket.on("alert_event", (msg) => {
       if ((msg.profileId ?? DEFAULT_PROFILE_ID) === profileIdRef.current) {
@@ -581,32 +572,9 @@ export function LiveApp() {
     };
   }, [api, profileId]);
 
-  // Poll the Active_Contract every 3s so the chart tracks the backend resolver
-  // even without a status push. Active_Contract is intentionally not profiled.
-  useEffect(() => {
-    let cancelled = false;
-    const pollActive = async () => {
-      try {
-        const c = await api.contracts(SYMBOL);
-        if (!cancelled) {
-          setContractOptions(c.candidates.map((candidate) => candidate.contract));
-          setContract((prev) => (prev === c.active ? prev : c.active));
-        }
-      } catch {
-        /* backend not up yet */
-      }
-    };
-    void pollActive();
-    const handle = setInterval(pollActive, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(handle);
-    };
-  }, [api]);
-
   // (Re)subscribe + load history whenever the charted series identity changes.
   useEffect(() => {
-    if (contract === undefined) return;
+    if (!profileHydrated) return;
     const requestedSeriesKey = seriesDataKey(SYMBOL, contract, timeframe);
     socket.subscribe(SYMBOL, TIMEFRAME_SUBSCRIBED_EVENTS, timeframe);
     let cancelled = false;
@@ -666,21 +634,16 @@ export function LiveApp() {
       }
       socket.unsubscribe(SYMBOL, TIMEFRAME_SUBSCRIBED_EVENTS, timeframe);
     };
-  }, [api, socket, contract, timeframe, socketGeneration]);
+  }, [api, socket, contract, timeframe, socketGeneration, profileHydrated]);
 
   useEffect(() => {
-    if (contract === undefined) return;
     setLoadedOverlayContract(undefined);
     setFootprintBars(new Map());
     setBigTrades([]);
   }, [contract]);
 
   useEffect(() => {
-    if (
-      contract === undefined ||
-      !hasLoadedCurrentSeries ||
-      loadedOverlayContract === contract
-    ) {
+    if (!hasLoadedCurrentSeries || loadedOverlayContract === contract) {
       return;
     }
     let cancelled = false;
@@ -707,15 +670,20 @@ export function LiveApp() {
   }, [api, contract, hasLoadedCurrentSeries, loadedOverlayContract]);
 
   useEffect(() => {
-    if (contract === undefined) return;
+    const matchesChartContract = (messageContract: string) =>
+      contract === SYMBOL || messageContract === contract;
     const offFootprint = socket.on("footprint_update", (msg) => {
-      if (msg.symbol !== SYMBOL || msg.contract !== contract || msg.tf !== "1m") {
+      if (
+        msg.symbol !== SYMBOL ||
+        !matchesChartContract(msg.contract) ||
+        msg.tf !== "1m"
+      ) {
         return;
       }
       setFootprintBars((prev) => mergeFootprint(prev, msg));
     });
     const offBigTrade = socket.on("big_trade", (msg) => {
-      if (msg.symbol !== SYMBOL || msg.contract !== contract) {
+      if (msg.symbol !== SYMBOL || !matchesChartContract(msg.contract)) {
         return;
       }
       setBigTrades((prev) => applyBigTrade(prev, msg).markers);
@@ -861,7 +829,10 @@ export function LiveApp() {
           setProfileInput(DEFAULT_PROFILE_ID);
         }
       } finally {
-        if (!cancelled) setProfileLoading(false);
+        if (!cancelled) {
+          setProfileLoading(false);
+          setProfileHydrated(true);
+        }
       }
     })();
     return () => {
@@ -973,27 +944,6 @@ export function LiveApp() {
     })();
   };
 
-  const onContractChange = (next: string) => {
-    if (next === contract || contractSwitching) return;
-    const previous = contract;
-    setContract(next);
-    setContractSwitching(true);
-    void (async () => {
-      try {
-        await api.setActiveContract(SYMBOL, next);
-        const c = await api.contracts(SYMBOL);
-        setContractOptions(c.candidates.map((candidate) => candidate.contract));
-        setContract((prev) => (prev === c.active ? prev : c.active));
-      } catch {
-        if (previous !== undefined) {
-          setContract(previous);
-        }
-      } finally {
-        setContractSwitching(false);
-      }
-    })();
-  };
-
   // Alert level lines drawn on the candle scale (Req 16.5). Recomputed only
   // when the alert set changes.
   const alertLines = useMemo(() => toAlertLines(alerts), [alerts]);
@@ -1084,12 +1034,7 @@ export function LiveApp() {
   return (
     <div className="app-shell">
       <Toolbar>
-        <ContractSelector
-          value={contract}
-          contracts={contractOptions}
-          disabled={contractSwitching}
-          onChange={onContractChange}
-        />
+        <SymbolContractLabel symbol={SYMBOL} contract={contract} hideContract />
         <TimeframeSelector value={timeframe} onChange={setTimeframe} />
         <IndicatorToggles
           footprint={showFootprint}
@@ -1184,41 +1129,39 @@ export function LiveApp() {
             setActiveTool(null);
           }}
         />
-        {contract !== undefined && (
-          <ChartContainer
-            symbol={SYMBOL}
-            contract={contract}
-            timeframe={timeframe}
-            bars={chartBars}
-            volumeDelta={chartVolumeDelta}
-            footprintBars={chartFootprintBars}
-            bigTrades={chartBigTrades}
-            alertLines={alertLines}
-            ema={ema}
-            smc={smc}
-            outsideBar={outsideBar}
-            showFootprint={showFootprint && timeframe === "1m"}
-            showBigTrades={showBigTrades}
-            bigTradeSettings={bigTradeSettings}
-            chartBackgroundColor={chartBackgroundColor}
-            timezoneOffsetMinutes={timezoneOffsetMinutes}
-            socket={socket}
-            onRequestAlertAtPrice={setAlertMenu}
-            onAlertDragCommit={onAlertDragCommit}
-            priceSnap={(price) => Math.round(price * 10) / 10}
-            activeTool={activeTool}
-            onToolDeselect={() => setActiveTool(null)}
-            onDrawingCountChange={setDrawingCount}
-            drawings={drawings}
-            drawingsLoadKey={drawingsLoadKey}
-            onDrawingsChange={setDrawings}
-            deleteAllSignal={deleteAllSignal}
-            footprintSettings={footprintSettings}
-            onScreenshotCaptureReady={(capture) => {
-              screenshotCaptureRef.current = capture;
-            }}
-          />
-        )}
+        <ChartContainer
+          symbol={SYMBOL}
+          contract={contract}
+          timeframe={timeframe}
+          bars={chartBars}
+          volumeDelta={chartVolumeDelta}
+          footprintBars={chartFootprintBars}
+          bigTrades={chartBigTrades}
+          alertLines={alertLines}
+          ema={ema}
+          smc={smc}
+          outsideBar={outsideBar}
+          showFootprint={showFootprint && timeframe === "1m"}
+          showBigTrades={showBigTrades}
+          bigTradeSettings={bigTradeSettings}
+          chartBackgroundColor={chartBackgroundColor}
+          timezoneOffsetMinutes={timezoneOffsetMinutes}
+          socket={socket}
+          onRequestAlertAtPrice={setAlertMenu}
+          onAlertDragCommit={onAlertDragCommit}
+          priceSnap={(price) => Math.round(price * 10) / 10}
+          activeTool={activeTool}
+          onToolDeselect={() => setActiveTool(null)}
+          onDrawingCountChange={setDrawingCount}
+          drawings={drawings}
+          drawingsLoadKey={drawingsLoadKey}
+          onDrawingsChange={setDrawings}
+          deleteAllSignal={deleteAllSignal}
+          footprintSettings={footprintSettings}
+          onScreenshotCaptureReady={(capture) => {
+            screenshotCaptureRef.current = capture;
+          }}
+        />
         <TimezoneControl
           offsetMinutes={timezoneOffsetMinutes}
           onChange={setTimezoneOffsetMinutes}

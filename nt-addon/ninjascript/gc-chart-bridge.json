@@ -4,5 +4,6 @@
   "backendPort": 8000,
   "backendPath": "/ws/nt",
   "outboundQueueCapacity": 200000,
-  "dropOnOverflow": false
+  "dropOnOverflow": false,
+  "manualContractOverride": "GC 08-26"
 }

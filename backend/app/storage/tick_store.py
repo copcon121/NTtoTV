@@ -23,7 +23,7 @@ concurrently with the ingest writer under WAL. (Requirement 7.3)
 
 Retention is enforced by :meth:`TickStore.purge_expired`, which deletes whole
 shard files (and their ``-wal``/``-shm`` sidecars) once their UTC calendar day
-falls outside the 90-day window. Day-sharding makes retention a cheap
+falls outside the configured calendar-day window. Day-sharding makes retention a cheap
 whole-file delete rather than a ``DELETE`` + ``VACUUM``. (Requirements 7.4, 7.5)
 """
 
@@ -399,24 +399,24 @@ class TickStore:
     # -- retention ------------------------------------------------------------
 
     def purge_expired(
-        self, now: datetime, retention_days: int = 90
+        self, now: datetime, retention_days: int = settings.tick_retention_days
     ) -> list[Path]:
-        """Delete shard files whose UTC day is older than ``retention_days``.
+        """Delete shard files outside the latest ``retention_days`` UTC days.
 
         Walks the ``<ticks_dir>/GC/<contract>/YYYY-MM-DD.sqlite`` tree and
-        removes any shard whose UTC calendar day falls outside the retention
-        window before ``now``. Because each day is its own SQLite file,
+        removes any shard whose UTC calendar day falls outside the most recent
+        ``retention_days`` calendar days including ``now``'s UTC day. Because
+        each day is its own SQLite file,
         retention is a cheap **whole-file delete** (no ``DELETE`` + ``VACUUM``)
         that also removes the ``-wal``/``-shm`` sidecars and evicts any cached
         :class:`SingleWriter` for the shard. (Requirements 7.4, 7.5)
 
         Semantics:
 
-        * A shard is retained while its day is within ``retention_days`` of the
-          UTC day of ``now`` (a shard exactly ``retention_days`` old is kept).
-          Only strictly older shards are deleted. (Requirement 7.4)
-        * **Today's shard is never deleted** (nor any shard dated on/after the
-          UTC day of ``now``), regardless of ``retention_days``.
+        * ``retention_days=2`` keeps exactly today and yesterday in UTC.
+          Older shards are deleted. (Requirement 7.4)
+        * Future-dated shards are never deleted.
+        * ``retention_days`` must be at least ``1``.
         * **Idempotent**: re-running after a purge — or against an already
           deleted shard — is a no-op; missing files are ignored.
         * Each removal is logged.
@@ -424,8 +424,10 @@ class TickStore:
         ``now`` may be naive (interpreted as UTC) or timezone-aware (converted
         to UTC). Returns the list of removed shard paths in ascending order.
         """
+        if retention_days < 1:
+            raise ValueError("retention_days must be >= 1")
         now_day = self._utc_date(now)
-        cutoff_day = now_day - timedelta(days=retention_days)
+        cutoff_day = now_day - timedelta(days=retention_days - 1)
 
         root = self._ticks_dir / SYMBOL
         if not root.exists():
@@ -436,9 +438,9 @@ class TickStore:
             day = self._parse_shard_day(shard)
             if day is None:
                 continue
-            # Keep today's/future shards and anything inside the window;
-            # delete only strictly-older shards. (Requirements 7.4, 7.5)
-            if day >= now_day or day >= cutoff_day:
+            # Keep future shards and the configured latest calendar-day window;
+            # delete only days older than the first retained day.
+            if day > now_day or day >= cutoff_day:
                 continue
             self._remove_shard(shard)
             removed.append(shard)

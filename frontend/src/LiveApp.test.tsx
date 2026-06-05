@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CHART_CONTRACT,
   FOOTPRINT_SUBSCRIBED_EVENTS,
   GLOBAL_SUBSCRIBED_EVENTS,
   TIMEFRAME_SUBSCRIBED_EVENTS,
@@ -72,6 +73,10 @@ describe("active profile persistence", () => {
 });
 
 describe("live chart series identity", () => {
+  it("uses the stable GC chart contract instead of a month contract", () => {
+    expect(CHART_CONTRACT).toBe("GC");
+  });
+
   it("uses different data keys for different timeframes", () => {
     expect(seriesDataKey("GC", "GC 08-26", "1m")).not.toBe(
       seriesDataKey("GC", "GC 08-26", "5m"),

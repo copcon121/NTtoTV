@@ -241,7 +241,7 @@ def test_active_contract_omitted_does_not_broadcast():
 
 
 @pytest.mark.unit
-def test_sync_from_resolver_subscribes_full_candidate_set_once():
+def test_sync_from_resolver_subscribes_active_contract_once():
     sent: list[ControlCommand] = []
     statuses: list[ChartStatusEvent] = []
     resolver = ContractResolver(CANDIDATES)
@@ -250,10 +250,8 @@ def test_sync_from_resolver_subscribes_full_candidate_set_once():
 
     asyncio.run(coord.sync_from_resolver(resolver))
 
-    # needed set is the full candidate set -> one subscribe per candidate.
-    assert {c.contract for c in sent} == set(CANDIDATES)
-    assert all(c.action is ControlAction.SUBSCRIBE for c in sent)
-    assert len(sent) == len(CANDIDATES)
+    # needed set is the active source contract only.
+    assert _pairs(sent) == [(ControlAction.SUBSCRIBE, "GC 08-26")]
     # Active_Contract resolved to the trade-heavy 08-26 and was broadcast.
     assert [e.contract for e in statuses] == ["GC 08-26"]
 

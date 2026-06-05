@@ -3,9 +3,11 @@
  *
  * Per Req 10.1 the Frontend presents the user-facing symbol as `GC`; per
  * Req 10.3 it also displays the resolved real contract identifier (for example
- * `GC 08-26`). This component renders both: a prominent symbol and the resolved
- * contract beside it. While the contract is still being resolved (undefined),
- * a neutral placeholder is shown instead of a stale value.
+ * `GC 08-26`). This component can render both: a prominent symbol and the
+ * resolved contract beside it. While the contract is still being resolved
+ * (undefined), a neutral placeholder is shown instead of a stale value. When
+ * the live chart uses the single logical `GC` cache contract, callers can hide
+ * the duplicate contract detail.
  *
  * Requirements: 10.1 (user-facing symbol "GC"), 10.3 (resolved real contract),
  * 19.1 (symbol/contract label region).
@@ -20,11 +22,14 @@ export interface SymbolContractLabelProps {
   contract?: string;
   /** Placeholder shown when no contract is resolved yet. */
   pendingLabel?: string;
+  /** Hide the contract detail when the chart uses a single logical contract. */
+  hideContract?: boolean;
 }
 
 export function SymbolContractLabel({
   symbol = "GC",
   contract,
+  hideContract = false,
   pendingLabel = "—",
 }: SymbolContractLabelProps) {
   return (
@@ -32,9 +37,11 @@ export function SymbolContractLabel({
       <span className="symbol" data-testid="symbol">
         {symbol}
       </span>
-      <span className="contract" data-testid="contract">
-        {contract ?? pendingLabel}
-      </span>
+      {!hideContract && (
+        <span className="contract" data-testid="contract">
+          {contract ?? pendingLabel}
+        </span>
+      )}
     </div>
   );
 }

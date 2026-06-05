@@ -14,6 +14,12 @@ describe("SymbolContractLabel", () => {
     expect(screen.getByTestId("contract")).toHaveTextContent("GC 08-26");
   });
 
+  it("can hide the contract detail for a single logical chart contract", () => {
+    render(<SymbolContractLabel symbol="GC" contract="GC" hideContract />);
+    expect(screen.getByTestId("symbol")).toHaveTextContent("GC");
+    expect(screen.queryByTestId("contract")).not.toBeInTheDocument();
+  });
+
   it("shows a placeholder while the contract is unresolved", () => {
     render(<SymbolContractLabel contract={undefined} pendingLabel="…" />);
     expect(screen.getByTestId("contract")).toHaveTextContent("…");

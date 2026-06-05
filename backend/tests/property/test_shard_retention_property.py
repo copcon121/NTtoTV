@@ -1,14 +1,13 @@
 """Property test for Tick_Store shard retention (task 3.5).
 
 Property 12 asserts that ``TickStore.purge_expired`` deletes exactly the shard
-files whose UTC calendar day is **strictly older than the retention window**
-(more than ``retention_days`` days before the UTC day of ``now``) and retains
-every shard within the window, every today/future shard, and is **idempotent**
-(a second purge removes nothing).
+files outside the latest ``retention_days`` UTC calendar days, counting the UTC
+day of ``now`` as day one. It retains every shard within that window, every
+future shard, and is **idempotent** (a second purge removes nothing).
 
 For each example we materialize a set of real day-sharded SQLite files at
-arbitrary ages relative to a fixed reference ``now`` (including the boundary at
-exactly 90 days, just-outside at 91 days, today, and future days), purge, and
+arbitrary ages relative to a fixed reference ``now`` (including today,
+yesterday, the just-outside day, and future days), purge, and
 check the partition of deleted vs. retained shards against the specification.
 
 Uses the design-mandated Hypothesis ``gc`` profile (>= 100 examples).
@@ -30,16 +29,15 @@ from app.models import NormalizedTrade, to_canonical_ms
 from app.storage import TickStore
 
 _CONTRACT = "GC 08-26"
-_RETENTION_DAYS = 90
+_RETENTION_DAYS = 2
 
 # Fixed reference "now" (UTC) for every example.
 _NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
 _NOW_DAY = _NOW.date()
 
 # A set of day-offsets relative to ``now``'s UTC day. Positive = days in the
-# past, 0 = today, negative = future. The range straddles the 90-day boundary
-# (89/90 retained, 91+ deleted) and includes today/future shards which are
-# never deleted regardless of age.
+# past, 0 = today, negative = future. With two-day retention, offsets 0 and 1
+# are retained, while offsets >= 2 are deleted.
 _OFFSET_SETS = st.sets(
     st.integers(min_value=-3, max_value=300),
     min_size=1,
@@ -79,17 +77,16 @@ def _make_shard(store: TickStore, day: date) -> Path:
 def _is_expired(offset_days: int) -> bool:
     """True iff a shard at this offset is strictly older than the window.
 
-    A shard exactly ``retention_days`` old is kept; only strictly-older shards
-    (age > retention_days) are deleted. Today/future shards (offset <= 0) are
-    never expired.
+    ``retention_days`` counts today as day one, so a two-day window retains
+    offsets 0 and 1. Future shards (offset < 0) are never expired.
     """
-    return offset_days > _RETENTION_DAYS
+    return offset_days >= _RETENTION_DAYS
 
 
-# Feature: gc-chart-platform, Property 12: Shard retention keeps shards within 90 days and deletes older ones
+# Feature: gc-chart-platform, Property 12: Shard retention keeps only latest raw calendar days
 @pytest.mark.property
 @given(offsets=_OFFSET_SETS)
-def test_purge_deletes_only_shards_older_than_90_days(offsets: set[int]) -> None:
+def test_purge_deletes_only_shards_outside_latest_days(offsets: set[int]) -> None:
     ticks_dir = Path(tempfile.mkdtemp(prefix="gc_retention_"))
     store = TickStore(ticks_dir=ticks_dir)
     try:
@@ -105,11 +102,11 @@ def test_purge_deletes_only_shards_older_than_90_days(offsets: set[int]) -> None
 
         removed = store.purge_expired(_NOW, retention_days=_RETENTION_DAYS)
 
-        # purge_expired deletes exactly the strictly-older shards.
+        # purge_expired deletes exactly the shards outside the retained window.
         assert set(removed) == expected_deleted
         for shard in expected_deleted:
             assert not shard.exists()
-        # Everything within 90 days (and today/future) is retained.
+        # Everything inside the latest-days window and future shards are retained.
         for shard in expected_retained:
             assert shard.exists()
 

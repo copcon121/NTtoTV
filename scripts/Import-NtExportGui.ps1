@@ -20,21 +20,30 @@ function Find-NtExportSet {
         $contract = $last.Name -replace "\.Last\.txt$", ""
         $bid = Join-Path $Folder "$contract.Bid.txt"
         $ask = Join-Path $Folder "$contract.Ask.txt"
-        if ((Test-Path -LiteralPath $bid) -and (Test-Path -LiteralPath $ask)) {
-            $sets += [pscustomobject]@{
-                Contract = $contract
-                Last = $last.FullName
-                Bid = (Resolve-Path -LiteralPath $bid).Path
-                Ask = (Resolve-Path -LiteralPath $ask).Path
-            }
+        $hasBidAsk = (Test-Path -LiteralPath $bid) -and (Test-Path -LiteralPath $ask)
+        $sets += [pscustomobject]@{
+            Contract = $contract
+            Last = $last.FullName
+            Bid = if ($hasBidAsk) { (Resolve-Path -LiteralPath $bid).Path } else { "" }
+            Ask = if ($hasBidAsk) { (Resolve-Path -LiteralPath $ask).Path } else { "" }
+            HasBidAsk = $hasBidAsk
         }
     }
     return $sets
 }
 
+function Get-CanonicalContract {
+    param([string]$ExportStem)
+
+    if ($ExportStem -match "^(GC \d{2}-\d{2})") {
+        return $Matches[1]
+    }
+    return $ExportStem
+}
+
 function Select-SourceFolder {
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = "Select folder containing NinjaTrader *.Last.txt, *.Bid.txt, *.Ask.txt exports"
+    $dialog.Description = "Select folder containing NinjaTrader *.Last.txt exports"
     $dialog.SelectedPath = Join-Path $repoRoot "export data"
     $dialog.ShowNewFolderButton = $false
     if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
@@ -127,8 +136,8 @@ function Show-ImportDialog {
     $noRebuildBox = New-Object System.Windows.Forms.CheckBox
     $noRebuildBox.Location = New-Object System.Drawing.Point(105, 148)
     $noRebuildBox.Size = New-Object System.Drawing.Size(210, 22)
-    $noRebuildBox.Text = "Skip cache rebuild"
-    $noRebuildBox.Checked = $true
+    $noRebuildBox.Text = "Skip recent raw ticks"
+    $noRebuildBox.Checked = $false
     $form.Controls.Add($noRebuildBox)
 
     $dryRunBox = New-Object System.Windows.Forms.CheckBox
@@ -160,14 +169,16 @@ function Show-ImportDialog {
 
     $selected = $ExportSets | Where-Object { $_.Contract -eq [string]$contractBox.SelectedItem } | Select-Object -First 1
     return [pscustomobject]@{
-        Contract = $selected.Contract
+        Contract = Get-CanonicalContract -ExportStem $selected.Contract
+        ExportSet = $selected.Contract
         Last = $selected.Last
         Bid = $selected.Bid
         Ask = $selected.Ask
+        HasBidAsk = $selected.HasBidAsk
         From = $fromBox.Text.Trim()
         To = $toBox.Text.Trim()
         Mode = [string]$modeBox.SelectedItem
-        NoRebuild = $noRebuildBox.Checked
+        SkipRecentRaw = $noRebuildBox.Checked
         DryRun = $dryRunBox.Checked
     }
 }
@@ -180,7 +191,7 @@ if ($null -eq $folder) {
 $exportSets = @(Find-NtExportSet -Folder $folder)
 if ($exportSets.Count -eq 0) {
     [System.Windows.Forms.MessageBox]::Show(
-        "No complete Last/Bid/Ask export set found in:`n$folder",
+        "No *.Last.txt export found in:`n$folder",
         "Import NinjaTrader Export",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Error
@@ -196,18 +207,22 @@ if ($null -eq $choice) {
 $argsList = @(
     "-Contract", $choice.Contract,
     "-Last", $choice.Last,
-    "-Bid", $choice.Bid,
-    "-Ask", $choice.Ask,
     "-Mode", $choice.Mode
 )
+if (-not [string]::IsNullOrWhiteSpace($choice.Bid)) {
+    $argsList += @("-Bid", $choice.Bid)
+}
+if (-not [string]::IsNullOrWhiteSpace($choice.Ask)) {
+    $argsList += @("-Ask", $choice.Ask)
+}
 if (-not [string]::IsNullOrWhiteSpace($choice.From)) {
     $argsList += @("-From", $choice.From)
 }
 if (-not [string]::IsNullOrWhiteSpace($choice.To)) {
     $argsList += @("-To", $choice.To)
 }
-if ($choice.NoRebuild) {
-    $argsList += "-NoRebuild"
+if ($choice.SkipRecentRaw) {
+    $argsList += "-SkipRecentRaw"
 }
 if ($choice.DryRun) {
     $argsList += "-DryRun"
@@ -215,10 +230,16 @@ if ($choice.DryRun) {
 
 Write-Host "Running import..."
 Write-Host ("Contract: " + $choice.Contract)
+Write-Host ("Export:   " + $choice.ExportSet)
 Write-Host ("Mode:     " + $choice.Mode)
 Write-Host ("Last:     " + $choice.Last)
-Write-Host ("Bid:      " + $choice.Bid)
-Write-Host ("Ask:      " + $choice.Ask)
+if ($choice.HasBidAsk) {
+    Write-Host ("Bid:      " + $choice.Bid)
+    Write-Host ("Ask:      " + $choice.Ask)
+    Write-Host "Recent raw Last/Bid/Ask import enabled when the export touches the 2-day raw window."
+} else {
+    Write-Host "Bid/Ask:  not found; importing history cache only (bars + volume delta)."
+}
 Write-Host ""
 
 & $importScript @argsList

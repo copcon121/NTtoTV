@@ -47,6 +47,7 @@ from ..config import settings
 from ..models.canonical import NormalizedQuote, NormalizedTrade
 from ..models.messages import (
     ChartStatusEvent,
+    ControlAction,
     ControlCommand,
     NTStatusEvent,
     StatusState,
@@ -382,8 +383,8 @@ async def ws_nt(websocket: WebSocket) -> None:
     socket so subscribe/unsubscribe Control_Commands reach the NT_AddOn (Req
     4.6, 1.7, 1.8), and the liveness watchdog forwards a ``disconnected`` status
     to subscribed clients on 15s of silence (Req 4.8, 20.2). On connect the
-    needed-contract set is synced so the NT_AddOn subscribes to all candidates
-    (Req 1.5).
+    needed-contract set is synced so the NT_AddOn subscribes to the active
+    source contract (Req 1.5).
 
     Without a runtime (route-only test harness) it falls back to the default
     drain loop so the route stays importable and connectable.
@@ -401,14 +402,29 @@ async def ws_nt(websocket: WebSocket) -> None:
         emit_disconnected=pipeline._emit_status,
     )
     # Bind the control plane to this live socket and announce the initial
-    # needed-contract set so the NT_AddOn subscribes to all candidates (Req 1.5).
+    # needed-contract set so the NT_AddOn subscribes to the active source
+    # contract (Req 1.5).
     # The sync runs via on_connected (AFTER accept) so the subscribe frames are
     # not sent before the WebSocket handshake completes.
     control_plane = runtime.make_control_plane(endpoint.send_control)
     pipeline.set_control_plane(control_plane)
 
     async def _announce() -> None:
-        await control_plane.sync_from_resolver(runtime.pipeline._resolver)
+        resolver = runtime.pipeline._resolver
+        await control_plane.sync_from_resolver(resolver)
+        needed = resolver.needed_contracts()
+        # Older AddOn builds subscribed every configured candidate on startup.
+        # Send explicit cleanup commands on connect so a stale deployed AddOn
+        # cannot keep multiple contracts feeding the logical GC chart.
+        for contract in getattr(resolver, "candidates", ()):
+            if contract not in needed:
+                await endpoint.send_control(
+                    ControlCommand(
+                        action=ControlAction.UNSUBSCRIBE,
+                        contract=contract,
+                        time=now_ms(),
+                    )
+                )
 
     try:
         await endpoint.run(on_connected=_announce)

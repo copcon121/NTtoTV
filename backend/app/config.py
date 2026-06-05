@@ -57,8 +57,9 @@ class Settings:
     # NT_AddOn connection liveness (see Requirements 4.7, 4.8).
     nt_status_timeout_s: int = 15
 
-    # Raw tick retention (see Requirements 7.4, 7.5).
-    tick_retention_days: int = 90
+    # Raw tick retention (see Requirements 7.4, 7.5). This is a calendar-day
+    # count including today's UTC shard; v1 keeps today and yesterday only.
+    tick_retention_days: int = 2
 
     # Contract_Resolver scoring (see Requirement 10.2).
     resolver_window_ms: int = DEFAULT_RESOLVER_WINDOW_MS

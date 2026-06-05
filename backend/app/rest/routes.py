@@ -174,11 +174,14 @@ def _resolve_contract(
 
     When ``contract`` is omitted (``None`` or empty), it defaults to the current
     Active_Contract resolved for ``symbol`` (Req 18.4). When provided, it must be
-    a known candidate or a descriptive 404 is raised with ``field: "contract"``
-    (Req 18.12). The caller must have already validated ``symbol``.
+    either the stable chart alias (``contract == symbol``) or a known candidate;
+    otherwise a descriptive 404 is raised with ``field: "contract"`` (Req 18.12).
+    The caller must have already validated ``symbol``.
     """
     if contract is None or contract == "":
         return state.active_contract(symbol)
+    if contract == symbol:
+        return contract
     if not state.is_candidate(symbol, contract):
         raise not_found(
             f"Unknown contract {contract!r} for symbol {symbol!r}",

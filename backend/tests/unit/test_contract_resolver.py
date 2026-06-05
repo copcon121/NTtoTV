@@ -217,9 +217,10 @@ def test_observations_within_window_accumulate():
 
 
 @pytest.mark.unit
-def test_needed_contracts_is_full_candidate_set():
+def test_needed_contracts_is_active_contract_only():
     r = ContractResolver(CANDIDATES)
-    assert r.needed_contracts() == set(CANDIDATES)
+    r.observe("GC 08-26", 5, 0, 1_000)
+    assert r.needed_contracts() == {"GC 08-26"}
 
 
 @pytest.mark.unit
@@ -228,4 +229,4 @@ def test_needed_contracts_returns_a_fresh_mutable_copy():
     needed = r.needed_contracts()
     needed.add("GC 99-99")
     # Mutating the returned set must not affect the resolver.
-    assert r.needed_contracts() == set(CANDIDATES)
+    assert r.needed_contracts() == {"GC 12-26"}

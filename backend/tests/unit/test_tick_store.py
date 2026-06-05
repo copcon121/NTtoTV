@@ -302,9 +302,9 @@ def _make_shard(store: TickStore, contract: str, day: date) -> Path:
 def test_purge_deletes_shards_older_than_retention(store: TickStore):
     now = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
     old = _make_shard(store, "GC 08-26", date(2026, 1, 1))  # ~212 days old
-    recent = _make_shard(store, "GC 08-26", date(2026, 7, 30))  # 2 days old
+    recent = _make_shard(store, "GC 08-26", date(2026, 7, 31))  # yesterday
 
-    removed = store.purge_expired(now, retention_days=90)
+    removed = store.purge_expired(now, retention_days=2)
 
     assert removed == [old]
     assert not old.exists()
@@ -312,16 +312,17 @@ def test_purge_deletes_shards_older_than_retention(store: TickStore):
 
 
 @pytest.mark.unit
-def test_purge_keeps_shard_exactly_at_retention_boundary(store: TickStore):
+def test_purge_keeps_latest_two_utc_days(store: TickStore):
     now = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
-    # Exactly 90 days before now's UTC day is kept; 91 days is deleted.
-    at_boundary = _make_shard(store, "GC 08-26", date(2026, 8, 1) - timedelta(days=90))
-    just_outside = _make_shard(store, "GC 08-26", date(2026, 8, 1) - timedelta(days=91))
+    today = _make_shard(store, "GC 08-26", date(2026, 8, 1))
+    yesterday = _make_shard(store, "GC 08-26", date(2026, 7, 31))
+    just_outside = _make_shard(store, "GC 08-26", date(2026, 7, 30))
 
-    removed = store.purge_expired(now, retention_days=90)
+    removed = store.purge_expired(now, retention_days=2)
 
     assert removed == [just_outside]
-    assert at_boundary.exists()
+    assert today.exists()
+    assert yesterday.exists()
     assert not just_outside.exists()
 
 
@@ -330,11 +331,18 @@ def test_purge_never_deletes_todays_shard(store: TickStore):
     now = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
     today = _make_shard(store, "GC 08-26", date(2026, 8, 1))
 
-    # Even with an absurdly short retention, today's shard survives.
-    removed = store.purge_expired(now, retention_days=0)
+    removed = store.purge_expired(now, retention_days=1)
 
     assert removed == []
     assert today.exists()
+
+
+@pytest.mark.unit
+def test_purge_rejects_non_positive_retention_days(store: TickStore):
+    now = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError, match="retention_days"):
+        store.purge_expired(now, retention_days=0)
 
 
 @pytest.mark.unit
@@ -342,8 +350,8 @@ def test_purge_is_idempotent(store: TickStore):
     now = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
     old = _make_shard(store, "GC 08-26", date(2026, 1, 1))
 
-    first = store.purge_expired(now, retention_days=90)
-    second = store.purge_expired(now, retention_days=90)
+    first = store.purge_expired(now, retention_days=2)
+    second = store.purge_expired(now, retention_days=2)
 
     assert first == [old]
     assert second == []  # nothing left to delete
@@ -359,7 +367,7 @@ def test_purge_removes_wal_sidecars(store: TickStore):
     shm = old.with_name(old.name + "-shm")
     assert wal.exists() and shm.exists()
 
-    store.purge_expired(now, retention_days=90)
+    store.purge_expired(now, retention_days=2)
 
     assert not old.exists()
     assert not wal.exists()
@@ -373,7 +381,7 @@ def test_purge_evicts_cached_writer(store: TickStore):
     # record_trade left a cached SingleWriter for the shard.
     assert old in store._writers
 
-    store.purge_expired(now, retention_days=90)
+    store.purge_expired(now, retention_days=2)
 
     assert old not in store._writers
     assert not old.exists()
@@ -383,9 +391,9 @@ def test_purge_evicts_cached_writer(store: TickStore):
 def test_purge_accepts_naive_datetime_as_utc(store: TickStore):
     naive_now = datetime(2026, 8, 1, 12)  # no tzinfo -> treated as UTC
     old = _make_shard(store, "GC 08-26", date(2026, 1, 1))
-    recent = _make_shard(store, "GC 08-26", date(2026, 7, 30))
+    recent = _make_shard(store, "GC 08-26", date(2026, 7, 31))
 
-    removed = store.purge_expired(naive_now, retention_days=90)
+    removed = store.purge_expired(naive_now, retention_days=2)
 
     assert removed == [old]
     assert recent.exists()
@@ -407,7 +415,7 @@ def test_purge_ignores_non_iso_filenames(store: TickStore):
     stray = store._ticks_dir / SYMBOL / "GC_08-26" / "not-a-date.sqlite"
     stray.write_bytes(b"")
 
-    removed = store.purge_expired(now, retention_days=90)
+    removed = store.purge_expired(now, retention_days=2)
 
     assert removed == []
     assert stray.exists()  # unparseable names are left untouched

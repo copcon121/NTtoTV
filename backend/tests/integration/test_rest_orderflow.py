@@ -86,6 +86,38 @@ def test_volume_delta_returns_persisted_bars(env):
 
 
 @pytest.mark.integration
+def test_volume_delta_chart_contract_alias_is_accepted(env):
+    client, cache = env
+    cache.upsert_volume_delta(
+        VolumeDeltaRecord(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            timeframe="1m",
+            time=_BASE_MS,
+            volume=14,
+            buy_volume=8,
+            sell_volume=6,
+            delta=2,
+            delta_high=6,
+            delta_low=1,
+            open_delta=3,
+            close_delta=2,
+        )
+    )
+
+    resp = client.get(
+        "/api/orderflow/volume-delta",
+        params={"symbol": "GC", "tf": "1m", "contract": "GC"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["contract"] == "GC"
+    assert body["source"] == "cache"
+    assert body["bars"][0]["delta"] == 2
+
+
+@pytest.mark.integration
 def test_volume_delta_unknown_symbol_is_404(env):
     client, _ = env
     resp = client.get("/api/orderflow/volume-delta", params={"symbol": "ZZ", "tf": "1m"})

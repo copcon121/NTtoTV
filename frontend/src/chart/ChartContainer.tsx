@@ -203,7 +203,7 @@ function matchesSeries(
 ): boolean {
   return (
     message.symbol === symbol &&
-    message.contract === contract &&
+    (contract === symbol || message.contract === contract) &&
     message.tf === timeframe
   );
 }
@@ -216,7 +216,7 @@ function matchesVolumeDeltaSeries(
 ): boolean {
   return (
     message.symbol === symbol &&
-    message.contract === contract &&
+    (contract === symbol || message.contract === contract) &&
     message.tf === timeframe
   );
 }
