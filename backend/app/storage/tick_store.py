@@ -157,6 +157,25 @@ CREATE INDEX IF NOT EXISTS idx_quotes_time ON quotes(time);
 CREATE INDEX IF NOT EXISTS idx_quotes_sequence ON quotes(sequence);
 """
 
+_INSERT_TRADE_SQL = (
+    "INSERT INTO ticks "
+    "(event_key, sequence, time, price, volume, bid, ask, best_bid, best_ask, side) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) "
+    "ON CONFLICT(event_key) DO UPDATE SET "
+    "sequence=excluded.sequence, time=excluded.time, price=excluded.price, "
+    "volume=excluded.volume, bid=excluded.bid, ask=excluded.ask, "
+    "best_bid=excluded.best_bid, best_ask=excluded.best_ask, side=excluded.side"
+)
+
+_INSERT_QUOTE_SQL = (
+    "INSERT INTO quotes "
+    "(event_key, sequence, time, bid, ask, bid_size, ask_size) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+    "ON CONFLICT(event_key) DO UPDATE SET "
+    "sequence=excluded.sequence, time=excluded.time, bid=excluded.bid, "
+    "ask=excluded.ask, bid_size=excluded.bid_size, ask_size=excluded.ask_size"
+)
+
 
 class TickStore:
     """Day-sharded writer/reader for raw trades and quotes. (Requirement 7)
@@ -208,25 +227,45 @@ class TickStore:
         """
         day = from_canonical_ms(t.time).date()
         writer = self._writer_for(self.shard_path(t.contract, day))
-        writer.execute(
-            "INSERT INTO ticks "
-            "(event_key, sequence, time, price, volume, bid, ask, best_bid, best_ask, side) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) "
-            "ON CONFLICT(event_key) DO UPDATE SET "
-            "sequence=excluded.sequence, time=excluded.time, price=excluded.price, "
-            "volume=excluded.volume, bid=excluded.bid, ask=excluded.ask, "
-            "best_bid=excluded.best_bid, best_ask=excluded.best_ask, side=excluded.side",
-            (
-                trade_event_key(
-                    t.sequence,
-                    t.time,
-                    t.price,
-                    t.volume,
-                    t.bid,
-                    t.ask,
-                    t.best_bid,
-                    t.best_ask,
-                ),
+        writer.execute(_INSERT_TRADE_SQL, self._trade_params(t))
+
+    def record_trades(self, trades: list[NormalizedTrade]) -> None:
+        """Record trades in shard-local batches for high-throughput capture."""
+        if not trades:
+            return
+        batches: dict[Path, list[tuple[object, ...]]] = {}
+        for trade in trades:
+            day = from_canonical_ms(trade.time).date()
+            path = self.shard_path(trade.contract, day)
+            batches.setdefault(path, []).append(self._trade_params(trade))
+        for path, rows in batches.items():
+            self._writer_for(path).executemany(_INSERT_TRADE_SQL, rows)
+
+    def record_quote(self, q: NormalizedQuote) -> None:
+        """Record a raw quote to the shard for its Canonical_Timestamp's UTC day.
+
+        Creates the shard on demand. (Requirements 7.1, 7.2)
+        """
+        day = from_canonical_ms(q.time).date()
+        writer = self._writer_for(self.shard_path(q.contract, day))
+        writer.execute(_INSERT_QUOTE_SQL, self._quote_params(q))
+
+    def record_quotes(self, quotes: list[NormalizedQuote]) -> None:
+        """Record quotes in shard-local batches for high-throughput capture."""
+        if not quotes:
+            return
+        batches: dict[Path, list[tuple[object, ...]]] = {}
+        for quote in quotes:
+            day = from_canonical_ms(quote.time).date()
+            path = self.shard_path(quote.contract, day)
+            batches.setdefault(path, []).append(self._quote_params(quote))
+        for path, rows in batches.items():
+            self._writer_for(path).executemany(_INSERT_QUOTE_SQL, rows)
+
+    @staticmethod
+    def _trade_params(t: NormalizedTrade) -> tuple[object, ...]:
+        return (
+            trade_event_key(
                 t.sequence,
                 t.time,
                 t.price,
@@ -236,31 +275,20 @@ class TickStore:
                 t.best_bid,
                 t.best_ask,
             ),
+            t.sequence,
+            t.time,
+            t.price,
+            t.volume,
+            t.bid,
+            t.ask,
+            t.best_bid,
+            t.best_ask,
         )
 
-    def record_quote(self, q: NormalizedQuote) -> None:
-        """Record a raw quote to the shard for its Canonical_Timestamp's UTC day.
-
-        Creates the shard on demand. (Requirements 7.1, 7.2)
-        """
-        day = from_canonical_ms(q.time).date()
-        writer = self._writer_for(self.shard_path(q.contract, day))
-        writer.execute(
-            "INSERT INTO quotes "
-            "(event_key, sequence, time, bid, ask, bid_size, ask_size) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(event_key) DO UPDATE SET "
-            "sequence=excluded.sequence, time=excluded.time, bid=excluded.bid, "
-            "ask=excluded.ask, bid_size=excluded.bid_size, ask_size=excluded.ask_size",
-            (
-                quote_event_key(
-                    q.sequence,
-                    q.time,
-                    q.bid,
-                    q.ask,
-                    q.bid_size,
-                    q.ask_size,
-                ),
+    @staticmethod
+    def _quote_params(q: NormalizedQuote) -> tuple[object, ...]:
+        return (
+            quote_event_key(
                 q.sequence,
                 q.time,
                 q.bid,
@@ -268,6 +296,12 @@ class TickStore:
                 q.bid_size,
                 q.ask_size,
             ),
+            q.sequence,
+            q.time,
+            q.bid,
+            q.ask,
+            q.bid_size,
+            q.ask_size,
         )
 
     # -- reads ----------------------------------------------------------------

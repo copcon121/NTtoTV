@@ -154,6 +154,23 @@ def test_record_and_read_range_round_trip(store: TickStore):
 
 
 @pytest.mark.unit
+def test_batch_record_trades_and_quotes_span_shards(store: TickStore):
+    contract = "GC 08-26"
+    trade_a = _trade(contract, _ms(2026, 8, 1, 23, 59), sequence=1, volume=2)
+    trade_b = _trade(contract, _ms(2026, 8, 2, 0, 1), sequence=2, volume=5)
+    quote_a = _quote(contract, _ms(2026, 8, 1, 23, 59), sequence=1)
+    quote_b = _quote(contract, _ms(2026, 8, 2, 0, 1), sequence=2)
+
+    store.record_trades([trade_a, trade_b])
+    store.record_quotes([quote_a, quote_b])
+
+    trades = list(store.read_range(contract, _ms(2026, 8, 1), _ms(2026, 8, 2, 23)))
+    quotes = list(store.read_quotes(contract, _ms(2026, 8, 1), _ms(2026, 8, 2, 23)))
+    assert [(t.sequence, t.volume) for t in trades] == [(1, 2), (2, 5)]
+    assert [q.sequence for q in quotes] == [1, 2]
+
+
+@pytest.mark.unit
 def test_record_trade_sequence_reset_does_not_overwrite_rows(store: TickStore):
     contract = "GC 08-26"
     first = _trade(contract, _ms(2026, 8, 1, 10), sequence=1, price=2345.6, volume=2)

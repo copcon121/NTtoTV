@@ -53,10 +53,14 @@ from ..models.messages import (
     decode_nt_data_message,
 )
 from ..models.timestamp import CanonicalTimestamp, now_ms
+from ..storage.tick_store import TickStore
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_CAPTURE_BATCH_SIZE = 5_000
+_CAPTURE_FLUSH_INTERVAL_S = 0.5
 
 __all__ = [
     "HEARTBEAT_TYPE",
@@ -410,3 +414,100 @@ async def ws_nt(websocket: WebSocket) -> None:
         await endpoint.run(on_connected=_announce)
     finally:
         pipeline.set_control_plane(None)
+
+
+@router.websocket("/ws/nt-capture")
+async def ws_nt_capture(websocket: WebSocket) -> None:
+    """High-throughput raw capture endpoint for fast NT Playback.
+
+    This endpoint intentionally bypasses the live chart pipeline: no resolver,
+    indicators, alerts, or `/ws/chart` fan-out. It decodes trade/quote frames
+    and writes them to the TickStore in large shard-local batches, making it the
+    preferred path for collecting historical playback data at high speed.
+    """
+    await websocket.accept()
+    runtime = getattr(websocket.app.state, "runtime", None)
+    tick_store = runtime.tick_store if runtime is not None else TickStore()
+
+    trades: list[NormalizedTrade] = []
+    quotes: list[NormalizedQuote] = []
+    highest: dict[tuple[str, str, str], int] = {}
+    loop = asyncio.get_running_loop()
+    last_flush = loop.time()
+    received = 0
+    flushed_trades = 0
+    flushed_quotes = 0
+
+    async def flush() -> None:
+        nonlocal trades, quotes, last_flush, flushed_trades, flushed_quotes
+        if not trades and not quotes:
+            last_flush = loop.time()
+            return
+        trade_batch = trades
+        quote_batch = quotes
+        trades = []
+        quotes = []
+        await asyncio.to_thread(tick_store.record_trades, trade_batch)
+        await asyncio.to_thread(tick_store.record_quotes, quote_batch)
+        flushed_trades += len(trade_batch)
+        flushed_quotes += len(quote_batch)
+        last_flush = loop.time()
+
+    def note_sequence(symbol: str, contract: str, channel: str, sequence: int) -> None:
+        key = (symbol, contract, channel)
+        prev = highest.get(key)
+        if prev is not None and sequence > prev + 1:
+            logger.warning(
+                "Capture_Stream_Gap on %s:%s:%s gap_from=%s gap_to=%s missing=%s",
+                symbol,
+                contract,
+                channel,
+                prev,
+                sequence,
+                sequence - prev - 1,
+            )
+        if prev is None or sequence > prev:
+            highest[key] = sequence
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            received += 1
+            try:
+                data = json.loads(raw)
+            except (TypeError, ValueError):
+                logger.warning("/ws/nt-capture: discarding non-JSON frame")
+                continue
+            if not isinstance(data, dict):
+                logger.warning("/ws/nt-capture: discarding non-object frame")
+                continue
+            if data.get("type") == HEARTBEAT_TYPE:
+                continue
+            try:
+                decoded = decode_nt_data_message(data)
+            except (ValueError, KeyError) as exc:
+                logger.warning("/ws/nt-capture: discarding undecodable frame: %s", exc)
+                continue
+
+            if isinstance(decoded, NormalizedTrade):
+                trades.append(decoded)
+                note_sequence(decoded.symbol, decoded.contract, "trade", decoded.sequence)
+            elif isinstance(decoded, NormalizedQuote):
+                quotes.append(decoded)
+                note_sequence(decoded.symbol, decoded.contract, "quote", decoded.sequence)
+
+            if (
+                len(trades) + len(quotes) >= _CAPTURE_BATCH_SIZE
+                or loop.time() - last_flush >= _CAPTURE_FLUSH_INTERVAL_S
+            ):
+                await flush()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await flush()
+        logger.info(
+            "/ws/nt-capture closed after receiving %s frames; flushed trades=%s quotes=%s",
+            received,
+            flushed_trades,
+            flushed_quotes,
+        )
