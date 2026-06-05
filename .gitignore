@@ -38,6 +38,7 @@ packages/
 # Runtime data and generated databases
 backend/data/
 data/
+_data_backups/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
