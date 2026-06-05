@@ -1,0 +1,10 @@
+/**
+ * drawings barrel — re-exports all drawing types, primitives, and the manager.
+ */
+export * from "./types";
+export { DrawingManager } from "./DrawingManager";
+export { TrendLinePrimitive } from "./TrendLinePrimitive";
+export { HorizontalRayPrimitive } from "./HorizontalRayPrimitive";
+export { RectanglePrimitive } from "./RectanglePrimitive";
+export { PriceRangePrimitive } from "./PriceRangePrimitive";
+export { VerticalLinePrimitive } from "./VerticalLinePrimitive";

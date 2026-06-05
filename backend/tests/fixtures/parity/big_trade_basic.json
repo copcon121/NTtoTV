@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "engine": "big_trade",
+  "source": "spec-derived",
+  "description": "Tape with NT-style adjacent same-time/same-side merging and a MinVolume=30 filter. At t=5000 two adjacent buys (20+15) merge to 35 (emit) and one sell (10) does not reach the floor (no emit). At t=6000 a single buy of 40 emits. At t=7000 a sell of 12 is below the floor (no emit). Sides are forced by explicit bid/ask. Expected markers derived by hand from the BigTradeIndicator merge + filter rules.",
+  "symbol": "GC",
+  "contract": "GC 08-26",
+  "config": { "minVolume": 30, "maxVolume": -1, "volumeFilterEnable": true },
+  "events": [
+    { "type": "trade", "time": 5000, "price": 100.2, "volume": 20, "bid": 100.0, "ask": 100.2 },
+    { "type": "trade", "time": 5000, "price": 100.3, "volume": 15, "bid": 100.0, "ask": 100.2 },
+    { "type": "trade", "time": 5000, "price": 99.9, "volume": 10, "bid": 99.9, "ask": 100.4 },
+    { "type": "trade", "time": 6000, "price": 100.5, "volume": 40, "bid": 100.0, "ask": 100.5 },
+    { "type": "trade", "time": 7000, "price": 99.8, "volume": 12, "bid": 99.8, "ask": 100.4 }
+  ],
+  "expected": {
+    "markers": [
+      { "time": 5000, "price": 100.3, "volume": 35, "side": "buy" },
+      { "time": 6000, "price": 100.5, "volume": 40, "side": "buy" }
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "engine": "footprint",
+  "source": "spec-derived",
+  "description": "Single M1 bar with a 4-level bid-by-ask ladder. Trades are tagged with explicit bid/ask so every side is forced by the bid/ask-lean rule (order-independent). Built with clear-cut diagonal ratios so the ASK imbalance at 100.2 and 100.3 (stacked) is unambiguous, POC is the 100.1 level, and the high extreme (both sides traded) is an unfinished auction. Expected values derived by hand from the design's footprint rules.",
+  "symbol": "GC",
+  "contract": "GC 08-26",
+  "config": { "imbalancePercent": 100.0, "imbalanceMinVolume": 10, "groupTicksPerLevel": 0, "tradeVolumeFilter": 0, "tickSize": 0.1 },
+  "events": [
+    { "type": "quote", "time": 1000, "bid": 100.0, "ask": 100.1, "bidSize": 5, "askSize": 5 },
+    { "type": "trade", "time": 1500, "price": 100.0, "volume": 8, "bid": 100.0, "ask": 100.4 },
+    { "type": "trade", "time": 1600, "price": 100.1, "volume": 40, "bid": 99.9, "ask": 100.1 },
+    { "type": "trade", "time": 1700, "price": 100.1, "volume": 3, "bid": 100.1, "ask": 100.5 },
+    { "type": "trade", "time": 1800, "price": 100.2, "volume": 30, "bid": 99.9, "ask": 100.2 },
+    { "type": "trade", "time": 1900, "price": 100.3, "volume": 25, "bid": 99.9, "ask": 100.3 },
+    { "type": "trade", "time": 2000, "price": 100.3, "volume": 6, "bid": 100.3, "ask": 100.6 }
+  ],
+  "expected": {
+    "bars": [
+      {
+        "time": 0,
+        "rows": [
+          { "price": 100.3, "bid": 6, "ask": 25, "imbalance": "ask" },
+          { "price": 100.2, "bid": 0, "ask": 30, "imbalance": "ask" },
+          { "price": 100.1, "bid": 3, "ask": 40, "imbalance": "ask" },
+          { "price": 100.0, "bid": 8, "ask": 0, "imbalance": null }
+        ],
+        "poc": 100.1,
+        "barDelta": 78,
+        "buyPct": 0.8482142857142857,
+        "sellPct": 0.15178571428571427,
+        "stackedImbalance": [ { "side": "ask", "from": 100.1, "to": 100.3 } ],
+        "unfinishedAuction": { "high": true, "low": false }
+      }
+    ]
+  }
+}

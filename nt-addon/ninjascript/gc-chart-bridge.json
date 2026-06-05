@@ -1,0 +1,6 @@
+{
+  "candidateContracts": ["GC 02-26", "GC 04-26", "GC 06-26", "GC 08-26"],
+  "backendHost": "127.0.0.1",
+  "backendPort": 8000,
+  "backendPath": "/ws/nt"
+}

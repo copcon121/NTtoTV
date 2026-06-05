@@ -1,0 +1,10 @@
+{
+  "candidateContracts": ["GC 08-26", "GC 10-26", "GC 12-26"],
+  "backendHost": "127.0.0.1",
+  "backendPort": 8000,
+  "backendPath": "/ws/nt",
+  "queueCapacity": 10000,
+  "criticalOverloadThreshold": 9000,
+  "compressionEnabled": false,
+  "manualContractOverride": null
+}

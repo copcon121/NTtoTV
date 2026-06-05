@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-ssr
+*.local
+coverage
+.vite
+
+# Editor / OS
+.DS_Store
+*.log

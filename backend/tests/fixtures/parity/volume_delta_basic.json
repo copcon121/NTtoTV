@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "engine": "volume_delta",
+  "source": "spec-derived",
+  "description": "Single-quote snapshot then a 1m bucket exercising every VolumeDelta classification rule (bid/ask lean buy+sell, uptick, downtick, last-side reuse) plus a roll into a second bucket. Expected bars derived by hand from the design's ordered rule set, not from the engine.",
+  "symbol": "GC",
+  "contract": "GC 08-26",
+  "config": { "timeframe": "1m", "mode": "Delta", "minTradeSize": 0 },
+  "events": [
+    { "type": "quote", "time": 1000, "bid": 100.0, "ask": 100.2, "bidSize": 10, "askSize": 12 },
+    { "type": "trade", "time": 1500, "price": 100.2, "volume": 3 },
+    { "type": "trade", "time": 2000, "price": 100.0, "volume": 2 },
+    { "type": "trade", "time": 2500, "price": 100.1, "volume": 4, "bid": 100.0, "ask": 100.3 },
+    { "type": "trade", "time": 3000, "price": 100.1, "volume": 1 },
+    { "type": "trade", "time": 3500, "price": 100.05, "volume": 4 },
+    { "type": "trade", "time": 65000, "price": 100.1, "volume": 5 }
+  ],
+  "expected": {
+    "bars": [
+      {
+        "time": 0,
+        "volume": 14,
+        "buyVolume": 8,
+        "sellVolume": 6,
+        "delta": 2,
+        "deltaHigh": 6,
+        "deltaLow": 1,
+        "openDelta": 3,
+        "closeDelta": 2
+      },
+      {
+        "time": 60000,
+        "volume": 5,
+        "buyVolume": 5,
+        "sellVolume": 0,
+        "delta": 5,
+        "deltaHigh": 5,
+        "deltaLow": 5,
+        "openDelta": 5,
+        "closeDelta": 5
+      }
+    ]
+  }
+}

@@ -1,0 +1,675 @@
+import { type ReactNode, useEffect, useRef, useState } from "react";
+
+import {
+  DEFAULT_OUTSIDE_BAR_SETTINGS,
+  type OutsideBarSettings,
+} from "./outsideBar";
+import { type SmcSettings } from "./smc";
+
+/**
+ * IndicatorToggles — TradingView-style "Indicators" dropdown.
+ *
+ * A single button opens a popover listing the available indicators, each with
+ * an enable/disable checkbox. The EMA row has a gear button that opens a small
+ * settings panel to edit the EMA length and line color. Footprint is M1-only
+ * and can be disabled independently. EMA is an explicitly-added overlay
+ * (Req 19.3).
+ */
+export interface EmaSettings {
+  enabled: boolean;
+  period: number;
+  color: string;
+}
+
+export interface FootprintSettings {
+  showVA: boolean;
+  vaPercent: number;
+  imbalanceMinVolume: number;
+  showImbalance: boolean;
+  showUnfinishedAuction: boolean;
+}
+
+export interface BigTradeSettings {
+  minVolume: number;
+  maxVisible: number;
+}
+
+export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
+  showVA: false,
+  vaPercent: 70,
+  imbalanceMinVolume: 10,
+  showImbalance: true,
+  showUnfinishedAuction: true,
+};
+
+export const DEFAULT_BIG_TRADE_SETTINGS: BigTradeSettings = {
+  minVolume: 30,
+  maxVisible: 500,
+};
+
+export interface IndicatorTogglesProps {
+  footprint: boolean;
+  bigTrades: boolean;
+  ema: EmaSettings;
+  smc: SmcSettings;
+  outsideBar?: OutsideBarSettings;
+  footprintSettings: FootprintSettings;
+  bigTradeSettings?: BigTradeSettings;
+  footprintDisabled?: boolean;
+  onFootprintChange: (enabled: boolean) => void;
+  onBigTradesChange: (enabled: boolean) => void;
+  onEmaChange: (next: EmaSettings) => void;
+  onSmcChange: (next: SmcSettings) => void;
+  onOutsideBarChange?: (next: OutsideBarSettings) => void;
+  onFootprintSettingsChange: (next: FootprintSettings) => void;
+  onBigTradeSettingsChange?: (next: BigTradeSettings) => void;
+}
+
+/** A few common EMA colors for the swatch row. */
+const EMA_COLOR_PRESETS = [
+  "#2962ff",
+  "#e0b341",
+  "#26a69a",
+  "#ef5350",
+  "#ab47bc",
+  "#d8d8d8",
+];
+
+interface RowProps {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (enabled: boolean) => void;
+  trailing?: ReactNode;
+}
+
+function IndicatorRow({ label, checked, disabled = false, onChange, trailing }: RowProps) {
+  return (
+    <div className="indicator-row">
+      <label className="indicator-row-main">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          aria-label={label}
+          onChange={(event) => onChange(event.currentTarget.checked)}
+        />
+        <span>{label}</span>
+      </label>
+      {trailing}
+    </div>
+  );
+}
+
+export function IndicatorToggles({
+  footprint,
+  bigTrades,
+  ema,
+  smc,
+  outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
+  footprintSettings,
+  bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
+  footprintDisabled = false,
+  onFootprintChange,
+  onBigTradesChange,
+  onEmaChange,
+  onSmcChange,
+  onOutsideBarChange = () => {},
+  onFootprintSettingsChange,
+  onBigTradeSettingsChange = () => {},
+}: IndicatorTogglesProps) {
+  const [open, setOpen] = useState(false);
+  const [emaSettingsOpen, setEmaSettingsOpen] = useState(false);
+  const [smcSettingsOpen, setSmcSettingsOpen] = useState(false);
+  const [outsideBarSettingsOpen, setOutsideBarSettingsOpen] = useState(false);
+  const [fpSettingsOpen, setFpSettingsOpen] = useState(false);
+  const [btSettingsOpen, setBtSettingsOpen] = useState(false);
+  // Local draft for the length input so typing is smooth; committed on blur/Enter.
+  const [lengthDraft, setLengthDraft] = useState(String(ema.period));
+  const [smcSwingDraft, setSmcSwingDraft] = useState(String(smc.swingLength));
+  const [smcInternalDraft, setSmcInternalDraft] = useState(String(smc.internalLength));
+  const [smcFvgExtendDraft, setSmcFvgExtendDraft] = useState(String(smc.fvgExtendBars));
+  const [vaPercentDraft, setVaPercentDraft] = useState(String(footprintSettings.vaPercent));
+  const [imbMinVolDraft, setImbMinVolDraft] = useState(String(footprintSettings.imbalanceMinVolume));
+  const [btMinVolDraft, setBtMinVolDraft] = useState(String(bigTradeSettings.minVolume));
+  const [btLimitDraft, setBtLimitDraft] = useState(String(bigTradeSettings.maxVisible));
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep the draft in sync when the period changes from outside.
+  useEffect(() => {
+    setLengthDraft(String(ema.period));
+  }, [ema.period]);
+
+  useEffect(() => {
+    setSmcSwingDraft(String(smc.swingLength));
+  }, [smc.swingLength]);
+
+  useEffect(() => {
+    setSmcInternalDraft(String(smc.internalLength));
+  }, [smc.internalLength]);
+
+  useEffect(() => {
+    setSmcFvgExtendDraft(String(smc.fvgExtendBars));
+  }, [smc.fvgExtendBars]);
+
+  useEffect(() => {
+    setBtMinVolDraft(String(bigTradeSettings.minVolume));
+  }, [bigTradeSettings.minVolume]);
+
+  useEffect(() => {
+    setBtLimitDraft(String(bigTradeSettings.maxVisible));
+  }, [bigTradeSettings.maxVisible]);
+
+  // Close the popover on an outside click or Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setEmaSettingsOpen(false);
+        setSmcSettingsOpen(false);
+        setOutsideBarSettingsOpen(false);
+        setFpSettingsOpen(false);
+        setBtSettingsOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+        setEmaSettingsOpen(false);
+        setSmcSettingsOpen(false);
+        setOutsideBarSettingsOpen(false);
+        setFpSettingsOpen(false);
+        setBtSettingsOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const activeCount =
+    (footprint ? 1 : 0) +
+    (bigTrades ? 1 : 0) +
+    (ema.enabled ? 1 : 0) +
+    (smc.enabled ? 1 : 0) +
+    (outsideBar.enabled ? 1 : 0);
+
+  const commitLength = () => {
+    const parsed = Math.round(Number(lengthDraft));
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 1000) {
+      onEmaChange({ ...ema, period: parsed });
+    } else {
+      setLengthDraft(String(ema.period)); // revert invalid input
+    }
+  };
+
+  const commitVaPercent = () => {
+    const parsed = Math.round(Number(vaPercentDraft));
+    if (Number.isFinite(parsed) && parsed >= 10 && parsed <= 95) {
+      onFootprintSettingsChange({ ...footprintSettings, vaPercent: parsed });
+    } else {
+      setVaPercentDraft(String(footprintSettings.vaPercent));
+    }
+  };
+
+  const commitSmcSwingLength = () => {
+    const parsed = Math.round(Number(smcSwingDraft));
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 500) {
+      onSmcChange({ ...smc, swingLength: parsed });
+    } else {
+      setSmcSwingDraft(String(smc.swingLength));
+    }
+  };
+
+  const commitSmcInternalLength = () => {
+    const parsed = Math.round(Number(smcInternalDraft));
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 200) {
+      onSmcChange({ ...smc, internalLength: parsed });
+    } else {
+      setSmcInternalDraft(String(smc.internalLength));
+    }
+  };
+
+  const commitSmcFvgExtend = () => {
+    const parsed = Math.round(Number(smcFvgExtendDraft));
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 20) {
+      onSmcChange({ ...smc, fvgExtendBars: parsed });
+    } else {
+      setSmcFvgExtendDraft(String(smc.fvgExtendBars));
+    }
+  };
+
+  const commitImbMinVol = () => {
+    const parsed = Math.round(Number(imbMinVolDraft));
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1000) {
+      onFootprintSettingsChange({ ...footprintSettings, imbalanceMinVolume: parsed });
+    } else {
+      setImbMinVolDraft(String(footprintSettings.imbalanceMinVolume));
+    }
+  };
+
+  const commitBtMinVol = () => {
+    const parsed = Math.round(Number(btMinVolDraft));
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 100000) {
+      onBigTradeSettingsChange({ ...bigTradeSettings, minVolume: parsed });
+    } else {
+      setBtMinVolDraft(String(bigTradeSettings.minVolume));
+    }
+  };
+
+  const commitBtLimit = () => {
+    const parsed = Math.round(Number(btLimitDraft));
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 5000) {
+      onBigTradeSettingsChange({ ...bigTradeSettings, maxVisible: parsed });
+    } else {
+      setBtLimitDraft(String(bigTradeSettings.maxVisible));
+    }
+  };
+
+  return (
+    <div className="indicator-toggles" ref={rootRef}>
+      <button
+        type="button"
+        className="indicator-button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Indicators"
+        onClick={() => setOpen((v) => !v)}
+      >
+        Indicators
+        {activeCount > 0 && <span className="indicator-badge">{activeCount}</span>}
+        <span className="indicator-caret" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+      {open && (
+        <div className="indicator-menu" role="menu" aria-label="Indicator list">
+          <IndicatorRow
+            label={`EMA ${ema.period}`}
+            checked={ema.enabled}
+            onChange={(enabled) => onEmaChange({ ...ema, enabled })}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="EMA settings"
+                aria-expanded={emaSettingsOpen}
+                onClick={() => setEmaSettingsOpen((v) => !v)}
+              >
+                ⚙
+              </button>
+            }
+          />
+          {emaSettingsOpen && (
+            <div className="ema-settings" aria-label="EMA settings panel">
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Length</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={1000}
+                  className="ema-length-input"
+                  aria-label="EMA length"
+                  value={lengthDraft}
+                  onChange={(e) => setLengthDraft(e.currentTarget.value)}
+                  onBlur={commitLength}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitLength();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Color</span>
+                <div className="ema-color-row">
+                  {EMA_COLOR_PRESETS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      className={
+                        "ema-color-swatch" +
+                        (color.toLowerCase() === ema.color.toLowerCase()
+                          ? " is-selected"
+                          : "")
+                      }
+                      style={{ background: color }}
+                      aria-label={`EMA color ${color}`}
+                      aria-pressed={color.toLowerCase() === ema.color.toLowerCase()}
+                      onClick={() => onEmaChange({ ...ema, color })}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    className="ema-color-picker"
+                    aria-label="EMA custom color"
+                    value={ema.color}
+                    onChange={(e) => onEmaChange({ ...ema, color: e.currentTarget.value })}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+          <IndicatorRow
+            label="SMC"
+            checked={smc.enabled}
+            onChange={(enabled) => onSmcChange({ ...smc, enabled })}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="SMC settings"
+                aria-expanded={smcSettingsOpen}
+                onClick={() => setSmcSettingsOpen((v) => !v)}
+              >
+                ...
+              </button>
+            }
+          />
+          {smcSettingsOpen && (
+            <div className="ema-settings" aria-label="SMC settings panel">
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Swing</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  className="ema-length-input"
+                  aria-label="SMC swing length"
+                  value={smcSwingDraft}
+                  onChange={(e) => setSmcSwingDraft(e.currentTarget.value)}
+                  onBlur={commitSmcSwingLength}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitSmcSwingLength();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Internal</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  className="ema-length-input"
+                  aria-label="SMC internal length"
+                  value={smcInternalDraft}
+                  onChange={(e) => setSmcInternalDraft(e.currentTarget.value)}
+                  onBlur={commitSmcInternalLength}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitSmcInternalLength();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={smc.showInternal}
+                    onChange={(e) =>
+                      onSmcChange({ ...smc, showInternal: e.currentTarget.checked })
+                    }
+                  />
+                  <span>Show internal</span>
+                </label>
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={smc.showZones}
+                    onChange={(e) =>
+                      onSmcChange({ ...smc, showZones: e.currentTarget.checked })
+                    }
+                  />
+                  <span>Show zones</span>
+                </label>
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">FVG extend</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  className="ema-length-input"
+                  aria-label="SMC FVG extend bars"
+                  value={smcFvgExtendDraft}
+                  onChange={(e) => setSmcFvgExtendDraft(e.currentTarget.value)}
+                  onBlur={commitSmcFvgExtend}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitSmcFvgExtend();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          <IndicatorRow
+            label="Outside Bar"
+            checked={outsideBar.enabled}
+            onChange={(enabled) => onOutsideBarChange({ ...outsideBar, enabled })}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="Outside Bar settings"
+                aria-expanded={outsideBarSettingsOpen}
+                onClick={() => setOutsideBarSettingsOpen((v) => !v)}
+              >
+                ...
+              </button>
+            }
+          />
+          {outsideBarSettingsOpen && (
+            <div className="ema-settings" aria-label="Outside Bar settings panel">
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Bull</span>
+                <input
+                  type="color"
+                  className="ema-color-picker"
+                  aria-label="Outside Bar bullish color"
+                  value={outsideBar.bullColor}
+                  onChange={(e) =>
+                    onOutsideBarChange({
+                      ...outsideBar,
+                      bullColor: e.currentTarget.value,
+                    })
+                  }
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Bear</span>
+                <input
+                  type="color"
+                  className="ema-color-picker"
+                  aria-label="Outside Bar bearish color"
+                  value={outsideBar.bearColor}
+                  onChange={(e) =>
+                    onOutsideBarChange({
+                      ...outsideBar,
+                      bearColor: e.currentTarget.value,
+                    })
+                  }
+                />
+              </div>
+            </div>
+          )}
+          <IndicatorRow
+            label="Footprint"
+            checked={footprint}
+            disabled={footprintDisabled}
+            onChange={onFootprintChange}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="Footprint settings"
+                aria-expanded={fpSettingsOpen}
+                onClick={() => setFpSettingsOpen((v) => !v)}
+              >
+                ⚙
+              </button>
+            }
+          />
+          {fpSettingsOpen && (
+            <div className="ema-settings" aria-label="Footprint settings panel">
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={footprintSettings.showVA}
+                    onChange={(e) =>
+                      onFootprintSettingsChange({
+                        ...footprintSettings,
+                        showVA: e.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>Show VA</span>
+                </label>
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">VA %</span>
+                <input
+                  type="number"
+                  min={10}
+                  max={95}
+                  className="ema-length-input"
+                  aria-label="VA percent"
+                  value={vaPercentDraft}
+                  onChange={(e) => setVaPercentDraft(e.currentTarget.value)}
+                  onBlur={commitVaPercent}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitVaPercent();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={footprintSettings.showImbalance}
+                    onChange={(e) =>
+                      onFootprintSettingsChange({
+                        ...footprintSettings,
+                        showImbalance: e.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>Imbalance</span>
+                </label>
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Min Vol</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={1000}
+                  className="ema-length-input"
+                  aria-label="Imbalance min volume"
+                  value={imbMinVolDraft}
+                  onChange={(e) => setImbMinVolDraft(e.currentTarget.value)}
+                  onBlur={commitImbMinVol}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitImbMinVol();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={footprintSettings.showUnfinishedAuction}
+                    onChange={(e) =>
+                      onFootprintSettingsChange({
+                        ...footprintSettings,
+                        showUnfinishedAuction: e.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>Unfinished Auction</span>
+                </label>
+              </div>
+            </div>
+          )}
+          <IndicatorRow
+            label="BigTrade"
+            checked={bigTrades}
+            onChange={onBigTradesChange}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="BigTrade settings"
+                aria-expanded={btSettingsOpen}
+                onClick={() => setBtSettingsOpen((v) => !v)}
+              >
+                ...
+              </button>
+            }
+          />
+          {btSettingsOpen && (
+            <div className="ema-settings" aria-label="BigTrade settings panel">
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Min Vol</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100000}
+                  className="ema-length-input"
+                  aria-label="BigTrade min volume"
+                  value={btMinVolDraft}
+                  onChange={(e) => setBtMinVolDraft(e.currentTarget.value)}
+                  onBlur={commitBtMinVol}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitBtMinVol();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Limit</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={5000}
+                  className="ema-length-input"
+                  aria-label="BigTrade display limit"
+                  value={btLimitDraft}
+                  onChange={(e) => setBtLimitDraft(e.currentTarget.value)}
+                  onBlur={commitBtLimit}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitBtLimit();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,73 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    NtAddOn.NinjaTrader is the ONLY project that depends on the NinjaTrader 8
+    assemblies. It hosts the AddOn entry point and the thin adapter that turns
+    NinjaTrader market-data callbacks into the platform-agnostic types defined
+    in NtAddOn.Core. Keeping the NinjaTrader dependency isolated here lets
+    NtAddOn.Core and NtAddOn.Tests build and run on any machine.
+
+    NinjaTrader 8 runs on .NET Framework 4.8, so this project targets net48.
+
+    The NinjaTrader assemblies (NinjaTrader.Custom, NinjaTrader.Core, etc.) are
+    NOT redistributable and are not available in CI. Point the
+    `NinjaTraderInstallDir` property (or the NT_INSTALL_DIR environment variable)
+    at a local NinjaTrader 8 installation to build this project. When the
+    assemblies cannot be found, the NinjaTrader-specific source is excluded so
+    the rest of the solution still builds; only this project is skipped.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>NtAddOn.NinjaTrader</RootNamespace>
+    <AssemblyName>NtAddOn.NinjaTrader</AssemblyName>
+    <Deterministic>true</Deterministic>
+
+    <!-- Default NinjaTrader 8 install location; override as needed. -->
+    <NinjaTraderInstallDir Condition="'$(NinjaTraderInstallDir)' == '' and '$(NT_INSTALL_DIR)' != ''">$(NT_INSTALL_DIR)</NinjaTraderInstallDir>
+    <NinjaTraderInstallDir Condition="'$(NinjaTraderInstallDir)' == ''">$(USERPROFILE)\Documents\NinjaTrader 8\bin\Custom</NinjaTraderInstallDir>
+    <NinjaTraderBinDir Condition="'$(NinjaTraderBinDir)' == ''">$(USERPROFILE)\Documents\NinjaTrader 8\bin</NinjaTraderBinDir>
+
+    <NinjaTraderAvailable Condition="Exists('$(NinjaTraderBinDir)\NinjaTrader.Core.dll')">true</NinjaTraderAvailable>
+    <NinjaTraderAvailable Condition="'$(NinjaTraderAvailable)' == ''">false</NinjaTraderAvailable>
+
+    <!--
+      Define the NT8 compile symbol when the NinjaTrader assemblies are present
+      so the NinjaTrader-coupled sources (guarded by #if NT8) actually compile in
+      a real NinjaTrader build. When NinjaTrader is absent the same sources are
+      excluded below, so the guard + the Compile Remove keep the testable build
+      green either way.
+    -->
+    <DefineConstants Condition="'$(NinjaTraderAvailable)' == 'true'">$(DefineConstants);NT8</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NtAddOn.Core\NtAddOn.Core.csproj" />
+  </ItemGroup>
+
+  <!-- NinjaTrader assembly references; only resolved when an install is present. -->
+  <ItemGroup Condition="'$(NinjaTraderAvailable)' == 'true'">
+    <Reference Include="NinjaTrader.Core">
+      <HintPath>$(NinjaTraderBinDir)\NinjaTrader.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="NinjaTrader.Custom">
+      <HintPath>$(NinjaTraderInstallDir)\NinjaTrader.Custom.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!--
+    When NinjaTrader is not installed, exclude the NinjaTrader-coupled sources so
+    the project still restores. The platform-agnostic skeleton compiles either way.
+  -->
+  <ItemGroup Condition="'$(NinjaTraderAvailable)' != 'true'">
+    <Compile Remove="NinjaTrader\**\*.cs" />
+  </ItemGroup>
+
+  <Target Name="WarnIfNinjaTraderMissing" BeforeTargets="Build" Condition="'$(NinjaTraderAvailable)' != 'true'">
+    <Warning Text="NinjaTrader 8 assemblies not found at '$(NinjaTraderBinDir)'. NinjaTrader-coupled sources were excluded. Set NinjaTraderInstallDir / NinjaTraderBinDir (or NT_INSTALL_DIR) to build the full AddOn." />
+  </Target>
+
+</Project>

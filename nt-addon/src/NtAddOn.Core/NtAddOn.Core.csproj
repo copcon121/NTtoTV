@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    NtAddOn.Core holds all platform-agnostic, fully testable logic for the
+    NinjaTrader 8 GC AddOn: the configuration model, stream identity, and the
+    normalized-event/domain types. It deliberately has NO dependency on the
+    NinjaTrader assemblies so it can be built and unit/property-tested in any
+    environment (CI, Linux, machines without NinjaTrader installed).
+
+    Target: netstandard2.0 so it can be consumed by both the net48 NinjaTrader
+    AddOn project (NinjaTrader 8 runs on .NET Framework 4.8) and the modern
+    test project.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>NtAddOn.Core</RootNamespace>
+    <AssemblyName>NtAddOn.Core</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+</Project>

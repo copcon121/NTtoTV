@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Test and tooling caches
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+dist/
+dist-ssr/
+coverage/
+.vite/
+*.local
+*.tsbuildinfo
+
+# .NET / NinjaTrader build outputs
+bin/
+obj/
+packages/
+*.nupkg
+*.user
+.vs/
+.idea/
+
+# Runtime data and generated databases
+backend/data/
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+
+# Logs and ad-hoc run outputs
+*.log
+*_out.txt
+nt_test_out.txt
+result.txt
+
+# NT historical export samples / market data dumps
+GC *.txt
+*.Ask.txt
+*.Bid.txt
+*.Last.txt
+
+# Compiled trading artifacts
+*.ex5
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db

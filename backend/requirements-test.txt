@@ -1,0 +1,6 @@
+# Test/dev dependencies for the GC Chart Platform backend.
+# Install with: pip install -r requirements-test.txt
+-r requirements.txt
+pytest>=8.0
+hypothesis>=6.100
+httpx>=0.27
