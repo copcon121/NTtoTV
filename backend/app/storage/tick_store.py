@@ -29,6 +29,7 @@ whole-file delete rather than a ``DELETE`` + ``VACUUM``. (Requirements 7.4, 7.5)
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 from datetime import date, datetime, timedelta, timezone
@@ -39,7 +40,14 @@ from ..config import settings
 from ..models import NormalizedQuote, NormalizedTrade, from_canonical_ms
 from .connection import DEFAULT_BUSY_TIMEOUT_MS, SingleWriter, connect, connect_reader
 
-__all__ = ["TickStore", "sanitize_contract", "SYMBOL", "TICK_SHARD_SCHEMA"]
+__all__ = [
+    "TickStore",
+    "sanitize_contract",
+    "trade_event_key",
+    "quote_event_key",
+    "SYMBOL",
+    "TICK_SHARD_SCHEMA",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +78,57 @@ def sanitize_contract(contract: str) -> str:
     return "".join(c if (c.isalnum() or c in _SAFE_EXTRA) else "_" for c in contract)
 
 
+def _key_part(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.10f}"
+    return str(value)
+
+
+def _event_key(kind: str, *parts: object) -> str:
+    payload = "|".join((kind, *(_key_part(part) for part in parts)))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def trade_event_key(
+    sequence: int,
+    time: int,
+    price: float,
+    volume: int,
+    bid: float | None,
+    ask: float | None,
+    best_bid: float | None,
+    best_ask: float | None,
+) -> str:
+    """Return the stable storage key for a raw trade event.
+
+    The stream ``sequence`` is included but is not the sole key. Playback,
+    reconnects, and NT export imports can reset sequence numbering; including
+    timestamp and payload prevents unrelated rows from overwriting each other.
+    Exact replays of the same event still collapse to one row.
+    """
+    return _event_key(
+        "trade", sequence, time, price, volume, bid, ask, best_bid, best_ask
+    )
+
+
+def quote_event_key(
+    sequence: int,
+    time: int,
+    bid: float | None,
+    ask: float | None,
+    bid_size: int | None,
+    ask_size: int | None,
+) -> str:
+    """Return the stable storage key for a raw quote snapshot."""
+    return _event_key("quote", sequence, time, bid, ask, bid_size, ask_size)
+
+
 # Each day shard contains a ``ticks`` table and a ``quotes`` table. (Req 7.2)
 TICK_SHARD_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ticks (
+    event_key  TEXT    NOT NULL,
     sequence   INTEGER NOT NULL,
     time       INTEGER NOT NULL,
     price      REAL    NOT NULL,
@@ -82,20 +138,23 @@ CREATE TABLE IF NOT EXISTS ticks (
     best_bid   REAL,
     best_ask   REAL,
     side       TEXT,
-    PRIMARY KEY (sequence)
+    PRIMARY KEY (event_key)
 );
 CREATE INDEX IF NOT EXISTS idx_ticks_time ON ticks(time);
+CREATE INDEX IF NOT EXISTS idx_ticks_sequence ON ticks(sequence);
 
 CREATE TABLE IF NOT EXISTS quotes (
+    event_key  TEXT    NOT NULL,
     sequence   INTEGER NOT NULL,
     time       INTEGER NOT NULL,
     bid        REAL,
     ask        REAL,
     bid_size   INTEGER,
     ask_size   INTEGER,
-    PRIMARY KEY (sequence)
+    PRIMARY KEY (event_key)
 );
 CREATE INDEX IF NOT EXISTS idx_quotes_time ON quotes(time);
+CREATE INDEX IF NOT EXISTS idx_quotes_sequence ON quotes(sequence);
 """
 
 
@@ -150,10 +209,24 @@ class TickStore:
         day = from_canonical_ms(t.time).date()
         writer = self._writer_for(self.shard_path(t.contract, day))
         writer.execute(
-            "INSERT OR REPLACE INTO ticks "
-            "(sequence, time, price, volume, bid, ask, best_bid, best_ask, side) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+            "INSERT INTO ticks "
+            "(event_key, sequence, time, price, volume, bid, ask, best_bid, best_ask, side) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) "
+            "ON CONFLICT(event_key) DO UPDATE SET "
+            "sequence=excluded.sequence, time=excluded.time, price=excluded.price, "
+            "volume=excluded.volume, bid=excluded.bid, ask=excluded.ask, "
+            "best_bid=excluded.best_bid, best_ask=excluded.best_ask, side=excluded.side",
             (
+                trade_event_key(
+                    t.sequence,
+                    t.time,
+                    t.price,
+                    t.volume,
+                    t.bid,
+                    t.ask,
+                    t.best_bid,
+                    t.best_ask,
+                ),
                 t.sequence,
                 t.time,
                 t.price,
@@ -173,10 +246,28 @@ class TickStore:
         day = from_canonical_ms(q.time).date()
         writer = self._writer_for(self.shard_path(q.contract, day))
         writer.execute(
-            "INSERT OR REPLACE INTO quotes "
-            "(sequence, time, bid, ask, bid_size, ask_size) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (q.sequence, q.time, q.bid, q.ask, q.bid_size, q.ask_size),
+            "INSERT INTO quotes "
+            "(event_key, sequence, time, bid, ask, bid_size, ask_size) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(event_key) DO UPDATE SET "
+            "sequence=excluded.sequence, time=excluded.time, bid=excluded.bid, "
+            "ask=excluded.ask, bid_size=excluded.bid_size, ask_size=excluded.ask_size",
+            (
+                quote_event_key(
+                    q.sequence,
+                    q.time,
+                    q.bid,
+                    q.ask,
+                    q.bid_size,
+                    q.ask_size,
+                ),
+                q.sequence,
+                q.time,
+                q.bid,
+                q.ask,
+                q.bid_size,
+                q.ask_size,
+            ),
         )
 
     # -- reads ----------------------------------------------------------------
@@ -210,7 +301,7 @@ class TickStore:
                     "SELECT sequence, time, price, volume, bid, ask, "
                     "best_bid, best_ask FROM ticks "
                     "WHERE time BETWEEN ? AND ? "
-                    "ORDER BY time ASC, sequence ASC",
+                    "ORDER BY time ASC, sequence ASC, event_key ASC",
                     (frm, to),
                 ).fetchall()
             finally:
@@ -254,7 +345,7 @@ class TickStore:
                 rows = conn.execute(
                     "SELECT sequence, time, bid, ask, bid_size, ask_size "
                     "FROM quotes WHERE time BETWEEN ? AND ? "
-                    "ORDER BY time ASC, sequence ASC",
+                    "ORDER BY time ASC, sequence ASC, event_key ASC",
                     (frm, to),
                 ).fetchall()
             finally:
@@ -408,5 +499,129 @@ class TickStore:
             )
             writer = SingleWriter(conn)
             writer.executescript(TICK_SHARD_SCHEMA)
+            self._migrate_legacy_sequence_primary_keys(writer)
             self._writers[path] = writer
             return writer
+
+    def _migrate_legacy_sequence_primary_keys(self, writer: SingleWriter) -> None:
+        """Migrate pre-event-key shards whose primary key was only sequence."""
+
+        def op(conn) -> None:
+            self._migrate_legacy_ticks(conn)
+            self._migrate_legacy_quotes(conn)
+
+        writer.write(op)
+
+    @staticmethod
+    def _table_columns(conn, table: str) -> set[str]:
+        return {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
+
+    @classmethod
+    def _migrate_legacy_ticks(cls, conn) -> None:
+        if "event_key" in cls._table_columns(conn, "ticks"):
+            return
+        conn.execute("ALTER TABLE ticks RENAME TO ticks_legacy_sequence_pk")
+        conn.execute(
+            """
+            CREATE TABLE ticks (
+                event_key  TEXT    NOT NULL,
+                sequence   INTEGER NOT NULL,
+                time       INTEGER NOT NULL,
+                price      REAL    NOT NULL,
+                volume     INTEGER NOT NULL,
+                bid        REAL,
+                ask        REAL,
+                best_bid   REAL,
+                best_ask   REAL,
+                side       TEXT,
+                PRIMARY KEY (event_key)
+            )
+            """
+        )
+        rows = conn.execute(
+            "SELECT sequence, time, price, volume, bid, ask, best_bid, best_ask, side "
+            "FROM ticks_legacy_sequence_pk ORDER BY time ASC, sequence ASC"
+        ).fetchall()
+        conn.executemany(
+            "INSERT OR IGNORE INTO ticks "
+            "(event_key, sequence, time, price, volume, bid, ask, best_bid, best_ask, side) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                (
+                    trade_event_key(
+                        row["sequence"],
+                        row["time"],
+                        row["price"],
+                        row["volume"],
+                        row["bid"],
+                        row["ask"],
+                        row["best_bid"],
+                        row["best_ask"],
+                    ),
+                    row["sequence"],
+                    row["time"],
+                    row["price"],
+                    row["volume"],
+                    row["bid"],
+                    row["ask"],
+                    row["best_bid"],
+                    row["best_ask"],
+                    row["side"],
+                )
+                for row in rows
+            ),
+        )
+        conn.execute("DROP TABLE ticks_legacy_sequence_pk")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ticks_time ON ticks(time)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ticks_sequence ON ticks(sequence)")
+
+    @classmethod
+    def _migrate_legacy_quotes(cls, conn) -> None:
+        if "event_key" in cls._table_columns(conn, "quotes"):
+            return
+        conn.execute("ALTER TABLE quotes RENAME TO quotes_legacy_sequence_pk")
+        conn.execute(
+            """
+            CREATE TABLE quotes (
+                event_key  TEXT    NOT NULL,
+                sequence   INTEGER NOT NULL,
+                time       INTEGER NOT NULL,
+                bid        REAL,
+                ask        REAL,
+                bid_size   INTEGER,
+                ask_size   INTEGER,
+                PRIMARY KEY (event_key)
+            )
+            """
+        )
+        rows = conn.execute(
+            "SELECT sequence, time, bid, ask, bid_size, ask_size "
+            "FROM quotes_legacy_sequence_pk ORDER BY time ASC, sequence ASC"
+        ).fetchall()
+        conn.executemany(
+            "INSERT OR IGNORE INTO quotes "
+            "(event_key, sequence, time, bid, ask, bid_size, ask_size) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                (
+                    quote_event_key(
+                        row["sequence"],
+                        row["time"],
+                        row["bid"],
+                        row["ask"],
+                        row["bid_size"],
+                        row["ask_size"],
+                    ),
+                    row["sequence"],
+                    row["time"],
+                    row["bid"],
+                    row["ask"],
+                    row["bid_size"],
+                    row["ask_size"],
+                )
+                for row in rows
+            ),
+        )
+        conn.execute("DROP TABLE quotes_legacy_sequence_pk")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_time ON quotes(time)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_quotes_sequence ON quotes(sequence)")

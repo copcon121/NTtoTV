@@ -154,6 +154,60 @@ def test_record_and_read_range_round_trip(store: TickStore):
 
 
 @pytest.mark.unit
+def test_record_trade_sequence_reset_does_not_overwrite_rows(store: TickStore):
+    contract = "GC 08-26"
+    first = _trade(contract, _ms(2026, 8, 1, 10), sequence=1, price=2345.6, volume=2)
+    reset = _trade(contract, _ms(2026, 8, 1, 11), sequence=1, price=2346.0, volume=5)
+
+    store.record_trade(first)
+    store.record_trade(reset)
+
+    out = list(store.read_range(contract, _ms(2026, 8, 1, 0), _ms(2026, 8, 1, 23)))
+    assert [(r.sequence, r.time, r.price, r.volume) for r in out] == [
+        (1, first.time, 2345.6, 2),
+        (1, reset.time, 2346.0, 5),
+    ]
+
+
+@pytest.mark.unit
+def test_record_trade_exact_replay_is_deduplicated(store: TickStore):
+    contract = "GC 08-26"
+    trade = _trade(contract, _ms(2026, 8, 1, 10), sequence=1, price=2345.6, volume=2)
+
+    store.record_trade(trade)
+    store.record_trade(trade)
+
+    out = list(store.read_range(contract, _ms(2026, 8, 1, 0), _ms(2026, 8, 1, 23)))
+    assert len(out) == 1
+    assert out[0].sequence == 1 and out[0].price == 2345.6
+
+
+@pytest.mark.unit
+def test_record_quote_sequence_reset_does_not_overwrite_rows(store: TickStore):
+    contract = "GC 08-26"
+    first = _quote(contract, _ms(2026, 8, 1, 10), sequence=1)
+    reset = NormalizedQuote(
+        symbol="GC",
+        contract=contract,
+        time=_ms(2026, 8, 1, 11),
+        bid=2346.1,
+        ask=2346.3,
+        bid_size=3,
+        ask_size=4,
+        sequence=1,
+    )
+
+    store.record_quote(first)
+    store.record_quote(reset)
+
+    out = list(store.read_quotes(contract, _ms(2026, 8, 1, 0), _ms(2026, 8, 1, 23)))
+    assert [(q.sequence, q.time, q.bid, q.ask) for q in out] == [
+        (1, first.time, 2345.5, 2345.7),
+        (1, reset.time, 2346.1, 2346.3),
+    ]
+
+
+@pytest.mark.unit
 def test_read_range_spans_multiple_day_shards(store: TickStore):
     contract = "GC 08-26"
     d1 = _trade(contract, _ms(2026, 8, 1, 23, 59), sequence=1)
