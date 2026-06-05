@@ -1,7 +1,9 @@
 param(
     [switch]$DryRun,
     [switch]$NoBackup,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$StopBackend,
+    [switch]$RestartBackend
 )
 
 Set-StrictMode -Version Latest
@@ -107,6 +109,92 @@ function Get-BlockingProcesses {
     return $processes
 }
 
+function Stop-BackendProcesses {
+    param([array]$Processes)
+
+    if ($Processes.Count -eq 0) {
+        return
+    }
+
+    foreach ($process in $Processes) {
+        Write-Info ("Stopping backend process PID {0}: {1}" -f $process.ProcessId, $process.Name)
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+
+    $ids = @($Processes | ForEach-Object { [int]$_.ProcessId })
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        $remaining = @(Get-Process -Id $ids -ErrorAction SilentlyContinue)
+        if ($remaining.Count -eq 0) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    $left = ($remaining | ForEach-Object { $_.Id }) -join ", "
+    throw "Backend process(es) did not stop in time: $left"
+}
+
+function Wait-BackendHealth {
+    param([int]$TimeoutSeconds = 20)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        try {
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/health" -TimeoutSec 2
+            Write-Info ("Backend health OK: status={0}, version={1}" -f $health.status, $health.version)
+            return $true
+        } catch {
+            Start-Sleep -Seconds 1
+        }
+    } while ((Get-Date) -lt $deadline)
+
+    Write-Warn "Backend was started, but /api/health did not respond before timeout."
+    return $false
+}
+
+function Start-BackendIfRequested {
+    param(
+        [string]$Root,
+        [bool]$DryRunMode
+    )
+
+    if (-not $RestartBackend) {
+        return
+    }
+
+    if ($DryRunMode) {
+        Write-Info "Dry run: would start backend on http://127.0.0.1:8000 after reset."
+        return
+    }
+
+    $existing = @(Get-BlockingProcesses -Root $Root)
+    if ($existing.Count -gt 0) {
+        Write-Info "Backend already appears to be running; not starting another instance."
+        return
+    }
+
+    $backendDir = Join-Path $Root "backend"
+    $exe = Join-Path $backendDir ".venv\Scripts\uvicorn.exe"
+    if (-not (Test-Path -LiteralPath $exe)) {
+        throw "Cannot restart backend because uvicorn was not found: $exe"
+    }
+
+    $outLog = Join-Path $backendDir "reset-backend.out.log"
+    $errLog = Join-Path $backendDir "reset-backend.err.log"
+    $process = Start-Process `
+        -FilePath $exe `
+        -ArgumentList @("app.app:app", "--host", "0.0.0.0", "--port", "8000") `
+        -WorkingDirectory $backendDir `
+        -RedirectStandardOutput $outLog `
+        -RedirectStandardError $errLog `
+        -WindowStyle Hidden `
+        -PassThru
+
+    Write-Info ("Started backend launcher PID {0}. Logs: {1}, {2}" -f $process.Id, $outLog, $errLog)
+    Wait-BackendHealth | Out-Null
+}
+
 function New-UniqueBackupPath {
     param(
         [string]$BackupRoot,
@@ -141,6 +229,7 @@ if (-not $summary.Exists) {
     if (-not $DryRun) {
         New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
     }
+    Start-BackendIfRequested -Root $repoRoot -DryRunMode $DryRun
     exit 0
 }
 
@@ -148,7 +237,16 @@ Write-Info ("Found {0} files, {1} SQLite-related files, total {2}." -f `
     $summary.FileCount, $summary.SqliteCount, (Format-Bytes -Bytes $summary.TotalBytes))
 
 $blockers = @(Get-BlockingProcesses -Root $repoRoot)
-if ($blockers.Count -gt 0 -and -not $Force) {
+if ($blockers.Count -gt 0 -and $StopBackend) {
+    if ($DryRun) {
+        foreach ($process in $blockers) {
+            Write-Info ("Dry run: would stop backend process PID {0}: {1}" -f $process.ProcessId, $process.CommandLine)
+        }
+    } else {
+        Stop-BackendProcesses -Processes $blockers
+        Start-Sleep -Seconds 1
+    }
+} elseif ($blockers.Count -gt 0 -and -not $Force) {
     Write-Warn "Backend-like processes are running from this repo. Close them before resetting data."
     foreach ($process in $blockers) {
         Write-Warn ("PID {0}: {1}" -f $process.ProcessId, $process.CommandLine)
@@ -164,6 +262,7 @@ if ($DryRun) {
         $backupPath = New-UniqueBackupPath -BackupRoot $backupRoot -Stamp $stamp
         Write-Info "Dry run: would move $dataDir to $backupPath and recreate a clean data directory."
     }
+    Start-BackendIfRequested -Root $repoRoot -DryRunMode $true
     exit 0
 }
 
@@ -172,6 +271,7 @@ if ($NoBackup) {
     Remove-Item -LiteralPath $dataDir -Recurse -Force
     New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
     Write-Info "Active data reset complete."
+    Start-BackendIfRequested -Root $repoRoot -DryRunMode $false
     exit 0
 }
 
@@ -184,3 +284,4 @@ New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 
 Write-Info "Active data reset complete. Backend will recreate SQLite files on next stream."
 Write-Info "Local backup kept at: $backupPath"
+Start-BackendIfRequested -Root $repoRoot -DryRunMode $false

@@ -8,7 +8,7 @@ echo GC market data reset
 echo Repo: %CD%
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Reset-MarketData.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Reset-MarketData.ps1" -StopBackend -RestartBackend
 set RESET_EXIT=%ERRORLEVEL%
 
 echo.
