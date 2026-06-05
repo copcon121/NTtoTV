@@ -629,6 +629,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
         private async Task SenderLoopAsync(CancellationToken token)
         {
             int attempt = 0;
+            string pendingFrame = null;
             while (!token.IsCancellationRequested)
             {
                 TimeSpan? reconnectDelay = null;
@@ -637,17 +638,26 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                     await EnsureConnectedAsync(token).ConfigureAwait(false);
                     attempt = 0;
 
-                    foreach (string frame in outbound.GetConsumingEnumerable(token))
+                    while (!token.IsCancellationRequested)
                     {
-                        byte[] bytes = Encoding.UTF8.GetBytes(frame);
+                        if (pendingFrame == null)
+                            pendingFrame = outbound.Take(token);
+
+                        byte[] bytes = Encoding.UTF8.GetBytes(pendingFrame);
                         await socket.SendAsync(
                             new ArraySegment<byte>(bytes),
                             WebSocketMessageType.Text, true, token).ConfigureAwait(false);
+                        pendingFrame = null;
                     }
                 }
                 catch (OperationCanceledException)
                 {
                     if (token.IsCancellationRequested) return;
+                }
+                catch (InvalidOperationException)
+                {
+                    if (outbound.IsCompleted) return;
+                    reconnectDelay = FibonacciDelay(attempt++);
                 }
                 catch (Exception ex)
                 {
