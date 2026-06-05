@@ -19,7 +19,7 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Iterable, Iterator, Literal
+from typing import Iterator, Literal
 
 from app.engines.bar_aggregator import SUPPORTED_TFS, BarAggregator
 from app.engines.big_trade_engine import BigTradeEngine
@@ -95,6 +95,14 @@ class _QuoteSideEvent:
     size: int
 
 
+@dataclass(slots=True)
+class _StreamStats:
+    trades: int = 0
+    quotes: int = 0
+    range_from: int | None = None
+    range_to: int | None = None
+
+
 def parse_utc_offset(value: str) -> tzinfo:
     """Parse ``+HH:MM``/``-HH:MM`` into a fixed-offset timezone."""
     text = value.strip()
@@ -166,6 +174,7 @@ def import_nt_export_gap(
     export_tz: tzinfo = timezone.utc,
     dry_run: bool = False,
     rebuild: bool = True,
+    chunk_size: int = 100_000,
 ) -> ImportSummary:
     """Import an NT export set into Tick_Store and optionally rebuild cache.
 
@@ -176,6 +185,8 @@ def import_nt_export_gap(
     """
     if mode not in ("missing-only", "replace-range"):
         raise ValueError(f"unsupported import mode: {mode!r}")
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be > 0")
 
     store = TickStore(ticks_dir=ticks_dir)
     cache = (
@@ -184,32 +195,58 @@ def import_nt_export_gap(
         else None
     )
     try:
-        trades = list(iter_last_trades(paths.last, symbol, contract, export_tz, frm, to))
-        quotes = list(iter_quotes(paths.bid, paths.ask, symbol, contract, export_tz, frm, to))
-        actual_from, actual_to = _effective_range(frm, to, trades, quotes)
-
         summary = ImportSummary(
             symbol=symbol,
             contract=contract,
             mode=mode,
             dry_run=dry_run,
-            range_from=actual_from,
-            range_to=actual_to,
-            trades=len(trades),
-            quotes=len(quotes),
+            range_from=frm,
+            range_to=to,
         )
 
+        if dry_run:
+            stats = _stream_export_records(
+                paths=paths,
+                symbol=symbol,
+                contract=contract,
+                export_tz=export_tz,
+                frm=frm,
+                to=to,
+                store=None,
+                chunk_size=chunk_size,
+            )
+            _apply_stream_stats(summary, stats)
+            if summary.range_from is not None and summary.range_to is not None:
+                before_trades, before_quotes = count_raw_range(
+                    store, contract, summary.range_from, summary.range_to
+                )
+                summary.raw_trades_before = before_trades
+                summary.raw_quotes_before = before_quotes
+            summary.raw_trades_after = summary.raw_trades_before
+            summary.raw_quotes_after = summary.raw_quotes_before
+            return summary
+
+        if mode == "replace-range" and (frm is None or to is None):
+            stats = _stream_export_records(
+                paths=paths,
+                symbol=symbol,
+                contract=contract,
+                export_tz=export_tz,
+                frm=frm,
+                to=to,
+                store=None,
+                chunk_size=chunk_size,
+            )
+            _apply_stream_stats(summary, stats)
+
+        actual_from = summary.range_from
+        actual_to = summary.range_to
         if actual_from is not None and actual_to is not None:
             before_trades, before_quotes = count_raw_range(
                 store, contract, actual_from, actual_to
             )
             summary.raw_trades_before = before_trades
             summary.raw_quotes_before = before_quotes
-
-        if dry_run:
-            summary.raw_trades_after = summary.raw_trades_before
-            summary.raw_quotes_after = summary.raw_quotes_before
-            return summary
 
         if mode == "replace-range" and actual_from is not None and actual_to is not None:
             deleted_trades, deleted_quotes = delete_raw_range(
@@ -218,11 +255,20 @@ def import_nt_export_gap(
             summary.deleted_trades = deleted_trades
             summary.deleted_quotes = deleted_quotes
 
-        for quote in quotes:
-            store.record_quote(quote)
-        for trade in trades:
-            store.record_trade(trade)
+        stats = _stream_export_records(
+            paths=paths,
+            symbol=symbol,
+            contract=contract,
+            export_tz=export_tz,
+            frm=frm,
+            to=to,
+            store=store,
+            chunk_size=chunk_size,
+        )
+        _apply_stream_stats(summary, stats)
 
+        actual_from = summary.range_from
+        actual_to = summary.range_to
         if actual_from is not None and actual_to is not None:
             after_trades, after_quotes = count_raw_range(
                 store, contract, actual_from, actual_to
@@ -247,6 +293,67 @@ def import_nt_export_gap(
             cache.close()
 
 
+def _stream_export_records(
+    *,
+    paths: NtExportPaths,
+    symbol: str,
+    contract: str,
+    export_tz: tzinfo,
+    frm: int | None,
+    to: int | None,
+    store: TickStore | None,
+    chunk_size: int,
+) -> _StreamStats:
+    stats = _StreamStats(range_from=frm, range_to=to)
+    trade_batch: list[NormalizedTrade] = []
+    quote_batch: list[NormalizedQuote] = []
+
+    for trade in iter_last_trades(paths.last, symbol, contract, export_tz, frm, to):
+        stats.trades += 1
+        _include_stream_time(stats, trade.time, frm, to)
+        if store is None:
+            continue
+        trade_batch.append(trade)
+        if len(trade_batch) >= chunk_size:
+            store.record_trades(trade_batch)
+            trade_batch.clear()
+    if store is not None and trade_batch:
+        store.record_trades(trade_batch)
+
+    for quote in iter_quotes(paths.bid, paths.ask, symbol, contract, export_tz, frm, to):
+        stats.quotes += 1
+        _include_stream_time(stats, quote.time, frm, to)
+        if store is None:
+            continue
+        quote_batch.append(quote)
+        if len(quote_batch) >= chunk_size:
+            store.record_quotes(quote_batch)
+            quote_batch.clear()
+    if store is not None and quote_batch:
+        store.record_quotes(quote_batch)
+
+    return stats
+
+
+def _include_stream_time(
+    stats: _StreamStats,
+    ts: int,
+    frm: int | None,
+    to: int | None,
+) -> None:
+    if frm is None:
+        stats.range_from = ts if stats.range_from is None else min(stats.range_from, ts)
+    if to is None:
+        stats.range_to = ts if stats.range_to is None else max(stats.range_to, ts)
+
+
+def _apply_stream_stats(summary: ImportSummary, stats: _StreamStats) -> None:
+    summary.trades = stats.trades
+    summary.quotes = stats.quotes
+    summary.range_from = stats.range_from
+    summary.range_to = stats.range_to
+
+
 def iter_last_trades(
     path: Path | str | None,
     symbol: str,
@@ -268,6 +375,8 @@ def iter_last_trades(
             if len(cols) < 5:
                 raise ValueError(f"{p}:{line_no}: expected 5 columns in Last export")
             ts = parse_nt_timestamp(cols[0], export_tz)
+            if to is not None and ts > to:
+                break
             if not _in_range(ts, frm, to):
                 continue
             price = _parse_required_float(cols[1], p, line_no, "last")
@@ -298,8 +407,8 @@ def iter_quotes(
     to: int | None,
 ) -> Iterator[NormalizedQuote]:
     """Merge separate NT Bid/Ask exports into full quote snapshots."""
-    bid_iter = _iter_quote_side(bid_path, "bid", export_tz)
-    ask_iter = _iter_quote_side(ask_path, "ask", export_tz)
+    bid_iter = _iter_quote_side(bid_path, "bid", export_tz, to)
+    ask_iter = _iter_quote_side(ask_path, "ask", export_tz, to)
     bid_event = next(bid_iter, None)
     ask_event = next(ask_iter, None)
     last_bid: float | None = None
@@ -345,6 +454,7 @@ def _iter_quote_side(
     path: Path | str | None,
     side: Literal["bid", "ask"],
     export_tz: tzinfo,
+    to: int | None,
 ) -> Iterator[_QuoteSideEvent]:
     if path is None:
         return
@@ -359,6 +469,8 @@ def _iter_quote_side(
             if len(cols) < 5:
                 raise ValueError(f"{p}:{line_no}: expected 5 columns in {side} export")
             ts = parse_nt_timestamp(cols[0], export_tz)
+            if to is not None and ts > to:
+                break
             price = _parse_required_float(cols[1], p, line_no, side)
             size = _parse_required_int(cols[4], p, line_no, f"{side}_size")
             yield _QuoteSideEvent(
@@ -614,23 +726,6 @@ def _shards_for_range(store: TickStore, contract: str, frm: int, to: int) -> Ite
         day += timedelta(days=1)
 
 
-def _effective_range(
-    frm: int | None,
-    to: int | None,
-    trades: Iterable[NormalizedTrade],
-    quotes: Iterable[NormalizedQuote],
-) -> tuple[int | None, int | None]:
-    times = [row.time for row in trades]
-    times.extend(row.time for row in quotes)
-    if frm is not None:
-        times.append(frm)
-    if to is not None:
-        times.append(to)
-    if not times:
-        return frm, to
-    return (min(times) if frm is None else frm, max(times) if to is None else to)
-
-
 def _in_range(ts: int, frm: int | None, to: int | None) -> bool:
     return (frm is None or ts >= frm) and (to is None or ts <= to)
 
@@ -718,6 +813,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=("missing-only", "replace-range"),
         default="missing-only",
     )
+    parser.add_argument("--chunk-size", type=int, default=100_000)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-rebuild", action="store_true")
     args = parser.parse_args(argv)
@@ -742,6 +838,7 @@ def main(argv: list[str] | None = None) -> int:
         export_tz=export_tz,
         dry_run=args.dry_run,
         rebuild=not args.no_rebuild,
+        chunk_size=args.chunk_size,
     )
     _print_summary(summary)
     return 0

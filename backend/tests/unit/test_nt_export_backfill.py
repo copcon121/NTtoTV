@@ -77,6 +77,31 @@ def test_iter_quotes_merges_bid_and_ask_exports(tmp_path: Path):
 
 
 @pytest.mark.unit
+def test_iter_quotes_stops_side_files_after_to_bound(tmp_path: Path):
+    bid = _write(
+        tmp_path / "GC 08-26.Bid.txt",
+        """
+        20260602 000000 0160000;4514.0;;;3
+        20260602 000001 0000000;bad-price;;;1
+        """,
+    )
+    ask = _write(
+        tmp_path / "GC 08-26.Ask.txt",
+        """
+        20260602 000000 0200000;4514.5;;;2
+        20260602 000001 0000000;bad-price;;;1
+        """,
+    )
+    to = parse_nt_timestamp("20260602 000000 0500000", timezone.utc)
+
+    quotes = list(iter_quotes(bid, ask, _SYMBOL, _CONTRACT, timezone.utc, None, to))
+
+    assert [(q.time, q.bid, q.ask, q.bid_size, q.ask_size) for q in quotes] == [
+        (1_780_358_400_020, 4514.0, 4514.5, 3, 2),
+    ]
+
+
+@pytest.mark.unit
 def test_import_nt_export_gap_writes_raw_and_rebuilds_cache(tmp_path: Path):
     last = _write(
         tmp_path / "GC 08-26.Last.txt",

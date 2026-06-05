@@ -3,11 +3,15 @@ param(
     [string]$Last,
     [string]$Bid,
     [string]$Ask,
+    [string]$DataDir,
+    [string]$TicksDir,
+    [string]$CacheDb,
     [string]$From,
     [string]$To,
     [string]$UtcOffset = "+00:00",
     [ValidateSet("missing-only", "replace-range")]
     [string]$Mode = "missing-only",
+    [int]$ChunkSize = 100000,
     [switch]$DryRun,
     [switch]$NoRebuild
 )
@@ -43,9 +47,19 @@ $argsList = @(
     "--bid", $Bid,
     "--ask", $Ask,
     "--utc-offset", $UtcOffset,
-    "--mode", $Mode
+    "--mode", $Mode,
+    "--chunk-size", $ChunkSize
 )
 
+if (-not [string]::IsNullOrWhiteSpace($DataDir)) {
+    $argsList += @("--data-dir", $DataDir)
+}
+if (-not [string]::IsNullOrWhiteSpace($TicksDir)) {
+    $argsList += @("--ticks-dir", $TicksDir)
+}
+if (-not [string]::IsNullOrWhiteSpace($CacheDb)) {
+    $argsList += @("--cache-db", $CacheDb)
+}
 if (-not [string]::IsNullOrWhiteSpace($From)) {
     $argsList += @("--from", $From)
 }
