@@ -22,7 +22,9 @@
 //     "candidateContracts": ["GC 06-26", "GC 08-26", "GC 12-26"],
 //     "backendHost": "127.0.0.1",
 //     "backendPort": 8000,
-//     "backendPath": "/ws/nt"
+//     "backendPath": "/ws/nt",
+//     "outboundQueueCapacity": 200000,
+//     "dropOnOverflow": false
 //   }
 // When absent, the defaults below are used. EDIT the contract months to match
 // the GC contracts your data feed actually provides.
@@ -111,6 +113,8 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
         public string BackendHost = "127.0.0.1";
         public int BackendPort = 8000;
         public string BackendPath = "/ws/nt";
+        public int OutboundQueueCapacity = 20000;
+        public bool DropOnOverflow = true;
 
         public Uri BuildUri()
         {
@@ -156,6 +160,14 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             int port;
             if (ExtractInt(json, "backendPort", out port))
                 BackendPort = port;
+
+            int capacity;
+            if (ExtractInt(json, "outboundQueueCapacity", out capacity) && capacity > 0)
+                OutboundQueueCapacity = capacity;
+
+            bool drop;
+            if (ExtractBool(json, "dropOnOverflow", out drop))
+                DropOnOverflow = drop;
         }
 
         private static string ExtractString(string json, string key)
@@ -187,6 +199,30 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 else if (c == ',' || c == '}') break;
             }
             return sb.Length > 0 && int.TryParse(sb.ToString(), out value);
+        }
+
+        private static bool ExtractBool(string json, string key, out bool value)
+        {
+            value = false;
+            int i = json.IndexOf("\"" + key + "\"", StringComparison.Ordinal);
+            if (i < 0) return false;
+            i = json.IndexOf(':', i);
+            if (i < 0) return false;
+            int j = i + 1;
+            while (j < json.Length && char.IsWhiteSpace(json[j])) j++;
+            if (j + 4 <= json.Length &&
+                string.Compare(json, j, "true", 0, 4, StringComparison.OrdinalIgnoreCase) == 0)
+            {
+                value = true;
+                return true;
+            }
+            if (j + 5 <= json.Length &&
+                string.Compare(json, j, "false", 0, 5, StringComparison.OrdinalIgnoreCase) == 0)
+            {
+                value = false;
+                return true;
+            }
+            return false;
         }
 
         private static List<string> ExtractStringArray(string json, string key)
@@ -224,8 +260,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
         private readonly Uri backendUri;
 
         // Outbound frame queue (string JSON), drained by the sender loop.
-        private readonly BlockingCollection<string> outbound =
-            new BlockingCollection<string>(20000);
+        private readonly BlockingCollection<string> outbound;
 
         // Per-stream monotonic sequence counters keyed by "contract|channel".
         private readonly Dictionary<string, long> sequences = new Dictionary<string, long>(StringComparer.Ordinal);
@@ -256,6 +291,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             this.config = config;
             this.log = log != null ? log : delegate { };
             this.backendUri = config.BuildUri();
+            this.outbound = new BlockingCollection<string>(config.OutboundQueueCapacity);
         }
 
         public void Start()
@@ -279,7 +315,9 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 Subscribe(config.CandidateContracts[i]);
 
             log("started; forwarding " + string.Join(", ", config.CandidateContracts.ToArray()) +
-                " to " + backendUri);
+                " to " + backendUri +
+                "; queueCapacity=" + config.OutboundQueueCapacity.ToString(CultureInfo.InvariantCulture) +
+                "; dropOnOverflow=" + config.DropOnOverflow.ToString());
         }
 
         // Re-subscribe all contracts when a data connection (re)connects, so
@@ -548,7 +586,23 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
 
         private void TryEnqueue(string frame)
         {
-            // Non-blocking add; drop on overflow rather than block the NT thread.
+            if (!config.DropOnOverflow)
+            {
+                // Capture mode: backpressure playback rather than lose frames.
+                // This can slow/freeze Playback if the backend is not draining.
+                try
+                {
+                    outbound.Add(frame);
+                }
+                catch (InvalidOperationException)
+                {
+                    // shutting down
+                }
+                return;
+            }
+
+            // Live/default mode: non-blocking add; drop on overflow rather than
+            // block the NT thread.
             if (!outbound.TryAdd(frame))
             {
                 // Backpressure: discard oldest to keep the freshest tape moving.
