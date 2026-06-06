@@ -68,9 +68,9 @@ export const DRAWING_TOOLS: readonly DrawingToolDef[] = [
 
 export interface AnchorPoint {
   /**
-   * Display timestamp in seconds. Kept for labels/serialization; drawings use
-   * `logical` when present so they can sit in right-side whitespace/future
-   * space where Lightweight Charts has no concrete time point.
+   * Display timestamp in seconds. This is the stable x-axis anchor across
+   * timeframe changes. `logical` is kept only as a fallback when no timestamp
+   * mapping can be resolved, such as a chart with no loaded data.
    */
   time: UTCTimestamp;
   price: number;

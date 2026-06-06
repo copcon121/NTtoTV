@@ -160,9 +160,9 @@ class PriceRangePaneView implements IPrimitivePaneView {
   update(): void {
     const source = this._source;
     if (source.anchors.length < 2 || !source.chart || !source.series) return;
-    const x1 = anchorToCoordinate(source.chart, source.anchors[0]);
+    const x1 = anchorToCoordinate(source.chart, source.series, source.anchors[0]);
     const y1 = source.series.priceToCoordinate(source.anchors[0].price);
-    const x2 = anchorToCoordinate(source.chart, source.anchors[1]);
+    const x2 = anchorToCoordinate(source.chart, source.series, source.anchors[1]);
     const y2 = source.series.priceToCoordinate(source.anchors[1].price);
     if (x1 === null || y1 === null || x2 === null || y2 === null) return;
     this._x1 = x1 as number;

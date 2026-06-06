@@ -155,11 +155,11 @@ class TrendLinePaneView implements IPrimitivePaneView {
       return;
     }
     this.p1 = {
-      x: anchorToCoordinate(chart, anchors[0]),
+      x: anchorToCoordinate(chart, series, anchors[0]),
       y: series.priceToCoordinate(anchors[0].price),
     };
     this.p2 = {
-      x: anchorToCoordinate(chart, anchors[1]),
+      x: anchorToCoordinate(chart, series, anchors[1]),
       y: series.priceToCoordinate(anchors[1].price),
     };
   }
@@ -267,6 +267,6 @@ export class TrendLinePrimitive implements ISeriesPrimitive<Time>, IDrawing {
   }
 
   private pointIndex(point: AnchorPoint): Logical | null {
-    return this.chart ? anchorToLogical(this.chart, point) : null;
+    return this.chart && this.series ? anchorToLogical(this.chart, this.series, point) : null;
   }
 }

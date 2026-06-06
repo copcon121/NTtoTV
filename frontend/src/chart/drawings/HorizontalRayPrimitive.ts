@@ -95,7 +95,7 @@ class HorizontalRayPaneView implements IPrimitivePaneView {
   update(): void {
     const source = this._source;
     if (source.anchors.length < 1 || !source.chart || !source.series) return;
-    const x = anchorToCoordinate(source.chart, source.anchors[0]);
+    const x = anchorToCoordinate(source.chart, source.series, source.anchors[0]);
     const y = source.series.priceToCoordinate(source.anchors[0].price);
     if (x === null || y === null) return;
     this._x = x as number;

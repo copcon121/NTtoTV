@@ -145,11 +145,11 @@ class RectanglePaneView implements UpdatablePaneView {
       return;
     }
     this.p1 = {
-      x: anchorToCoordinate(chart, anchors[0]),
+      x: anchorToCoordinate(chart, series, anchors[0]),
       y: series.priceToCoordinate(anchors[0].price),
     };
     this.p2 = {
-      x: anchorToCoordinate(chart, anchors[1]),
+      x: anchorToCoordinate(chart, series, anchors[1]),
       y: series.priceToCoordinate(anchors[1].price),
     };
   }
@@ -240,11 +240,11 @@ class RectanglePriceAxisPaneView extends RectangleAxisPaneView {
 
 class RectangleTimeAxisPaneView extends RectangleAxisPaneView {
   getPoints(): [Coordinate | null, Coordinate | null] {
-    const { chart, anchors } = this.source;
-    if (!chart || anchors.length < 2) return [null, null];
+    const { chart, series, anchors } = this.source;
+    if (!chart || !series || anchors.length < 2) return [null, null];
     return [
-      anchorToCoordinate(chart, anchors[0]),
-      anchorToCoordinate(chart, anchors[1]),
+      anchorToCoordinate(chart, series, anchors[0]),
+      anchorToCoordinate(chart, series, anchors[1]),
     ];
   }
 }
@@ -296,11 +296,11 @@ abstract class RectangleAxisView implements UpdatableAxisView {
 class RectangleTimeAxisView extends RectangleAxisView {
   update(): void {
     const anchor = this.anchor;
-    if (!anchor || !this.source.chart) {
+    if (!anchor || !this.source.chart || !this.source.series) {
       this.setPosition(null);
       return;
     }
-    this.setPosition(anchorToCoordinate(this.source.chart, anchor));
+    this.setPosition(anchorToCoordinate(this.source.chart, this.source.series, anchor));
   }
 
   text(): string {

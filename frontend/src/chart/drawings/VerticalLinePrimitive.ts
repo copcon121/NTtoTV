@@ -83,11 +83,11 @@ class VerticalLinePaneView implements IPrimitivePaneView {
 
   update(): void {
     const anchor = this.source.anchors[0];
-    if (!anchor || !this.source.chart) {
+    if (!anchor || !this.source.chart || !this.source.series) {
       this.x = null;
       return;
     }
-    this.x = anchorToCoordinate(this.source.chart, anchor);
+    this.x = anchorToCoordinate(this.source.chart, this.source.series, anchor);
   }
 
   renderer(): IPrimitivePaneRenderer {
@@ -102,11 +102,11 @@ class VerticalLineTimeAxisView implements ISeriesPrimitiveAxisView {
 
   update(): void {
     const anchor = this.source.anchors[0];
-    if (!anchor || !this.source.chart) {
+    if (!anchor || !this.source.chart || !this.source.series) {
       this.x = null;
       return;
     }
-    this.x = anchorToCoordinate(this.source.chart, anchor);
+    this.x = anchorToCoordinate(this.source.chart, this.source.series, anchor);
   }
 
   visible(): boolean {
