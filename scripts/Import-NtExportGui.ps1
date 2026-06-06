@@ -204,28 +204,29 @@ if ($null -eq $choice) {
     exit 0
 }
 
-$argsList = @(
-    "-Contract", $choice.Contract,
-    "-Last", $choice.Last,
-    "-Mode", $choice.Mode
-)
+$params = @{
+    Contract = $choice.Contract
+    Last = $choice.Last
+    Mode = $choice.Mode
+    ClearDerivedRange = $true
+}
 if (-not [string]::IsNullOrWhiteSpace($choice.Bid)) {
-    $argsList += @("-Bid", $choice.Bid)
+    $params.Bid = $choice.Bid
 }
 if (-not [string]::IsNullOrWhiteSpace($choice.Ask)) {
-    $argsList += @("-Ask", $choice.Ask)
+    $params.Ask = $choice.Ask
 }
 if (-not [string]::IsNullOrWhiteSpace($choice.From)) {
-    $argsList += @("-From", $choice.From)
+    $params.From = $choice.From
 }
 if (-not [string]::IsNullOrWhiteSpace($choice.To)) {
-    $argsList += @("-To", $choice.To)
+    $params.To = $choice.To
 }
-if ($choice.SkipRecentRaw) {
-    $argsList += "-SkipRecentRaw"
+if ($choice.SkipRecentRaw -or -not $choice.HasBidAsk) {
+    $params.SkipRecentRaw = $true
 }
 if ($choice.DryRun) {
-    $argsList += "-DryRun"
+    $params.DryRun = $true
 }
 
 Write-Host "Running import..."
@@ -242,7 +243,7 @@ if ($choice.HasBidAsk) {
 }
 Write-Host ""
 
-& $importScript @argsList
+& $importScript @params
 $exitCode = $LASTEXITCODE
 
 if ($exitCode -eq 0) {
