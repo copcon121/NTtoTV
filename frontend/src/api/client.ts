@@ -17,6 +17,7 @@ import {
   type FootprintRow,
   type FootprintUpdateMessage,
   type StackedImbalance,
+  type TradingOrder,
   type Timeframe,
 } from "../socket/messages";
 
@@ -78,6 +79,49 @@ export interface ApiClientOptions {
   fetchFn?: typeof fetch;
 }
 
+export interface AuthUser {
+  id: string;
+  username: string;
+}
+
+export interface Mt5Account {
+  accountId: string;
+  login: number;
+  server: string;
+  symbolBroker?: string;
+  tradeMode: string;
+  currency?: string;
+  balance?: number;
+  equity?: number;
+  margin?: number;
+  freeMargin?: number;
+}
+
+export interface Mt5Symbol {
+  symbol: string;
+  digits: number;
+  tickSize: number;
+  minLot: number;
+  maxLot: number;
+  lotStep: number;
+  stopsLevel: number;
+  pipValue: number;
+}
+
+export interface OrderSubmitInput {
+  source: "chart_bracket" | "market_bar" | "api";
+  side: "buy" | "sell";
+  kind: "market" | "limit" | "stop";
+  volumeLots: number;
+  entryGc?: number;
+  slGc?: number;
+  tpGc?: number;
+  slDistanceGc?: number;
+  tpDistanceGc?: number;
+  gcAnchored?: boolean;
+  idempotencyKey: string;
+}
+
 export class ApiClient {
   private readonly basePath: string;
   private readonly fetchFn: typeof fetch;
@@ -85,6 +129,123 @@ export class ApiClient {
   constructor(options: ApiClientOptions = {}) {
     this.basePath = options.basePath ?? "/api";
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
+  }
+
+  async login(username: string, password: string): Promise<AuthUser> {
+    const res = await this.fetchFn(`${this.basePath}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+      throw new Error(await this.errorMessage(res, "POST /auth/login"));
+    }
+    const body = (await res.json()) as { user: AuthUser };
+    return body.user;
+  }
+
+  async me(): Promise<AuthUser | undefined> {
+    const res = await this.fetchFn(`${this.basePath}/auth/me`, {
+      credentials: "same-origin",
+    });
+    if (res.status === 401) return undefined;
+    if (!res.ok) throw new Error(await this.errorMessage(res, "GET /auth/me"));
+    const body = (await res.json()) as { user: AuthUser };
+    return body.user;
+  }
+
+  async logout(): Promise<void> {
+    const res = await this.fetchFn(`${this.basePath}/auth/logout`, {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    if (!res.ok) throw new Error(await this.errorMessage(res, "POST /auth/logout"));
+  }
+
+  async connectMt5(input: {
+    login: number;
+    password: string;
+    server: string;
+    symbolBroker: string;
+  }): Promise<Mt5Account> {
+    const res = await this.fetchFn(`${this.basePath}/mt5/connect`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(await this.errorMessage(res, "POST /mt5/connect"));
+    const body = (await res.json()) as { account: Mt5Account };
+    return body.account;
+  }
+
+  async mt5Account(): Promise<Mt5Account> {
+    const body = await this.getJson<{ account: Mt5Account }>("/mt5/account");
+    return body.account;
+  }
+
+  async mt5Symbol(): Promise<Mt5Symbol> {
+    const body = await this.getJson<{ symbol: Mt5Symbol }>("/mt5/symbol");
+    return body.symbol;
+  }
+
+  async orders(openOnly = true): Promise<TradingOrder[]> {
+    const query = new URLSearchParams({ openOnly: String(openOnly) });
+    const body = await this.getJson<{ orders: TradingOrder[] }>(
+      `/orders?${query.toString()}`,
+    );
+    return body.orders;
+  }
+
+  async createOrder(input: OrderSubmitInput): Promise<TradingOrder> {
+    const res = await this.fetchFn(`${this.basePath}/orders`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(await this.errorMessage(res, "POST /orders"));
+    const body = (await res.json()) as { order: TradingOrder };
+    return body.order;
+  }
+
+  async patchOrder(
+    orderId: string,
+    input: { entryGc?: number; slGc?: number; tpGc?: number; expectedVersion?: number },
+  ): Promise<TradingOrder> {
+    const res = await this.fetchFn(
+      `${this.basePath}/orders/${encodeURIComponent(orderId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(input),
+      },
+    );
+    if (!res.ok) throw new Error(await this.errorMessage(res, "PATCH /orders"));
+    const body = (await res.json()) as { order: TradingOrder };
+    return body.order;
+  }
+
+  async cancelOrder(orderId: string): Promise<TradingOrder> {
+    const res = await this.fetchFn(
+      `${this.basePath}/orders/${encodeURIComponent(orderId)}`,
+      { method: "DELETE", credentials: "same-origin" },
+    );
+    if (!res.ok) throw new Error(await this.errorMessage(res, "DELETE /orders"));
+    const body = (await res.json()) as { order: TradingOrder };
+    return body.order;
+  }
+
+  async closeOrder(orderId: string): Promise<TradingOrder> {
+    const res = await this.fetchFn(
+      `${this.basePath}/orders/${encodeURIComponent(orderId)}/close`,
+      { method: "POST", credentials: "same-origin" },
+    );
+    if (!res.ok) throw new Error(await this.errorMessage(res, "POST /orders/close"));
+    const body = (await res.json()) as { order: TradingOrder };
+    return body.order;
   }
 
   /** List the available symbols (Req 18.1). v1: `["GC"]`. */
@@ -398,7 +559,9 @@ export class ApiClient {
   }
 
   private async getJson<T>(path: string): Promise<T> {
-    const res = await this.fetchFn(`${this.basePath}${path}`);
+    const res = await this.fetchFn(`${this.basePath}${path}`, {
+      credentials: "same-origin",
+    });
     if (!res.ok) {
       throw new Error(`GET ${path} failed: ${res.status}`);
     }

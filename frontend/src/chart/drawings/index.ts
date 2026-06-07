@@ -8,3 +8,4 @@ export { HorizontalRayPrimitive } from "./HorizontalRayPrimitive";
 export { RectanglePrimitive } from "./RectanglePrimitive";
 export { PriceRangePrimitive } from "./PriceRangePrimitive";
 export { VerticalLinePrimitive } from "./VerticalLinePrimitive";
+export { OrderBracketPrimitive } from "./OrderBracketPrimitive";

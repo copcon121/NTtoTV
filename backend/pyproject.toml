@@ -15,6 +15,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mt5 = [
+    "MetaTrader5>=5.0.45",
+]
 test = [
     "pytest>=8.0",
     "hypothesis>=6.100",

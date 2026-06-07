@@ -92,6 +92,11 @@ describe("live chart series identity", () => {
       "quote_update",
       "big_trade",
       "alert_event",
+      "order_update",
+      "position_update",
+      "account_update",
+      "basis_update",
+      "risk_update",
       "status",
     ]);
     expect(FOOTPRINT_SUBSCRIBED_EVENTS).toEqual(["footprint_update"]);

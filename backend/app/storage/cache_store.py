@@ -21,6 +21,7 @@ from ..config import Settings, settings as default_settings
 from .alert_store import AlertStore
 from .connection import SingleWriter, connect, connect_reader
 from .keyed_store import KeyedStore
+from .order_store import OrderStore
 from .profile_store import ProfileStore
 from .records import (
     AlertEventRecord,
@@ -32,6 +33,7 @@ from .records import (
     ProfileRecord,
     VolumeDeltaRecord,
 )
+from .user_store import UserStore
 
 __all__ = ["CacheStore", "CACHE_SCHEMA", "CACHE_TABLES"]
 
@@ -201,6 +203,100 @@ CREATE INDEX IF NOT EXISTS idx_stream_gaps_stream
     ON stream_gaps(symbol, contract, channel, time);
 CREATE INDEX IF NOT EXISTS idx_alert_events_alert
     ON alert_events(alert_id, time);
+
+-- Local users + sessions for order-on-chart auth.
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user_expires
+    ON sessions(user_id, expires_at);
+
+-- One active MT5 account config per local user for the first trading slice.
+CREATE TABLE IF NOT EXISTS user_mt5_accounts (
+    id                 TEXT PRIMARY KEY,
+    user_id            TEXT NOT NULL UNIQUE,
+    login              INTEGER NOT NULL,
+    server             TEXT NOT NULL,
+    symbol_broker      TEXT NOT NULL,
+    password_encrypted TEXT NOT NULL,
+    terminal_path      TEXT,
+    trade_mode         TEXT NOT NULL DEFAULT 'demo',
+    created_at         INTEGER NOT NULL,
+    updated_at         INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+    id                         TEXT PRIMARY KEY,
+    user_id                    TEXT NOT NULL,
+    account_id                 TEXT NOT NULL,
+    source                     TEXT NOT NULL,
+    symbol_internal            TEXT NOT NULL,
+    contract_internal          TEXT NOT NULL,
+    source_contract            TEXT,
+    symbol_broker              TEXT NOT NULL,
+    side                       TEXT NOT NULL,
+    kind                       TEXT NOT NULL,
+    volume_lots                REAL NOT NULL,
+    gc_anchored                INTEGER NOT NULL,
+    status                     TEXT NOT NULL,
+    idempotency_key            TEXT NOT NULL,
+    created_at                 INTEGER NOT NULL,
+    updated_at                 INTEGER NOT NULL,
+    version                    INTEGER NOT NULL DEFAULT 1,
+    entry_gc                   REAL,
+    sl_gc                      REAL,
+    tp_gc                      REAL,
+    entry_broker               REAL,
+    sl_broker                  REAL,
+    tp_broker                  REAL,
+    fill_price_broker          REAL,
+    fill_price_gc_estimate     REAL,
+    basis_at_submit            REAL,
+    basis_at_last_sync         REAL,
+    basis_at_fill              REAL,
+    basis_stale_at_submit      INTEGER NOT NULL DEFAULT 0,
+    broker_order_ticket        INTEGER,
+    broker_position_ticket     INTEGER,
+    broker_deal_ticket         INTEGER,
+    reject_reason              TEXT,
+    last_broker_error_code     TEXT,
+    last_broker_error_message  TEXT,
+    submitted_at               INTEGER,
+    filled_at                  INTEGER,
+    closed_at                  INTEGER,
+    last_sync_at               INTEGER,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(user_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_user_status
+    ON orders(user_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS order_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id   TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload    TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_events_order
+    ON order_events(order_id, created_at);
 """
 
 
@@ -232,6 +328,8 @@ class CacheStore:
         # same single-writer seam and WAL reader factory. (Req 16, 17.3, 18.8-11)
         self._alerts = AlertStore(self._writer, self.reader)
         self._profiles = ProfileStore(self._writer, self.reader)
+        self._users = UserStore(self._writer, self.reader)
+        self._orders = OrderStore(self._writer, self.reader)
 
     @classmethod
     def open(cls, settings: Settings | None = None) -> "CacheStore":
@@ -523,6 +621,16 @@ class CacheStore:
     def profiles(self) -> ProfileStore:
         """The frontend-profile persistence collaborator."""
         return self._profiles
+
+    @property
+    def users(self) -> UserStore:
+        """The local auth / MT5-account persistence collaborator."""
+        return self._users
+
+    @property
+    def orders(self) -> OrderStore:
+        """The order-on-chart persistence collaborator."""
+        return self._orders
 
     def upsert_profile(self, profile: ProfileRecord) -> None:
         self._profiles.upsert_profile(profile)

@@ -23,6 +23,11 @@ export type ChartEventType =
   | "footprint_update"
   | "big_trade"
   | "alert_event"
+  | "order_update"
+  | "position_update"
+  | "account_update"
+  | "basis_update"
+  | "risk_update"
   | "status";
 
 /** Order-flow / status side discriminator used across several messages. */
@@ -192,6 +197,108 @@ export interface StatusMessage {
   contract?: string;
 }
 
+export interface OrderUpdateMessage {
+  type: "order_update";
+  symbol: string;
+  order: TradingOrder;
+}
+
+export interface PositionUpdateMessage {
+  type: "position_update";
+  symbol: string;
+  position: TradingPosition;
+}
+
+export interface AccountUpdateMessage {
+  type: "account_update";
+  symbol: string;
+  account: TradingAccount;
+}
+
+export interface BasisUpdateMessage {
+  type: "basis_update";
+  symbol: string;
+  symbolBroker: string;
+  basis: number;
+  stale: boolean;
+  time: number;
+  warning?: string;
+}
+
+export interface RiskUpdateMessage {
+  type: "risk_update";
+  symbol: string;
+  accountId: string;
+  killSwitch: boolean;
+  tradingEnabled: boolean;
+  reason?: string;
+}
+
+export interface TradingOrder {
+  id: string;
+  userId: string;
+  accountId: string;
+  source: "chart_bracket" | "market_bar" | "api";
+  symbolInternal: string;
+  contractInternal: string;
+  sourceContract?: string | null;
+  symbolBroker: string;
+  side: Side;
+  kind: "market" | "limit" | "stop";
+  volumeLots: number;
+  gcAnchored: boolean;
+  status:
+    | "pending_submit"
+    | "submitted"
+    | "working"
+    | "filled"
+    | "rejected"
+    | "cancelled"
+    | "closed"
+    | "sync_paused"
+    | "sync_error";
+  idempotencyKey: string;
+  version: number;
+  entryGc?: number | null;
+  slGc?: number | null;
+  tpGc?: number | null;
+  entryBroker?: number | null;
+  slBroker?: number | null;
+  tpBroker?: number | null;
+  fillPriceBroker?: number | null;
+  fillPriceGcEstimate?: number | null;
+  basisAtSubmit?: number | null;
+  basisAtLastSync?: number | null;
+  brokerOrderTicket?: number | null;
+  brokerPositionTicket?: number | null;
+  brokerDealTicket?: number | null;
+  rejectReason?: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TradingPosition {
+  brokerPositionTicket: number;
+  orderId?: string;
+  side: Side;
+  volumeLots: number;
+  entryBroker: number;
+  entryGcEstimate?: number;
+  slGc?: number | null;
+  tpGc?: number | null;
+  profit?: number;
+  updatedAt: number;
+}
+
+export interface TradingAccount {
+  accountId: string;
+  tradeMode: "demo" | "live" | string;
+  balance: number;
+  equity: number;
+  freeMargin: number;
+  updatedAt: number;
+}
+
 /** Heartbeat ping (Req 5.2, 6.1). The client answers with a `pong` (Req 6.2). */
 export interface PingMessage {
   type: "ping";
@@ -206,6 +313,11 @@ export type InboundMessage =
   | FootprintUpdateMessage
   | BigTradeMessage
   | AlertEventMessage
+  | OrderUpdateMessage
+  | PositionUpdateMessage
+  | AccountUpdateMessage
+  | BasisUpdateMessage
+  | RiskUpdateMessage
   | StatusMessage
   | PingMessage;
 

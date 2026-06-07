@@ -18,7 +18,7 @@
 // factory so the component can be exercised under jsdom with a fake port; the
 // pure merge logic lives in `barReducer.ts` and is property-tested in task 12.4.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { type BigTradeMarker } from "./indicatorReducer";
 import { type ChartSeriesPort, ChartSeriesController } from "./chartSeriesController";
@@ -36,6 +36,7 @@ import {
   type LightweightChartsAdapterOptions,
   type VolumeDeltaDatum,
   type AlertLine,
+  type OrderLine,
   LightweightChartsAdapter,
 } from "./lightweightChartsAdapter";
 import { type Bar } from "../cache/types";
@@ -72,6 +73,8 @@ export interface DisposableChartPort extends ChartSeriesPort {
   setBigTrades?(markers: readonly BigTradeMarker[]): void;
   updateBigTrade?(marker: BigTradeMarker): void;
   setAlertLines?(lines: readonly AlertLine[]): void;
+  setOrderLines?(lines: readonly OrderLine[]): void;
+  priceToCoordinate?(price: number): number | null;
   setEma?(points: readonly EmaPoint[], color?: string): void;
   updateEma?(point: EmaPoint): void;
   clearEma?(): void;
@@ -87,6 +90,11 @@ export interface DisposableChartPort extends ChartSeriesPort {
     onCommit?: (id: string, price: number) => void;
     snap?: (price: number) => number;
   }): () => void;
+  subscribeOrderDrag?(handlers: {
+    onPreview?: (id: string, price: number) => void;
+    onCommit?: (id: string, price: number) => void;
+    snap?: (price: number) => number;
+  }): () => void;
 }
 
 /** Factory that builds the rendering port for a container element. */
@@ -94,6 +102,25 @@ export type ChartPortFactory = (
   container: HTMLElement,
   options?: LightweightChartsAdapterOptions,
 ) => DisposableChartPort;
+
+export interface OrderControl {
+  id: string;
+  orderId: string;
+  price: number;
+  side: "buy" | "sell";
+  title: string;
+  detail?: string;
+  pnlText?: string;
+  pnlValue?: number;
+  canClose?: boolean;
+  canCancel?: boolean;
+  closing?: boolean;
+  cancelling?: boolean;
+}
+
+interface PositionedOrderControl extends OrderControl {
+  top: number;
+}
 
 const defaultPortFactory: ChartPortFactory = (container, options) =>
   new LightweightChartsAdapter(container, options);
@@ -127,6 +154,10 @@ export interface ChartContainerProps {
   bigTrades?: readonly BigTradeMarker[];
   /** Alert level lines to draw on the candle price scale (Req 16.5). */
   alertLines?: readonly AlertLine[];
+  /** Live order entry/SL/TP levels to draw on the candle price scale. */
+  orderLines?: readonly OrderLine[];
+  /** Action chips aligned to order fill/entry lines. */
+  orderControls?: readonly OrderControl[];
   /**
    * EMA overlay config. When `enabled`, an EMA line of `period` (default 200)
    * is drawn on the candle scale, computed from `bars` (Req 19.3 — explicitly
@@ -174,6 +205,12 @@ export interface ChartContainerProps {
    * parent can persist the new level (Req 16.5).
    */
   onAlertDragCommit?: (id: string, price: number) => void;
+  /** Fired when an order line is dragged and released. */
+  onOrderDragCommit?: (id: string, price: number) => void;
+  /** Fired from an order action chip. */
+  onOrderClose?: (orderId: string) => void;
+  /** Fired from a pending/working order action chip. */
+  onOrderCancel?: (orderId: string) => void;
   /** Snap a dragged price to the instrument tick (e.g. round to 0.1 for GC). */
   priceSnap?: (price: number) => number;
   /** Active drawing tool type (null = no tool selected). */
@@ -190,6 +227,8 @@ export interface ChartContainerProps {
   onDrawingsChange?: (drawings: DrawingState[]) => void;
   /** Increment to trigger delete-all drawings. */
   deleteAllSignal?: number;
+  /** Completed drawing ids to remove after parent-side handling. */
+  removeDrawingIds?: readonly string[];
   /** Footprint display settings. */
   footprintSettings?: FootprintSettings;
 }
@@ -246,6 +285,8 @@ export function ChartContainer({
   footprintBars,
   bigTrades,
   alertLines,
+  orderLines,
+  orderControls,
   ema,
   showFootprint = false,
   showBigTrades = true,
@@ -261,6 +302,9 @@ export function ChartContainer({
   onScreenshotCaptureReady,
   onRequestAlertAtPrice,
   onAlertDragCommit,
+  onOrderDragCommit,
+  onOrderClose,
+  onOrderCancel,
   priceSnap,
   activeTool,
   onToolDeselect,
@@ -269,6 +313,7 @@ export function ChartContainer({
   drawingsLoadKey,
   onDrawingsChange,
   deleteAllSignal,
+  removeDrawingIds,
   footprintSettings,
 }: ChartContainerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -277,6 +322,9 @@ export function ChartContainer({
   const drawingManagerRef = useRef<DrawingManager | null>(null);
   const [footprintViewport, setFootprintViewport] =
     useState<FootprintViewport | null>(null);
+  const [positionedOrderControls, setPositionedOrderControls] = useState<
+    readonly PositionedOrderControl[]
+  >([]);
   // Keep the latest crosshair callback without re-subscribing on every render.
   const crosshairRef = useRef<((bar: Bar | undefined) => void) | undefined>(
     onCrosshairMove,
@@ -292,6 +340,10 @@ export function ChartContainer({
     ((id: string, price: number) => void) | undefined
   >(onAlertDragCommit);
   alertDragCommitRef.current = onAlertDragCommit;
+  const orderDragCommitRef = useRef<
+    ((id: string, price: number) => void) | undefined
+  >(onOrderDragCommit);
+  orderDragCommitRef.current = onOrderDragCommit;
   const priceSnapRef = useRef<((price: number) => number) | undefined>(priceSnap);
   priceSnapRef.current = priceSnap;
   // Running EMA state for incremental live updates. `closedValue` is the EMA at
@@ -333,6 +385,23 @@ export function ChartContainer({
     setFootprintViewport(port.createFootprintViewport(width, height));
   };
 
+  const refreshOrderControlPositions = useCallback(() => {
+    const port = portRef.current;
+    if (!port?.priceToCoordinate || !orderControls || orderControls.length === 0) {
+      setPositionedOrderControls([]);
+      return;
+    }
+    const paneHeight = Math.max(1, port.createFootprintViewport?.(1, 1).height ?? 1);
+    const topMax = Math.max(8, paneHeight - 42);
+    const next = orderControls.flatMap((control) => {
+      const y = port.priceToCoordinate?.(control.price);
+      if (y === null || y === undefined || !Number.isFinite(y)) return [];
+      const top = Math.min(Math.max(8, Math.round(y as number)), topMax);
+      return [{ ...control, top }];
+    });
+    setPositionedOrderControls(next);
+  }, [orderControls]);
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) {
@@ -369,6 +438,16 @@ export function ChartContainer({
       );
     }
 
+    // Wire order-line dragging before alert dragging so order levels win when
+    // two price lines overlap.
+    let disposeOrderDrag: (() => void) | undefined;
+    if (typeof port.subscribeOrderDrag === "function") {
+      disposeOrderDrag = port.subscribeOrderDrag({
+        onCommit: (id, price) => orderDragCommitRef.current?.(id, price),
+        snap: (price) => priceSnapRef.current?.(price) ?? price,
+      });
+    }
+
     // Wire alert-line dragging: live preview moves the line; release persists.
     let disposeAlertDrag: (() => void) | undefined;
     if (typeof port.subscribeAlertDrag === "function") {
@@ -392,6 +471,7 @@ export function ChartContainer({
       drawingManagerRef.current = null;
       disposeCrosshair?.();
       disposeContextMenu?.();
+      disposeOrderDrag?.();
       disposeAlertDrag?.();
       screenshotCaptureReadyRef.current?.(undefined);
       port.dispose();
@@ -407,7 +487,11 @@ export function ChartContainer({
     const host = hostRef.current;
     if (!host) return;
     refreshFootprintViewport();
-    const onResize = () => refreshFootprintViewport();
+    refreshOrderControlPositions();
+    const onResize = () => {
+      refreshFootprintViewport();
+      refreshOrderControlPositions();
+    };
     window.addEventListener("resize", onResize);
     let observer: ResizeObserver | undefined;
     if (typeof ResizeObserver !== "undefined") {
@@ -418,7 +502,7 @@ export function ChartContainer({
       window.removeEventListener("resize", onResize);
       observer?.disconnect();
     };
-  }, []);
+  }, [refreshOrderControlPositions]);
 
   // Load (or reload) initial history when the series identity or the bars array
   // changes. This is the single allowed bulk load / full repaint (Req 12.4).
@@ -468,6 +552,17 @@ export function ChartContainer({
     portRef.current?.setAlertLines?.(alertLines ?? []);
   }, [symbol, contract, alertLines]);
 
+  useEffect(() => {
+    portRef.current?.setOrderLines?.(orderLines ?? []);
+    const frame = window.requestAnimationFrame(refreshOrderControlPositions);
+    return () => window.cancelAnimationFrame(frame);
+  }, [symbol, contract, orderLines, refreshOrderControlPositions]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(refreshOrderControlPositions);
+    return () => window.cancelAnimationFrame(frame);
+  }, [symbol, contract, timeframe, bars, orderControls, refreshOrderControlPositions]);
+
   // EMA overlay (Req 19.3). Recompute from the loaded bars whenever the bars,
   // series identity, or EMA config change. Disabled -> clear the line.
   useEffect(() => {
@@ -516,6 +611,7 @@ export function ChartContainer({
         return;
       }
       const outcome = controller.apply(message.bar);
+      window.requestAnimationFrame(refreshOrderControlPositions);
 
       const smcCfg = smcConfigRef.current;
       if (outcome.rendered && smcCfg?.enabled) {
@@ -571,7 +667,7 @@ export function ChartContainer({
       dispose();
       disposeDelta();
     };
-  }, [socket, symbol, contract, timeframe]);
+  }, [socket, symbol, contract, timeframe, refreshOrderControlPositions]);
 
   // Drawing tool activation / deactivation.
   useEffect(() => {
@@ -624,6 +720,15 @@ export function ChartContainer({
     prevDeleteSignal.current = current;
   }, [deleteAllSignal]);
 
+  useEffect(() => {
+    if (!removeDrawingIds || removeDrawingIds.length === 0) return;
+    const mgr = drawingManagerRef.current;
+    if (!mgr) return;
+    for (const id of removeDrawingIds) {
+      mgr.removeDrawing(id);
+    }
+  }, [removeDrawingIds]);
+
   return (
     <div
       className="chart-container"
@@ -639,6 +744,48 @@ export function ChartContainer({
           viewport={footprintViewport}
           settings={footprintSettings}
         />
+      )}
+      {positionedOrderControls.length > 0 && (
+        <div className="order-action-rail" aria-label="Open order actions">
+          {positionedOrderControls.map((control) => (
+            <div
+              key={control.id}
+              className={`order-action-chip ${control.side}${
+                (control.pnlValue ?? 0) < 0 ? " losing" : " winning"
+              }`}
+              style={{ top: control.top }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="order-action-main">
+                <span className="order-action-title">{control.title}</span>
+                {control.pnlText && (
+                  <span className="order-action-pnl">{control.pnlText}</span>
+                )}
+              </div>
+              {control.detail && (
+                <span className="order-action-detail">{control.detail}</span>
+              )}
+              {control.canCancel ? (
+                <button
+                  type="button"
+                  disabled={control.cancelling}
+                  onClick={() => onOrderCancel?.(control.orderId)}
+                >
+                  {control.cancelling ? "..." : "Cancel"}
+                </button>
+              ) : control.canClose ? (
+                <button
+                  type="button"
+                  disabled={control.closing}
+                  onClick={() => onOrderClose?.(control.orderId)}
+                >
+                  {control.closing ? "..." : "Close"}
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

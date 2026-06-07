@@ -22,13 +22,15 @@ import { HorizontalRayPrimitive } from "./HorizontalRayPrimitive";
 import { RectanglePrimitive } from "./RectanglePrimitive";
 import { PriceRangePrimitive } from "./PriceRangePrimitive";
 import { VerticalLinePrimitive } from "./VerticalLinePrimitive";
+import { OrderBracketPrimitive } from "./OrderBracketPrimitive";
 
 type DrawingPrimitive =
   | TrendLinePrimitive
   | HorizontalRayPrimitive
   | RectanglePrimitive
   | PriceRangePrimitive
-  | VerticalLinePrimitive;
+  | VerticalLinePrimitive
+  | OrderBracketPrimitive;
 
 let nextId = 1;
 
@@ -171,16 +173,17 @@ export class DrawingManager implements IDrawingManager {
         );
 
         // Update or create preview
+        const previewAnchors = [
+          ...this._placement.anchors,
+          previewAnchor,
+        ];
         if (this._placement.preview) {
-          this._placement.preview.setAnchors([
-            this._placement.anchors[0],
-            previewAnchor,
-          ]);
+          this._placement.preview.setAnchors(previewAnchors);
         } else {
           const preview = this._createPrimitive(
             this._placement.tool,
             `preview-${uid()}`,
-            [this._placement.anchors[0], previewAnchor],
+            previewAnchors,
           );
           if (preview) {
             preview.setSelected(true);
@@ -467,6 +470,11 @@ export class DrawingManager implements IDrawingManager {
             return { drawingId };
           }
           break;
+        case "order_bracket":
+          if (points.length >= 1 && hitOrderBracket(point, points, HIT_PX)) {
+            return { drawingId };
+          }
+          break;
         case "vertical_line":
           if (points.length >= 1 && Math.abs(point.x - points[0].x) <= HIT_PX) {
             return { drawingId };
@@ -525,6 +533,8 @@ export class DrawingManager implements IDrawingManager {
         return new PriceRangePrimitive(id, anchors, options);
       case "vertical_line":
         return new VerticalLinePrimitive(id, anchors, options);
+      case "order_bracket":
+        return new OrderBracketPrimitive(id, anchors, options);
       default:
         return null;
     }
@@ -649,4 +659,15 @@ function hitPriceRange(
   const middleX = (p1.x + p2.x) / 2;
   const vertical = Math.abs(point.x - middleX) <= tolerance && pointInBox(point, p1, p2, tolerance);
   return topLine || bottomLine || vertical;
+}
+
+function hitOrderBracket(
+  point: { x: number; y: number },
+  points: readonly { x: number; y: number }[],
+  tolerance: number,
+): boolean {
+  const left = Math.min(...points.map((p) => p.x)) - tolerance;
+  const right = Math.max(...points.map((p) => p.x)) + tolerance;
+  if (point.x < left || point.x > right) return false;
+  return points.some((p) => Math.abs(point.y - p.y) <= tolerance);
 }

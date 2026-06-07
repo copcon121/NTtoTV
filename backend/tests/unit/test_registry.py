@@ -424,6 +424,36 @@ def test_broadcast_supports_async_send():
 
 
 @pytest.mark.unit
+def test_private_event_delivers_only_to_matching_user():
+    reg = WebSocketRegistry()
+    user_a = FakeTransport()
+    user_b = FakeTransport()
+    anon = FakeTransport()
+    asyncio.run(reg.register(ChartClient("a", user_a, user_id="u-a")))
+    asyncio.run(reg.register(ChartClient("b", user_b, user_id="u-b")))
+    asyncio.run(reg.register(ChartClient("anon", anon)))
+    for cid in ("a", "b", "anon"):
+        asyncio.run(reg.subscribe(cid, "GC", [EventType.ORDER_UPDATE]))
+
+    delivered = asyncio.run(
+        reg.broadcast(
+            OutboundEvent(
+                event_type=EventType.ORDER_UPDATE,
+                symbol="GC",
+                payload={"type": "order_update", "symbol": "GC", "order": {"id": "o1"}},
+                key="o1",
+                user_id="u-a",
+            )
+        )
+    )
+
+    assert delivered == 1
+    assert len(user_a.sent) == 1
+    assert user_b.sent == []
+    assert anon.sent == []
+
+
+@pytest.mark.unit
 def test_broadcast_drops_async_client_that_exceeds_send_timeout():
     closer = CloseRecorder()
 

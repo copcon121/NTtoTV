@@ -20,6 +20,17 @@ pip install -r requirements.txt          # runtime
 pip install -r requirements-test.txt     # + tests
 ```
 
+Optional real MT5 execution backend on the Windows VPS/terminal host:
+
+```bash
+pip install -r requirements-mt5.txt
+set NTTOTV_MT5_BACKEND=real
+set NTTOTV_TRADING_ENABLED=true
+```
+
+Live accounts remain fail-closed unless `NTTOTV_LIVE_TRADING_ENABLED=true` is
+also set. The default backend is fake/demo-safe.
+
 ## Run
 
 ```bash

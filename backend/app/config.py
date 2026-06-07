@@ -7,6 +7,7 @@ the MVP; a later phase can layer environment-variable or file-based overrides.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -71,6 +72,40 @@ class Settings:
     # avoiding a shared mutable default.
     supported_symbols: tuple[str, ...] = DEFAULT_SUPPORTED_SYMBOLS
     gc_candidate_contracts: tuple[str, ...] = DEFAULT_GC_CANDIDATE_CONTRACTS
+
+    # Trading / order-on-chart settings. These default closed so a fresh
+    # checkout can exercise fake/demo plumbing without ever sending a live
+    # broker order by accident.
+    trading_enabled: bool = field(
+        default_factory=lambda: os.getenv("NTTOTV_TRADING_ENABLED", "0") == "1"
+    )
+    live_trading_enabled: bool = field(
+        default_factory=lambda: os.getenv("NTTOTV_LIVE_TRADING_ENABLED", "0") == "1"
+    )
+    mt5_backend: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_MT5_BACKEND", "fake")
+    )
+    credential_key: str | None = field(
+        default_factory=lambda: os.getenv("NTTOTV_CREDENTIAL_KEY")
+    )
+    default_broker_symbol: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_BROKER_SYMBOL", "XAUUSDm")
+    )
+    broker_tick_size: float = field(
+        default_factory=lambda: float(os.getenv("NTTOTV_BROKER_TICK_SIZE", "0.01"))
+    )
+    broker_digits: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_BROKER_DIGITS", "2"))
+    )
+    broker_pip_value: float = field(
+        default_factory=lambda: float(os.getenv("NTTOTV_BROKER_PIP_VALUE", "1.0"))
+    )
+    basis_default: float = field(
+        default_factory=lambda: float(os.getenv("NTTOTV_BASIS_DEFAULT", "0.0"))
+    )
+    basis_stale_after_ms: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_BASIS_STALE_AFTER_MS", "5000"))
+    )
 
     @property
     def cache_db_path(self) -> Path:

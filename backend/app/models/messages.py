@@ -122,6 +122,11 @@ class EventType(str, Enum):
     FOOTPRINT_UPDATE = "footprint_update"
     BIG_TRADE = "big_trade"
     ALERT_EVENT = "alert_event"
+    ORDER_UPDATE = "order_update"
+    POSITION_UPDATE = "position_update"
+    ACCOUNT_UPDATE = "account_update"
+    BASIS_UPDATE = "basis_update"
+    RISK_UPDATE = "risk_update"
     STATUS = "status"
     PING = "ping"
 

@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ApiClient, type ProfileListItem } from "./api/client";
+import {
+  ApiClient,
+  type AuthUser,
+  type Mt5Account,
+  type Mt5Symbol,
+  type ProfileListItem,
+} from "./api/client";
 import { AlertPanel } from "./alerts/AlertPanel";
 import {
   type Alert,
   type TelegramNotificationConfig,
   type TelegramNotificationInput,
 } from "./alerts/types";
-import { ChartContainer } from "./chart/ChartContainer";
+import { ChartContainer, type OrderControl } from "./chart/ChartContainer";
 import { DrawingToolbar } from "./chart/DrawingToolbar";
 import {
   IndicatorToggles,
@@ -36,11 +42,21 @@ import {
   type FootprintBar,
   mergeFootprint,
 } from "./footprint/footprintModel";
-import { type VolumeDeltaDatum, type AlertLine } from "./chart/lightweightChartsAdapter";
+import {
+  type VolumeDeltaDatum,
+  type AlertLine,
+  type OrderLine,
+  type OrderLineField,
+} from "./chart/lightweightChartsAdapter";
+import {
+  MarketOrderBar,
+  type MarketOrderSettings,
+} from "./orders/MarketOrderBar";
 import { ChartSocket } from "./socket/ChartSocket";
 import {
   type AlertEventMessage,
   type ChartEventType,
+  type TradingOrder,
   type Timeframe,
 } from "./socket/messages";
 import type { ChartProfilePayload } from "./profiles/types";
@@ -49,7 +65,6 @@ import type { DrawingState, DrawingToolType } from "./chart/drawings/types";
 import {
   DEFAULT_TIMEZONE_OFFSET_MINUTES,
   TIMEZONE_OFFSET_OPTIONS,
-  formatClockForOffset,
   formatUtcOffset,
   normalizeTimezoneOffsetMinutes,
 } from "./chart/timezone";
@@ -75,6 +90,11 @@ export const GLOBAL_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "quote_update",
   "big_trade",
   "alert_event",
+  "order_update",
+  "position_update",
+  "account_update",
+  "basis_update",
+  "risk_update",
   "status",
 ];
 export const TIMEFRAME_SUBSCRIBED_EVENTS: ChartEventType[] = [
@@ -93,6 +113,19 @@ const DEFERRED_OVERLAY_LOAD_MS = 250;
 const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
 const INITIAL_BIG_TRADE_LIMIT = DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
+const MARKET_ORDER_SETTINGS_STORAGE_KEY = "gc-chart-platform.market-order-settings";
+const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
+  volumeLots: 0.1,
+  slDistanceGc: 3,
+  tpDistanceGc: 6,
+};
+
+function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `idem-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 export function seriesDataKey(
   symbol: string,
@@ -131,6 +164,199 @@ function toAlertLines(alerts: readonly Alert[]): AlertLine[] {
     });
   }
   return lines;
+}
+
+const OPEN_ORDER_STATUSES = new Set<TradingOrder["status"]>([
+  "pending_submit",
+  "submitted",
+  "working",
+  "filled",
+  "sync_paused",
+  "sync_error",
+]);
+
+function isFinitePrice(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isOpenTradingOrder(order: TradingOrder): boolean {
+  return OPEN_ORDER_STATUSES.has(order.status);
+}
+
+function roundGcPrice(price: number): number {
+  return Math.round(price * 10) / 10;
+}
+
+function sanitizeMarketOrderSettings(
+  value: Partial<MarketOrderSettings> | null | undefined,
+): MarketOrderSettings {
+  const volumeLots = Number(value?.volumeLots);
+  const slDistanceGc = Number(value?.slDistanceGc);
+  const tpDistanceGc = Number(value?.tpDistanceGc);
+  return {
+    volumeLots: Number.isFinite(volumeLots)
+      ? Math.max(0.01, Math.round(volumeLots * 100) / 100)
+      : DEFAULT_MARKET_ORDER_SETTINGS.volumeLots,
+    slDistanceGc: Number.isFinite(slDistanceGc)
+      ? Math.max(0.1, roundGcPrice(slDistanceGc))
+      : DEFAULT_MARKET_ORDER_SETTINGS.slDistanceGc,
+    tpDistanceGc: Number.isFinite(tpDistanceGc)
+      ? Math.max(0.1, roundGcPrice(tpDistanceGc))
+      : DEFAULT_MARKET_ORDER_SETTINGS.tpDistanceGc,
+  };
+}
+
+function readMarketOrderSettings(
+  storage: Pick<Storage, "getItem"> | undefined = browserStorage(),
+): MarketOrderSettings {
+  try {
+    const raw = storage?.getItem(MARKET_ORDER_SETTINGS_STORAGE_KEY);
+    if (!raw) return DEFAULT_MARKET_ORDER_SETTINGS;
+    return sanitizeMarketOrderSettings(JSON.parse(raw) as Partial<MarketOrderSettings>);
+  } catch {
+    return DEFAULT_MARKET_ORDER_SETTINGS;
+  }
+}
+
+function persistMarketOrderSettings(
+  settings: MarketOrderSettings,
+  storage: Pick<Storage, "setItem"> | undefined = browserStorage(),
+): void {
+  try {
+    storage?.setItem(
+      MARKET_ORDER_SETTINGS_STORAGE_KEY,
+      JSON.stringify(sanitizeMarketOrderSettings(settings)),
+    );
+  } catch {
+    /* Trading settings still work for the current session. */
+  }
+}
+
+function orderLineId(orderId: string, field: OrderLineField): string {
+  return `${orderId}:${field}`;
+}
+
+function parseOrderLineId(id: string):
+  | { orderId: string; field: OrderLineField }
+  | undefined {
+  const index = id.lastIndexOf(":");
+  if (index <= 0) return undefined;
+  const field = id.slice(index + 1);
+  if (field !== "entryGc" && field !== "slGc" && field !== "tpGc") {
+    return undefined;
+  }
+  return { orderId: id.slice(0, index), field };
+}
+
+function toOrderLines(orders: readonly TradingOrder[]): OrderLine[] {
+  const lines: OrderLine[] = [];
+  for (const order of orders) {
+    if (
+      order.symbolInternal !== SYMBOL ||
+      !isOpenTradingOrder(order)
+    ) {
+      continue;
+    }
+    const entry = order.entryGc ?? order.fillPriceGcEstimate;
+    const sideTitle = order.side.toUpperCase();
+    if (isFinitePrice(entry)) {
+      lines.push({
+        id: orderLineId(order.id, "entryGc"),
+        orderId: order.id,
+        field: "entryGc",
+        price: entry,
+        side: order.side,
+        status: order.status,
+        editable: order.status !== "filled",
+        title: `${sideTitle} ${order.status === "filled" ? "fill" : order.kind}`,
+      });
+    }
+    if (isFinitePrice(order.slGc)) {
+      lines.push({
+        id: orderLineId(order.id, "slGc"),
+        orderId: order.id,
+        field: "slGc",
+        price: order.slGc,
+        side: order.side,
+        status: order.status,
+        title: "SL",
+      });
+    }
+    if (isFinitePrice(order.tpGc)) {
+      lines.push({
+        id: orderLineId(order.id, "tpGc"),
+        orderId: order.id,
+        field: "tpGc",
+        price: order.tpGc,
+        side: order.side,
+        status: order.status,
+        title: "TP",
+      });
+    }
+  }
+  return lines;
+}
+
+function orderEntryGc(order: TradingOrder): number | undefined {
+  const price = order.entryGc ?? order.fillPriceGcEstimate;
+  return isFinitePrice(price) ? price : undefined;
+}
+
+function estimateOrderPnl(
+  order: TradingOrder,
+  currentPrice: number | undefined,
+  symbol: Mt5Symbol | undefined,
+): number | undefined {
+  if (order.status !== "filled") return undefined;
+  const entry = orderEntryGc(order);
+  if (entry === undefined || currentPrice === undefined) return undefined;
+  const direction = order.side === "buy" ? 1 : -1;
+  const tickSize = symbol?.tickSize && symbol.tickSize > 0 ? symbol.tickSize : 0.01;
+  const tickValue = symbol?.pipValue && symbol.pipValue > 0 ? symbol.pipValue : 1;
+  return ((currentPrice - entry) * direction / tickSize) * tickValue * order.volumeLots;
+}
+
+function formatPnl(value: number | undefined): string | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  const sign = value > 0 ? "+" : "";
+  return `${sign}$${value.toFixed(2)}`;
+}
+
+function toOrderControls(
+  orders: readonly TradingOrder[],
+  currentPrice: number | undefined,
+  symbol: Mt5Symbol | undefined,
+  closingIds: ReadonlySet<string>,
+  cancellingIds: ReadonlySet<string>,
+): OrderControl[] {
+  const controls: OrderControl[] = [];
+  for (const order of orders) {
+    if (order.symbolInternal !== SYMBOL || !isOpenTradingOrder(order)) continue;
+    const entry = orderEntryGc(order);
+    if (entry === undefined) continue;
+    const pnl = estimateOrderPnl(order, currentPrice, symbol);
+    const status = order.status === "filled" ? "fill" : order.status;
+    controls.push({
+      id: `${order.id}:action`,
+      orderId: order.id,
+      price: entry,
+      side: order.side,
+      title: `${order.side.toUpperCase()} ${status}`,
+      detail: `${order.volumeLots.toFixed(2)} lot @ ${entry.toFixed(1)}`,
+      pnlText: formatPnl(pnl),
+      pnlValue: pnl,
+      canClose: order.status === "filled" && order.brokerPositionTicket != null,
+      canCancel:
+        order.status === "pending_submit" ||
+        order.status === "submitted" ||
+        order.status === "working" ||
+        order.status === "sync_paused" ||
+        order.status === "sync_error",
+      closing: closingIds.has(order.id),
+      cancelling: cancellingIds.has(order.id),
+    });
+  }
+  return controls;
 }
 
 function normalizeProfileId(value: string | null | undefined): string {
@@ -186,7 +412,6 @@ function TimezoneControl({
   onChange: (offsetMinutes: number) => void;
 }) {
   const normalizedOffset = normalizeTimezoneOffsetMinutes(offsetMinutes);
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const options = useMemo(() => {
     if (
       TIMEZONE_OFFSET_OPTIONS.some(
@@ -204,19 +429,11 @@ function TimezoneControl({
     ].sort((a, b) => a.offsetMinutes - b.offsetMinutes);
   }, [normalizedOffset]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, []);
-
   return (
     <label
       className="timezone-control"
       title={`Chart timezone: ${formatUtcOffset(normalizedOffset)}`}
     >
-      <span className="timezone-clock" aria-hidden="true">
-        {formatClockForOffset(nowMs, normalizedOffset)}
-      </span>
       <select
         aria-label="Chart timezone"
         value={normalizedOffset}
@@ -291,6 +508,10 @@ function cloneDrawings(drawings: readonly DrawingState[]): DrawingState[] {
     anchors: drawing.anchors.map((anchor) => ({ ...anchor })),
     options: drawing.options ? { ...drawing.options } : undefined,
   }));
+}
+
+function profileDrawings(drawings: readonly DrawingState[]): DrawingState[] {
+  return cloneDrawings(drawings.filter((drawing) => drawing.tool !== "order_bracket"));
 }
 
 function serializeDrawings(drawings: readonly DrawingState[]): string {
@@ -388,6 +609,21 @@ export function LiveApp() {
       hasBotToken: false,
     });
   const [telegramStatus, setTelegramStatus] = useState("");
+  const [authUser, setAuthUser] = useState<AuthUser | undefined>(undefined);
+  const [mt5Account, setMt5Account] = useState<Mt5Account | undefined>(undefined);
+  const [mt5Symbol, setMt5Symbol] = useState<Mt5Symbol | undefined>(undefined);
+  const [orders, setOrders] = useState<readonly TradingOrder[]>([]);
+  const [closingOrderIds, setClosingOrderIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [cancellingOrderIds, setCancellingOrderIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [latestPrice, setLatestPrice] = useState<number | undefined>(undefined);
+  const [marketOrderSettings, setMarketOrderSettings] =
+    useState<MarketOrderSettings>(() => readMarketOrderSettings());
+  const [orderPending, setOrderPending] = useState(false);
+  const [orderError, setOrderError] = useState("");
   // TradingView-style "Add alert at {price}" menu, anchored at the click point.
   const [alertMenu, setAlertMenu] = useState<
     { price: number; x: number; y: number } | undefined
@@ -395,8 +631,12 @@ export function LiveApp() {
   const [activeTool, setActiveTool] = useState<DrawingToolType | null>(null);
   const [drawingCount, setDrawingCount] = useState(0);
   const [deleteAllSignal, setDeleteAllSignal] = useState(0);
+  const [removeDrawingIds, setRemoveDrawingIds] = useState<readonly string[]>([]);
   const [drawings, setDrawings] = useState<readonly DrawingState[]>([]);
-  const drawingsSignature = useMemo(() => serializeDrawings(drawings), [drawings]);
+  const drawingsSignature = useMemo(
+    () => serializeDrawings(profileDrawings(drawings)),
+    [drawings],
+  );
   const [drawingsSyncedSignature, setDrawingsSyncedSignature] =
     useState(drawingsSignature);
   const [drawingsLoadKey, setDrawingsLoadKey] = useState(0);
@@ -412,6 +652,8 @@ export function LiveApp() {
   profileIdRef.current = profileId;
   const drawingsSignatureRef = useRef(drawingsSignature);
   drawingsSignatureRef.current = drawingsSignature;
+  const submittedOrderDrawingIdsRef = useRef(new Set<string>());
+  const invalidOrderDrawingIdsRef = useRef(new Set<string>());
 
   const profilePayload = useMemo<ChartProfilePayload>(
     () => ({
@@ -426,7 +668,7 @@ export function LiveApp() {
       footprintSettings: { ...footprintSettings },
       bigTradeSettings: { ...bigTradeSettings },
       timezoneOffsetMinutes,
-      drawings: cloneDrawings(drawings),
+      drawings: profileDrawings(drawings),
     }),
     [
       bigTradeSettings,
@@ -464,6 +706,10 @@ export function LiveApp() {
   const currentSeriesKey = seriesDataKey(SYMBOL, contract, timeframe);
   const hasLoadedCurrentSeries = loadedSeriesKey === currentSeriesKey;
 
+  useEffect(() => {
+    persistMarketOrderSettings(marketOrderSettings);
+  }, [marketOrderSettings]);
+
   // Connect the socket once and keep it for the component's lifetime. Status
   // + alert handlers are attached here; subscription management lives in its
   // own effect below so status churn never tears down the connection.
@@ -495,15 +741,53 @@ export function LiveApp() {
         setLastAlert(msg);
       }
     });
+    const offOrder = socket.on("order_update", (msg) => {
+      setOrders((prev) => {
+        const without = prev.filter((order) => order.id !== msg.order.id);
+        return isOpenTradingOrder(msg.order) ? [msg.order, ...without] : without;
+      });
+    });
     return () => {
       window.clearInterval(reconnectTimer);
       offOpen();
       offClose();
       offStatus();
       offAlert();
+      offOrder();
       socket.close();
     };
   }, [socket]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const user = await api.me();
+        if (!cancelled) setAuthUser(user);
+        if (user && !cancelled) {
+          const [accountResult, symbolResult, orderResult] = await Promise.allSettled([
+            api.mt5Account(),
+            api.mt5Symbol(),
+            api.orders(true),
+          ]);
+          if (!cancelled && accountResult.status === "fulfilled") {
+            setMt5Account(accountResult.value);
+          }
+          if (!cancelled && symbolResult.status === "fulfilled") {
+            setMt5Symbol(symbolResult.value);
+          }
+          if (!cancelled && orderResult.status === "fulfilled") {
+            setOrders(orderResult.value);
+          }
+        }
+      } catch {
+        /* Trading remains locked until login succeeds. */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
 
   // Global events do not belong to a bar timeframe. Keep them subscribed once
   // so changing 1m -> 5m does not mix global and timeframe-scoped unsubscribe
@@ -589,6 +873,7 @@ export function LiveApp() {
         if (!cancelled) {
           setLoadedSeriesKey(requestedSeriesKey);
           setBars(history.bars);
+          setLatestPrice(history.bars[history.bars.length - 1]?.close);
           deltaTimer = window.setTimeout(() => {
             void (async () => {
               try {
@@ -622,6 +907,7 @@ export function LiveApp() {
         if (!cancelled) {
           setLoadedSeriesKey(requestedSeriesKey);
           setBars([]);
+          setLatestPrice(undefined);
           setVolumeDeltaSeriesKey(requestedSeriesKey);
           setVolumeDelta([]);
         }
@@ -672,6 +958,20 @@ export function LiveApp() {
   useEffect(() => {
     const matchesChartContract = (messageContract: string) =>
       contract === SYMBOL || messageContract === contract;
+    const offBarPrice = socket.on("bar_update", (msg) => {
+      if (
+        msg.symbol === SYMBOL &&
+        matchesChartContract(msg.contract) &&
+        msg.tf === timeframe
+      ) {
+        setLatestPrice(msg.bar.close);
+      }
+    });
+    const offQuotePrice = socket.on("quote_update", (msg) => {
+      if (msg.symbol === SYMBOL && matchesChartContract(msg.contract)) {
+        setLatestPrice((msg.bid + msg.ask) / 2);
+      }
+    });
     const offFootprint = socket.on("footprint_update", (msg) => {
       if (
         msg.symbol !== SYMBOL ||
@@ -689,10 +989,12 @@ export function LiveApp() {
       setBigTrades((prev) => applyBigTrade(prev, msg).markers);
     });
     return () => {
+      offBarPrice();
+      offQuotePrice();
       offFootprint();
       offBigTrade();
     };
-  }, [socket, contract]);
+  }, [socket, contract, timeframe]);
 
   const onToggleAlert = (id: string, enabled: boolean) => {
     setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, enabled } : a)));
@@ -747,15 +1049,250 @@ export function LiveApp() {
       }
     })();
   };
+  const onTradingLogin = () => {
+    const username = window.prompt("Username", authUser?.username ?? "local");
+    if (!username) return;
+    const password = window.prompt("Password");
+    if (!password) return;
+    setOrderError("");
+    void (async () => {
+      try {
+        const user = await api.login(username, password);
+        setAuthUser(user);
+      } catch (error) {
+        setOrderError(error instanceof Error ? error.message : "Login failed");
+      }
+    })();
+  };
+  const onConnectFakeMt5 = () => {
+    setOrderError("");
+    void (async () => {
+      try {
+        if (!authUser) {
+          const user = await api.login("local", "local");
+          setAuthUser(user);
+        }
+        const account = await api.connectMt5({
+          login: 1,
+          password: "fake",
+          server: "Fake-Demo",
+          symbolBroker: "XAUUSDm",
+        });
+        setMt5Account(account);
+        try {
+          setMt5Symbol(await api.mt5Symbol());
+        } catch {
+          setMt5Symbol(undefined);
+        }
+      } catch (error) {
+        setOrderError(error instanceof Error ? error.message : "Connect failed");
+      }
+    })();
+  };
+  const onMarketOrder = (side: "buy" | "sell") => {
+    const marketGcPrice =
+      latestPrice ?? (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
+    setOrderPending(true);
+    setOrderError("");
+    void (async () => {
+      try {
+        const order = await api.createOrder({
+          source: "market_bar",
+          side,
+          kind: "market",
+          volumeLots: marketOrderSettings.volumeLots,
+          ...(marketGcPrice !== undefined ? { entryGc: roundGcPrice(marketGcPrice) } : {}),
+          slDistanceGc: marketOrderSettings.slDistanceGc,
+          tpDistanceGc: marketOrderSettings.tpDistanceGc,
+          gcAnchored: true,
+          idempotencyKey: newIdempotencyKey(),
+        });
+        setOrders((prev) => {
+          const without = prev.filter((item) => item.id !== order.id);
+          return isOpenTradingOrder(order) ? [order, ...without] : without;
+        });
+      } catch (error) {
+        setOrderError(error instanceof Error ? error.message : "Order failed");
+      } finally {
+        setOrderPending(false);
+      }
+    })();
+  };
+
+  const removeTransientDrawing = (id: string) => {
+    setRemoveDrawingIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  };
+
+  const submitOrderBracketDrawing = (drawing: DrawingState) => {
+    if (drawing.anchors.length < 3) return;
+    const [entryAnchor, slAnchor, tpAnchor] = drawing.anchors;
+    const entryGc = roundGcPrice(entryAnchor.price);
+    const slGc = roundGcPrice(slAnchor.price);
+    const tpGc = roundGcPrice(tpAnchor.price);
+    const isBuy = slGc < entryGc && tpGc > entryGc;
+    const isSell = slGc > entryGc && tpGc < entryGc;
+    if (!isBuy && !isSell) {
+      invalidOrderDrawingIdsRef.current.add(drawing.id);
+      setOrderError("Order bracket invalid: SL and TP must be on opposite sides of entry.");
+      removeTransientDrawing(drawing.id);
+      return;
+    }
+    if (!mt5Account) {
+      setOrderError("Connect MT5 before placing chart orders.");
+      return;
+    }
+    submittedOrderDrawingIdsRef.current.add(drawing.id);
+    const side: "buy" | "sell" = isBuy ? "buy" : "sell";
+    const latestBar = hasLoadedCurrentSeries ? bars[bars.length - 1] : undefined;
+    const referencePrice = latestBar?.close ?? entryGc;
+    const kind =
+      side === "buy"
+        ? entryGc <= referencePrice ? "limit" : "stop"
+        : entryGc >= referencePrice ? "limit" : "stop";
+    setOrderPending(true);
+    setOrderError("");
+    void (async () => {
+      try {
+        const order = await api.createOrder({
+          source: "chart_bracket",
+          side,
+          kind,
+          volumeLots: marketOrderSettings.volumeLots,
+          entryGc,
+          slGc,
+          tpGc,
+          gcAnchored: true,
+          idempotencyKey: newIdempotencyKey(),
+        });
+        setOrders((prev) => {
+          const without = prev.filter((item) => item.id !== order.id);
+          return isOpenTradingOrder(order) ? [order, ...without] : without;
+        });
+        setOrderError("");
+        removeTransientDrawing(drawing.id);
+      } catch (error) {
+        setOrderError(error instanceof Error ? error.message : "Chart order failed");
+      } finally {
+        setOrderPending(false);
+      }
+    })();
+  };
+
+  const onDrawingsStateChange = (state: DrawingState[]) => {
+    setDrawings(state);
+    for (const drawing of state) {
+      if (
+        drawing.tool === "order_bracket" &&
+        !submittedOrderDrawingIdsRef.current.has(drawing.id) &&
+        !invalidOrderDrawingIdsRef.current.has(drawing.id)
+      ) {
+        submitOrderBracketDrawing(drawing);
+      }
+    }
+  };
+
+  const onOrderDragCommit = (id: string, price: number) => {
+    const parsed = parseOrderLineId(id);
+    if (!parsed) return;
+    const order = orders.find((item) => item.id === parsed.orderId);
+    if (!order) return;
+    if (parsed.field === "entryGc" && order.status === "filled") {
+      setOrderError("Filled positions cannot modify entry.");
+      return;
+    }
+    const level = roundGcPrice(price);
+    const patch: Parameters<ApiClient["patchOrder"]>[1] = {
+      expectedVersion: order.version,
+    };
+    patch[parsed.field] = level;
+    setOrderError("");
+    setOrders((prev) =>
+      prev.map((item) =>
+        item.id === parsed.orderId ? { ...item, [parsed.field]: level } : item,
+      ),
+    );
+    void (async () => {
+      try {
+        const updated = await api.patchOrder(parsed.orderId, patch);
+        setOrders((prev) => {
+          const without = prev.filter((item) => item.id !== updated.id);
+          return isOpenTradingOrder(updated) ? [updated, ...without] : without;
+        });
+      } catch (error) {
+        setOrderError(error instanceof Error ? error.message : "Modify order failed");
+        try {
+          setOrders(await api.orders(true));
+        } catch {
+          /* Keep the optimistic state if refresh also fails. */
+        }
+      }
+    })();
+  };
+
+  const onCloseOrder = (orderId: string) => {
+    if (closingOrderIds.has(orderId)) return;
+    setOrderError("");
+    setClosingOrderIds((prev) => new Set(prev).add(orderId));
+    void (async () => {
+      try {
+        const closed = await api.closeOrder(orderId);
+        setOrders((prev) => {
+          const without = prev.filter((item) => item.id !== closed.id);
+          return isOpenTradingOrder(closed) ? [closed, ...without] : without;
+        });
+      } catch (error) {
+        setOrderError(error instanceof Error ? error.message : "Close order failed");
+        try {
+          setOrders(await api.orders(true));
+        } catch {
+          /* Keep the current state if refresh also fails. */
+        }
+      } finally {
+        setClosingOrderIds((prev) => {
+          const next = new Set(prev);
+          next.delete(orderId);
+          return next;
+        });
+      }
+    })();
+  };
+
+  const onCancelOrder = (orderId: string) => {
+    if (cancellingOrderIds.has(orderId)) return;
+    setOrderError("");
+    setCancellingOrderIds((prev) => new Set(prev).add(orderId));
+    void (async () => {
+      try {
+        const cancelled = await api.cancelOrder(orderId);
+        setOrders((prev) => {
+          const without = prev.filter((item) => item.id !== cancelled.id);
+          return isOpenTradingOrder(cancelled) ? [cancelled, ...without] : without;
+        });
+      } catch (error) {
+        setOrderError(error instanceof Error ? error.message : "Cancel order failed");
+        try {
+          setOrders(await api.orders(true));
+        } catch {
+          /* Keep the current state if refresh also fails. */
+        }
+      } finally {
+        setCancellingOrderIds((prev) => {
+          const next = new Set(prev);
+          next.delete(orderId);
+          return next;
+        });
+      }
+    })();
+  };
   // Create a price-crosses-level alert at the price the user right-clicked.
   const onConfirmAlertAtPrice = (price: number) => {
-    const rounded = Math.round(price * 10) / 10; // GC tick is 0.1
+    const rounded = roundGcPrice(price);
     onCreateAlert({ type: "price_crosses_level", params: { level: rounded } });
     setAlertMenu(undefined);
   };
   // Persist a dragged alert line's new level (optimistic + PATCH).
   const onAlertDragCommit = (id: string, price: number) => {
-    const level = Math.round(price * 10) / 10; // GC tick is 0.1
+    const level = roundGcPrice(price);
     setAlerts((prev) =>
       prev.map((a) =>
         a.id === id ? { ...a, params: { ...a.params, level } } : a,
@@ -947,6 +1484,18 @@ export function LiveApp() {
   // Alert level lines drawn on the candle scale (Req 16.5). Recomputed only
   // when the alert set changes.
   const alertLines = useMemo(() => toAlertLines(alerts), [alerts]);
+  const orderLines = useMemo(() => toOrderLines(orders), [orders]);
+  const orderControls = useMemo(
+    () =>
+      toOrderControls(
+        orders,
+        latestPrice,
+        mt5Symbol,
+        closingOrderIds,
+        cancellingOrderIds,
+      ),
+    [orders, latestPrice, mt5Symbol, closingOrderIds, cancellingOrderIds],
+  );
   const profileChoices = useMemo(() => {
     const byId = new Map<string, ProfileListItem>();
     for (const option of profileOptions) {
@@ -1115,6 +1664,10 @@ export function LiveApp() {
             telegramStatus={telegramStatus}
           />
         </div>
+        <TimezoneControl
+          offsetMinutes={timezoneOffsetMinutes}
+          onChange={setTimezoneOffsetMinutes}
+        />
         <StatusIndicator state={connection} />
       </Toolbar>
       <main className="chart-area">
@@ -1126,46 +1679,65 @@ export function LiveApp() {
             setDeleteAllSignal((s) => s + 1);
             setDrawingCount(0);
             setDrawings([]);
+            submittedOrderDrawingIdsRef.current.clear();
+            invalidOrderDrawingIdsRef.current.clear();
             setActiveTool(null);
           }}
         />
-        <ChartContainer
-          symbol={SYMBOL}
-          contract={contract}
-          timeframe={timeframe}
-          bars={chartBars}
-          volumeDelta={chartVolumeDelta}
-          footprintBars={chartFootprintBars}
-          bigTrades={chartBigTrades}
-          alertLines={alertLines}
-          ema={ema}
-          smc={smc}
-          outsideBar={outsideBar}
-          showFootprint={showFootprint && timeframe === "1m"}
-          showBigTrades={showBigTrades}
-          bigTradeSettings={bigTradeSettings}
-          chartBackgroundColor={chartBackgroundColor}
-          timezoneOffsetMinutes={timezoneOffsetMinutes}
-          socket={socket}
-          onRequestAlertAtPrice={setAlertMenu}
-          onAlertDragCommit={onAlertDragCommit}
-          priceSnap={(price) => Math.round(price * 10) / 10}
-          activeTool={activeTool}
-          onToolDeselect={() => setActiveTool(null)}
-          onDrawingCountChange={setDrawingCount}
-          drawings={drawings}
-          drawingsLoadKey={drawingsLoadKey}
-          onDrawingsChange={setDrawings}
-          deleteAllSignal={deleteAllSignal}
-          footprintSettings={footprintSettings}
-          onScreenshotCaptureReady={(capture) => {
-            screenshotCaptureRef.current = capture;
-          }}
-        />
-        <TimezoneControl
-          offsetMinutes={timezoneOffsetMinutes}
-          onChange={setTimezoneOffsetMinutes}
-        />
+        <div className="chart-stack">
+          <ChartContainer
+            symbol={SYMBOL}
+            contract={contract}
+            timeframe={timeframe}
+            bars={chartBars}
+            volumeDelta={chartVolumeDelta}
+            footprintBars={chartFootprintBars}
+            bigTrades={chartBigTrades}
+            alertLines={alertLines}
+            orderLines={orderLines}
+            orderControls={orderControls}
+            ema={ema}
+            smc={smc}
+            outsideBar={outsideBar}
+            showFootprint={showFootprint && timeframe === "1m"}
+            showBigTrades={showBigTrades}
+            bigTradeSettings={bigTradeSettings}
+            chartBackgroundColor={chartBackgroundColor}
+            timezoneOffsetMinutes={timezoneOffsetMinutes}
+            socket={socket}
+            onRequestAlertAtPrice={setAlertMenu}
+            onAlertDragCommit={onAlertDragCommit}
+            onOrderDragCommit={onOrderDragCommit}
+            onOrderClose={onCloseOrder}
+            onOrderCancel={onCancelOrder}
+            priceSnap={roundGcPrice}
+            activeTool={activeTool}
+            onToolDeselect={() => setActiveTool(null)}
+            onDrawingCountChange={setDrawingCount}
+            drawings={drawings}
+            drawingsLoadKey={drawingsLoadKey}
+            onDrawingsChange={onDrawingsStateChange}
+            deleteAllSignal={deleteAllSignal}
+            removeDrawingIds={removeDrawingIds}
+            footprintSettings={footprintSettings}
+            onScreenshotCaptureReady={(capture) => {
+              screenshotCaptureRef.current = capture;
+            }}
+          />
+          <MarketOrderBar
+            account={mt5Account}
+            pending={orderPending}
+            error={orderError}
+            openOrderCount={orders.length}
+            settings={marketOrderSettings}
+            onSettingsChange={(settings) =>
+              setMarketOrderSettings(sanitizeMarketOrderSettings(settings))
+            }
+            onLogin={onTradingLogin}
+            onConnect={onConnectFakeMt5}
+            onMarketOrder={onMarketOrder}
+          />
+        </div>
         {alertMenu !== undefined && (
           <>
             <div

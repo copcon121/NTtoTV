@@ -15,6 +15,7 @@ import type { ISeriesApi, IChartApi, UTCTimestamp } from "lightweight-charts";
 export type DrawingToolType =
   | "trendline"
   | "price_range"
+  | "order_bracket"
   | "rectangle"
   | "horizontal_ray"
   | "vertical_line";
@@ -59,6 +60,12 @@ export const DRAWING_TOOLS: readonly DrawingToolDef[] = [
     label: "Price Range",
     anchors: 2,
     icon: "M4 6 h16 M4 18 h16 M12 6 v12 M8 9 L12 6 L16 9 M8 15 L12 18 L16 15",
+  },
+  {
+    type: "order_bracket",
+    label: "Order",
+    anchors: 3,
+    icon: "M4 6 h16 M4 12 h16 M4 18 h16 M8 6 v12 M16 6 v12",
   },
 ] as const;
 

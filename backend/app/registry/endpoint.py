@@ -19,6 +19,7 @@ from itertools import count
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..models.messages import Pong, Subscribe, Unsubscribe, decode_chart_client_message
+from ..storage.user_store import SESSION_COOKIE
 from .registry import ChartClient
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,9 @@ async def ws_chart(websocket: WebSocket) -> None:
 
     registry = runtime.registry
     client_id = f"chart-{next(_client_ids)}"
+    session_token = websocket.cookies.get(SESSION_COOKIE)
+    session_user = runtime.cache.users.read_session_user(session_token)
+    user_id = None if session_user is None else session_user.id
 
     async def _send(payload: dict) -> None:
         await websocket.send_json(payload)
@@ -53,7 +57,7 @@ async def ws_chart(websocket: WebSocket) -> None:
     async def _close() -> None:
         await websocket.close()
 
-    client = ChartClient(client_id, _send, _close)
+    client = ChartClient(client_id, _send, _close, user_id=user_id)
     await registry.register(client)
     logger.info("/ws/chart: registered %s", client_id)
     try:

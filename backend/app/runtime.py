@@ -23,13 +23,17 @@ from datetime import datetime, timezone
 
 from .config import Settings
 from .config import settings as default_settings
+from .engines.anchored_sync import AnchoredSyncEngine
+from .engines.basis_engine import BasisEngine
 from .engines.contract_resolver import ContractResolver
+from .engines.reconciliation import ReconciliationEngine
 from .ingest.control_plane import ControlPlaneCoordinator
 from .pipeline import Pipeline
 from .registry.registry import OutboundEvent, WebSocketRegistry
 from .rest.contract_state import ContractStateStore
 from .storage.cache_store import CacheStore
 from .storage.tick_store import TickStore
+from .mt5.manager import Mt5Manager
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +51,8 @@ class AppRuntime:
         tick_store: TickStore | None = None,
         resolver: ContractResolver | None = None,
         registry: WebSocketRegistry | None = None,
+        mt5_manager: Mt5Manager | None = None,
+        basis_engine: BasisEngine | None = None,
     ) -> None:
         s = settings or default_settings
         self._settings = s
@@ -64,6 +70,8 @@ class AppRuntime:
             max_interval_ms=s.ui_throttle_max_ms,
             send_timeout_s=s.chart_send_timeout_s,
         )
+        self._mt5_manager = mt5_manager or Mt5Manager(settings=s)
+        self._basis_engine = basis_engine or BasisEngine(settings=s)
         # Contract-state accessor shared with the REST API, resolver-backed so
         # the live Active_Contract is authoritative.
         self._contract_state = ContractStateStore(
@@ -79,10 +87,19 @@ class AppRuntime:
             tick_store=self._tick_store,
             resolver=self._resolver,
             symbol=self._symbol,
+            basis_engine=self._basis_engine,
         )
         self._flush_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._retention_task: asyncio.Task[None] | None = None
+        self._anchored_sync = AnchoredSyncEngine(
+            self._cache, self._mt5_manager, self._basis_engine
+        )
+        self._reconciliation = ReconciliationEngine(
+            self._cache, self._mt5_manager, self._registry
+        )
+        self._anchored_sync_task: asyncio.Task[None] | None = None
+        self._reconciliation_task: asyncio.Task[None] | None = None
 
     # -- accessors -------------------------------------------------------------
 
@@ -105,6 +122,22 @@ class AppRuntime:
     @property
     def cache(self) -> CacheStore:
         return self._cache
+
+    @property
+    def mt5_manager(self) -> Mt5Manager:
+        return self._mt5_manager
+
+    @property
+    def basis_engine(self) -> BasisEngine:
+        return self._basis_engine
+
+    @property
+    def anchored_sync(self) -> AnchoredSyncEngine:
+        return self._anchored_sync
+
+    @property
+    def reconciliation(self) -> ReconciliationEngine:
+        return self._reconciliation
 
     @property
     def symbol(self) -> str:
@@ -135,10 +168,20 @@ class AppRuntime:
             self._heartbeat_task = asyncio.create_task(self._registry.heartbeat_loop())
         if self._retention_task is None:
             self._retention_task = asyncio.create_task(self._retention_loop())
+        if self._anchored_sync_task is None:
+            self._anchored_sync_task = asyncio.create_task(self._anchored_sync_loop())
+        if self._reconciliation_task is None:
+            self._reconciliation_task = asyncio.create_task(self._reconciliation_loop())
 
     async def stop(self) -> None:
         """Cancel the background loops and close the stores."""
-        for task in (self._flush_task, self._heartbeat_task, self._retention_task):
+        for task in (
+            self._flush_task,
+            self._heartbeat_task,
+            self._retention_task,
+            self._anchored_sync_task,
+            self._reconciliation_task,
+        ):
             if task is not None:
                 task.cancel()
                 try:
@@ -148,10 +191,28 @@ class AppRuntime:
         self._flush_task = None
         self._heartbeat_task = None
         self._retention_task = None
+        self._anchored_sync_task = None
+        self._reconciliation_task = None
         try:
             self._tick_store.close()
         finally:
             self._cache.close()
+
+    async def _anchored_sync_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.to_thread(self._anchored_sync.run_once)
+            except Exception as exc:
+                logger.warning("anchored sync failed: %s", exc)
+            await asyncio.sleep(2.0)
+
+    async def _reconciliation_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.to_thread(self._reconciliation.run_once)
+            except Exception as exc:
+                logger.warning("order reconciliation failed: %s", exc)
+            await asyncio.sleep(2.0)
 
     async def _retention_loop(self) -> None:
         """Keep raw tick shards within the configured calendar-day retention."""

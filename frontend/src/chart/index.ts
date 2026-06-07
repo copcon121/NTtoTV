@@ -63,6 +63,8 @@ export {
   type LightweightChartsAdapterOptions,
   type VolumeDeltaDatum,
   type AlertLine,
+  type OrderLine,
+  type OrderLineField,
   LightweightChartsAdapter,
   toUtcTimestamp,
 } from "./lightweightChartsAdapter";
@@ -82,6 +84,7 @@ export {
   type ChartContainerProps,
   type ChartPortFactory,
   type DisposableChartPort,
+  type OrderControl,
   ChartContainer,
   filterBigTradeMarkers,
 } from "./ChartContainer";

@@ -168,6 +168,22 @@ def coalescing_subkey(payload: Mapping[str, Any]) -> Hashable:
         )
     if t == "alert_event":
         return ("alert_event", payload["alertId"], payload["time"])
+    if t == "order_update":
+        return ("order_update", payload["order"]["id"])
+    if t == "position_update":
+        position = payload.get("position", {})
+        return (
+            "position_update",
+            position.get("brokerPositionTicket"),
+            position.get("orderId"),
+        )
+    if t == "account_update":
+        account = payload.get("account", {})
+        return ("account_update", account.get("accountId"))
+    if t == "basis_update":
+        return ("basis_update", payload.get("symbolBroker"))
+    if t == "risk_update":
+        return ("risk_update", payload.get("accountId"))
     if t == "status":
         return ("status", payload["state"])
     if t == "ping":
@@ -195,12 +211,13 @@ class OutboundEvent:
     symbol: str
     payload: dict[str, Any]
     key: Hashable = None
+    user_id: str | None = None
 
     @property
-    def coalescing_key(self) -> tuple[EventType, str, Hashable]:
+    def coalescing_key(self) -> tuple[EventType, str, str | None, Hashable]:
         """The ``(type, symbol, key)`` slot this event coalesces into."""
 
-        return (self.event_type, self.symbol, self.key)
+        return (self.event_type, self.symbol, self.user_id, self.key)
 
     @classmethod
     def from_message(
@@ -209,6 +226,7 @@ class OutboundEvent:
         *,
         symbol: str = _DERIVE,
         key: Hashable = _DERIVE,
+        user_id: str | None = None,
     ) -> "OutboundEvent":
         """Build an :class:`OutboundEvent` from a typed Backend->client message.
 
@@ -233,6 +251,7 @@ class OutboundEvent:
             symbol=resolved_symbol,
             payload=payload,
             key=resolved_key,
+            user_id=user_id,
         )
 
 
@@ -252,14 +271,26 @@ class ChartClient:
     registry remains exercisable with a fake transport and no live socket.
     """
 
-    __slots__ = ("_id", "_send", "_close", "_subscriptions", "_timeframes")
+    __slots__ = (
+        "_id",
+        "_send",
+        "_close",
+        "_subscriptions",
+        "_timeframes",
+        "_user_id",
+    )
 
     def __init__(
-        self, client_id: str, send: SendCallable, close: CloseCallable | None = None
+        self,
+        client_id: str,
+        send: SendCallable,
+        close: CloseCallable | None = None,
+        user_id: str | None = None,
     ) -> None:
         self._id = client_id
         self._send = send
         self._close = close
+        self._user_id = user_id
         # symbol -> set of subscribed event types. A symbol key exists only
         # while the client has at least one subscribed event type for it.
         self._subscriptions: dict[str, set[EventType]] = {}
@@ -284,6 +315,12 @@ class ChartClient:
         """Optional connection-close hook (used when dropped, task 8.5)."""
 
         return self._close
+
+    @property
+    def user_id(self) -> str | None:
+        """Authenticated user id for private trading events, if any."""
+
+        return self._user_id
 
     @property
     def subscriptions(self) -> Mapping[str, frozenset[EventType]]:
@@ -470,7 +507,9 @@ class WebSocketRegistry:
         # Pending coalesced events, keyed by (type, symbol, key). Insertion
         # order is preserved (dict) so flush emits in first-seen order while
         # always carrying the latest state per key.
-        self._pending: dict[tuple[EventType, str, Hashable], OutboundEvent] = {}
+        self._pending: dict[
+            tuple[EventType, str, str | None, Hashable], OutboundEvent
+        ] = {}
         # Per-client last-pong time, in the same units as ``clock`` (seconds).
         # A client's entry is seeded at registration and refreshed by
         # ``note_pong``; the heartbeat drops clients whose entry is too old.
@@ -672,7 +711,8 @@ class WebSocketRegistry:
         recipients = [
             c
             for c in self.clients
-            if c.wants(event.symbol, event.event_type, event.payload.get("tf"))
+            if (event.user_id is None or c.user_id == event.user_id)
+            and c.wants(event.symbol, event.event_type, event.payload.get("tf"))
         ]
         if not recipients:
             return 0

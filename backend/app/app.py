@@ -22,8 +22,11 @@ from . import __version__
 from .ingest.endpoint import router as nt_router
 from .registry.endpoint import router as chart_router
 from .rest.alerts import router as alerts_router
+from .rest.auth import router as auth_router
+from .rest.mt5 import router as mt5_router
 from .rest.errors import install_error_handlers
 from .rest.notifications import router as notifications_router
+from .rest.orders import router as orders_router
 from .rest.orderflow import router as orderflow_router
 from .rest.profiles import router as profiles_router
 from .rest.routes import router as rest_router
@@ -76,8 +79,11 @@ def create_app(*, lifespan: bool = True) -> FastAPI:
     install_error_handlers(app)
 
     app.include_router(rest_router)
+    app.include_router(auth_router)
     app.include_router(alerts_router)
     app.include_router(notifications_router)
+    app.include_router(mt5_router)
+    app.include_router(orders_router)
     app.include_router(profiles_router)
     app.include_router(orderflow_router)
     app.include_router(nt_router)

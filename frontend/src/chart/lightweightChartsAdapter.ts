@@ -98,6 +98,23 @@ export interface AlertLine {
   enabled?: boolean;
 }
 
+export type OrderLineField = "entryGc" | "slGc" | "tpGc";
+
+/**
+ * One live order level drawn on the candle price scale. These are separate
+ * from persisted drawings: the backend order store is the source of truth.
+ */
+export interface OrderLine {
+  id: string;
+  orderId: string;
+  field: OrderLineField;
+  price: number;
+  side: "buy" | "sell";
+  status: string;
+  title?: string;
+  editable?: boolean;
+}
+
 /** Colors for positive/negative delta candles; kept here so the port stays self-contained. */
 export interface DeltaColors {
   positive: string;
@@ -177,8 +194,21 @@ const ALERT_LINE_COLORS = {
   disabled: "rgba(224, 179, 65, 0.35)",
 };
 
+const ORDER_LINE_COLORS: Record<OrderLineField | "entrySell" | "readonly", string> = {
+  entryGc: "#2f80ed",
+  entrySell: "#f2994a",
+  slGc: "#ef4444",
+  tpGc: "#22c55e",
+  readonly: "rgba(156, 163, 175, 0.75)",
+};
+
 /** EMA overlay line color (TradingView-style blue). */
 const EMA_LINE_COLOR = "#2962ff";
+
+interface DraggableLineMeta {
+  price: number;
+  editable?: boolean;
+}
 
 const symmetricZeroAutoscale: AutoscaleInfoProvider = (baseImplementation) => {
   const info = baseImplementation();
@@ -350,7 +380,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   // Live price/style per alert line, used for drag hit-testing + updates.
   private readonly alertLineMeta = new Map<
     string,
-    { price: number; enabled?: boolean; title?: string }
+    DraggableLineMeta & { enabled?: boolean; title?: string }
+  >();
+  private readonly orderLinesById = new Map<string, IPriceLine>();
+  private readonly orderLineMeta = new Map<
+    string,
+    DraggableLineMeta & { orderId: string; field: OrderLineField }
   >();
   private displayTimeOffsetMs: number;
   private readonly container: HTMLElement;
@@ -489,6 +524,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   /** The candle series instance (for DrawingManager to attach primitives). */
   get candleSeriesApi(): ISeriesApi<"Candlestick"> {
     return this.candleSeries;
+  }
+
+  /** Convert a candle-scale price to a Y coordinate inside the candle pane. */
+  priceToCoordinate(price: number): number | null {
+    const y = this.candleSeries.priceToCoordinate(price);
+    return y === null ? null : y as number;
   }
 
   /** Set the display-only bucket-start -> chart-time offsets. */
@@ -839,6 +880,54 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     };
   }
 
+  /** Draw live order entry/SL/TP levels from backend order state. */
+  setOrderLines(lines: readonly OrderLine[]): void {
+    const next = new Map(lines.map((line) => [line.id, line]));
+
+    for (const [id, priceLine] of this.orderLinesById) {
+      if (!next.has(id)) {
+        this.candleSeries.removePriceLine(priceLine);
+        this.orderLinesById.delete(id);
+        this.orderLineMeta.delete(id);
+      }
+    }
+
+    for (const line of lines) {
+      const existing = this.orderLinesById.get(line.id);
+      if (existing) {
+        existing.applyOptions(this.orderLineOptions(line));
+      } else {
+        this.orderLinesById.set(
+          line.id,
+          this.candleSeries.createPriceLine(this.orderLineOptions(line)),
+        );
+      }
+      this.orderLineMeta.set(line.id, {
+        price: line.price,
+        orderId: line.orderId,
+        field: line.field,
+        editable: line.editable !== false,
+      });
+    }
+  }
+
+  private orderLineOptions(line: OrderLine) {
+    const isEntry = line.field === "entryGc";
+    const color = line.editable === false
+      ? ORDER_LINE_COLORS.readonly
+      : line.field === "entryGc" && line.side === "sell"
+        ? ORDER_LINE_COLORS.entrySell
+        : ORDER_LINE_COLORS[line.field];
+    return {
+      price: line.price,
+      color,
+      lineWidth: isEntry ? 2 as const : 1 as const,
+      lineStyle: isEntry ? LineStyle.Solid : LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: line.title ?? "",
+    };
+  }
+
   /** Build a FootprintCanvas viewport using the candle price scale. */
   createFootprintViewport(width: number, height: number): FootprintViewport {
     const paneSize = this.chart.paneSize(0);
@@ -867,6 +956,35 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     onCommit?: (id: string, price: number) => void;
     snap?: (price: number) => number;
   }): () => void {
+    return this.subscribePriceLineDrag(
+      this.alertLineMeta,
+      this.alertLinesById,
+      handlers,
+    );
+  }
+
+  /** Make live order lines draggable, returning a disposer. */
+  subscribeOrderDrag(handlers: {
+    onPreview?: (id: string, price: number) => void;
+    onCommit?: (id: string, price: number) => void;
+    snap?: (price: number) => number;
+  }): () => void {
+    return this.subscribePriceLineDrag(
+      this.orderLineMeta,
+      this.orderLinesById,
+      handlers,
+    );
+  }
+
+  private subscribePriceLineDrag(
+    metaById: Map<string, DraggableLineMeta>,
+    linesById: Map<string, IPriceLine>,
+    handlers: {
+      onPreview?: (id: string, price: number) => void;
+      onCommit?: (id: string, price: number) => void;
+      snap?: (price: number) => number;
+    },
+  ): () => void {
     const HIT_PX = 6;
     let draggingId: string | undefined;
 
@@ -882,7 +1000,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       if (!isInCandlePane(y)) return undefined;
       let bestId: string | undefined;
       let bestDist = HIT_PX;
-      for (const [id, meta] of this.alertLineMeta) {
+      for (const [id, meta] of metaById) {
+        if (meta.editable === false) continue;
         const lineY = this.candleSeries.priceToCoordinate(meta.price);
         if (lineY === null) continue;
         const dist = Math.abs((lineY as number) - y);
@@ -919,6 +1038,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.container.setPointerCapture?.(e.pointerId);
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
     };
 
     const onPointerMove = (e: PointerEvent) => {
@@ -930,8 +1050,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       }
       const price = priceAtY(localY(e.clientY));
       if (price === undefined) return;
-      const meta = this.alertLineMeta.get(draggingId);
-      const existing = this.alertLinesById.get(draggingId);
+      const meta = metaById.get(draggingId);
+      const existing = linesById.get(draggingId);
       if (meta && existing) {
         meta.price = price;
         existing.applyOptions({ price });
@@ -947,7 +1067,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       setScroll(true);
       this.container.style.cursor = "";
       this.container.releasePointerCapture?.(e.pointerId);
-      const meta = this.alertLineMeta.get(id);
+      const meta = metaById.get(id);
       if (meta) handlers.onCommit?.(id, meta.price);
     };
 

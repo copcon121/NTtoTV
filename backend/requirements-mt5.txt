@@ -1,0 +1,5 @@
+# Optional Windows-only dependency for the real MT5 execution backend.
+# Install only on the VPS/terminal host that will run with:
+#   NTTOTV_MT5_BACKEND=real
+-r requirements.txt
+MetaTrader5>=5.0.45

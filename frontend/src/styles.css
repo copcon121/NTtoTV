@@ -445,9 +445,225 @@ body {
   min-width: 0;
 }
 
+.chart-stack {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .chart-host {
   position: absolute;
   inset: 0;
+}
+
+.market-order-bar {
+  flex: 0 0 auto;
+  min-height: 54px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: #161616;
+  color: #e7e7e7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 12px;
+  font-size: 12px;
+}
+
+.market-order-meta,
+.market-order-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.market-order-meta {
+  flex-wrap: wrap;
+}
+
+.market-order-settings {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.market-order-settings label {
+  display: grid;
+  grid-template-columns: auto 70px;
+  align-items: center;
+  gap: 5px;
+  color: #a8a8a8;
+  font-size: 12px;
+}
+
+.market-order-settings input {
+  width: 70px;
+  height: 30px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  background: #101010;
+  color: #f3f3f3;
+  padding: 0 7px;
+  font: inherit;
+}
+
+.account-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: #2f5f88;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.account-badge.live {
+  background: #8a2e2e;
+}
+
+.market-order-error {
+  color: #ff9f9f;
+}
+
+.market-order-actions button {
+  min-height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  background: #2a2a2a;
+  color: #f3f3f3;
+  padding: 0 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.market-button {
+  min-width: 108px;
+  font-size: 14px;
+}
+
+.market-button.buy {
+  background: #137a4f;
+}
+
+.market-button.sell {
+  background: #9c3030;
+}
+
+.market-order-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.order-action-rail {
+  position: absolute;
+  top: 0;
+  right: 70px;
+  bottom: 0;
+  z-index: 12;
+  width: 190px;
+  pointer-events: none;
+}
+
+.order-action-chip {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  width: 188px;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 2px 7px;
+  padding: 6px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-left-width: 3px;
+  border-radius: 5px;
+  background: rgba(18, 18, 18, 0.92);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.38);
+  color: #f2f2f2;
+  pointer-events: auto;
+}
+
+.order-action-chip.buy {
+  border-left-color: #22c55e;
+}
+
+.order-action-chip.sell {
+  border-left-color: #ef4444;
+}
+
+.order-action-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.order-action-title,
+.order-action-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.order-action-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.order-action-detail {
+  grid-column: 1;
+  color: #a8a8a8;
+  font-size: 11px;
+}
+
+.order-action-pnl {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.order-action-chip.winning .order-action-pnl {
+  color: #55d889;
+}
+
+.order-action-chip.losing .order-action-pnl {
+  color: #ff8d8d;
+}
+
+.order-action-chip button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-width: 62px;
+  min-height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  background: #2f3540;
+  color: #f3f3f3;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.order-action-chip button:hover:not(:disabled) {
+  background: #3a4352;
+}
+
+.order-action-chip button:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .bar-countdown {
@@ -466,15 +682,12 @@ body {
 }
 
 .timezone-control {
-  position: absolute;
-  right: 8px;
-  bottom: 4px;
-  z-index: 20;
+  flex: 0 0 auto;
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
   height: 24px;
-  padding: 0 5px 0 8px;
+  padding: 0 5px;
   background: #101010e6;
   border: 1px solid #333;
   border-radius: 4px;
@@ -482,12 +695,6 @@ body {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   line-height: 24px;
-  pointer-events: auto;
-}
-
-.timezone-clock {
-  min-width: 54px;
-  text-align: right;
 }
 
 .timezone-control select {
@@ -900,7 +1107,7 @@ body {
     grid-template-columns: auto minmax(0, 1fr) auto auto;
     grid-template-areas:
       "symbol timeframe bg status"
-      "indicators profile profile alerts";
+      "indicators profile tz alerts";
     align-items: center;
     gap: 6px 4px;
     padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 6px;
@@ -1003,6 +1210,18 @@ body {
     justify-self: end;
   }
 
+  .timezone-control {
+    grid-area: tz;
+    justify-self: end;
+    margin-left: 0;
+    height: 28px;
+    line-height: 28px;
+  }
+
+  .timezone-control select {
+    height: 26px;
+  }
+
   .alert-popover .alert-panel {
     position: fixed;
     top: calc(82px + env(safe-area-inset-top, 0px));
@@ -1066,5 +1285,61 @@ body {
 
   .telegram-row {
     grid-template-columns: 1fr;
+  }
+
+  .market-order-bar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .market-order-meta {
+    width: 100%;
+  }
+
+  .market-order-settings {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .market-order-settings label {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .market-order-settings input {
+    width: 100%;
+  }
+
+  .market-order-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .market-order-actions button {
+    min-height: 44px;
+    width: 100%;
+  }
+
+  .order-action-rail {
+    right: 50px;
+    width: 150px;
+  }
+
+  .order-action-chip {
+    width: 148px;
+    grid-template-columns: minmax(0, 1fr) 54px;
+    padding: 5px 6px;
+  }
+
+  .order-action-detail {
+    display: none;
+  }
+
+  .order-action-chip button {
+    min-width: 54px;
+    min-height: 28px;
   }
 }

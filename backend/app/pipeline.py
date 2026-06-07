@@ -39,6 +39,7 @@ import logging
 from typing import Awaitable, Callable
 
 from .engines.bar_aggregator import SUPPORTED_TFS, BarAggregator
+from .engines.basis_engine import BasisEngine
 from .engines.big_trade_engine import BigTradeEngine
 from .engines.contract_resolver import ContractResolver
 from .engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
@@ -188,6 +189,7 @@ class Pipeline:
         footprint: FootprintEngine | None = None,
         big_trade: BigTradeEngine | None = None,
         alert_engine: AlertEngine | None = None,
+        basis_engine: BasisEngine | None = None,
         send_alert_text: AlertTextSender | None = None,
         control_plane: ControlPlaneCoordinator | None = None,
         validator: SequenceValidator | None = None,
@@ -218,6 +220,7 @@ class Pipeline:
         self._fp = footprint or FootprintEngine()
         self._bt = big_trade or BigTradeEngine()
         self._alerts = alert_engine or AlertEngine(cache)
+        self._basis = basis_engine
         self._send_alert_text = (
             send_alert_text
             if send_alert_text is not None
@@ -338,6 +341,8 @@ class Pipeline:
         except ValueError:
             logger.info("pipeline: charting non-candidate source %s", trade.contract)
         await self._sync_control_plane()
+        if self._basis is not None:
+            self._basis.update_gc(trade.price, trade.time)
 
         await self._run_trade_engines(_trade_for_contract(trade, chart_contract))
 
@@ -351,6 +356,8 @@ class Pipeline:
         # classified against the book even though NT trade prints carry no
         # same-print bid/ask. (Req 13.2, 13.3)
         self._last_quote[quote.contract] = (quote.bid, quote.ask)
+        if self._basis is not None:
+            self._basis.update_gc((quote.bid + quote.ask) / 2, quote.time)
 
         if quote.contract != self._chart_source_contract:
             return

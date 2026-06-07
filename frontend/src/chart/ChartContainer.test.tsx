@@ -6,6 +6,7 @@ import {
   type DisposableChartPort,
   type VolumeDeltaDatum,
   type AlertLine,
+  type OrderLine,
   type SmcOverlay,
   type OutsideBarSettings,
   DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -48,10 +49,16 @@ class FakePort implements DisposableChartPort {
   updateVolumeDeltaCalls: VolumeDeltaDatum[] = [];
   setBigTradesCalls: BigTradeMarker[][] = [];
   setAlertLinesCalls: AlertLine[][] = [];
+  setOrderLinesCalls: OrderLine[][] = [];
   setSmcOverlayCalls: SmcOverlay[] = [];
   setOutsideBarCalls: OutsideBarSettings[] = [];
   contextMenuHandlers: ((info: { price: number; x: number; y: number }) => void)[] = [];
   alertDragHandlers: {
+    onPreview?: (id: string, price: number) => void;
+    onCommit?: (id: string, price: number) => void;
+    snap?: (price: number) => number;
+  }[] = [];
+  orderDragHandlers: {
     onPreview?: (id: string, price: number) => void;
     onCommit?: (id: string, price: number) => void;
     snap?: (price: number) => number;
@@ -89,6 +96,9 @@ class FakePort implements DisposableChartPort {
   setAlertLines(lines: readonly AlertLine[]): void {
     this.setAlertLinesCalls.push(lines.map((line) => ({ ...line })));
   }
+  setOrderLines(lines: readonly OrderLine[]): void {
+    this.setOrderLinesCalls.push(lines.map((line) => ({ ...line })));
+  }
   setSmcOverlay(overlay: SmcOverlay): void {
     this.setSmcOverlayCalls.push({
       markers: overlay.markers.map((marker) => ({ ...marker })),
@@ -119,6 +129,16 @@ class FakePort implements DisposableChartPort {
     this.alertDragHandlers.push(handlers);
     return () => {
       this.alertDragHandlers = this.alertDragHandlers.filter((h) => h !== handlers);
+    };
+  }
+  subscribeOrderDrag(handlers: {
+    onPreview?: (id: string, price: number) => void;
+    onCommit?: (id: string, price: number) => void;
+    snap?: (price: number) => number;
+  }): () => void {
+    this.orderDragHandlers.push(handlers);
+    return () => {
+      this.orderDragHandlers = this.orderDragHandlers.filter((h) => h !== handlers);
     };
   }
   dispose(): void {
@@ -633,6 +653,52 @@ describe("ChartContainer", () => {
     expect(handlers.snap?.(2345.07)).toBe(2345.1);
     handlers.onCommit?.("a1", 2350.1);
     expect(onAlertDragCommit).toHaveBeenCalledWith("a1", 2350.1);
+  });
+
+  it("draws order lines and forwards committed order-line drags", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const onOrderDragCommit = vi.fn();
+    const orderLines: OrderLine[] = [
+      {
+        id: "ord_1:entryGc",
+        orderId: "ord_1",
+        field: "entryGc",
+        price: 2348.5,
+        side: "buy",
+        status: "working",
+        title: "BUY limit",
+      },
+      {
+        id: "ord_1:slGc",
+        orderId: "ord_1",
+        field: "slGc",
+        price: 2345.5,
+        side: "buy",
+        status: "working",
+        title: "SL",
+      },
+    ];
+
+    render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        orderLines={orderLines}
+        portFactory={factory}
+        onOrderDragCommit={onOrderDragCommit}
+        priceSnap={(p) => Math.round(p * 10) / 10}
+      />,
+    );
+
+    expect(port.setOrderLinesCalls[0]).toEqual(orderLines);
+    expect(port.orderDragHandlers).toHaveLength(1);
+    const handlers = port.orderDragHandlers[0];
+    expect(handlers.snap?.(2348.56)).toBe(2348.6);
+    handlers.onCommit?.("ord_1:slGc", 2346.1);
+    expect(onOrderDragCommit).toHaveBeenCalledWith("ord_1:slGc", 2346.1);
   });
 
   it("disposes the port on unmount", () => {

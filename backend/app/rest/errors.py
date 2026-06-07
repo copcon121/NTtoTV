@@ -65,6 +65,7 @@ class ErrorCode:
     """Envelope ``code`` constants (design Error Response Envelope table)."""
 
     BAD_REQUEST = "BAD_REQUEST"
+    UNAUTHORIZED = "UNAUTHORIZED"
     NOT_FOUND = "NOT_FOUND"
     CONFLICT = "CONFLICT"
     VALIDATION_ERROR = "VALIDATION_ERROR"
@@ -75,6 +76,7 @@ class ErrorCode:
 # did not originate as an ApiError (e.g. a bare 404 route miss).
 _STATUS_TO_CODE: dict[int, str] = {
     HTTPStatus.BAD_REQUEST: ErrorCode.BAD_REQUEST,            # 400
+    HTTPStatus.UNAUTHORIZED: ErrorCode.UNAUTHORIZED,          # 401
     HTTPStatus.NOT_FOUND: ErrorCode.NOT_FOUND,                # 404
     HTTPStatus.CONFLICT: ErrorCode.CONFLICT,                  # 409
     HTTPStatus.UNPROCESSABLE_ENTITY: ErrorCode.VALIDATION_ERROR,  # 422
