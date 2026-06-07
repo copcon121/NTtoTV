@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import type { Mt5Account } from "../api/client";
 
 export interface MarketOrderSettings {
@@ -13,14 +15,15 @@ export interface MarketOrderBarProps {
   openOrderCount: number;
   settings: MarketOrderSettings;
   onSettingsChange: (settings: MarketOrderSettings) => void;
-  onLogin: () => void;
-  onConnect: () => void;
   onMarketOrder: (side: "buy" | "sell") => void;
 }
 
-function numericValue(value: string, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+function money(value: number | undefined, currency: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return `${value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}${currency ? ` ${currency}` : ""}`;
 }
 
 export function MarketOrderBar({
@@ -30,11 +33,11 @@ export function MarketOrderBar({
   openOrderCount,
   settings,
   onSettingsChange,
-  onLogin,
-  onConnect,
   onMarketOrder,
 }: MarketOrderBarProps) {
   const connected = account !== undefined;
+  const balance = money(account?.balance, account?.currency);
+  const equity = money(account?.equity, account?.currency);
   const update = (patch: Partial<MarketOrderSettings>) =>
     onSettingsChange({ ...settings, ...patch });
   return (
@@ -44,73 +47,42 @@ export function MarketOrderBar({
           {account ? account.tradeMode.toUpperCase() : "NO ACCOUNT"}
         </span>
         <span>{account ? `${account.server} ${account.login}` : "Trading locked"}</span>
+        {balance && <span>Balance {balance}</span>}
+        {equity && <span>Equity {equity}</span>}
         <span>{openOrderCount} open</span>
         {error && <span className="market-order-error">{error}</span>}
       </div>
       <div className="market-order-settings" aria-label="Market order settings">
         <label>
           <span>Lots</span>
-          <input
-            type="number"
-            min="0.01"
-            step="0.01"
+          <NumberSettingInput
             value={settings.volumeLots}
-            onChange={(event) =>
-              update({
-                volumeLots: Math.max(
-                  0.01,
-                  numericValue(event.currentTarget.value, settings.volumeLots),
-                ),
-              })
-            }
+            min={0.01}
+            step="0.01"
+            onCommit={(volumeLots) => update({ volumeLots })}
           />
         </label>
         <label>
           <span>SL</span>
-          <input
-            type="number"
-            min="0.1"
-            step="0.1"
+          <NumberSettingInput
             value={settings.slDistanceGc}
-            onChange={(event) =>
-              update({
-                slDistanceGc: Math.max(
-                  0.1,
-                  numericValue(event.currentTarget.value, settings.slDistanceGc),
-                ),
-              })
-            }
+            min={0.1}
+            step="0.1"
+            onCommit={(slDistanceGc) => update({ slDistanceGc })}
           />
         </label>
         <label>
           <span>TP</span>
-          <input
-            type="number"
-            min="0.1"
-            step="0.1"
+          <NumberSettingInput
             value={settings.tpDistanceGc}
-            onChange={(event) =>
-              update({
-                tpDistanceGc: Math.max(
-                  0.1,
-                  numericValue(event.currentTarget.value, settings.tpDistanceGc),
-                ),
-              })
-            }
+            min={0.1}
+            step="0.1"
+            onCommit={(tpDistanceGc) => update({ tpDistanceGc })}
           />
         </label>
       </div>
       <div className="market-order-actions">
-        {!connected ? (
-          <>
-            <button type="button" onClick={onLogin}>
-              Login
-            </button>
-            <button type="button" onClick={onConnect}>
-              Connect Fake
-            </button>
-          </>
-        ) : (
+        {connected ? (
           <>
             <button
               type="button"
@@ -129,8 +101,67 @@ export function MarketOrderBar({
               SELL
             </button>
           </>
-        )}
+        ) : null}
       </div>
     </section>
   );
+}
+
+function NumberSettingInput({
+  value,
+  min,
+  step,
+  onCommit,
+}: {
+  value: number;
+  min: number;
+  step: string;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setDraft(String(value));
+  }, [focused, value]);
+
+  const commit = () => {
+    const parsed = parseDecimalDraft(draft);
+    if (parsed === undefined) {
+      setDraft(String(value));
+      return;
+    }
+    const next = Math.max(min, parsed);
+    setDraft(String(next));
+    onCommit(next);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      pattern="[0-9]*([.,][0-9]*)?"
+      value={draft}
+      onFocus={() => setFocused(true)}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      onBlur={() => {
+        setFocused(false);
+        commit();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        }
+      }}
+      min={min}
+      step={step}
+    />
+  );
+}
+
+function parseDecimalDraft(draft: string): number | undefined {
+  const normalized = draft.trim().replace(",", ".");
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized)) return undefined;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }

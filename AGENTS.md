@@ -131,7 +131,7 @@ Networking rule:
 - Browser should use same-origin `/api` and `/ws/chart`, not hard-code `:8000`
   in frontend code, or REST and websocket can split across different backend
   processes.
-- Vite dev default port is `5174` via `frontend/vite.config.ts`.
+- Vite dev default port is `9999` via `frontend/vite.config.ts`.
 
 ## NT AddOn Layout
 
@@ -190,7 +190,7 @@ npm run dev
 Frontend URL defaults to:
 
 ```text
-http://127.0.0.1:5174/
+http://127.0.0.1:9999/
 ```
 
 Backend tests:
@@ -363,7 +363,7 @@ NT-specific:
 Frontend frozen / no data:
 
 1. Check backend: `GET /api/health`.
-2. Check frontend dev server port `5174`.
+2. Check frontend dev server port `9999`.
 3. Check `/api/contracts?symbol=GC`; active should normally be `GC 08-26`.
 4. Check `/api/history?symbol=GC&contract=GC&tf=1m&limit=5`.
 5. Check backend log for `/ws/nt` and `/ws/chart` accepted connections.
@@ -391,7 +391,16 @@ Gap/history import:
 After the latest fixes:
 
 - Backend process runs on port `8000`.
-- Frontend dev server runs on port `5174`.
+- Frontend dev server runs on port `9999`.
+- Public/browser entrypoint is `http://127.0.0.1:9999/` or the VPS hostname/IP
+  on port `9999`; frontend proxies `/api` and `/ws` to backend.
+- Backend port `8000` has an inbound Windows Firewall block rule:
+  `NTtoTV Block Backend 8000 Inbound`. Local loopback still works for the
+  frontend proxy and health checks.
+- Current real MT5 backend runtime env uses live trading enabled and invite-code
+  gated self-registration:
+  `NTTOTV_MT5_BACKEND=real`, `NTTOTV_TRADING_ENABLED=1`,
+  `NTTOTV_LIVE_TRADING_ENABLED=1`, `NTTOTV_INVITE_CODE=join-9999`.
 - Active REST contract is `GC 08-26`; chart cache key is `GC`.
 - Last-only file `export data\GC 08-26-5-6.Last.txt` was imported into chart
   cache as bars + volume delta.

@@ -142,6 +142,28 @@ body {
   background: #242424;
 }
 
+.account-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-toolbar button {
+  height: 30px;
+  padding: 0 10px;
+  color: var(--text);
+  background: #1b1b1b;
+  border: 1px solid #333;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.account-toolbar button:hover {
+  background: #242424;
+  border-color: #008b8b99;
+}
+
 .indicator-badge {
   background: #2962ff;
   color: #fff;
@@ -563,6 +585,108 @@ body {
   cursor: not-allowed;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.56);
+}
+
+.auth-dialog,
+.mt5-dialog {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  background: #151515;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.42);
+}
+
+.modal-header,
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.auth-dialog label,
+.mt5-dialog label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.auth-dialog input,
+.mt5-dialog input {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  color: var(--text);
+  background: #0f0f0f;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+}
+
+.icon-button {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--text);
+  background: #202020;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+}
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 3px;
+  background: #0f0f0f;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+.segmented-control button,
+.modal-actions button {
+  min-height: 32px;
+  color: var(--text);
+  background: #202020;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+}
+
+.segmented-control button.active,
+.segmented-control button[aria-selected="true"],
+.modal-actions button[type="submit"] {
+  background: #006d6d;
+  border-color: #008b8b99;
+}
+
+.modal-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modal-error {
+  color: #ff8f8f;
+  font-size: 12px;
+}
+
 .order-action-rail {
   position: absolute;
   top: 0;
@@ -728,8 +852,9 @@ body {
   align-items: center;
   width: 40px;
   flex-shrink: 0;
-  background: var(--panel);
-  border-right: 1px solid var(--border);
+  background: #11161a;
+  border-right: 1px solid #34424a;
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.04);
   padding: 6px 0;
   gap: 2px;
   z-index: 10;
@@ -752,26 +877,28 @@ body {
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
-  color: var(--muted);
+  color: #d7e0e6;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .drawing-tool-btn:hover {
-  background: #242424;
-  color: var(--text);
-  border-color: var(--border);
+  background: #24313a;
+  color: #ffffff;
+  border-color: #526675;
 }
 
 .drawing-tool-btn.active {
-  background: rgba(41, 98, 255, 0.18);
-  color: #5b8def;
-  border-color: rgba(41, 98, 255, 0.45);
+  background: rgba(0, 137, 123, 0.28);
+  color: #ffffff;
+  border-color: #00b3a6;
+  box-shadow: inset 0 0 0 1px rgba(0, 179, 166, 0.35);
 }
 
 .drawing-tool-btn:disabled {
-  color: #444;
+  color: #6d7780;
   cursor: default;
+  opacity: 0.65;
 }
 
 .drawing-tool-btn:disabled:hover {
@@ -782,7 +909,7 @@ body {
 .drawing-toolbar-separator {
   width: 24px;
   height: 1px;
-  background: var(--border);
+  background: #38464f;
   margin: 6px 0;
   flex-shrink: 0;
 }
@@ -1107,7 +1234,7 @@ body {
     grid-template-columns: auto minmax(0, 1fr) auto auto;
     grid-template-areas:
       "symbol timeframe bg status"
-      "indicators profile tz alerts";
+      "indicators account tz alerts";
     align-items: center;
     gap: 6px 4px;
     padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 6px;
@@ -1161,6 +1288,19 @@ body {
     min-width: 0;
   }
 
+  .account-toolbar {
+    grid-area: account;
+    justify-self: end;
+    gap: 4px;
+  }
+
+  .account-toolbar button {
+    width: 58px;
+    height: 30px;
+    padding: 0 4px;
+    font-size: 12px;
+  }
+
   .indicator-button {
     height: 30px;
     padding: 4px 7px;
@@ -1173,36 +1313,6 @@ body {
     height: 30px;
     padding: 3px 6px;
     justify-content: center;
-  }
-
-  .profile-control {
-    grid-area: profile;
-    min-width: 0;
-    width: 100%;
-    height: 30px;
-    overflow-x: visible;
-    overflow-y: visible;
-    gap: 4px;
-  }
-
-  .profile-control select {
-    flex: 0 0 64px;
-    min-width: 64px;
-    height: 30px;
-    padding: 0 4px;
-    font-size: 12px;
-  }
-
-  .profile-control button {
-    flex: 0 0 auto;
-    width: 32px;
-    height: 30px;
-    padding: 0 2px;
-    font-size: 12px;
-  }
-
-  .profile-control .profile-danger-button {
-    width: 42px;
   }
 
   .alert-popover {

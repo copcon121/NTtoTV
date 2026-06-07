@@ -4,8 +4,8 @@ import {
   ApiClient,
   type AuthUser,
   type Mt5Account,
+  type Mt5ConnectInput,
   type Mt5Symbol,
-  type ProfileListItem,
 } from "./api/client";
 import { AlertPanel } from "./alerts/AlertPanel";
 import {
@@ -38,6 +38,7 @@ import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./chart/smc";
 import { HistoryLoader } from "./cache/historyLoader";
 import { MemoryCache } from "./cache/memoryCache";
 import { type Bar } from "./cache/types";
+import { AuthDialog, type AuthDialogMode } from "./auth/AuthDialog";
 import {
   type FootprintBar,
   mergeFootprint,
@@ -52,6 +53,7 @@ import {
   MarketOrderBar,
   type MarketOrderSettings,
 } from "./orders/MarketOrderBar";
+import { Mt5AccountDialog } from "./orders/Mt5AccountDialog";
 import { ChartSocket } from "./socket/ChartSocket";
 import {
   type AlertEventMessage,
@@ -181,6 +183,11 @@ function isFinitePrice(value: number | null | undefined): value is number {
 
 function isOpenTradingOrder(order: TradingOrder): boolean {
   return OPEN_ORDER_STATUSES.has(order.status);
+}
+
+function rejectedOrderMessage(order: TradingOrder): string {
+  if (order.status !== "rejected") return "";
+  return order.rejectReason ?? "Broker rejected order";
 }
 
 function roundGcPrice(price: number): number {
@@ -364,10 +371,6 @@ function normalizeProfileId(value: string | null | undefined): string {
   return normalized.length > 0 ? normalized : DEFAULT_PROFILE_ID;
 }
 
-function profileDisplayName(profile: Pick<ProfileListItem, "id" | "name">): string {
-  return profile.name.trim() || profile.id;
-}
-
 function browserStorage(): Pick<Storage, "getItem" | "setItem"> | undefined {
   if (typeof window === "undefined") return undefined;
   try {
@@ -514,18 +517,6 @@ function profileDrawings(drawings: readonly DrawingState[]): DrawingState[] {
   return cloneDrawings(drawings.filter((drawing) => drawing.tool !== "order_bracket"));
 }
 
-function serializeDrawings(drawings: readonly DrawingState[]): string {
-  return JSON.stringify(cloneDrawings(drawings));
-}
-
-function upsertProfileChoice(
-  choices: readonly ProfileListItem[],
-  profile: ProfileListItem,
-): ProfileListItem[] {
-  const without = choices.filter((item) => item.id !== profile.id);
-  return [profile, ...without];
-}
-
 /** Resolve the backend base URLs.
  *
  * REST and WebSocket intentionally stay same-origin. In dev, Vite proxies
@@ -610,8 +601,15 @@ export function LiveApp() {
     });
   const [telegramStatus, setTelegramStatus] = useState("");
   const [authUser, setAuthUser] = useState<AuthUser | undefined>(undefined);
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthDialogMode>("login");
+  const [authPending, setAuthPending] = useState(false);
+  const [authError, setAuthError] = useState("");
   const [mt5Account, setMt5Account] = useState<Mt5Account | undefined>(undefined);
   const [mt5Symbol, setMt5Symbol] = useState<Mt5Symbol | undefined>(undefined);
+  const [mt5DialogOpen, setMt5DialogOpen] = useState(false);
+  const [mt5Pending, setMt5Pending] = useState(false);
+  const [mt5Error, setMt5Error] = useState("");
   const [orders, setOrders] = useState<readonly TradingOrder[]>([]);
   const [closingOrderIds, setClosingOrderIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -633,25 +631,13 @@ export function LiveApp() {
   const [deleteAllSignal, setDeleteAllSignal] = useState(0);
   const [removeDrawingIds, setRemoveDrawingIds] = useState<readonly string[]>([]);
   const [drawings, setDrawings] = useState<readonly DrawingState[]>([]);
-  const drawingsSignature = useMemo(
-    () => serializeDrawings(profileDrawings(drawings)),
-    [drawings],
-  );
-  const [drawingsSyncedSignature, setDrawingsSyncedSignature] =
-    useState(drawingsSignature);
   const [drawingsLoadKey, setDrawingsLoadKey] = useState(0);
-  const initialProfileId = useMemo(() => readActiveProfileId(), []);
-  const [profileId, setProfileId] = useState(initialProfileId);
-  const [profileInput, setProfileInput] = useState(initialProfileId);
-  const [profileOptions, setProfileOptions] = useState<readonly ProfileListItem[]>([]);
+  const [profileId, setProfileId] = useState(DEFAULT_PROFILE_ID);
   const [profileSaving, setProfileSaving] = useState(false);
-  const [profileDeleting, setProfileDeleting] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileHydrated, setProfileHydrated] = useState(false);
   const profileIdRef = useRef(profileId);
   profileIdRef.current = profileId;
-  const drawingsSignatureRef = useRef(drawingsSignature);
-  drawingsSignatureRef.current = drawingsSignature;
   const submittedOrderDrawingIdsRef = useRef(new Set<string>());
   const invalidOrderDrawingIdsRef = useRef(new Set<string>());
 
@@ -667,6 +653,7 @@ export function LiveApp() {
       outsideBar: { ...outsideBar },
       footprintSettings: { ...footprintSettings },
       bigTradeSettings: { ...bigTradeSettings },
+      marketOrderSettings: { ...marketOrderSettings },
       timezoneOffsetMinutes,
       drawings: profileDrawings(drawings),
     }),
@@ -676,6 +663,7 @@ export function LiveApp() {
       drawings,
       ema,
       footprintSettings,
+      marketOrderSettings,
       outsideBar,
       showBigTrades,
       showFootprint,
@@ -685,9 +673,18 @@ export function LiveApp() {
     ],
   );
 
-  const markDrawingsSyncedIfCurrent = (signature: string) => {
-    setDrawingsSyncedSignature((current) =>
-      drawingsSignatureRef.current === signature ? signature : current,
+  const profilePayloadSignature = useMemo(
+    () => JSON.stringify(profilePayload),
+    [profilePayload],
+  );
+  const [profileSyncedSignature, setProfileSyncedSignature] =
+    useState(profilePayloadSignature);
+  const profilePayloadSignatureRef = useRef(profilePayloadSignature);
+  profilePayloadSignatureRef.current = profilePayloadSignature;
+
+  const markProfileSyncedIfCurrent = (signature: string) => {
+    setProfileSyncedSignature((current) =>
+      profilePayloadSignatureRef.current === signature ? signature : current,
     );
   };
 
@@ -758,37 +755,6 @@ export function LiveApp() {
     };
   }, [socket]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const user = await api.me();
-        if (!cancelled) setAuthUser(user);
-        if (user && !cancelled) {
-          const [accountResult, symbolResult, orderResult] = await Promise.allSettled([
-            api.mt5Account(),
-            api.mt5Symbol(),
-            api.orders(true),
-          ]);
-          if (!cancelled && accountResult.status === "fulfilled") {
-            setMt5Account(accountResult.value);
-          }
-          if (!cancelled && symbolResult.status === "fulfilled") {
-            setMt5Symbol(symbolResult.value);
-          }
-          if (!cancelled && orderResult.status === "fulfilled") {
-            setOrders(orderResult.value);
-          }
-        }
-      } catch {
-        /* Trading remains locked until login succeeds. */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [api]);
-
   // Global events do not belong to a bar timeframe. Keep them subscribed once
   // so changing 1m -> 5m does not mix global and timeframe-scoped unsubscribe
   // bookkeeping on the backend.
@@ -801,23 +767,13 @@ export function LiveApp() {
     };
   }, [socket]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const profiles = await api.profiles();
-        if (!cancelled) setProfileOptions(profiles);
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [api]);
-
   // Resolve profile-scoped alerts when the active profile changes.
   useEffect(() => {
+    if (!authUser || !profileHydrated) {
+      setAlerts([]);
+      setLastAlert(undefined);
+      return;
+    }
     let cancelled = false;
     setLastAlert(undefined);
     void (async () => {
@@ -831,9 +787,19 @@ export function LiveApp() {
     return () => {
       cancelled = true;
     };
-  }, [api, profileId]);
+  }, [api, authUser, profileHydrated, profileId]);
 
   useEffect(() => {
+    if (!authUser || !profileHydrated) {
+      setTelegramConfig({
+        enabled: false,
+        chatId: "",
+        sendScreenshot: true,
+        hasBotToken: false,
+      });
+      setTelegramStatus("");
+      return;
+    }
     let cancelled = false;
     setTelegramStatus("");
     void (async () => {
@@ -854,7 +820,7 @@ export function LiveApp() {
     return () => {
       cancelled = true;
     };
-  }, [api, profileId]);
+  }, [api, authUser, profileHydrated, profileId]);
 
   // (Re)subscribe + load history whenever the charted series identity changes.
   useEffect(() => {
@@ -997,10 +963,18 @@ export function LiveApp() {
   }, [socket, contract, timeframe]);
 
   const onToggleAlert = (id: string, enabled: boolean) => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
     setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, enabled } : a)));
     void api.patchAlert(id, enabled, profileId);
   };
   const onDeleteAlert = (id: string) => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
     setAlerts((prev) => prev.filter((a) => a.id !== id));
     void api.deleteAlert(id, profileId);
   };
@@ -1008,6 +982,10 @@ export function LiveApp() {
     type: Alert["type"];
     params: Record<string, number | boolean>;
   }) => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
     void (async () => {
       try {
         const created = await api.createAlert({
@@ -1023,6 +1001,10 @@ export function LiveApp() {
     })();
   };
   const onSaveTelegram = (input: TelegramNotificationInput) => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
     setTelegramStatus("Saving...");
     void (async () => {
       try {
@@ -1037,6 +1019,10 @@ export function LiveApp() {
     })();
   };
   const onTestTelegram = () => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
     setTelegramStatus("Sending test...");
     void (async () => {
       try {
@@ -1050,42 +1036,42 @@ export function LiveApp() {
     })();
   };
   const onTradingLogin = () => {
-    const username = window.prompt("Username", authUser?.username ?? "local");
-    if (!username) return;
-    const password = window.prompt("Password");
-    if (!password) return;
-    setOrderError("");
-    void (async () => {
-      try {
-        const user = await api.login(username, password);
-        setAuthUser(user);
-      } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Login failed");
-      }
-    })();
+    setAuthMode("login");
+    setAuthError("");
+    setAuthDialogOpen(true);
   };
-  const onConnectFakeMt5 = () => {
-    setOrderError("");
+  const onOpenMt5Account = () => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
+    setMt5Error("");
+    setMt5DialogOpen(true);
+  };
+  const onLogout = () => {
     void (async () => {
       try {
-        if (!authUser) {
-          const user = await api.login("local", "local");
-          setAuthUser(user);
-        }
-        const account = await api.connectMt5({
-          login: 1,
-          password: "fake",
-          server: "Fake-Demo",
-          symbolBroker: "XAUUSDm",
+        await api.logout();
+      } catch {
+        /* Local state still clears if the session was already gone. */
+      } finally {
+        setAuthUser(undefined);
+        setMt5Account(undefined);
+        setMt5Symbol(undefined);
+        setOrders([]);
+        setAlerts([]);
+        setLastAlert(undefined);
+        setTelegramConfig({
+          enabled: false,
+          chatId: "",
+          sendScreenshot: true,
+          hasBotToken: false,
         });
-        setMt5Account(account);
-        try {
-          setMt5Symbol(await api.mt5Symbol());
-        } catch {
-          setMt5Symbol(undefined);
-        }
-      } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Connect failed");
+        setOrderError("");
+        setAuthDialogOpen(false);
+        setMt5DialogOpen(false);
+        setProfileId(DEFAULT_PROFILE_ID);
+        setProfileHydrated(true);
       }
     })();
   };
@@ -1111,6 +1097,7 @@ export function LiveApp() {
           const without = prev.filter((item) => item.id !== order.id);
           return isOpenTradingOrder(order) ? [order, ...without] : without;
         });
+        setOrderError(rejectedOrderMessage(order));
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Order failed");
       } finally {
@@ -1159,6 +1146,7 @@ export function LiveApp() {
           kind,
           volumeLots: marketOrderSettings.volumeLots,
           entryGc,
+          referenceGc: roundGcPrice(referencePrice),
           slGc,
           tpGc,
           gcAnchored: true,
@@ -1168,7 +1156,7 @@ export function LiveApp() {
           const without = prev.filter((item) => item.id !== order.id);
           return isOpenTradingOrder(order) ? [order, ...without] : without;
         });
-        setOrderError("");
+        setOrderError(rejectedOrderMessage(order));
         removeTransientDrawing(drawing.id);
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Chart order failed");
@@ -1300,8 +1288,6 @@ export function LiveApp() {
     );
     void api.patchAlertParams(id, { level }, profileId);
   };
-  const buildProfilePayload = (): ChartProfilePayload => profilePayload;
-
   const applyProfilePayload = (payload: ChartProfilePayload) => {
     const emaPeriod = Number(payload.ema?.period ?? 200);
     if (isTimeframe(payload.timeframe)) {
@@ -1331,42 +1317,95 @@ export function LiveApp() {
       ...DEFAULT_BIG_TRADE_SETTINGS,
       ...(payload.bigTradeSettings ?? {}),
     });
+    if (payload.marketOrderSettings) {
+      setMarketOrderSettings(sanitizeMarketOrderSettings(payload.marketOrderSettings));
+    }
     setTimezoneOffsetMinutes(
       normalizeTimezoneOffsetMinutes(payload.timezoneOffsetMinutes),
     );
     const nextDrawings = Array.isArray(payload.drawings)
       ? cloneDrawings(payload.drawings)
       : [];
-    const nextDrawingsSignature = serializeDrawings(nextDrawings);
-    drawingsSignatureRef.current = nextDrawingsSignature;
-    setDrawingsSyncedSignature(nextDrawingsSignature);
     setDrawings(nextDrawings);
     setDrawingsLoadKey((key) => key + 1);
     setDrawingCount(nextDrawings.length);
     setActiveTool(null);
   };
 
-  // Restore the last successfully loaded/saved profile after a browser refresh.
-  // The payload remains server-side; localStorage stores only the active id.
+  async function loadAuthenticatedState(
+    user: AuthUser,
+    options: { openMt5Setup?: boolean } = {},
+  ): Promise<void> {
+    setAuthUser(user);
+    setProfileLoading(true);
+    setProfileHydrated(false);
+    setOrderError("");
+
+    const [profileResult, statusResult] = await Promise.allSettled([
+      api.meProfile(),
+      api.mt5Status(),
+    ]);
+
+    if (profileResult.status === "fulfilled") {
+      applyProfilePayload(profileResult.value.payload);
+      setProfileId(normalizeProfileId(profileResult.value.id));
+    } else {
+      setProfileId(user.id);
+    }
+
+    const connectedAccount =
+      statusResult.status === "fulfilled" && statusResult.value.connected
+        ? statusResult.value.account ?? undefined
+        : undefined;
+    setMt5Account(connectedAccount);
+    if (statusResult.status === "fulfilled" && !statusResult.value.connected) {
+      setOrderError(statusResult.value.error ?? "");
+    } else if (connectedAccount) {
+      setOrderError("");
+    }
+
+    if (connectedAccount) {
+      const [symbolResult, orderResult] = await Promise.allSettled([
+        api.mt5Symbol(),
+        api.orders(true),
+      ]);
+      setMt5Symbol(symbolResult.status === "fulfilled" ? symbolResult.value : undefined);
+      setOrders(orderResult.status === "fulfilled" ? orderResult.value : []);
+    } else {
+      setMt5Symbol(undefined);
+      setOrders([]);
+      if (options.openMt5Setup) {
+        setMt5Error("");
+        setMt5DialogOpen(true);
+      }
+    }
+
+    setProfileSyncedSignature("");
+    setProfileLoading(false);
+    setProfileHydrated(true);
+  }
+
   useEffect(() => {
     let cancelled = false;
     setProfileLoading(true);
     void (async () => {
       try {
-        const profile = await api.profile(initialProfileId);
-        if (!cancelled) {
-          applyProfilePayload(profile.payload);
-          setProfileId(profile.id);
-          setProfileInput(profile.id);
+        const user = await api.me();
+        if (cancelled) return;
+        if (user) {
+          await loadAuthenticatedState(user, { openMt5Setup: true });
+        } else {
+          setAuthUser(undefined);
+          setMt5Account(undefined);
+          setMt5Symbol(undefined);
+          setOrders([]);
+          setProfileId(DEFAULT_PROFILE_ID);
+          setProfileLoading(false);
+          setProfileHydrated(true);
         }
       } catch {
-        if (!cancelled && initialProfileId !== DEFAULT_PROFILE_ID) {
-          persistActiveProfileId(DEFAULT_PROFILE_ID);
-          setProfileId(DEFAULT_PROFILE_ID);
-          setProfileInput(DEFAULT_PROFILE_ID);
-        }
-      } finally {
         if (!cancelled) {
+          setAuthUser(undefined);
           setProfileLoading(false);
           setProfileHydrated(true);
         }
@@ -1375,108 +1414,55 @@ export function LiveApp() {
     return () => {
       cancelled = true;
     };
-  }, [api, initialProfileId]);
+  }, [api]);
 
-  const onSaveProfile = () => {
-    const id = normalizeProfileId(profileInput);
-    const existing = profileChoices.find((profile) => profile.id === id);
-    const name = existing ? profileDisplayName(existing) : id;
-    setProfileInput(id);
-    setProfileSaving(true);
-    const payload = buildProfilePayload();
-    const savedDrawingsSignature = drawingsSignature;
+  const onAuthSubmit = (input: {
+    username: string;
+    password: string;
+    mode: AuthDialogMode;
+    inviteCode?: string;
+  }) => {
+    setAuthPending(true);
+    setAuthError("");
     void (async () => {
       try {
-        const saved = await api.saveProfile(id, {
-          name,
-          payload,
-        });
-        setProfileOptions((prev) => upsertProfileChoice(prev, saved));
-        setProfileId(id);
-        persistActiveProfileId(id);
-        markDrawingsSyncedIfCurrent(savedDrawingsSignature);
-      } catch {
-        /* ignore */
+        const user =
+          input.mode === "register"
+            ? await api.register(input.username, input.password, input.inviteCode)
+            : await api.login(input.username, input.password);
+        setAuthDialogOpen(false);
+        await loadAuthenticatedState(user, { openMt5Setup: true });
+      } catch (error) {
+        setAuthError(error instanceof Error ? error.message : "Login failed");
       } finally {
-        setProfileSaving(false);
+        setAuthPending(false);
       }
     })();
   };
 
-  const onLoadProfile = () => {
-    const id = normalizeProfileId(profileInput);
-    setProfileInput(id);
-    setProfileLoading(true);
+  const onSubmitMt5Account = (input: Mt5ConnectInput) => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
+    setMt5Pending(true);
+    setMt5Error("");
     void (async () => {
       try {
-        const profile = await api.profile(id);
-        applyProfilePayload(profile.payload);
-        setProfileId(profile.id);
-        setProfileInput(profile.id);
-        persistActiveProfileId(profile.id);
-      } catch {
-        /* ignore */
+        const account = await api.connectMt5(input);
+        setMt5Account(account);
+        const [symbolResult, orderResult] = await Promise.allSettled([
+          api.mt5Symbol(),
+          api.orders(true),
+        ]);
+        setMt5Symbol(symbolResult.status === "fulfilled" ? symbolResult.value : undefined);
+        setOrders(orderResult.status === "fulfilled" ? orderResult.value : []);
+        setOrderError("");
+        setMt5DialogOpen(false);
+      } catch (error) {
+        setMt5Error(error instanceof Error ? error.message : "Account save failed");
       } finally {
-        setProfileLoading(false);
-      }
-    })();
-  };
-
-  const onCreateProfile = () => {
-    const name = window.prompt("Profile name");
-    if (name === null) return;
-    const id = name.trim();
-    if (!id) return;
-    setProfileInput(id);
-    setProfileSaving(true);
-    const payload = buildProfilePayload();
-    const savedDrawingsSignature = drawingsSignature;
-    void (async () => {
-      try {
-        const saved = await api.saveProfile(id, {
-          name: id,
-          payload,
-        });
-        setProfileOptions((prev) => upsertProfileChoice(prev, saved));
-        setProfileId(saved.id);
-        setProfileInput(saved.id);
-        persistActiveProfileId(saved.id);
-        markDrawingsSyncedIfCurrent(savedDrawingsSignature);
-      } catch {
-        /* ignore */
-      } finally {
-        setProfileSaving(false);
-      }
-    })();
-  };
-
-  const onDeleteProfile = () => {
-    const id = normalizeProfileId(profileInput);
-    if (id === DEFAULT_PROFILE_ID || profileDeleting) return;
-    const selected = profileChoices.find((profile) => profile.id === id);
-    if (!window.confirm(`Delete profile "${selected ? profileDisplayName(selected) : id}"?`)) return;
-    setProfileDeleting(true);
-    void (async () => {
-      try {
-        await api.deleteProfile(id);
-        setProfileOptions((prev) => prev.filter((profile) => profile.id !== id));
-        if (id === profileId) {
-          persistActiveProfileId(DEFAULT_PROFILE_ID);
-          setProfileId(DEFAULT_PROFILE_ID);
-          try {
-            const fallback = await api.profile(DEFAULT_PROFILE_ID);
-            applyProfilePayload(fallback.payload);
-            setProfileInput(fallback.id);
-          } catch {
-            setProfileInput(DEFAULT_PROFILE_ID);
-          }
-        } else {
-          setProfileInput(profileId);
-        }
-      } catch {
-        /* ignore */
-      } finally {
-        setProfileDeleting(false);
+        setMt5Pending(false);
       }
     })();
   };
@@ -1496,27 +1482,6 @@ export function LiveApp() {
       ),
     [orders, latestPrice, mt5Symbol, closingOrderIds, cancellingOrderIds],
   );
-  const profileChoices = useMemo(() => {
-    const byId = new Map<string, ProfileListItem>();
-    for (const option of profileOptions) {
-      byId.set(option.id, option);
-    }
-    for (const id of [profileInput, profileId, DEFAULT_PROFILE_ID]) {
-      const normalized = normalizeProfileId(id);
-      if (!byId.has(normalized)) {
-        byId.set(normalized, {
-          id: normalized,
-          name: normalized,
-          createdAt: 0,
-          updatedAt: 0,
-        });
-      }
-    }
-    return [...byId.values()];
-  }, [profileId, profileInput, profileOptions]);
-  const selectedProfile = profileChoices.find((profile) => profile.id === profileInput);
-  const canDeleteSelectedProfile =
-    normalizeProfileId(profileInput) !== DEFAULT_PROFILE_ID && selectedProfile !== undefined;
   const chartBars = hasLoadedCurrentSeries ? bars : EMPTY_BARS;
   const chartVolumeDelta = hasLoadedCurrentSeries && volumeDeltaSeriesKey === currentSeriesKey
     ? volumeDelta
@@ -1528,26 +1493,28 @@ export function LiveApp() {
 
   useEffect(() => {
     if (
+      !authUser ||
+      !profileHydrated ||
       profileLoading ||
       profileSaving ||
-      drawingsSignature === drawingsSyncedSignature
+      profilePayloadSignature === profileSyncedSignature
     ) {
       return;
     }
 
-    const id = normalizeProfileId(profileId);
-    const existing = profileOptions.find((profile) => profile.id === id);
-    const name = existing ? profileDisplayName(existing) : id;
     const payload = profilePayload;
-    const savedDrawingsSignature = drawingsSignature;
+    const savedProfileSignature = profilePayloadSignature;
     const timer = window.setTimeout(() => {
       void (async () => {
         try {
-          const saved = await api.saveProfile(id, { name, payload });
-          setProfileOptions((prev) => upsertProfileChoice(prev, saved));
-          markDrawingsSyncedIfCurrent(savedDrawingsSignature);
+          setProfileSaving(true);
+          const saved = await api.saveMeProfile({ name: authUser.username, payload });
+          setProfileId(normalizeProfileId(saved.id));
+          markProfileSyncedIfCurrent(savedProfileSignature);
         } catch {
-          /* Keep the drawings dirty so the next render/change can retry. */
+          /* Keep the profile dirty so the next render/change can retry. */
+        } finally {
+          setProfileSaving(false);
         }
       })();
     }, DRAWINGS_AUTOSAVE_DELAY_MS);
@@ -1555,13 +1522,14 @@ export function LiveApp() {
     return () => window.clearTimeout(timer);
   }, [
     api,
-    drawingsSignature,
-    drawingsSyncedSignature,
+    authUser,
+    profileHydrated,
     profileId,
     profileLoading,
-    profileOptions,
     profilePayload,
+    profilePayloadSignature,
     profileSaving,
+    profileSyncedSignature,
   ]);
 
   useEffect(() => {
@@ -1602,6 +1570,22 @@ export function LiveApp() {
           onFootprintSettingsChange={setFootprintSettings}
           onBigTradeSettingsChange={setBigTradeSettings}
         />
+        <div className="account-toolbar" aria-label="Account controls">
+          {authUser ? (
+            <>
+              <button type="button" onClick={onOpenMt5Account}>
+                Account
+              </button>
+              <button type="button" onClick={onLogout}>
+                Logout
+              </button>
+            </>
+          ) : (
+            <button type="button" onClick={onTradingLogin}>
+              Login
+            </button>
+          )}
+        </div>
         <label className="chart-bg-control" title="Chart background">
           <span
             className="chart-bg-swatch"
@@ -1615,36 +1599,6 @@ export function LiveApp() {
             onChange={(e) => setChartBackgroundColor(e.currentTarget.value)}
           />
         </label>
-        <div className="profile-control" title={`Active profile: ${profileId}`}>
-          <select
-            aria-label="Profile id"
-            value={profileInput}
-            onChange={(e) => setProfileInput(e.currentTarget.value)}
-          >
-            {profileChoices.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profileDisplayName(profile)}
-              </option>
-            ))}
-          </select>
-          <button type="button" onClick={onLoadProfile} disabled={profileLoading}>
-            Load
-          </button>
-          <button type="button" onClick={onSaveProfile} disabled={profileSaving}>
-            Save
-          </button>
-          <button type="button" onClick={onCreateProfile} disabled={profileSaving}>
-            New
-          </button>
-          <button
-            type="button"
-            className="profile-danger-button"
-            onClick={onDeleteProfile}
-            disabled={profileDeleting || !canDeleteSelectedProfile}
-          >
-            Delete
-          </button>
-        </div>
         <div className="alert-popover">
           <AlertToolbarButton
             open={alertPanelOpen}
@@ -1733,11 +1687,30 @@ export function LiveApp() {
             onSettingsChange={(settings) =>
               setMarketOrderSettings(sanitizeMarketOrderSettings(settings))
             }
-            onLogin={onTradingLogin}
-            onConnect={onConnectFakeMt5}
             onMarketOrder={onMarketOrder}
           />
         </div>
+        <AuthDialog
+          open={authDialogOpen}
+          mode={authMode}
+          pending={authPending}
+          error={authError}
+          usernameHint={authUser?.username ?? "local"}
+          onModeChange={(mode) => {
+            setAuthMode(mode);
+            setAuthError("");
+          }}
+          onSubmit={onAuthSubmit}
+          onClose={() => setAuthDialogOpen(false)}
+        />
+        <Mt5AccountDialog
+          open={mt5DialogOpen}
+          account={mt5Account}
+          pending={mt5Pending}
+          error={mt5Error}
+          onSubmit={onSubmitMt5Account}
+          onClose={() => setMt5DialogOpen(false)}
+        />
         {alertMenu !== undefined && (
           <>
             <div

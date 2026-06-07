@@ -10,7 +10,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, ".", "");
   const backendHost = env.VITE_BACKEND_HOST ?? "127.0.0.1";
   const backendPort = env.VITE_BACKEND_PORT ?? "8000";
-  const devPort = Number(env.VITE_DEV_PORT ?? "5174");
+  const devPort = Number(env.VITE_DEV_PORT ?? "9999");
   const backendHttp = `http://${backendHost}:${backendPort}`;
   const backendWs = `ws://${backendHost}:${backendPort}`;
 

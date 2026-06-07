@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS metadata (
 -- Server-side frontend profiles. Active_Contract remains global metadata.
 CREATE TABLE IF NOT EXISTS profiles (
     id         TEXT PRIMARY KEY,
+    user_id    TEXT,
     name       TEXT NOT NULL,
     payload    TEXT NOT NULL,          -- JSON
     created_at INTEGER NOT NULL,
@@ -374,6 +375,10 @@ class CacheStore:
 
     def _migrate_profiles_and_alerts(self) -> None:
         """Add profile support columns/indexes to existing cache files."""
+        rows = self._writer.connection.execute("PRAGMA table_info(profiles)").fetchall()
+        existing = {str(r["name"]) for r in rows}
+        if "user_id" not in existing:
+            self._writer.execute("ALTER TABLE profiles ADD COLUMN user_id TEXT")
         for table in ("alerts", "alert_events"):
             rows = self._writer.connection.execute(f"PRAGMA table_info({table})").fetchall()
             existing = {str(r["name"]) for r in rows}
@@ -384,6 +389,8 @@ class CacheStore:
                 )
         self._writer.executescript(
             """
+            CREATE INDEX IF NOT EXISTS idx_profiles_user
+                ON profiles(user_id, updated_at);
             CREATE INDEX IF NOT EXISTS idx_alerts_profile_symbol
                 ON alerts(profile_id, symbol, created_at);
             CREATE INDEX IF NOT EXISTS idx_alert_events_profile_time
@@ -635,14 +642,16 @@ class CacheStore:
     def upsert_profile(self, profile: ProfileRecord) -> None:
         self._profiles.upsert_profile(profile)
 
-    def read_profile(self, profile_id: str) -> ProfileRecord | None:
-        return self._profiles.read_profile(profile_id)
+    def read_profile(
+        self, profile_id: str, user_id: str | None = None
+    ) -> ProfileRecord | None:
+        return self._profiles.read_profile(profile_id, user_id)
 
-    def read_profiles(self) -> list[ProfileRecord]:
-        return self._profiles.read_profiles()
+    def read_profiles(self, user_id: str | None = None) -> list[ProfileRecord]:
+        return self._profiles.read_profiles(user_id)
 
-    def delete_profile(self, profile_id: str) -> bool:
-        return self._profiles.delete_profile(profile_id)
+    def delete_profile(self, profile_id: str, user_id: str | None = None) -> bool:
+        return self._profiles.delete_profile(profile_id, user_id)
 
     def upsert_alert(self, alert: AlertRecord) -> None:
         self._alerts.upsert_alert(alert)

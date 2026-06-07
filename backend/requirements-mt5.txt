@@ -2,4 +2,5 @@
 # Install only on the VPS/terminal host that will run with:
 #   NTTOTV_MT5_BACKEND=real
 -r requirements.txt
+numpy<2
 MetaTrader5>=5.0.45

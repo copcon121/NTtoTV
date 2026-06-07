@@ -1,13 +1,118 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.app import create_app
 from app.config import Settings
 from app.engines.basis_engine import BasisEngine
+from app.models.mt5 import Mt5AccountInfo, Mt5OrderResult, Mt5SymbolInfo, Mt5Tick
+from app.models.orders import OrderKind, OrderRecord
+from app.models.timestamp import now_ms
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
+
+
+class _Manager:
+    def __init__(self, backend) -> None:
+        self.backend = backend
+
+    def credential_key(self) -> str:
+        return "fake-local-development-key"
+
+    @contextmanager
+    def backend_session(self):
+        yield self.backend
+
+    @contextmanager
+    def account_session(self, cache, account):
+        connector = getattr(self.backend, "connect_account", None)
+        if callable(connector):
+            password = cache.users.read_mt5_password(
+                account.user_id,
+                self.credential_key(),
+            )
+            connector(
+                login=account.login,
+                password=password or "",
+                server=account.server,
+                terminal_path=account.terminal_path,
+            )
+        yield self.backend
+
+
+class _StrictSymbolBackend:
+    def __init__(self) -> None:
+        self.active_login = 1
+        self.placed_logins: list[int] = []
+        self.placed_orders: list[OrderRecord] = []
+
+    def connect_account(
+        self,
+        *,
+        login: int,
+        password: str,
+        server: str,
+        terminal_path: str | None = None,
+    ) -> None:
+        self.active_login = int(login)
+
+    def account_info(self, user_id: str, account_id: str) -> Mt5AccountInfo:
+        return Mt5AccountInfo(
+            account_id=account_id,
+            login=self.active_login,
+            server="Fake-Demo",
+            trade_mode="demo",
+            currency="USD",
+            balance=10_000.0,
+            equity=10_000.0,
+            margin=0.0,
+            free_margin=10_000.0,
+        )
+
+    def symbol_info(self, user_id: str, account_id: str, symbol: str) -> Mt5SymbolInfo:
+        if symbol != "XAUUSDm":
+            raise RuntimeError(f"Unknown MT5 symbol {symbol!r}")
+        return Mt5SymbolInfo(
+            symbol=symbol,
+            digits=3,
+            tick_size=0.001,
+            min_lot=0.01,
+            max_lot=50.0,
+            lot_step=0.01,
+            stops_level=0.5,
+            pip_value=1.0,
+        )
+
+    def symbol_tick(self, user_id: str, account_id: str, symbol: str) -> Mt5Tick:
+        return Mt5Tick(symbol=symbol, bid=2350.0, ask=2350.1, time=now_ms())
+
+    def place_order(self, order: OrderRecord) -> Mt5OrderResult:
+        self.placed_logins.append(self.active_login)
+        self.placed_orders.append(order)
+        return Mt5OrderResult(
+            accepted=True,
+            status="filled",
+            broker_position_ticket=self.active_login,
+            fill_price=2350.1,
+        )
+
+    def modify_order(self, order: OrderRecord) -> Mt5OrderResult:
+        return Mt5OrderResult(accepted=True, status=order.status.value)
+
+    def cancel_order(self, order: OrderRecord) -> Mt5OrderResult:
+        return Mt5OrderResult(accepted=True, status="cancelled")
+
+    def close_position(self, order: OrderRecord) -> Mt5OrderResult:
+        return Mt5OrderResult(accepted=True, status="closed")
+
+    def orders(self, user_id: str, account_id: str) -> list[dict]:
+        return []
+
+    def positions(self, user_id: str, account_id: str) -> list[dict]:
+        return []
 
 
 @pytest.fixture()
@@ -40,10 +145,243 @@ def _login_and_connect(client: TestClient) -> None:
 
 
 @pytest.mark.integration
+def test_mt5_status_reports_verified_balance(client: TestClient):
+    _login_and_connect(client)
+
+    status = client.get("/api/mt5/status")
+
+    assert status.status_code == 200
+    body = status.json()
+    assert body["connected"] is True
+    assert body["account"]["balance"] == 10_000.0
+    assert body["account"]["equity"] == 10_000.0
+    assert body["account"]["currency"] == "USD"
+
+
+@pytest.mark.integration
+def test_mt5_connect_does_not_persist_invalid_symbol(client: TestClient):
+    client.app.state.mt5_manager = _Manager(_StrictSymbolBackend())
+    assert client.post(
+        "/api/auth/login", json={"username": "local", "password": "local"}
+    ).status_code == 200
+
+    good = client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 1,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+        },
+    )
+    assert good.status_code == 200
+
+    bad = client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 1,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSD",
+        },
+    )
+    assert bad.status_code == 400
+    assert "Unknown MT5 symbol 'XAUUSD'" in bad.json()["error"]["message"]
+
+    status = client.get("/api/mt5/status")
+    assert status.status_code == 200
+    assert status.json()["connected"] is True
+    assert status.json()["account"]["symbolBroker"] == "XAUUSDm"
+
+
+@pytest.mark.integration
+def test_mt5_connect_auto_detects_symbol_when_omitted(client: TestClient):
+    client.app.state.mt5_manager = _Manager(_StrictSymbolBackend())
+    assert client.post(
+        "/api/auth/login", json={"username": "local", "password": "local"}
+    ).status_code == 200
+
+    detected = client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 1,
+            "password": "fake",
+            "server": "Fake-Demo",
+        },
+    )
+
+    assert detected.status_code == 200
+    assert detected.json()["account"]["symbolBroker"] == "XAUUSDm"
+
+
+@pytest.mark.integration
+def test_two_users_place_orders_with_their_own_mt5_logins(client: TestClient):
+    backend = _StrictSymbolBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+
+    assert client.post(
+        "/api/auth/register", json={"username": "alice", "password": "pw"}
+    ).status_code == 200
+    assert client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 11,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+        },
+    ).status_code == 200
+    current = now_ms()
+    client.app.state.basis_engine.update_gc(2350.0, current)
+    client.app.state.basis_engine.update_broker_mid(2350.05, current)
+    alice_order = client.post(
+        "/api/orders",
+        json={
+            "source": "market_bar",
+            "side": "buy",
+            "kind": "market",
+            "volumeLots": 0.1,
+            "idempotencyKey": "alice-order",
+        },
+    )
+    assert alice_order.status_code == 200
+    assert alice_order.json()["order"]["brokerPositionTicket"] == 11
+
+    assert client.post("/api/auth/logout").status_code == 200
+    assert client.post(
+        "/api/auth/register", json={"username": "bob", "password": "pw"}
+    ).status_code == 200
+    assert client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 22,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+        },
+    ).status_code == 200
+    current = now_ms()
+    client.app.state.basis_engine.update_gc(2350.0, current)
+    client.app.state.basis_engine.update_broker_mid(2350.05, current)
+    bob_order = client.post(
+        "/api/orders",
+        json={
+            "source": "market_bar",
+            "side": "sell",
+            "kind": "market",
+            "volumeLots": 0.1,
+            "idempotencyKey": "bob-order",
+        },
+    )
+    assert bob_order.status_code == 200
+    assert bob_order.json()["order"]["brokerPositionTicket"] == 22
+    assert backend.placed_logins == [11, 22]
+
+
+@pytest.mark.integration
+def test_market_order_distances_are_anchored_to_broker_tick(client: TestClient):
+    backend = _StrictSymbolBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    assert client.post(
+        "/api/auth/login", json={"username": "local", "password": "local"}
+    ).status_code == 200
+    assert client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 1,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+        },
+    ).status_code == 200
+
+    resp = client.post(
+        "/api/orders",
+        json={
+            "source": "market_bar",
+            "side": "buy",
+            "kind": "market",
+            "volumeLots": 0.1,
+            "entryGc": 9999.0,
+            "slDistanceGc": 3,
+            "tpDistanceGc": 6,
+            "idempotencyKey": "market-stops-anchor",
+        },
+    )
+
+    assert resp.status_code == 200
+    placed = backend.placed_orders[-1]
+    assert placed.entry_broker == 2350.1
+    assert placed.sl_broker == 2347.1
+    assert placed.tp_broker == 2356.1
+
+
+@pytest.mark.integration
+def test_chart_bracket_uses_reference_gc_to_convert_pending_price(client: TestClient):
+    backend = _StrictSymbolBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    assert client.post(
+        "/api/auth/login", json={"username": "local", "password": "local"}
+    ).status_code == 200
+    assert client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 1,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+        },
+    ).status_code == 200
+
+    resp = client.post(
+        "/api/orders",
+        json={
+            "source": "chart_bracket",
+            "side": "buy",
+            "kind": "stop",
+            "volumeLots": 0.1,
+            "referenceGc": 2370.0,
+            "entryGc": 2360.0,
+            "slGc": 2355.0,
+            "tpGc": 2372.0,
+            "idempotencyKey": "chart-reference",
+        },
+    )
+
+    assert resp.status_code == 200
+    order = resp.json()["order"]
+    assert order["kind"] == "limit"
+    assert order["entryBroker"] == 2340.05
+    assert order["slBroker"] == 2335.05
+    assert order["tpBroker"] == 2352.05
+    placed = backend.placed_orders[-1]
+    assert placed.kind is OrderKind.LIMIT
+
+
+@pytest.mark.integration
 def test_orders_require_auth(client: TestClient):
     resp = client.get("/api/orders")
     assert resp.status_code == 401
     assert resp.json()["error"]["code"] == "UNAUTHORIZED"
+
+
+@pytest.mark.integration
+def test_orders_require_mt5_account(client: TestClient):
+    assert client.post(
+        "/api/auth/register", json={"username": "local", "password": "local"}
+    ).status_code == 200
+    resp = client.post(
+        "/api/orders",
+        json={
+            "source": "market_bar",
+            "side": "buy",
+            "kind": "market",
+            "volumeLots": 0.1,
+            "idempotencyKey": "missing-mt5",
+        },
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["field"] == "account"
 
 
 @pytest.mark.integration

@@ -25,10 +25,11 @@ Optional real MT5 execution backend on the Windows VPS/terminal host:
 ```bash
 pip install -r requirements-mt5.txt
 set NTTOTV_MT5_BACKEND=real
-set NTTOTV_TRADING_ENABLED=true
+set NTTOTV_TRADING_ENABLED=1
+set NTTOTV_INVITE_CODE=join-9999
 ```
 
-Live accounts remain fail-closed unless `NTTOTV_LIVE_TRADING_ENABLED=true` is
+Live accounts remain fail-closed unless `NTTOTV_LIVE_TRADING_ENABLED=1` is
 also set. The default backend is fake/demo-safe.
 
 ## Run
@@ -40,6 +41,9 @@ uvicorn app.app:app --host 127.0.0.1 --port 8000
 ```
 
 Health check: `GET http://127.0.0.1:8000/api/health`
+
+When the frontend is exposed publicly, keep backend port `8000` closed to
+inbound network traffic and expose only the frontend/proxy port.
 
 ## Package layout
 

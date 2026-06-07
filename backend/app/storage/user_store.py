@@ -74,6 +74,21 @@ def _seal_secret(secret: str, key: str) -> str:
     return base64.urlsafe_b64encode(mac + ciphertext).decode("ascii")
 
 
+def _unseal_secret(sealed: str, key: str) -> str:
+    key_bytes = hashlib.sha256(key.encode("utf-8")).digest()
+    raw = base64.urlsafe_b64decode(sealed.encode("ascii"))
+    if len(raw) < hashlib.sha256().digest_size:
+        raise ValueError("sealed secret is invalid")
+    mac = raw[: hashlib.sha256().digest_size]
+    ciphertext = raw[hashlib.sha256().digest_size :]
+    expected = hmac.new(key_bytes, ciphertext, hashlib.sha256).digest()
+    if not hmac.compare_digest(mac, expected):
+        raise ValueError("sealed secret authentication failed")
+    stream = _keystream(key_bytes, len(ciphertext))
+    payload = bytes(a ^ b for a, b in zip(ciphertext, stream))
+    return payload.decode("utf-8")
+
+
 def _keystream(key: bytes, length: int) -> bytes:
     out = bytearray()
     counter = 0
@@ -152,6 +167,17 @@ class UserStore:
                 "SELECT id, username, password_hash, created_at "
                 "FROM users WHERE lower(username) = lower(?)",
                 (username.strip(),),
+            ).fetchone()
+            return None if row is None else _row_to_user(row)
+        finally:
+            conn.close()
+
+    def read_first_user(self) -> UserRecord | None:
+        conn = self._reader()
+        try:
+            row = conn.execute(
+                "SELECT id, username, password_hash, created_at "
+                "FROM users ORDER BY created_at, id LIMIT 1"
             ).fetchone()
             return None if row is None else _row_to_user(row)
         finally:
@@ -268,6 +294,12 @@ class UserStore:
             return None if row is None else _row_to_account(row)
         finally:
             conn.close()
+
+    def read_mt5_password(self, user_id: str, credential_key: str) -> str | None:
+        account = self.read_mt5_account(user_id)
+        if account is None:
+            return None
+        return _unseal_secret(account.password_encrypted, credential_key)
 
     def read_mt5_accounts(self) -> list[Mt5AccountRecord]:
         conn = self._reader()

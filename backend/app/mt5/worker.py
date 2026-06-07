@@ -1,9 +1,7 @@
 """Optional real MetaTrader5 backend.
 
 This module imports the `MetaTrader5` Python package only inside the real backend
-constructor so CI/local fake mode does not require the package. The initial real
-path attaches to the currently logged-in terminal; credential/login orchestration
-can be layered behind the same interface later.
+constructor so CI/local fake mode does not require the package.
 """
 
 from __future__ import annotations
@@ -18,6 +16,8 @@ from ..models.timestamp import now_ms
 
 __all__ = ["RealMt5Backend"]
 
+_MT5_COMMENT_MAX_LENGTH = 31
+
 
 class RealMt5Backend:
     def __init__(
@@ -30,6 +30,7 @@ class RealMt5Backend:
         self._terminal_path = terminal_path
         self._mt5 = importlib.import_module("MetaTrader5")
         self._initialized = False
+        self._active_login: int | None = None
 
     def _ensure(self) -> None:
         if self._initialized:
@@ -42,6 +43,54 @@ class RealMt5Backend:
             code, message = self._mt5.last_error()
             raise RuntimeError(f"MetaTrader5 initialize failed: {code} {message}")
         self._initialized = True
+
+    def connect_account(
+        self,
+        *,
+        login: int,
+        password: str,
+        server: str,
+        terminal_path: str | None = None,
+    ) -> None:
+        next_terminal = terminal_path.strip() if terminal_path else None
+        if (
+            self._initialized
+            and next_terminal
+            and next_terminal != self._terminal_path
+        ):
+            self._mt5.shutdown()
+            self._initialized = False
+            self._active_login = None
+        if next_terminal:
+            self._terminal_path = next_terminal
+
+        if not self._initialized:
+            kwargs: dict[str, Any] = {
+                "login": int(login),
+                "password": password,
+                "server": server,
+            }
+            if self._terminal_path:
+                kwargs["path"] = self._terminal_path
+            ok = self._mt5.initialize(**kwargs)
+            if not ok:
+                code, message = self._mt5.last_error()
+                raise RuntimeError(f"MetaTrader5 initialize failed: {code} {message}")
+            self._initialized = True
+        if self._active_login != int(login):
+            ok = self._mt5.login(int(login), password=password, server=server)
+            if not ok:
+                code, message = self._mt5.last_error()
+                raise RuntimeError(f"MetaTrader5 login failed: {code} {message}")
+        info = self._mt5.account_info()
+        if info is None:
+            code, message = self._mt5.last_error()
+            raise RuntimeError(f"MetaTrader5 account_info failed: {code} {message}")
+        if int(info.login) != int(login):
+            raise RuntimeError(
+                f"MetaTrader5 logged into {int(info.login)}, expected {int(login)}"
+            )
+        self._active_login = int(login)
 
     def account_info(self, user_id: str, account_id: str) -> Mt5AccountInfo:
         self._ensure()
@@ -69,6 +118,11 @@ class RealMt5Backend:
             raise RuntimeError(f"Unknown MT5 symbol {symbol!r}")
         if not info.visible:
             self._mt5.symbol_select(symbol, True)
+        trade_mode = getattr(info, "trade_mode", None)
+        if trade_mode is not None and int(trade_mode) == int(
+            getattr(self._mt5, "SYMBOL_TRADE_MODE_DISABLED", 0)
+        ):
+            raise RuntimeError(f"MT5 symbol {symbol!r} is disabled for trading")
         tick_size = float(getattr(info, "trade_tick_size", 0.0) or info.point)
         return Mt5SymbolInfo(
             symbol=symbol,
@@ -91,6 +145,7 @@ class RealMt5Backend:
 
     def place_order(self, order: OrderRecord) -> Mt5OrderResult:
         self._ensure()
+        symbol_info = self._mt5.symbol_info(order.symbol_broker)
         tick = self._mt5.symbol_info_tick(order.symbol_broker)
         if tick is None:
             return Mt5OrderResult(False, "rejected", error_code="no_tick", error_message="No broker tick")
@@ -101,9 +156,9 @@ class RealMt5Backend:
             "tp": order.tp_broker or 0.0,
             "deviation": 20,
             "magic": 240606,
-            "comment": f"NTtoTV {order.id}",
+            "comment": _mt5_comment("ord", order.id),
             "type_time": self._mt5.ORDER_TIME_GTC,
-            "type_filling": self._mt5.ORDER_FILLING_IOC,
+            "type_filling": _mt5_filling_type(self._mt5, symbol_info),
         }
         if order.kind is OrderKind.MARKET:
             request["action"] = self._mt5.TRADE_ACTION_DEAL
@@ -118,6 +173,13 @@ class RealMt5Backend:
             request["type"] = _pending_type(self._mt5, order)
             request["price"] = order.entry_broker
         result = self._mt5.order_send(request)
+        session_result = self._market_session_error_from_invalid_stops(
+            order,
+            request,
+            result,
+        )
+        if session_result is not None:
+            return session_result
         return self._result_to_order_result(order, result)
 
     def modify_order(self, order: OrderRecord) -> Mt5OrderResult:
@@ -173,7 +235,10 @@ class RealMt5Backend:
                 "price": price,
                 "deviation": 20,
                 "magic": 240606,
-                "comment": f"NTtoTV close {order.id}",
+                "comment": _mt5_comment("close", order.id),
+                "type_filling": _mt5_filling_type(
+                    self._mt5, self._mt5.symbol_info(order.symbol_broker)
+                ),
             }
         )
         return self._result_to_order_result(order, result, success_status="closed")
@@ -212,6 +277,32 @@ class RealMt5Backend:
             fill_price=float(result.price) if getattr(result, "price", 0.0) else None,
         )
 
+    def _market_session_error_from_invalid_stops(
+        self,
+        order: OrderRecord,
+        request: dict[str, Any],
+        result,
+    ) -> Mt5OrderResult | None:
+        if order.kind is not OrderKind.MARKET:
+            return None
+        if not _retcode_matches(
+            self._mt5,
+            result,
+            "TRADE_RETCODE_INVALID_STOPS",
+            10016,
+        ):
+            return None
+        order_check = getattr(self._mt5, "order_check", None)
+        if not callable(order_check):
+            return None
+        probe = dict(request)
+        probe["sl"] = 0.0
+        probe["tp"] = 0.0
+        check = order_check(probe)
+        if _retcode_matches(self._mt5, check, "TRADE_RETCODE_MARKET_CLOSED", 10018):
+            return self._result_to_order_result(order, check)
+        return None
+
 
 def _pending_type(mt5, order: OrderRecord) -> int:
     if order.side is OrderSide.BUY and order.kind is OrderKind.LIMIT:
@@ -221,6 +312,31 @@ def _pending_type(mt5, order: OrderRecord) -> int:
     if order.side is OrderSide.SELL and order.kind is OrderKind.LIMIT:
         return mt5.ORDER_TYPE_SELL_LIMIT
     return mt5.ORDER_TYPE_SELL_STOP
+
+
+def _mt5_comment(action: str, order_id: str) -> str:
+    safe_action = "".join(ch for ch in action if ch.isascii() and ch.isalnum())
+    safe_order = "".join(ch for ch in order_id if ch.isascii() and ch.isalnum())
+    suffix = safe_order[-12:] or "order"
+    comment = f"NTtoTV-{safe_action or 'ord'}-{suffix}"
+    return comment[:_MT5_COMMENT_MAX_LENGTH]
+
+
+def _mt5_filling_type(mt5, symbol_info) -> int:
+    mode = int(getattr(symbol_info, "filling_mode", 0) or 0)
+    symbol_ioc = int(getattr(mt5, "SYMBOL_FILLING_IOC", 2))
+    symbol_fok = int(getattr(mt5, "SYMBOL_FILLING_FOK", 1))
+    if mode & symbol_ioc:
+        return int(mt5.ORDER_FILLING_IOC)
+    if mode & symbol_fok:
+        return int(mt5.ORDER_FILLING_FOK)
+    return int(mt5.ORDER_FILLING_RETURN)
+
+
+def _retcode_matches(mt5, result, name: str, fallback: int) -> bool:
+    if result is None:
+        return False
+    return int(getattr(result, "retcode", -1)) == int(getattr(mt5, name, fallback))
 
 
 def _ticket_dict(obj) -> dict:

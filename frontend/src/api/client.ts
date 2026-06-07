@@ -108,12 +108,27 @@ export interface Mt5Symbol {
   pipValue: number;
 }
 
+export interface Mt5ConnectInput {
+  login: number;
+  password: string;
+  server: string;
+  symbolBroker?: string;
+  terminalPath?: string;
+}
+
+export interface Mt5Status {
+  connected: boolean;
+  account: Mt5Account | null;
+  error?: string;
+}
+
 export interface OrderSubmitInput {
   source: "chart_bracket" | "market_bar" | "api";
   side: "buy" | "sell";
   kind: "market" | "limit" | "stop";
   volumeLots: number;
   entryGc?: number;
+  referenceGc?: number;
   slGc?: number;
   tpGc?: number;
   slDistanceGc?: number;
@@ -145,6 +160,24 @@ export class ApiClient {
     return body.user;
   }
 
+  async register(username: string, password: string, inviteCode?: string): Promise<AuthUser> {
+    const res = await this.fetchFn(`${this.basePath}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        username,
+        password,
+        ...(inviteCode ? { inviteCode } : {}),
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(await this.errorMessage(res, "POST /auth/register"));
+    }
+    const body = (await res.json()) as { user: AuthUser };
+    return body.user;
+  }
+
   async me(): Promise<AuthUser | undefined> {
     const res = await this.fetchFn(`${this.basePath}/auth/me`, {
       credentials: "same-origin",
@@ -163,12 +196,7 @@ export class ApiClient {
     if (!res.ok) throw new Error(await this.errorMessage(res, "POST /auth/logout"));
   }
 
-  async connectMt5(input: {
-    login: number;
-    password: string;
-    server: string;
-    symbolBroker: string;
-  }): Promise<Mt5Account> {
+  async connectMt5(input: Mt5ConnectInput): Promise<Mt5Account> {
     const res = await this.fetchFn(`${this.basePath}/mt5/connect`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -178,6 +206,10 @@ export class ApiClient {
     if (!res.ok) throw new Error(await this.errorMessage(res, "POST /mt5/connect"));
     const body = (await res.json()) as { account: Mt5Account };
     return body.account;
+  }
+
+  async mt5Status(): Promise<Mt5Status> {
+    return this.getJson<Mt5Status>("/mt5/status");
   }
 
   async mt5Account(): Promise<Mt5Account> {
@@ -308,6 +340,30 @@ export class ApiClient {
   async profiles(): Promise<ProfileListItem[]> {
     const body = await this.getJson<{ profiles: ProfileListItem[] }>("/profiles");
     return body.profiles;
+  }
+
+  /** Authenticated user's default chart workspace. */
+  async meProfile(): Promise<ChartProfile> {
+    const body = await this.getJson<{ profile: ChartProfile }>("/me/profile");
+    return body.profile;
+  }
+
+  /** Save the authenticated user's default chart workspace. */
+  async saveMeProfile(input: {
+    name?: string;
+    payload: ChartProfilePayload;
+  }): Promise<ChartProfile> {
+    const res = await this.fetchFn(`${this.basePath}/me/profile`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+      throw new Error(await this.errorMessage(res, "PUT /me/profile"));
+    }
+    const body = (await res.json()) as { profile: ChartProfile };
+    return body.profile;
   }
 
   /** Load Telegram notification config for the active alert profile. */

@@ -157,6 +157,7 @@ class ProfileRecord:
     payload: dict[str, Any] = field(default_factory=dict)
     created_at: CanonicalTimestamp = 0
     updated_at: CanonicalTimestamp = 0
+    user_id: str | None = None
 
 
 @dataclass(slots=True)

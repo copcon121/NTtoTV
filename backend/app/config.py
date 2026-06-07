@@ -88,6 +88,9 @@ class Settings:
     credential_key: str | None = field(
         default_factory=lambda: os.getenv("NTTOTV_CREDENTIAL_KEY")
     )
+    invite_code: str | None = field(
+        default_factory=lambda: os.getenv("NTTOTV_INVITE_CODE")
+    )
     default_broker_symbol: str = field(
         default_factory=lambda: os.getenv("NTTOTV_BROKER_SYMBOL", "XAUUSDm")
     )

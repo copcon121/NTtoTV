@@ -4,6 +4,12 @@ import type { OutsideBarSettings } from "../chart/outsideBar";
 import type { SmcSettings } from "../chart/smc";
 import type { Timeframe } from "../socket/messages";
 
+export interface ProfileMarketOrderSettings {
+  volumeLots: number;
+  slDistanceGc: number;
+  tpDistanceGc: number;
+}
+
 export interface ChartProfilePayload {
   version: 1;
   timeframe: Timeframe;
@@ -19,6 +25,7 @@ export interface ChartProfilePayload {
   outsideBar?: OutsideBarSettings;
   footprintSettings: FootprintSettings;
   bigTradeSettings?: BigTradeSettings;
+  marketOrderSettings?: ProfileMarketOrderSettings;
   timezoneOffsetMinutes?: number;
   drawings: DrawingState[];
 }

@@ -40,18 +40,22 @@ class AnchoredSyncEngine:
     def run_once(self) -> int:
         changed = 0
         for account in self._cache.users.read_mt5_accounts():
-            symbol_info = self._mt5.backend.symbol_info(
-                account.user_id, account.id, account.symbol_broker
-            )
-            symbol = SymbolMap.from_info(symbol_info)
-            for order in self._cache.orders.list_open_for_account(
-                account.user_id, account.id
-            ):
-                if self._sync_order(order, symbol):
-                    changed += 1
+            try:
+                with self._mt5.account_session(self._cache, account) as backend:
+                    symbol_info = backend.symbol_info(
+                        account.user_id, account.id, account.symbol_broker
+                    )
+                    symbol = SymbolMap.from_info(symbol_info)
+                    for order in self._cache.orders.list_open_for_account(
+                        account.user_id, account.id
+                    ):
+                        if self._sync_order(order, symbol, backend):
+                            changed += 1
+            except Exception as exc:
+                logger.debug("skipping MT5 anchored sync for account %s: %s", account.id, exc)
         return changed
 
-    def _sync_order(self, order: OrderRecord, symbol: SymbolMap) -> bool:
+    def _sync_order(self, order: OrderRecord, symbol: SymbolMap, backend) -> bool:
         if not order.gc_anchored:
             return False
         now = now_ms()
@@ -98,7 +102,7 @@ class AnchoredSyncEngine:
             order.basis_at_last_sync = converted[0].basis
         order.last_sync_at = now
         order.updated_at = now
-        result = self._mt5.backend.modify_order(order)
+        result = backend.modify_order(order)
         if not result.accepted:
             order.status = OrderStatus.SYNC_ERROR
             order.last_broker_error_code = result.error_code
