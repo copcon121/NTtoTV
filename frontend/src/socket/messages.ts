@@ -279,14 +279,18 @@ export interface TradingOrder {
 
 export interface TradingPosition {
   brokerPositionTicket: number;
-  orderId?: string;
+  orderId?: string | null;
+  symbolBroker?: string;
   side: Side;
   volumeLots: number;
   entryBroker: number;
   entryGcEstimate?: number;
+  slBroker?: number | null;
+  tpBroker?: number | null;
   slGc?: number | null;
   tpGc?: number | null;
   profit?: number;
+  basisStale?: boolean;
   updatedAt: number;
 }
 

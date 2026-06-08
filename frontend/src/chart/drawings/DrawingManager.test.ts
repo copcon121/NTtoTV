@@ -167,3 +167,22 @@ describe("DrawingManager trendline constraints", () => {
     container.remove();
   });
 });
+
+describe("DrawingManager fixed range delta profile", () => {
+  it("places and exports fixed-range delta profile drawings", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fixed_range_delta_profile");
+
+    clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
+    clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
+
+    const [profile] = manager.exportState();
+    expect(profile.tool).toBe("fixed_range_delta_profile");
+    expect(profile.anchors).toHaveLength(2);
+    expect(profile.anchors[0].logical).toBe(20);
+    expect(profile.anchors[1].logical).toBe(80);
+
+    manager.dispose();
+    container.remove();
+  });
+});

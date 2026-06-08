@@ -6,10 +6,27 @@ import {
   GLOBAL_SUBSCRIBED_EVENTS,
   TIMEFRAME_SUBSCRIBED_EVENTS,
   persistActiveProfileId,
+  persistProfileHotSnapshot,
   readActiveProfileId,
+  readProfileHotSnapshot,
   resolveEndpoints,
   seriesDataKey,
 } from "./LiveApp";
+import { DEFAULT_FOOTPRINT_SETTINGS } from "./chart/IndicatorToggles";
+import { DEFAULT_SMC_SETTINGS } from "./chart/smc";
+import type { ChartProfilePayload } from "./profiles/types";
+
+const profilePayload: ChartProfilePayload = {
+  version: 1,
+  timeframe: "5m",
+  chartBackgroundColor: "#101010",
+  showFootprint: false,
+  showBigTrades: true,
+  ema: { enabled: false, period: 200, color: "#2962ff" },
+  smc: DEFAULT_SMC_SETTINGS,
+  footprintSettings: DEFAULT_FOOTPRINT_SETTINGS,
+  drawings: [],
+};
 
 describe("resolveEndpoints", () => {
   it("keeps the chart WebSocket on the Vite dev origin", () => {
@@ -69,6 +86,58 @@ describe("active profile persistence", () => {
         },
       }),
     ).not.toThrow();
+  });
+});
+
+describe("hot profile snapshots", () => {
+  it("round-trips a recent profile snapshot", () => {
+    let saved: string | null = null;
+    const storage = {
+      getItem: () => saved,
+      setItem: (_key: string, value: string) => {
+        saved = value;
+      },
+    };
+
+    persistProfileHotSnapshot("user_1", "profile_1", profilePayload, storage, 1_000);
+
+    expect(readProfileHotSnapshot("user_1", storage, 2_000)).toEqual({
+      version: 1,
+      userId: "user_1",
+      profileId: "profile_1",
+      savedAt: 1_000,
+      payload: profilePayload,
+    });
+  });
+
+  it("keeps snapshots isolated by user", () => {
+    let saved: string | null = null;
+    const storage = {
+      getItem: () => saved,
+      setItem: (_key: string, value: string) => {
+        saved = value;
+      },
+    };
+
+    persistProfileHotSnapshot("user_1", "profile_1", profilePayload, storage, 1_000);
+
+    expect(readProfileHotSnapshot("user_2", storage, 2_000)).toBeUndefined();
+  });
+
+  it("ignores stale snapshots", () => {
+    let saved: string | null = null;
+    const storage = {
+      getItem: () => saved,
+      setItem: (_key: string, value: string) => {
+        saved = value;
+      },
+    };
+
+    persistProfileHotSnapshot("user_1", "profile_1", profilePayload, storage, 1_000);
+
+    expect(
+      readProfileHotSnapshot("user_1", storage, 24 * 60 * 60 * 1_000 + 1_001),
+    ).toBeUndefined();
   });
 });
 

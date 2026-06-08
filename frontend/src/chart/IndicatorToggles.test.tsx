@@ -182,16 +182,22 @@ describe("IndicatorToggles", () => {
     const swing = screen.getByLabelText("SMC swing length");
     const internal = screen.getByLabelText("SMC internal length");
     const fvgExtend = screen.getByLabelText("SMC FVG extend bars");
+    const showPd = screen.getByLabelText("Show PD");
     fireEvent.change(swing, { target: { value: "21" } });
     fireEvent.blur(swing);
     fireEvent.change(internal, { target: { value: "3" } });
     fireEvent.blur(internal);
     fireEvent.change(fvgExtend, { target: { value: "2" } });
     fireEvent.blur(fvgExtend);
+    fireEvent.click(showPd);
 
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, swingLength: 21 });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, internalLength: 3 });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, fvgExtendBars: 2 });
+    expect(onSmc).toHaveBeenCalledWith({
+      ...SMC,
+      showPremiumDiscount: false,
+    });
   });
 
   it("changes the EMA color from a preset swatch", () => {

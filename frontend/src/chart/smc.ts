@@ -6,6 +6,7 @@ export interface SmcSettings {
   internalLength: number;
   showInternal: boolean;
   showZones: boolean;
+  showPremiumDiscount: boolean;
   showSwingOrderBlocks: boolean;
   showInternalOrderBlocks: boolean;
   fvgExtendBars: number;
@@ -23,6 +24,7 @@ export const DEFAULT_SMC_SETTINGS: SmcSettings = {
   internalLength: 5,
   showInternal: true,
   showZones: true,
+  showPremiumDiscount: true,
   showSwingOrderBlocks: true,
   showInternalOrderBlocks: true,
   fvgExtendBars: 3,
@@ -52,13 +54,15 @@ export interface SmcMarker {
   kind: SmcMarkerKind;
 }
 
-export type SmcZoneKind = "ob" | "fvg";
+export type SmcZoneKind = "ob" | "fvg" | "pd";
+export type SmcPremiumDiscountKind = "premium" | "equilibrium" | "discount";
 
 export interface SmcZone {
   id: string;
   kind: SmcZoneKind;
   scope: Scope;
   direction: Direction;
+  pdKind?: SmcPremiumDiscountKind;
   startTime: number;
   endTime?: number;
   extendBars?: number;
@@ -634,6 +638,8 @@ function settingsWithDefaults(settings?: Partial<SmcSettings>): SmcSettings {
         settings?.maxFairValueGaps ?? DEFAULT_SMC_SETTINGS.maxFairValueGaps,
       ),
     ),
+    showPremiumDiscount:
+      settings?.showPremiumDiscount ?? DEFAULT_SMC_SETTINGS.showPremiumDiscount,
     fvgExtendBars: Math.max(
       1,
       Math.round(settings?.fvgExtendBars ?? DEFAULT_SMC_SETTINGS.fvgExtendBars),
@@ -915,6 +921,85 @@ function fvgToZone(
   };
 }
 
+function premiumDiscountZones(
+  state: StructureState,
+  bars: readonly Bar[],
+): SmcZone[] {
+  const highPivot = state.swingHigh;
+  const lowPivot = state.swingLow;
+  const lastBar = bars[bars.length - 1];
+  if (!highPivot || !lowPivot || !lastBar) return [];
+
+  const anchorIndex = Math.max(highPivot.barIndex, lowPivot.barIndex);
+  if (anchorIndex < 0 || anchorIndex >= bars.length) return [];
+
+  let rangeHigh = highPivot.price;
+  let rangeLow = lowPivot.price;
+  for (let i = anchorIndex; i < bars.length; i += 1) {
+    const bar = bars[i];
+    if (!bar) continue;
+    if (bar.high >= rangeHigh) rangeHigh = bar.high;
+    if (bar.low <= rangeLow) rangeLow = bar.low;
+  }
+
+  if (!Number.isFinite(rangeHigh) || !Number.isFinite(rangeLow) || rangeHigh <= rangeLow) {
+    return [];
+  }
+
+  const startTime = bars[anchorIndex].time;
+  const endTime = lastBar.time;
+  const premiumBottom = 0.95 * rangeHigh + 0.05 * rangeLow;
+  const equilibriumTop = 0.525 * rangeHigh + 0.475 * rangeLow;
+  const equilibriumBottom = 0.475 * rangeHigh + 0.525 * rangeLow;
+  const discountTop = 0.95 * rangeLow + 0.05 * rangeHigh;
+  const idBase = `${startTime}:${endTime}:${rangeHigh}:${rangeLow}`;
+
+  return [
+    {
+      id: `pd:premium:${idBase}`,
+      kind: "pd",
+      scope: "swing",
+      direction: -1,
+      pdKind: "premium",
+      startTime,
+      endTime,
+      top: rangeHigh,
+      bottom: premiumBottom,
+      label: "Premium",
+    },
+    {
+      id: `pd:equilibrium:${idBase}`,
+      kind: "pd",
+      scope: "swing",
+      direction: 1,
+      pdKind: "equilibrium",
+      startTime,
+      endTime,
+      top: equilibriumTop,
+      bottom: equilibriumBottom,
+      label: "EQ",
+    },
+    {
+      id: `pd:discount:${idBase}`,
+      kind: "pd",
+      scope: "swing",
+      direction: 1,
+      pdKind: "discount",
+      startTime,
+      endTime,
+      top: discountTop,
+      bottom: rangeLow,
+      label: "Discount",
+    },
+  ];
+}
+
+function zoneSortRank(zone: SmcZone): number {
+  if (zone.kind === "pd") return 0;
+  if (zone.kind === "ob") return 1;
+  return 2;
+}
+
 export function computeSmcOverlay(
   bars: readonly Bar[],
   settings?: Partial<SmcSettings>,
@@ -936,6 +1021,9 @@ export function computeSmcOverlay(
 
   const zones: SmcZone[] = [];
   if (cfg.showZones) {
+    if (cfg.showPremiumDiscount) {
+      zones.push(...premiumDiscountZones(detector.state, bars));
+    }
     if (cfg.showSwingOrderBlocks) {
       for (const ob of detector.swingObs.filter((ob) => ob.active).slice(0, cfg.maxSwingOrderBlocks)) {
         zones.push(orderBlockToZone(ob, "swing"));
@@ -952,7 +1040,12 @@ export function computeSmcOverlay(
   }
 
   markers.sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
-  zones.sort((a, b) => a.startTime - b.startTime || a.id.localeCompare(b.id));
+  zones.sort(
+    (a, b) =>
+      zoneSortRank(a) - zoneSortRank(b) ||
+      a.startTime - b.startTime ||
+      a.id.localeCompare(b.id),
+  );
   lines.sort((a, b) => a.startTime - b.startTime || a.id.localeCompare(b.id));
 
   return {

@@ -114,4 +114,80 @@ describe("SMC overlay", () => {
       }),
     );
   });
+
+  it("draws premium, equilibrium, and discount zones from the live swing range", () => {
+    const overlay = computeSmcOverlay(
+      [
+        bar(0, 9.5, 10, 9, 9.5),
+        bar(1, 11.5, 12, 11, 11.5),
+        bar(2, 10.5, 11, 10, 10.5),
+        bar(3, 9.5, 10, 9, 9.5),
+        bar(4, 10, 11, 8, 10),
+        bar(5, 12.5, 13, 9, 12.5),
+        bar(6, 11.5, 12, 10, 11.5),
+      ],
+      {
+        ...DEFAULT_SMC_SETTINGS,
+        enabled: true,
+        swingLength: 2,
+        internalLength: 1,
+        showPremiumDiscount: true,
+      },
+    );
+
+    expect(overlay.zones).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "pd",
+          pdKind: "premium",
+          label: "Premium",
+          startTime: 4,
+          endTime: 6,
+          top: 13,
+          bottom: 12.75,
+        }),
+        expect.objectContaining({
+          kind: "pd",
+          pdKind: "equilibrium",
+          label: "EQ",
+          startTime: 4,
+          endTime: 6,
+          top: 10.625,
+          bottom: 10.375,
+        }),
+        expect.objectContaining({
+          kind: "pd",
+          pdKind: "discount",
+          label: "Discount",
+          startTime: 4,
+          endTime: 6,
+          top: 8.25,
+          bottom: 8,
+        }),
+      ]),
+    );
+  });
+
+  it("omits premium and discount zones when disabled", () => {
+    const overlay = computeSmcOverlay(
+      [
+        bar(0, 9.5, 10, 9, 9.5),
+        bar(1, 11.5, 12, 11, 11.5),
+        bar(2, 10.5, 11, 10, 10.5),
+        bar(3, 9.5, 10, 9, 9.5),
+        bar(4, 10, 11, 8, 10),
+        bar(5, 12.5, 13, 9, 12.5),
+        bar(6, 11.5, 12, 10, 11.5),
+      ],
+      {
+        ...DEFAULT_SMC_SETTINGS,
+        enabled: true,
+        swingLength: 2,
+        internalLength: 1,
+        showPremiumDiscount: false,
+      },
+    );
+
+    expect(overlay.zones.some((zone) => zone.kind === "pd")).toBe(false);
+  });
 });

@@ -587,6 +587,18 @@ class CacheStore:
     ) -> list[FootprintLevelRecord]:
         return self._keyed.read_footprint_levels(symbol, contract, time, timeframe)
 
+    def read_footprint_levels_range(
+        self,
+        symbol: str,
+        contract: str,
+        timeframe: str,
+        frm: int,
+        to: int,
+    ) -> list[FootprintLevelRecord]:
+        return self._keyed.read_footprint_levels_range(
+            symbol, contract, timeframe, frm, to
+        )
+
     def upsert_big_trade(self, rec: BigTradeRecord) -> None:
         self._keyed.upsert_big_trade(rec)
 

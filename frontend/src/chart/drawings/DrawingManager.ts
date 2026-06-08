@@ -23,11 +23,14 @@ import { RectanglePrimitive } from "./RectanglePrimitive";
 import { PriceRangePrimitive } from "./PriceRangePrimitive";
 import { VerticalLinePrimitive } from "./VerticalLinePrimitive";
 import { OrderBracketPrimitive } from "./OrderBracketPrimitive";
+import { FixedRangeDeltaProfilePrimitive } from "./FixedRangeDeltaProfilePrimitive";
+import type { DeltaProfileLoadState } from "../../orderflow/deltaProfile";
 
 type DrawingPrimitive =
   | TrendLinePrimitive
   | HorizontalRayPrimitive
   | RectanglePrimitive
+  | FixedRangeDeltaProfilePrimitive
   | PriceRangePrimitive
   | VerticalLinePrimitive
   | OrderBracketPrimitive;
@@ -223,6 +226,13 @@ export class DrawingManager implements IDrawingManager {
 
   removeAllDrawings(): void {
     this._clearDrawings(true);
+  }
+
+  setFixedRangeDeltaProfile(id: string, state: DeltaProfileLoadState): void {
+    const drawing = this._drawings.get(id);
+    if (drawing instanceof FixedRangeDeltaProfilePrimitive) {
+      drawing.setProfileState(state);
+    }
   }
 
   exportState(): DrawingState[] {
@@ -461,6 +471,7 @@ export class DrawingManager implements IDrawingManager {
           }
           break;
         case "rectangle":
+        case "fixed_range_delta_profile":
           if (points.length >= 2 && pointInBox(point, points[0], points[1], HIT_PX)) {
             return { drawingId };
           }
@@ -529,6 +540,8 @@ export class DrawingManager implements IDrawingManager {
         return new HorizontalRayPrimitive(id, anchors, options);
       case "rectangle":
         return new RectanglePrimitive(id, anchors, options);
+      case "fixed_range_delta_profile":
+        return new FixedRangeDeltaProfilePrimitive(id, anchors, options);
       case "price_range":
         return new PriceRangePrimitive(id, anchors, options);
       case "vertical_line":

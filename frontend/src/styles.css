@@ -481,6 +481,37 @@ body {
   inset: 0;
 }
 
+.price-line-drag-handle {
+  position: absolute;
+  z-index: 8;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  cursor: ns-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+.price-line-drag-handle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--price-line-handle-color, #e7e7e7);
+  border-radius: 50%;
+  background: var(--price-line-handle-color, #e7e7e7);
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.24);
+  transform: translate(-50%, -50%);
+}
+
+.price-line-drag-handle.is-dragging::after {
+  box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.34);
+}
+
 .market-order-bar {
   flex: 0 0 auto;
   min-height: 54px;
@@ -488,11 +519,18 @@ body {
   background: #161616;
   color: #e7e7e7;
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 12px;
+  font-size: 12px;
+}
+
+.market-order-main {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 7px 12px;
-  font-size: 12px;
+  min-width: 0;
 }
 
 .market-order-meta,
@@ -504,7 +542,10 @@ body {
 }
 
 .market-order-meta {
-  flex-wrap: wrap;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .market-order-settings {
@@ -583,6 +624,91 @@ body {
 .market-order-actions button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.market-order-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 112px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.market-order-row {
+  min-height: 30px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-left: 3px solid rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.market-order-row.buy {
+  border-left-color: #22c55e;
+}
+
+.market-order-row.sell {
+  border-left-color: #ef4444;
+}
+
+.market-order-row-title {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.market-order-row-detail {
+  min-width: 0;
+  color: #b8b8b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-order-row-pnl {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.market-order-row-pnl.winning {
+  color: #55d889;
+}
+
+.market-order-row-pnl.losing {
+  color: #ff8d8d;
+}
+
+.market-order-row-actions {
+  grid-column: 4;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.market-order-row-actions button {
+  min-width: 58px;
+  min-height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  background: #2f3540;
+  color: #f3f3f3;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.market-order-row-actions .market-order-row-break-even {
+  min-width: 38px;
+}
+
+.market-order-row-actions button:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .modal-backdrop {
@@ -1404,8 +1530,14 @@ body {
     padding: 8px;
   }
 
+  .market-order-main {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
   .market-order-meta {
     width: 100%;
+    gap: 6px;
   }
 
   .market-order-settings {
@@ -1431,6 +1563,27 @@ body {
   .market-order-actions button {
     min-height: 44px;
     width: 100%;
+  }
+
+  .market-order-rows {
+    max-height: 120px;
+  }
+
+  .market-order-row {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    gap: 5px;
+  }
+
+  .market-order-row-pnl {
+    font-size: 11px;
+  }
+
+  .market-order-row-actions button {
+    min-width: 56px;
+  }
+
+  .market-order-row-actions .market-order-row-break-even {
+    min-width: 34px;
   }
 
   .order-action-rail {

@@ -413,6 +413,50 @@ class KeyedStore:
             for r in rows
         ]
 
+    def read_footprint_levels_range(
+        self,
+        symbol: str,
+        contract: str,
+        timeframe: str,
+        frm: int,
+        to: int,
+    ) -> list[FootprintLevelRecord]:
+        """Read footprint ladder cells across an inclusive time range.
+
+        Returned in ascending ``time`` then descending ``price`` order so callers
+        can either replay bars or aggregate a fixed-range profile without
+        issuing one query per M1 bar.
+        """
+        if frm > to:
+            return []
+        conn = self._reader_factory()
+        try:
+            rows = conn.execute(
+                "SELECT symbol, contract, timeframe, time, price, bid_volume, "
+                "ask_volume, imbalance FROM footprint_levels "
+                "WHERE symbol = ? AND contract = ? AND timeframe = ? "
+                "AND time BETWEEN ? AND ? "
+                "ORDER BY time ASC, price DESC",
+                (symbol, contract, timeframe, int(frm), int(to)),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [
+            FootprintLevelRecord(
+                symbol=r["symbol"],
+                contract=r["contract"],
+                timeframe=r["timeframe"],
+                time=r["time"],
+                price=r["price"],
+                bid_volume=r["bid_volume"],
+                ask_volume=r["ask_volume"],
+                imbalance=(
+                    None if r["imbalance"] is None else ImbalanceSide(r["imbalance"])
+                ),
+            )
+            for r in rows
+        ]
+
     # -- big trades -----------------------------------------------------------
 
     def upsert_big_trade(self, rec: BigTradeRecord) -> None:

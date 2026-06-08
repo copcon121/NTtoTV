@@ -56,6 +56,8 @@ import { DrawingManager } from "./drawings/DrawingManager";
 import type { DrawingState, DrawingToolType } from "./drawings/types";
 import { barDurationForTimeframe } from "./barCountdown";
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES } from "./timezone";
+import { displayOffsetForTimeframe } from "./timeframeRange";
+import type { DeltaProfileLoadState } from "../orderflow/deltaProfile";
 
 /**
  * A disposable rendering port. The default factory builds a
@@ -93,6 +95,7 @@ export interface DisposableChartPort extends ChartSeriesPort {
   subscribeOrderDrag?(handlers: {
     onPreview?: (id: string, price: number) => void;
     onCommit?: (id: string, price: number) => void;
+    onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
     snap?: (price: number) => number;
   }): () => void;
 }
@@ -124,21 +127,6 @@ interface PositionedOrderControl extends OrderControl {
 
 const defaultPortFactory: ChartPortFactory = (container, options) =>
   new LightweightChartsAdapter(container, options);
-
-const TIMEFRAME_DISPLAY_OFFSET_MS: Record<Timeframe, number> = {
-  "1m": 60_000,
-  "3m": 3 * 60_000,
-  "5m": 5 * 60_000,
-  "15m": 15 * 60_000,
-  "30m": 30 * 60_000,
-  "1h": 60 * 60_000,
-  "4h": 4 * 60 * 60_000,
-  "1D": 0,
-};
-
-function displayOffsetForTimeframe(timeframe: Timeframe): number {
-  return TIMEFRAME_DISPLAY_OFFSET_MS[timeframe];
-}
 
 export interface ChartContainerProps {
   symbol: string;
@@ -207,6 +195,10 @@ export interface ChartContainerProps {
   onAlertDragCommit?: (id: string, price: number) => void;
   /** Fired when an order line is dragged and released. */
   onOrderDragCommit?: (id: string, price: number) => void;
+  /** Fired when one selected order group has multiple pending line edits. */
+  onOrderDragBatchCommit?: (
+    updates: readonly { id: string; price: number }[],
+  ) => void;
   /** Fired from an order action chip. */
   onOrderClose?: (orderId: string) => void;
   /** Fired from a pending/working order action chip. */
@@ -229,6 +221,8 @@ export interface ChartContainerProps {
   deleteAllSignal?: number;
   /** Completed drawing ids to remove after parent-side handling. */
   removeDrawingIds?: readonly string[];
+  /** Computed fixed-range delta profiles keyed by drawing id. */
+  fixedRangeDeltaProfiles?: ReadonlyMap<string, DeltaProfileLoadState>;
   /** Footprint display settings. */
   footprintSettings?: FootprintSettings;
 }
@@ -303,6 +297,7 @@ export function ChartContainer({
   onRequestAlertAtPrice,
   onAlertDragCommit,
   onOrderDragCommit,
+  onOrderDragBatchCommit,
   onOrderClose,
   onOrderCancel,
   priceSnap,
@@ -314,6 +309,7 @@ export function ChartContainer({
   onDrawingsChange,
   deleteAllSignal,
   removeDrawingIds,
+  fixedRangeDeltaProfiles,
   footprintSettings,
 }: ChartContainerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -344,6 +340,10 @@ export function ChartContainer({
     ((id: string, price: number) => void) | undefined
   >(onOrderDragCommit);
   orderDragCommitRef.current = onOrderDragCommit;
+  const orderDragBatchCommitRef = useRef<
+    ((updates: readonly { id: string; price: number }[]) => void) | undefined
+  >(onOrderDragBatchCommit);
+  orderDragBatchCommitRef.current = onOrderDragBatchCommit;
   const priceSnapRef = useRef<((price: number) => number) | undefined>(priceSnap);
   priceSnapRef.current = priceSnap;
   // Running EMA state for incremental live updates. `closedValue` is the EMA at
@@ -444,6 +444,7 @@ export function ChartContainer({
     if (typeof port.subscribeOrderDrag === "function") {
       disposeOrderDrag = port.subscribeOrderDrag({
         onCommit: (id, price) => orderDragCommitRef.current?.(id, price),
+        onCommitBatch: (updates) => orderDragBatchCommitRef.current?.(updates),
         snap: (price) => priceSnapRef.current?.(price) ?? price,
       });
     }
@@ -728,6 +729,14 @@ export function ChartContainer({
       mgr.removeDrawing(id);
     }
   }, [removeDrawingIds]);
+
+  useEffect(() => {
+    const mgr = drawingManagerRef.current;
+    if (!mgr || !fixedRangeDeltaProfiles) return;
+    for (const [id, state] of fixedRangeDeltaProfiles) {
+      mgr.setFixedRangeDeltaProfile(id, state);
+    }
+  }, [fixedRangeDeltaProfiles]);
 
   return (
     <div

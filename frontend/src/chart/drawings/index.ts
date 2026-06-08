@@ -6,6 +6,7 @@ export { DrawingManager } from "./DrawingManager";
 export { TrendLinePrimitive } from "./TrendLinePrimitive";
 export { HorizontalRayPrimitive } from "./HorizontalRayPrimitive";
 export { RectanglePrimitive } from "./RectanglePrimitive";
+export { FixedRangeDeltaProfilePrimitive } from "./FixedRangeDeltaProfilePrimitive";
 export { PriceRangePrimitive } from "./PriceRangePrimitive";
 export { VerticalLinePrimitive } from "./VerticalLinePrimitive";
 export { OrderBracketPrimitive } from "./OrderBracketPrimitive";

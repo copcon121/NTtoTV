@@ -43,6 +43,7 @@ export {
   type SmcLine,
   type SmcLineKind,
   type SmcOverlay,
+  type SmcPremiumDiscountKind,
   type SmcSettings,
   type SmcZone,
   type SmcZoneKind,

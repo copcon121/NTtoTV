@@ -61,6 +61,7 @@ class FakePort implements DisposableChartPort {
   orderDragHandlers: {
     onPreview?: (id: string, price: number) => void;
     onCommit?: (id: string, price: number) => void;
+    onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
     snap?: (price: number) => number;
   }[] = [];
   screenshotDataUrl = "data:image/png;base64,abc";
@@ -134,6 +135,7 @@ class FakePort implements DisposableChartPort {
   subscribeOrderDrag(handlers: {
     onPreview?: (id: string, price: number) => void;
     onCommit?: (id: string, price: number) => void;
+    onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
     snap?: (price: number) => number;
   }): () => void {
     this.orderDragHandlers.push(handlers);
@@ -699,6 +701,33 @@ describe("ChartContainer", () => {
     expect(handlers.snap?.(2348.56)).toBe(2348.6);
     handlers.onCommit?.("ord_1:slGc", 2346.1);
     expect(onOrderDragCommit).toHaveBeenCalledWith("ord_1:slGc", 2346.1);
+  });
+
+  it("forwards batched order-line drags", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const onOrderDragBatchCommit = vi.fn();
+
+    render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        orderLines={[]}
+        portFactory={factory}
+        onOrderDragBatchCommit={onOrderDragBatchCommit}
+      />,
+    );
+
+    expect(port.orderDragHandlers).toHaveLength(1);
+    const updates = [
+      { id: "ord_1:slGc", price: 2346.1 },
+      { id: "ord_1:tpGc", price: 2351.2 },
+    ];
+    port.orderDragHandlers[0].onCommitBatch?.(updates);
+
+    expect(onOrderDragBatchCommit).toHaveBeenCalledWith(updates);
   });
 
   it("disposes the port on unmount", () => {

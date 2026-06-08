@@ -77,20 +77,25 @@ class RealMt5Backend:
                 code, message = self._mt5.last_error()
                 raise RuntimeError(f"MetaTrader5 initialize failed: {code} {message}")
             self._initialized = True
-        if self._active_login != int(login):
+        expected_login = int(login)
+        info = self._mt5.account_info()
+        current_login = _account_login(info)
+        if current_login != expected_login:
             ok = self._mt5.login(int(login), password=password, server=server)
             if not ok:
                 code, message = self._mt5.last_error()
+                self._active_login = current_login
                 raise RuntimeError(f"MetaTrader5 login failed: {code} {message}")
-        info = self._mt5.account_info()
+            info = self._mt5.account_info()
         if info is None:
             code, message = self._mt5.last_error()
             raise RuntimeError(f"MetaTrader5 account_info failed: {code} {message}")
-        if int(info.login) != int(login):
+        if int(info.login) != expected_login:
+            self._active_login = _account_login(info)
             raise RuntimeError(
-                f"MetaTrader5 logged into {int(info.login)}, expected {int(login)}"
+                f"MetaTrader5 logged into {int(info.login)}, expected {expected_login}"
             )
-        self._active_login = int(login)
+        self._active_login = expected_login
 
     def account_info(self, user_id: str, account_id: str) -> Mt5AccountInfo:
         self._ensure()
@@ -184,20 +189,20 @@ class RealMt5Backend:
 
     def modify_order(self, order: OrderRecord) -> Mt5OrderResult:
         self._ensure()
-        if order.broker_order_ticket is not None:
+        if order.broker_position_ticket is not None:
+            request = {
+                "action": self._mt5.TRADE_ACTION_SLTP,
+                "position": order.broker_position_ticket,
+                "symbol": order.symbol_broker,
+                "sl": order.sl_broker or 0.0,
+                "tp": order.tp_broker or 0.0,
+            }
+        elif order.broker_order_ticket is not None:
             request = {
                 "action": self._mt5.TRADE_ACTION_MODIFY,
                 "order": order.broker_order_ticket,
                 "symbol": order.symbol_broker,
                 "price": order.entry_broker or 0.0,
-                "sl": order.sl_broker or 0.0,
-                "tp": order.tp_broker or 0.0,
-            }
-        elif order.broker_position_ticket is not None:
-            request = {
-                "action": self._mt5.TRADE_ACTION_SLTP,
-                "position": order.broker_position_ticket,
-                "symbol": order.symbol_broker,
                 "sl": order.sl_broker or 0.0,
                 "tp": order.tp_broker or 0.0,
             }
@@ -269,12 +274,42 @@ class RealMt5Backend:
         if int(result.retcode) not in ok_codes:
             return Mt5OrderResult(False, "rejected", error_code=str(result.retcode), error_message=str(result.comment))
         status = success_status or ("filled" if order.kind is OrderKind.MARKET else "working")
+        broker_order_ticket = int(result.order) if getattr(result, "order", 0) else None
+        broker_position_ticket = (
+            self._resolve_market_position_ticket(order, result)
+            if order.kind is OrderKind.MARKET and status == "filled"
+            else None
+        )
         return Mt5OrderResult(
             accepted=True,
             status=status,
-            broker_order_ticket=int(result.order) if getattr(result, "order", 0) else None,
+            broker_order_ticket=None if order.kind is OrderKind.MARKET else broker_order_ticket,
+            broker_position_ticket=broker_position_ticket,
             broker_deal_ticket=int(result.deal) if getattr(result, "deal", 0) else None,
             fill_price=float(result.price) if getattr(result, "price", 0.0) else None,
+        )
+
+    def _resolve_market_position_ticket(self, order: OrderRecord, result) -> int | None:
+        direct_position = int(getattr(result, "position", 0) or 0)
+        if direct_position:
+            return direct_position
+        try:
+            positions = self._mt5.positions_get(symbol=order.symbol_broker)
+        except TypeError:
+            positions = self._mt5.positions_get()
+        except Exception:
+            positions = ()
+        if positions is None:
+            positions = ()
+        order_ticket = int(getattr(result, "order", 0) or 0)
+        deal_ticket = int(getattr(result, "deal", 0) or 0)
+        fill_price = float(getattr(result, "price", 0.0) or 0.0)
+        return _match_position_ticket(
+            positions,
+            order,
+            order_ticket=order_ticket,
+            deal_ticket=deal_ticket,
+            fill_price=fill_price,
         )
 
     def _market_session_error_from_invalid_stops(
@@ -314,6 +349,66 @@ def _pending_type(mt5, order: OrderRecord) -> int:
     return mt5.ORDER_TYPE_SELL_STOP
 
 
+def _match_position_ticket(
+    positions,
+    order: OrderRecord,
+    *,
+    order_ticket: int | None = None,
+    deal_ticket: int | None = None,
+    fill_price: float | None = None,
+) -> int | None:
+    expected_comment = _mt5_comment("ord", order.id)
+    expected_suffix = expected_comment.rsplit("-", 1)[-1]
+    candidates: list[tuple[float, int, int]] = []
+    for pos in positions:
+        ticket = int(getattr(pos, "ticket", 0) or 0)
+        if ticket <= 0:
+            continue
+        symbol = str(getattr(pos, "symbol", ""))
+        if symbol and symbol != order.symbol_broker:
+            continue
+        volume = float(getattr(pos, "volume_current", getattr(pos, "volume", 0.0)) or 0.0)
+        if volume > 0 and abs(volume - order.volume_lots) > 1e-9:
+            continue
+        type_code = int(getattr(pos, "type", -1) if getattr(pos, "type", -1) is not None else -1)
+        if type_code in (0, 1):
+            side = OrderSide.BUY if type_code == 0 else OrderSide.SELL
+            if side is not order.side:
+                continue
+
+        score = 0.0
+        identifier = int(getattr(pos, "identifier", 0) or 0)
+        if order_ticket and (ticket == order_ticket or identifier == order_ticket):
+            score += 100.0
+        if deal_ticket and (ticket == deal_ticket or identifier == deal_ticket):
+            score += 80.0
+        comment = str(getattr(pos, "comment", "") or "")
+        if comment == expected_comment:
+            score += 60.0
+        elif expected_suffix and expected_suffix in comment:
+            score += 40.0
+        if int(getattr(pos, "magic", 0) or 0) == 240606:
+            score += 20.0
+        if fill_price:
+            open_price = float(getattr(pos, "price_open", 0.0) or 0.0)
+            if open_price:
+                score += max(0.0, 10.0 - min(10.0, abs(open_price - fill_price)))
+        timestamp = int(
+            getattr(pos, "time_update_msc", 0)
+            or getattr(pos, "time_msc", 0)
+            or int(getattr(pos, "time_update", 0) or 0) * 1000
+            or int(getattr(pos, "time", 0) or 0) * 1000
+        )
+        candidates.append((score, timestamp, ticket))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    best_score, _, best_ticket = candidates[0]
+    if best_score > 0 or len(candidates) == 1:
+        return best_ticket
+    return None
+
+
 def _mt5_comment(action: str, order_id: str) -> str:
     safe_action = "".join(ch for ch in action if ch.isascii() and ch.isalnum())
     safe_order = "".join(ch for ch in order_id if ch.isascii() and ch.isalnum())
@@ -339,13 +434,44 @@ def _retcode_matches(mt5, result, name: str, fallback: int) -> bool:
     return int(getattr(result, "retcode", -1)) == int(getattr(mt5, name, fallback))
 
 
+def _account_login(info) -> int | None:
+    if info is None:
+        return None
+    try:
+        return int(info.login)
+    except Exception:
+        return None
+
+
 def _ticket_dict(obj) -> dict:
+    type_code = int(getattr(obj, "type", -1) if getattr(obj, "type", -1) is not None else -1)
+    side = "buy" if type_code in (0, 2, 4, 6) else "sell" if type_code in (1, 3, 5, 7) else None
+    kind = (
+        "market"
+        if type_code in (0, 1)
+        else "limit"
+        if type_code in (2, 3)
+        else "stop"
+        if type_code in (4, 5, 6, 7)
+        else None
+    )
     return {
         "ticket": int(getattr(obj, "ticket", 0)),
+        "identifier": int(getattr(obj, "identifier", 0) or 0) or None,
         "symbol": str(getattr(obj, "symbol", "")),
+        "side": side,
+        "kind": kind,
+        "type": type_code,
+        "magic": int(getattr(obj, "magic", 0) or 0) or None,
+        "comment": str(getattr(obj, "comment", "") or ""),
         "volumeLots": float(getattr(obj, "volume_current", getattr(obj, "volume", 0.0))),
         "entryBroker": float(getattr(obj, "price_open", 0.0)),
         "slBroker": float(getattr(obj, "sl", 0.0)),
         "tpBroker": float(getattr(obj, "tp", 0.0)),
-        "time": int(getattr(obj, "time_msc", 0) or getattr(obj, "time", 0) * 1000),
+        "priceCurrent": float(getattr(obj, "price_current", 0.0) or 0.0),
+        "profit": float(getattr(obj, "profit", 0.0) or 0.0),
+        "time": int(
+            getattr(obj, "time_msc", 0)
+            or int(getattr(obj, "time", 0) or 0) * 1000
+        ),
     }

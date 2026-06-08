@@ -436,6 +436,21 @@ export function IndicatorToggles({
                 </label>
               </div>
               <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={smc.showPremiumDiscount}
+                    onChange={(e) =>
+                      onSmcChange({
+                        ...smc,
+                        showPremiumDiscount: e.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>Show PD</span>
+                </label>
+              </div>
+              <div className="ema-setting-line">
                 <span className="ema-setting-label">FVG extend</span>
                 <input
                   type="number"

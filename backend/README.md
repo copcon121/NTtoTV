@@ -26,11 +26,14 @@ Optional real MT5 execution backend on the Windows VPS/terminal host:
 pip install -r requirements-mt5.txt
 set NTTOTV_MT5_BACKEND=real
 set NTTOTV_TRADING_ENABLED=1
+set NTTOTV_CREDENTIAL_KEY=<stable random secret>
 set NTTOTV_INVITE_CODE=join-9999
 ```
 
 Live accounts remain fail-closed unless `NTTOTV_LIVE_TRADING_ENABLED=1` is
-also set. The default backend is fake/demo-safe.
+also set. The default backend is fake/demo-safe. Keep
+`NTTOTV_CREDENTIAL_KEY` stable across restarts because stored MT5 passwords are
+sealed with it.
 
 ## Run
 

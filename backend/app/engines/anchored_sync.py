@@ -40,15 +40,18 @@ class AnchoredSyncEngine:
     def run_once(self) -> int:
         changed = 0
         for account in self._cache.users.read_mt5_accounts():
+            orders = self._cache.orders.list_open_for_account(
+                account.user_id, account.id
+            )
+            if not orders:
+                continue
             try:
                 with self._mt5.account_session(self._cache, account) as backend:
                     symbol_info = backend.symbol_info(
                         account.user_id, account.id, account.symbol_broker
                     )
                     symbol = SymbolMap.from_info(symbol_info)
-                    for order in self._cache.orders.list_open_for_account(
-                        account.user_id, account.id
-                    ):
+                    for order in orders:
                         if self._sync_order(order, symbol, backend):
                             changed += 1
             except Exception as exc:
@@ -57,6 +60,19 @@ class AnchoredSyncEngine:
 
     def _sync_order(self, order: OrderRecord, symbol: SymbolMap, backend) -> bool:
         if not order.gc_anchored:
+            return False
+        if order.status in {OrderStatus.FILLED, OrderStatus.SYNC_ERROR}:
+            if order.broker_position_ticket is None:
+                self._audit(
+                    order,
+                    "missing_position_ticket_pause",
+                    {"brokerOrderTicket": order.broker_order_ticket},
+                )
+                return False
+        elif order.status is OrderStatus.WORKING:
+            if order.broker_order_ticket is None:
+                return False
+        else:
             return False
         now = now_ms()
         if (

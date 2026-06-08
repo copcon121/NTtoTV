@@ -41,6 +41,7 @@ interface ViewLine {
 interface ZoneStyle {
   fill: string;
   stroke: string;
+  label?: string;
 }
 
 interface LineStyle {
@@ -50,6 +51,28 @@ interface LineStyle {
 }
 
 function styleFor(zone: RenderableSmcZone): ZoneStyle {
+  if (zone.kind === "pd") {
+    if (zone.pdKind === "premium") {
+      return {
+        fill: "rgba(120, 45, 45, 0.24)",
+        stroke: "rgba(190, 75, 75, 0.44)",
+        label: "rgba(255, 135, 135, 0.88)",
+      };
+    }
+    if (zone.pdKind === "discount") {
+      return {
+        fill: "rgba(45, 120, 70, 0.22)",
+        stroke: "rgba(80, 180, 110, 0.42)",
+        label: "rgba(120, 235, 155, 0.86)",
+      };
+    }
+    return {
+      fill: "rgba(90, 90, 90, 0.22)",
+      stroke: "rgba(170, 170, 170, 0.40)",
+      label: "rgba(215, 215, 215, 0.78)",
+    };
+  }
+
   if (zone.kind === "fvg") {
     return zone.direction === 1
       ? {
@@ -155,6 +178,18 @@ class SmcOverlayRenderer implements IPrimitivePaneRenderer {
           vertical.length,
         );
 
+        if (view.zone.kind === "pd" && style.label) {
+          const labelX =
+            horizontal.position +
+            horizontal.length * (view.zone.pdKind === "equilibrium" ? 0.92 : 0.5);
+          const labelY = vertical.position + vertical.length / 2;
+          ctx.setLineDash([]);
+          ctx.fillStyle = style.label;
+          ctx.textAlign =
+            view.zone.pdKind === "equilibrium" ? "right" : "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(view.zone.label, labelX, labelY);
+        }
       }
 
       ctx.textAlign = "center";

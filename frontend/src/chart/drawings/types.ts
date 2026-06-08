@@ -7,6 +7,7 @@
  */
 
 import type { ISeriesApi, IChartApi, UTCTimestamp } from "lightweight-charts";
+import type { DeltaProfileLoadState } from "../../orderflow/deltaProfile";
 
 /* ------------------------------------------------------------------ */
 /* Tool catalogue                                                      */
@@ -17,6 +18,7 @@ export type DrawingToolType =
   | "price_range"
   | "order_bracket"
   | "rectangle"
+  | "fixed_range_delta_profile"
   | "horizontal_ray"
   | "vertical_line";
 
@@ -48,6 +50,12 @@ export const DRAWING_TOOLS: readonly DrawingToolDef[] = [
     label: "Rectangle",
     anchors: 2,
     icon: "M4 6 h16 v12 h-16 Z",
+  },
+  {
+    type: "fixed_range_delta_profile",
+    label: "Fixed Range Delta Profile",
+    anchors: 2,
+    icon: "M5 5 v14 M8 7 h11 M8 12 h8 M8 17 h5",
   },
   {
     type: "vertical_line",
@@ -150,6 +158,9 @@ export interface IDrawingManager {
 
   /** Remove all drawings. */
   removeAllDrawings(): void;
+
+  /** Update computed data for one fixed-range delta profile drawing. */
+  setFixedRangeDeltaProfile(id: string, state: DeltaProfileLoadState): void;
 
   /** Export all completed drawings to serializable state. */
   exportState(): DrawingState[];

@@ -47,8 +47,7 @@ class BasisEngine:
         self._broker_mid = float(mid)
         self._last_update = int(at or now_ms())
         if self._gc_price is not None:
-            raw = self._broker_mid - self._gc_price
-            self._basis = 0.75 * self._basis + 0.25 * raw
+            self._basis = self._broker_mid - self._gc_price
 
     def snapshot(self) -> BasisSnapshot:
         current = now_ms()

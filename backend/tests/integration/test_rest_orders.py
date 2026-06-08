@@ -317,6 +317,81 @@ def test_market_order_distances_are_anchored_to_broker_tick(client: TestClient):
 
 
 @pytest.mark.integration
+def test_market_order_fill_estimate_uses_current_raw_basis(client: TestClient):
+    backend = _StrictSymbolBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    assert client.post(
+        "/api/auth/login", json={"username": "local", "password": "local"}
+    ).status_code == 200
+    assert client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 1,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+        },
+    ).status_code == 200
+    current = now_ms()
+    client.app.state.basis_engine.update_gc(2374.05, current)
+
+    resp = client.post(
+        "/api/orders",
+        json={
+            "source": "market_bar",
+            "side": "sell",
+            "kind": "market",
+            "volumeLots": 0.1,
+            "idempotencyKey": "market-current-raw-basis",
+        },
+    )
+
+    assert resp.status_code == 200
+    order = resp.json()["order"]
+    assert order["basisAtSubmit"] == pytest.approx(-24.0)
+    assert order["basisAtFill"] == pytest.approx(-24.0)
+    assert order["entryGc"] == 2374.0
+    assert order["fillPriceGcEstimate"] == 2374.1
+
+
+@pytest.mark.integration
+def test_market_order_reference_gc_bootstraps_basis(client: TestClient):
+    backend = _StrictSymbolBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    assert client.post(
+        "/api/auth/login", json={"username": "local", "password": "local"}
+    ).status_code == 200
+    assert client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 1,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+        },
+    ).status_code == 200
+
+    resp = client.post(
+        "/api/orders",
+        json={
+            "source": "market_bar",
+            "side": "sell",
+            "kind": "market",
+            "volumeLots": 0.1,
+            "referenceGc": 2374.05,
+            "idempotencyKey": "market-reference-basis",
+        },
+    )
+
+    assert resp.status_code == 200
+    order = resp.json()["order"]
+    assert order["basisAtSubmit"] == pytest.approx(-24.0)
+    assert order["basisAtFill"] == pytest.approx(-24.0)
+    assert order["entryGc"] == 2374.0
+    assert order["fillPriceGcEstimate"] == 2374.1
+
+
+@pytest.mark.integration
 def test_chart_bracket_uses_reference_gc_to_convert_pending_price(client: TestClient):
     backend = _StrictSymbolBackend()
     client.app.state.mt5_manager = _Manager(backend)

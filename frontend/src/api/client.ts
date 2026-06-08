@@ -12,12 +12,15 @@ import {
 } from "../alerts/types";
 import type { AlertEventMessage } from "../socket/messages";
 import { type ChartProfile, type ChartProfilePayload } from "../profiles/types";
+import type { DeltaProfileData } from "../orderflow/deltaProfile";
 import {
   type BigTradeMessage,
   type FootprintRow,
   type FootprintUpdateMessage,
+  type Side,
   type StackedImbalance,
   type TradingOrder,
+  type TradingPosition,
   type Timeframe,
 } from "../socket/messages";
 
@@ -137,6 +140,34 @@ export interface OrderSubmitInput {
   idempotencyKey: string;
 }
 
+export interface Mt5PendingOrder {
+  brokerOrderTicket: number;
+  orderId?: string | null;
+  symbolBroker: string;
+  side: Side;
+  kind: "limit" | "stop";
+  volumeLots: number;
+  entryBroker: number;
+  entryGc?: number | null;
+  slBroker?: number | null;
+  tpBroker?: number | null;
+  slGc?: number | null;
+  tpGc?: number | null;
+  basisStale?: boolean;
+  updatedAt: number;
+}
+
+export interface Mt5OpenTrades {
+  positions: TradingPosition[];
+  orders: Mt5PendingOrder[];
+}
+
+export interface Mt5TradePatchInput {
+  entryGc?: number | null;
+  slGc?: number | null;
+  tpGc?: number | null;
+}
+
 export class ApiClient {
   private readonly basePath: string;
   private readonly fetchFn: typeof fetch;
@@ -220,6 +251,62 @@ export class ApiClient {
   async mt5Symbol(): Promise<Mt5Symbol> {
     const body = await this.getJson<{ symbol: Mt5Symbol }>("/mt5/symbol");
     return body.symbol;
+  }
+
+  async mt5OpenTrades(): Promise<Mt5OpenTrades> {
+    return this.getJson<Mt5OpenTrades>("/mt5/open-trades");
+  }
+
+  async patchMt5Position(
+    brokerPositionTicket: number,
+    input: Pick<Mt5TradePatchInput, "slGc" | "tpGc">,
+  ): Promise<TradingPosition> {
+    const res = await this.fetchFn(
+      `${this.basePath}/mt5/positions/${encodeURIComponent(String(brokerPositionTicket))}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(input),
+      },
+    );
+    if (!res.ok) throw new Error(await this.errorMessage(res, "PATCH /mt5/positions"));
+    const body = (await res.json()) as { position: TradingPosition };
+    return body.position;
+  }
+
+  async closeMt5Position(brokerPositionTicket: number): Promise<void> {
+    const res = await this.fetchFn(
+      `${this.basePath}/mt5/positions/${encodeURIComponent(String(brokerPositionTicket))}/close`,
+      { method: "POST", credentials: "same-origin" },
+    );
+    if (!res.ok) throw new Error(await this.errorMessage(res, "POST /mt5/positions/close"));
+  }
+
+  async patchMt5Order(
+    brokerOrderTicket: number,
+    input: Mt5TradePatchInput,
+  ): Promise<Mt5PendingOrder> {
+    const res = await this.fetchFn(
+      `${this.basePath}/mt5/orders/${encodeURIComponent(String(brokerOrderTicket))}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(input),
+      },
+    );
+    if (!res.ok) throw new Error(await this.errorMessage(res, "PATCH /mt5/orders"));
+    const body = (await res.json()) as { order: Mt5PendingOrder };
+    return body.order;
+  }
+
+  async cancelMt5Order(brokerOrderTicket: number): Promise<void> {
+    const res = await this.fetchFn(
+      `${this.basePath}/mt5/orders/${encodeURIComponent(String(brokerOrderTicket))}`,
+      { method: "DELETE", credentials: "same-origin" },
+    );
+    if (!res.ok) throw new Error(await this.errorMessage(res, "DELETE /mt5/orders"));
   }
 
   async orders(openOnly = true): Promise<TradingOrder[]> {
@@ -545,6 +632,39 @@ export class ApiClient {
     });
   }
 
+  /** Fixed-range delta profile aggregated from cached M1 footprint ladders. */
+  async deltaProfile(input: {
+    symbol: string;
+    contract: string;
+    from: number;
+    to: number;
+    rowTicks?: number;
+    valueAreaPct?: number;
+  }): Promise<DeltaProfileData> {
+    const params = new URLSearchParams({
+      symbol: input.symbol,
+      contract: input.contract,
+      from: String(input.from),
+      to: String(input.to),
+    });
+    if (input.rowTicks !== undefined) {
+      params.set("rowTicks", String(input.rowTicks));
+    }
+    if (input.valueAreaPct !== undefined) {
+      params.set("valueAreaPct", String(input.valueAreaPct));
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 10_000);
+    try {
+      return await this.getJson<DeltaProfileData>(
+        `/orderflow/delta-profile?${params.toString()}`,
+        { signal: controller.signal },
+      );
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
   /** Merged big trades for the selected contract. */
   async bigTrades(
     symbol: string,
@@ -614,8 +734,9 @@ export class ApiClient {
     );
   }
 
-  private async getJson<T>(path: string): Promise<T> {
+  private async getJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const res = await this.fetchFn(`${this.basePath}${path}`, {
+      ...init,
       credentials: "same-origin",
     });
     if (!res.ok) {

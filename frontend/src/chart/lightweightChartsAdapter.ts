@@ -194,12 +194,11 @@ const ALERT_LINE_COLORS = {
   disabled: "rgba(224, 179, 65, 0.35)",
 };
 
-const ORDER_LINE_COLORS: Record<OrderLineField | "entrySell" | "readonly", string> = {
-  entryGc: "#2f80ed",
-  entrySell: "#f2994a",
-  slGc: "#ef4444",
-  tpGc: "#22c55e",
-  readonly: "rgba(156, 163, 175, 0.75)",
+const ORDER_LINE_COLORS: Record<OrderLineField | "entrySell", string> = {
+  entryGc: "#1d4ed8",
+  entrySell: "#b45309",
+  slGc: "#b91c1c",
+  tpGc: "#047857",
 };
 
 /** EMA overlay line color (TradingView-style blue). */
@@ -208,6 +207,23 @@ const EMA_LINE_COLOR = "#2962ff";
 interface DraggableLineMeta {
   price: number;
   editable?: boolean;
+  color: string;
+}
+
+type PriceLineDragKind = "alert" | "order";
+type PriceLineSelection =
+  | { kind: "alert"; id: string }
+  | { kind: "order"; orderId: string };
+
+interface PriceLineDragConfig {
+  metaById: Map<string, DraggableLineMeta>;
+  linesById: Map<string, IPriceLine>;
+  handlers: {
+    onPreview?: (id: string, price: number) => void;
+    onCommit?: (id: string, price: number) => void;
+    onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
+    snap?: (price: number) => number;
+  };
 }
 
 const symmetricZeroAutoscale: AutoscaleInfoProvider = (baseImplementation) => {
@@ -387,6 +403,17 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     string,
     DraggableLineMeta & { orderId: string; field: OrderLineField }
   >();
+  private readonly priceLineDragHandles = new Map<string, HTMLDivElement>();
+  private readonly priceLineDragConfigs = new Map<
+    PriceLineDragKind,
+    PriceLineDragConfig
+  >();
+  private readonly pendingOrderLineCommits = new Map<string, number>();
+  private selectedPriceLine: PriceLineSelection | undefined;
+  private draggingPriceLine:
+    | { kind: PriceLineDragKind; id: string; pointerId: number }
+    | undefined;
+  private disposePriceLineDragListeners: (() => void) | undefined;
   private displayTimeOffsetMs: number;
   private readonly container: HTMLElement;
   private chartBackgroundColor: string;
@@ -839,6 +866,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     // Remove lines whose alert is gone.
     for (const [id, priceLine] of this.alertLinesById) {
       if (!next.has(id)) {
+        if (this.isPriceLineSelected("alert", id)) {
+          this.clearSelectedPriceLine();
+        }
         this.candleSeries.removePriceLine(priceLine);
         this.alertLinesById.delete(id);
         this.alertLineMeta.delete(id);
@@ -848,32 +878,38 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     // Add or update the rest.
     for (const line of lines) {
       const existing = this.alertLinesById.get(line.id);
+      const selected = this.isPriceLineSelected("alert", line.id);
       if (existing) {
-        existing.applyOptions(this.alertLineOptions(line));
+        existing.applyOptions(this.alertLineOptions(line, selected));
       } else {
         this.alertLinesById.set(
           line.id,
-          this.candleSeries.createPriceLine(this.alertLineOptions(line)),
+          this.candleSeries.createPriceLine(this.alertLineOptions(line, selected)),
         );
       }
       this.alertLineMeta.set(line.id, {
         price: line.price,
+        color: this.alertLineColor(line),
         enabled: line.enabled,
         title: line.title,
       });
     }
+    this.positionSelectedPriceLineHandles();
+  }
+
+  private alertLineColor(line: AlertLine): string {
+    return line.enabled === false
+      ? ALERT_LINE_COLORS.disabled
+      : ALERT_LINE_COLORS.enabled;
   }
 
   /** Shared price-line options for an alert line (light dashed style). */
-  private alertLineOptions(line: AlertLine) {
-    const color =
-      line.enabled === false
-        ? ALERT_LINE_COLORS.disabled
-        : ALERT_LINE_COLORS.enabled;
+  private alertLineOptions(line: AlertLine, selected = false) {
+    const color = this.alertLineColor(line);
     return {
       price: line.price,
       color,
-      lineWidth: 1 as const,
+      lineWidth: (selected ? 3 : 1) as 1 | 3,
       lineStyle: LineStyle.Dashed,
       axisLabelVisible: true,
       title: line.title ?? "",
@@ -886,6 +922,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
     for (const [id, priceLine] of this.orderLinesById) {
       if (!next.has(id)) {
+        if (this.isPriceLineSelected("order", id)) {
+          this.clearSelectedPriceLine();
+        }
         this.candleSeries.removePriceLine(priceLine);
         this.orderLinesById.delete(id);
         this.orderLineMeta.delete(id);
@@ -893,35 +932,43 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
 
     for (const line of lines) {
+      const pendingPrice = this.pendingOrderLineCommits.get(line.id);
+      const displayLine =
+        pendingPrice === undefined ? line : { ...line, price: pendingPrice };
       const existing = this.orderLinesById.get(line.id);
+      const selected = this.isPriceLineSelected("order", line.id);
       if (existing) {
-        existing.applyOptions(this.orderLineOptions(line));
+        existing.applyOptions(this.orderLineOptions(displayLine, selected));
       } else {
         this.orderLinesById.set(
           line.id,
-          this.candleSeries.createPriceLine(this.orderLineOptions(line)),
+          this.candleSeries.createPriceLine(this.orderLineOptions(displayLine, selected)),
         );
       }
       this.orderLineMeta.set(line.id, {
-        price: line.price,
+        price: displayLine.price,
+        color: this.orderLineColor(displayLine),
         orderId: line.orderId,
         field: line.field,
         editable: line.editable !== false,
       });
     }
+    this.positionSelectedPriceLineHandles();
   }
 
-  private orderLineOptions(line: OrderLine) {
-    const isEntry = line.field === "entryGc";
-    const color = line.editable === false
-      ? ORDER_LINE_COLORS.readonly
-      : line.field === "entryGc" && line.side === "sell"
+  private orderLineColor(line: OrderLine): string {
+    return line.field === "entryGc" && line.side === "sell"
         ? ORDER_LINE_COLORS.entrySell
         : ORDER_LINE_COLORS[line.field];
+  }
+
+  private orderLineOptions(line: OrderLine, selected = false) {
+    const isEntry = line.field === "entryGc";
+    const color = this.orderLineColor(line);
     return {
       price: line.price,
       color,
-      lineWidth: isEntry ? 2 as const : 1 as const,
+      lineWidth: (selected ? 3 : 1) as 1 | 3,
       lineStyle: isEntry ? LineStyle.Solid : LineStyle.Dashed,
       axisLabelVisible: true,
       title: line.title ?? "",
@@ -957,6 +1004,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     snap?: (price: number) => number;
   }): () => void {
     return this.subscribePriceLineDrag(
+      "alert",
       this.alertLineMeta,
       this.alertLinesById,
       handlers,
@@ -967,9 +1015,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   subscribeOrderDrag(handlers: {
     onPreview?: (id: string, price: number) => void;
     onCommit?: (id: string, price: number) => void;
+    onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
     snap?: (price: number) => number;
   }): () => void {
     return this.subscribePriceLineDrag(
+      "order",
       this.orderLineMeta,
       this.orderLinesById,
       handlers,
@@ -977,111 +1027,418 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   private subscribePriceLineDrag(
+    kind: PriceLineDragKind,
     metaById: Map<string, DraggableLineMeta>,
     linesById: Map<string, IPriceLine>,
     handlers: {
       onPreview?: (id: string, price: number) => void;
       onCommit?: (id: string, price: number) => void;
+      onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
       snap?: (price: number) => number;
     },
   ): () => void {
-    const HIT_PX = 6;
-    let draggingId: string | undefined;
-
-    const localY = (clientY: number) =>
-      clientY - this.container.getBoundingClientRect().top;
-
-    const isInCandlePane = (y: number) => {
-      const { height } = this.chart.paneSize(0);
-      return y >= 0 && y <= height;
-    };
-
-    const lineIdNearY = (y: number): string | undefined => {
-      if (!isInCandlePane(y)) return undefined;
-      let bestId: string | undefined;
-      let bestDist = HIT_PX;
-      for (const [id, meta] of metaById) {
-        if (meta.editable === false) continue;
-        const lineY = this.candleSeries.priceToCoordinate(meta.price);
-        if (lineY === null) continue;
-        const dist = Math.abs((lineY as number) - y);
-        if (dist <= bestDist) {
-          bestDist = dist;
-          bestId = id;
-        }
+    this.priceLineDragConfigs.set(kind, { metaById, linesById, handlers });
+    this.ensurePriceLineDragListeners();
+    return () => {
+      this.priceLineDragConfigs.delete(kind);
+      if (this.selectedPriceLine?.kind === kind) {
+        this.clearSelectedPriceLine(false);
       }
-      return bestId;
+      if (this.priceLineDragConfigs.size === 0) {
+        this.disposePriceLineDragListeners?.();
+        this.disposePriceLineDragListeners = undefined;
+      }
+    };
+  }
+
+  private ensurePriceLineDragListeners(): void {
+    if (this.disposePriceLineDragListeners !== undefined) return;
+    const TAP_PX = 8;
+    let press:
+      | { pointerId: number; x: number; y: number; moved: boolean }
+      | undefined;
+
+    const onContainerPointerDown = (e: PointerEvent) => {
+      if (
+        e.button !== 0 ||
+        this.priceLineHandleFromEventTarget(e.target) !== undefined
+      ) {
+        return;
+      }
+      press = {
+        pointerId: e.pointerId,
+        x: e.clientX,
+        y: e.clientY,
+        moved: false,
+      };
     };
 
-    const priceAtY = (y: number): number | undefined => {
-      if (!isInCandlePane(y)) return undefined;
-      const price = this.candleSeries.coordinateToPrice(y);
-      if (price === null) return undefined;
-      const raw = price as number;
-      return handlers.snap ? handlers.snap(raw) : raw;
-    };
-
-    const setScroll = (enabled: boolean) => {
-      this.chart.applyOptions({
-        handleScroll: enabled,
-        handleScale: enabled,
-      });
-    };
-
-    const onPointerDown = (e: PointerEvent) => {
-      if (e.button !== 0) return;
-      const id = lineIdNearY(localY(e.clientY));
-      if (id === undefined) return;
-      draggingId = id;
-      setScroll(false);
+    const onHandlePointerDown = (e: PointerEvent) => {
+      const handle = this.priceLineHandleFromEventTarget(e.target);
+      const kind = handle?.dataset.kind as PriceLineDragKind | undefined;
+      const id = handle?.dataset.lineId;
+      if (
+        e.button !== 0 ||
+        handle === undefined ||
+        kind === undefined ||
+        id === undefined ||
+        !this.isPriceLineSelected(kind, id)
+      ) {
+        return;
+      }
+      const config = this.priceLineDragConfigs.get(kind);
+      const meta = config?.metaById.get(id);
+      if (!config || !meta || meta.editable === false) return;
+      this.draggingPriceLine = { kind, id, pointerId: e.pointerId };
+      this.setChartPointerInteractions(false);
       this.container.style.cursor = "ns-resize";
-      this.container.setPointerCapture?.(e.pointerId);
+      handle.classList.add("is-dragging");
+      handle.setPointerCapture?.(e.pointerId);
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
     };
 
     const onPointerMove = (e: PointerEvent) => {
-      if (draggingId === undefined) {
-        // Hover affordance: show a resize cursor over a line.
-        this.container.style.cursor =
-          lineIdNearY(localY(e.clientY)) !== undefined ? "ns-resize" : "";
+      if (
+        press &&
+        press.pointerId === e.pointerId &&
+        (Math.abs(e.clientX - press.x) > TAP_PX ||
+          Math.abs(e.clientY - press.y) > TAP_PX)
+      ) {
+        press.moved = true;
+      }
+      const drag = this.draggingPriceLine;
+      if (drag !== undefined) {
+        if (drag.pointerId !== e.pointerId) return;
+        const config = this.priceLineDragConfigs.get(drag.kind);
+        const price = this.priceAtLineDragY(this.localChartY(e.clientY), config);
+        if (price === undefined || config === undefined) return;
+        const meta = config.metaById.get(drag.id);
+        const existing = config.linesById.get(drag.id);
+        if (meta && existing) {
+          meta.price = price;
+          existing.applyOptions({ price });
+          this.positionSelectedPriceLineHandles();
+        }
+        config.handlers.onPreview?.(drag.id, price);
+        e.preventDefault();
         return;
       }
-      const price = priceAtY(localY(e.clientY));
-      if (price === undefined) return;
-      const meta = metaById.get(draggingId);
-      const existing = linesById.get(draggingId);
-      if (meta && existing) {
-        meta.price = price;
-        existing.applyOptions({ price });
+      this.positionSelectedPriceLineHandles();
+      this.container.style.cursor =
+        this.lineSelectionNearY(this.localChartY(e.clientY)) !== undefined
+          ? "pointer"
+          : "";
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      const drag = this.draggingPriceLine;
+      if (drag !== undefined && drag.pointerId === e.pointerId) {
+        this.endSelectedPriceLineDrag(e);
+        return;
       }
-      handlers.onPreview?.(draggingId, price);
-      e.preventDefault();
+      if (press === undefined || press.pointerId !== e.pointerId) return;
+      const tap = press;
+      press = undefined;
+      if (tap.moved) return;
+      const hit = this.lineSelectionNearY(this.localChartY(e.clientY));
+      if (hit === undefined) {
+        this.clearSelectedPriceLine();
+      } else {
+        this.selectPriceLine(hit.kind, hit.id);
+        e.preventDefault();
+        e.stopPropagation();
+      }
     };
 
-    const endDrag = (e: PointerEvent) => {
-      if (draggingId === undefined) return;
-      const id = draggingId;
-      draggingId = undefined;
-      setScroll(true);
-      this.container.style.cursor = "";
-      this.container.releasePointerCapture?.(e.pointerId);
-      const meta = metaById.get(id);
-      if (meta) handlers.onCommit?.(id, meta.price);
+    const onPointerCancel = (e: PointerEvent) => {
+      press = undefined;
+      if (
+        this.draggingPriceLine !== undefined &&
+        this.draggingPriceLine.pointerId === e.pointerId
+      ) {
+        this.endSelectedPriceLineDrag(e);
+      }
     };
 
-    this.container.addEventListener("pointerdown", onPointerDown, true);
+    this.container.addEventListener("pointerdown", onContainerPointerDown);
     this.container.addEventListener("pointermove", onPointerMove);
-    this.container.addEventListener("pointerup", endDrag);
-    this.container.addEventListener("pointercancel", endDrag);
-    return () => {
-      this.container.removeEventListener("pointerdown", onPointerDown, true);
+    this.container.addEventListener("pointerup", onPointerUp);
+    this.container.addEventListener("pointercancel", onPointerCancel);
+    this.container.addEventListener("pointerdown", onHandlePointerDown, true);
+    this.disposePriceLineDragListeners = () => {
+      this.container.removeEventListener("pointerdown", onContainerPointerDown);
       this.container.removeEventListener("pointermove", onPointerMove);
-      this.container.removeEventListener("pointerup", endDrag);
-      this.container.removeEventListener("pointercancel", endDrag);
+      this.container.removeEventListener("pointerup", onPointerUp);
+      this.container.removeEventListener("pointercancel", onPointerCancel);
+      this.container.removeEventListener("pointerdown", onHandlePointerDown, true);
+      this.draggingPriceLine = undefined;
+      press = undefined;
+      this.setChartPointerInteractions(true);
       this.container.style.cursor = "";
+      this.hideAllPriceLineHandles();
     };
+  }
+
+  private localChartY(clientY: number): number {
+    return clientY - this.container.getBoundingClientRect().top;
+  }
+
+  private isInCandlePane(y: number): boolean {
+    const { height } = this.chart.paneSize(0);
+    return y >= 0 && y <= height;
+  }
+
+  private lineSelectionNearY(
+    y: number,
+  ): { kind: PriceLineDragKind; id: string } | undefined {
+    if (!this.isInCandlePane(y)) return undefined;
+    const HIT_PX = 10;
+    let best: { kind: PriceLineDragKind; id: string } | undefined;
+    let bestDist = HIT_PX;
+    const kinds: PriceLineDragKind[] = ["order", "alert"];
+    for (const kind of kinds) {
+      const config = this.priceLineDragConfigs.get(kind);
+      if (config === undefined) continue;
+      for (const [id, meta] of config.metaById) {
+        if (kind !== "order" && meta.editable === false) continue;
+        const lineY = this.candleSeries.priceToCoordinate(meta.price);
+        if (lineY === null) continue;
+        const dist = Math.abs((lineY as number) - y);
+        if (dist <= bestDist) {
+          bestDist = dist;
+          best = { kind, id };
+        }
+      }
+    }
+    return best;
+  }
+
+  private priceAtLineDragY(
+    y: number,
+    config: PriceLineDragConfig | undefined,
+  ): number | undefined {
+    if (config === undefined || !this.isInCandlePane(y)) return undefined;
+    const price = this.candleSeries.coordinateToPrice(y);
+    if (price === null) return undefined;
+    const raw = price as number;
+    return config.handlers.snap ? config.handlers.snap(raw) : raw;
+  }
+
+  private setChartPointerInteractions(enabled: boolean): void {
+    this.chart.applyOptions({
+      handleScroll: enabled,
+      handleScale: enabled,
+    });
+  }
+
+  private isPriceLineSelected(kind: PriceLineDragKind, id: string): boolean {
+    const selected = this.selectedPriceLine;
+    if (selected === undefined || selected.kind !== kind) return false;
+    if (kind === "alert") {
+      return selected.kind === "alert" && selected.id === id;
+    }
+    const meta = this.orderLineMeta.get(id);
+    return (
+      selected.kind === "order" &&
+      meta !== undefined &&
+      meta.orderId === selected.orderId
+    );
+  }
+
+  private selectPriceLine(kind: PriceLineDragKind, id: string): void {
+    if (this.isPriceLineSelected(kind, id)) {
+      this.positionSelectedPriceLineHandles();
+      return;
+    }
+    this.clearSelectedPriceLine();
+    if (kind === "order") {
+      const meta = this.orderLineMeta.get(id);
+      if (meta === undefined) return;
+      this.selectedPriceLine = { kind: "order", orderId: meta.orderId };
+      this.setOrderGroupSelectionStyle(meta.orderId, true);
+    } else {
+      this.selectedPriceLine = { kind: "alert", id };
+      this.applyPriceLineSelectionStyle(kind, id, true);
+    }
+    this.positionSelectedPriceLineHandles();
+  }
+
+  private clearSelectedPriceLine(commitPending = true): void {
+    const selected = this.selectedPriceLine;
+    if (commitPending && selected?.kind === "order") {
+      this.flushPendingOrderLineCommits(selected.orderId);
+    }
+    if (selected !== undefined) {
+      if (selected.kind === "order") {
+        this.setOrderGroupSelectionStyle(selected.orderId, false);
+      } else {
+        this.applyPriceLineSelectionStyle(selected.kind, selected.id, false);
+      }
+    }
+    this.selectedPriceLine = undefined;
+    this.draggingPriceLine = undefined;
+    this.hideAllPriceLineHandles();
+  }
+
+  private applyPriceLineSelectionStyle(
+    kind: PriceLineDragKind,
+    id: string,
+    selected: boolean,
+  ): void {
+    const config = this.priceLineDragConfigs.get(kind);
+    const line = config?.linesById.get(id);
+    if (line === undefined) return;
+    line.applyOptions({ lineWidth: (selected ? 3 : 1) as 1 | 3 });
+  }
+
+  private setOrderGroupSelectionStyle(orderId: string, selected: boolean): void {
+    for (const [id, meta] of this.orderLineMeta) {
+      if (meta.orderId === orderId) {
+        this.applyPriceLineSelectionStyle("order", id, selected);
+      }
+    }
+  }
+
+  private positionSelectedPriceLineHandles(): void {
+    const selected = this.selectedPriceLine;
+    if (selected === undefined) {
+      this.hideAllPriceLineHandles();
+      return;
+    }
+    const selectedHandles =
+      selected.kind === "alert"
+        ? [{ kind: "alert" as const, id: selected.id }]
+        : [...this.orderLineMeta]
+            .filter(([, meta]) =>
+              meta.orderId === selected.orderId &&
+              meta.editable !== false &&
+              meta.field !== "entryGc"
+            )
+            .map(([id]) => ({ kind: "order" as const, id }));
+    const activeHandleKeys = new Set<string>();
+    for (const handleLine of selectedHandles) {
+      const key = this.priceLineHandleKey(handleLine.kind, handleLine.id);
+      const handle = this.ensurePriceLineHandle(handleLine.kind, handleLine.id);
+      activeHandleKeys.add(key);
+      this.positionPriceLineHandle(handle, handleLine.kind, handleLine.id);
+    }
+    for (const [key, handle] of this.priceLineDragHandles) {
+      if (!activeHandleKeys.has(key)) {
+        handle.hidden = true;
+        handle.classList.remove("is-dragging");
+      }
+    }
+  }
+
+  private positionPriceLineHandle(
+    handle: HTMLDivElement,
+    kind: PriceLineDragKind,
+    id: string,
+  ): void {
+    const config = this.priceLineDragConfigs.get(kind);
+    const meta = config?.metaById.get(id);
+    if (config === undefined || meta === undefined || meta.editable === false) {
+      handle.hidden = true;
+      return;
+    }
+    const y = this.candleSeries.priceToCoordinate(meta.price);
+    if (y === null || !this.isInCandlePane(y as number)) {
+      handle.hidden = true;
+      return;
+    }
+    const pane = this.chart.paneSize(0);
+    const x = Math.max(20, Math.round(pane.width / 2));
+    handle.hidden = false;
+    handle.style.left = `${x}px`;
+    handle.style.top = `${Math.round(y as number)}px`;
+    handle.style.setProperty("--price-line-handle-color", meta.color);
+  }
+
+  private endSelectedPriceLineDrag(e: PointerEvent): void {
+    const drag = this.draggingPriceLine;
+    if (drag === undefined) return;
+    this.draggingPriceLine = undefined;
+    this.setChartPointerInteractions(true);
+    this.container.style.cursor = "";
+    const handle = this.priceLineDragHandles.get(
+      this.priceLineHandleKey(drag.kind, drag.id),
+    );
+    handle?.classList.remove("is-dragging");
+    handle?.releasePointerCapture?.(e.pointerId);
+    const config = this.priceLineDragConfigs.get(drag.kind);
+    const meta = config?.metaById.get(drag.id);
+    if (meta !== undefined) {
+      if (drag.kind === "order") {
+        this.pendingOrderLineCommits.set(drag.id, meta.price);
+      } else {
+        config?.handlers.onCommit?.(drag.id, meta.price);
+      }
+    }
+  }
+
+  private priceLineHandleKey(kind: PriceLineDragKind, id: string): string {
+    return `${kind}:${id}`;
+  }
+
+  private ensurePriceLineHandle(
+    kind: PriceLineDragKind,
+    id: string,
+  ): HTMLDivElement {
+    const key = this.priceLineHandleKey(kind, id);
+    const existing = this.priceLineDragHandles.get(key);
+    if (existing !== undefined) return existing;
+    const handle = document.createElement("div");
+    handle.className = "price-line-drag-handle";
+    handle.setAttribute("aria-label", "Drag selected price line");
+    handle.dataset.kind = kind;
+    handle.dataset.lineId = id;
+    handle.hidden = true;
+    this.container.appendChild(handle);
+    this.priceLineDragHandles.set(key, handle);
+    return handle;
+  }
+
+  private priceLineHandleFromEventTarget(
+    target: EventTarget | null,
+  ): HTMLDivElement | undefined {
+    if (!(target instanceof HTMLElement)) return undefined;
+    const handle = target.closest(".price-line-drag-handle");
+    return handle instanceof HTMLDivElement &&
+      this.container.contains(handle)
+      ? handle
+      : undefined;
+  }
+
+  private hideAllPriceLineHandles(): void {
+    for (const handle of this.priceLineDragHandles.values()) {
+      handle.hidden = true;
+      handle.classList.remove("is-dragging");
+    }
+  }
+
+  private flushPendingOrderLineCommits(orderId: string): void {
+    const config = this.priceLineDragConfigs.get("order");
+    if (config === undefined) {
+      this.pendingOrderLineCommits.clear();
+      return;
+    }
+    const updates: { id: string; price: number }[] = [];
+    for (const [id, price] of [...this.pendingOrderLineCommits]) {
+      const meta = this.orderLineMeta.get(id);
+      if (meta?.orderId !== orderId) continue;
+      this.pendingOrderLineCommits.delete(id);
+      updates.push({ id, price });
+    }
+    if (updates.length === 0) return;
+    if (config.handlers.onCommitBatch) {
+      config.handlers.onCommitBatch(updates);
+      return;
+    }
+    for (const update of updates) {
+      config.handlers.onCommit?.(update.id, update.price);
+    }
   }
 
   private renderBigTradeMarkers(): void {
@@ -1282,6 +1639,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       window.clearInterval(this.barCountdownTimer);
       this.barCountdownTimer = undefined;
     }
+    this.disposePriceLineDragListeners?.();
+    this.disposePriceLineDragListeners = undefined;
+    for (const handle of this.priceLineDragHandles.values()) {
+      handle.remove();
+    }
+    this.priceLineDragHandles.clear();
     this.barCountdownElement.remove();
     if (this.smcPrimitive !== undefined) {
       this.candleSeries.detachPrimitive(

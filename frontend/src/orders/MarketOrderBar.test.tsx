@@ -39,7 +39,7 @@ describe("MarketOrderBar", () => {
     expect(screen.queryByRole("button", { name: "SELL" })).not.toBeInTheDocument();
   });
 
-  it("shows verified account balance when connected", () => {
+  it("shows compact verified account balance when connected", () => {
     render(
       <MarketOrderBar
         account={{
@@ -51,16 +51,68 @@ describe("MarketOrderBar", () => {
           balance: 10000,
           equity: 9999.5,
         }}
-        openOrderCount={0}
+        openOrderCount={2}
         settings={settings}
         onSettingsChange={vi.fn()}
         onMarketOrder={vi.fn()}
       />,
     );
 
-    expect(screen.getByText("Balance 10,000.00 USD")).toBeInTheDocument();
-    expect(screen.getByText("Equity 9,999.50 USD")).toBeInTheDocument();
+    expect(screen.getByText("#123")).toBeInTheDocument();
+    expect(screen.queryByText(/Exness-Demo/)).not.toBeInTheDocument();
+    expect(screen.getByText("Bal 10,000.00")).toBeInTheDocument();
+    expect(screen.getByText("Eq 9,999.50")).toBeInTheDocument();
+    expect(screen.getByText("Open 2")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "BUY" })).toBeInTheDocument();
+  });
+
+  it("renders one control row per open order", () => {
+    const onOrderRowBreakEven = vi.fn();
+    const onOrderRowClose = vi.fn();
+    const onOrderRowCancel = vi.fn();
+    render(
+      <MarketOrderBar
+        openOrderCount={2}
+        orderRows={[
+          {
+            id: "app:ord_1",
+            side: "buy",
+            title: "BUY fill",
+            detail: "0.01 @ 4335.3",
+            pnlText: "+$6.30",
+            pnlValue: 6.3,
+            action: "close",
+            canBreakEven: true,
+          },
+          {
+            id: "mt5order:8",
+            side: "sell",
+            title: "SELL limit",
+            detail: "0.02 @ 4345.0",
+            action: "cancel",
+          },
+        ]}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+        onOrderRowBreakEven={onOrderRowBreakEven}
+        onOrderRowClose={onOrderRowClose}
+        onOrderRowCancel={onOrderRowCancel}
+      />,
+    );
+
+    expect(screen.getAllByRole("button", { name: "BE" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "BE" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByText("BUY fill")).toBeInTheDocument();
+    expect(screen.getByText("SELL limit")).toBeInTheDocument();
+    expect(screen.getByText("+$6.30")).toBeInTheDocument();
+    expect(onOrderRowBreakEven).toHaveBeenCalledWith("app:ord_1");
+    expect(onOrderRowClose).toHaveBeenCalledWith("app:ord_1");
+    expect(onOrderRowCancel).toHaveBeenCalledWith("mt5order:8");
   });
 
   it("lets mobile users clear and replace numeric settings before commit", () => {

@@ -5,9 +5,10 @@ trades:
 
 * ``GET /api/orderflow/volume-delta`` — per-bar volume-delta summaries (Req 18.5)
 * ``GET /api/orderflow/footprint``    — last ``count`` M1 footprint bars + ladders (Req 18.6)
+* ``GET /api/orderflow/delta-profile`` — fixed-range profile from M1 footprint ladders
 * ``GET /api/big-trades``             — merged big trades over a range (Req 18.7)
 
-All three accept an optional ``contract`` that defaults to the Active_Contract
+These read endpoints accept an optional ``contract`` that defaults to the Active_Contract
 (Req 18.4) and surface failures through the shared error envelope (Req 18.12):
 an unknown ``symbol`` yields ``404`` and a ``contract`` that is not a known
 candidate yields ``404`` with ``field: "contract"``.
@@ -332,6 +333,169 @@ def _big_trade_to_dict(rec: BigTradeRecord) -> dict[str, Any]:
     }
 
 
+def _round_profile_price(price: float) -> float:
+    return round(price, 10)
+
+
+def _delta_profile_price(price: float, row_ticks: int) -> float:
+    """Group a traded price to the lower GC tick row used by the profile."""
+    tick_index = int(round(price / DEFAULT_TICK_SIZE))
+    grouped_tick = (tick_index // row_ticks) * row_ticks
+    return _round_profile_price(grouped_tick * DEFAULT_TICK_SIZE)
+
+
+def _compute_profile_value_area(
+    volumes_by_price: dict[float, int],
+    poc: float,
+    *,
+    row_ticks: int,
+    value_area_pct: float,
+    total_volume: int,
+) -> tuple[float, float]:
+    if total_volume <= 0:
+        return poc, poc
+    step = _round_profile_price(DEFAULT_TICK_SIZE * row_ticks)
+    target = total_volume * value_area_pct / 100.0
+    accumulated = volumes_by_price.get(poc, 0)
+    vah = poc
+    val = poc
+    lower_price = _round_profile_price(poc - step)
+    upper_price = _round_profile_price(poc + step)
+
+    while accumulated < target:
+        lower_volume = volumes_by_price.get(lower_price, 0)
+        upper_volume = volumes_by_price.get(upper_price, 0)
+        if lower_volume <= 0 and upper_volume <= 0:
+            break
+        if lower_volume > 0 and lower_volume > upper_volume:
+            accumulated += lower_volume
+            val = lower_price
+            lower_price = _round_profile_price(lower_price - step)
+        elif upper_volume > 0 and upper_volume > lower_volume:
+            accumulated += upper_volume
+            vah = upper_price
+            upper_price = _round_profile_price(upper_price + step)
+        else:
+            if lower_volume > 0:
+                accumulated += lower_volume
+                val = lower_price
+                lower_price = _round_profile_price(lower_price - step)
+            if upper_volume > 0:
+                accumulated += upper_volume
+                vah = upper_price
+                upper_price = _round_profile_price(upper_price + step)
+    return vah, val
+
+
+def _empty_delta_profile(
+    *,
+    symbol: str,
+    contract: str,
+    frm: int,
+    to: int,
+    row_ticks: int,
+    value_area_pct: float,
+    covered_bars: int,
+) -> dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "contract": contract,
+        "tf": FOOTPRINT_TIMEFRAME,
+        "from": frm,
+        "to": to,
+        "rowTicks": row_ticks,
+        "valueAreaPct": value_area_pct,
+        "poc": None,
+        "vah": None,
+        "val": None,
+        "totalVolume": 0,
+        "totalDelta": 0,
+        "maxAbsDelta": 0,
+        "coveredBars": covered_bars,
+        "source": "footprint_cache",
+        "rows": [],
+    }
+
+
+def _delta_profile_to_dict(
+    *,
+    symbol: str,
+    contract: str,
+    frm: int,
+    to: int,
+    row_ticks: int,
+    value_area_pct: float,
+    covered_bars: int,
+    levels: list[FootprintLevelRecord],
+) -> dict[str, Any]:
+    grouped: dict[float, dict[str, int]] = {}
+    for level in levels:
+        if level.bid_volume <= 0 and level.ask_volume <= 0:
+            continue
+        price = _delta_profile_price(level.price, row_ticks)
+        row = grouped.setdefault(price, {"bid": 0, "ask": 0})
+        row["bid"] += int(level.bid_volume)
+        row["ask"] += int(level.ask_volume)
+
+    if not grouped:
+        return _empty_delta_profile(
+            symbol=symbol,
+            contract=contract,
+            frm=frm,
+            to=to,
+            row_ticks=row_ticks,
+            value_area_pct=value_area_pct,
+            covered_bars=covered_bars,
+        )
+
+    volumes_by_price = {
+        price: values["bid"] + values["ask"] for price, values in grouped.items()
+    }
+    total_volume = sum(volumes_by_price.values())
+    poc = max(volumes_by_price, key=lambda price: (volumes_by_price[price], price))
+    vah, val = _compute_profile_value_area(
+        volumes_by_price,
+        poc,
+        row_ticks=row_ticks,
+        value_area_pct=value_area_pct,
+        total_volume=total_volume,
+    )
+    total_delta = sum(values["ask"] - values["bid"] for values in grouped.values())
+    max_abs_delta = max(abs(values["ask"] - values["bid"]) for values in grouped.values())
+    rows = []
+    for price in sorted(grouped, reverse=True):
+        bid = grouped[price]["bid"]
+        ask = grouped[price]["ask"]
+        rows.append(
+            {
+                "price": price,
+                "bidVolume": bid,
+                "askVolume": ask,
+                "totalVolume": bid + ask,
+                "delta": ask - bid,
+            }
+        )
+
+    return {
+        "symbol": symbol,
+        "contract": contract,
+        "tf": FOOTPRINT_TIMEFRAME,
+        "from": frm,
+        "to": to,
+        "rowTicks": row_ticks,
+        "valueAreaPct": value_area_pct,
+        "poc": poc,
+        "vah": vah,
+        "val": val,
+        "totalVolume": total_volume,
+        "totalDelta": total_delta,
+        "maxAbsDelta": max_abs_delta,
+        "coveredBars": covered_bars,
+        "source": "footprint_cache",
+        "rows": rows,
+    }
+
+
 @router.get("/orderflow/volume-delta")
 async def get_volume_delta(
     symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
@@ -425,6 +589,82 @@ async def get_footprint(
         "tf": FOOTPRINT_TIMEFRAME,
         "bars": out_bars,
     }
+
+
+@router.get("/orderflow/delta-profile")
+async def get_delta_profile(
+    symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
+    contract: str | None = Query(
+        None, description="GC contract; defaults to the Active_Contract"
+    ),
+    frm: int = Query(
+        ..., alias="from", description="Inclusive start Canonical_Timestamp (ms)"
+    ),
+    to: int = Query(..., description="Inclusive end Canonical_Timestamp (ms)"),
+    row_ticks: int = Query(
+        1,
+        alias="rowTicks",
+        ge=1,
+        description="Number of GC ticks per profile row",
+    ),
+    value_area_pct: float = Query(
+        70.0,
+        alias="valueAreaPct",
+        ge=0.0,
+        le=100.0,
+        description="Value-area percentage computed from total volume",
+    ),
+    state: ContractStateStore = Depends(get_contract_state),
+    cache: CacheStore = Depends(get_cache),
+) -> dict[str, Any]:
+    """Aggregate a fixed-range delta profile from cached M1 footprint ladders."""
+    if not state.is_known_symbol(symbol):
+        raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
+    resolved = _resolve_contract(state, symbol, contract)
+    if frm > to:
+        raise bad_request("'from' must be less than or equal to 'to'", field="from")
+
+    bars = cache.read_footprint_bars(
+        symbol,
+        resolved,
+        FOOTPRINT_TIMEFRAME,
+        frm,
+        to,
+        MAX_ROWS + 1,
+    )
+    if len(bars) > MAX_ROWS:
+        raise bad_request(
+            f"Delta profile range exceeds {MAX_ROWS} M1 footprint bars",
+            field="to",
+        )
+    if not bars:
+        return _empty_delta_profile(
+            symbol=symbol,
+            contract=resolved,
+            frm=frm,
+            to=to,
+            row_ticks=row_ticks,
+            value_area_pct=value_area_pct,
+            covered_bars=0,
+        )
+
+    levels = cache.read_footprint_levels_range(
+        symbol,
+        resolved,
+        FOOTPRINT_TIMEFRAME,
+        frm,
+        to,
+    )
+    return _delta_profile_to_dict(
+        symbol=symbol,
+        contract=resolved,
+        frm=frm,
+        to=to,
+        row_ticks=row_ticks,
+        value_area_pct=value_area_pct,
+        covered_bars=len(bars),
+        levels=levels,
+    )
 
 
 @router.get("/big-trades")

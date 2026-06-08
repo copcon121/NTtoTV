@@ -101,16 +101,18 @@ async def create_order(
         _guard_volume(volume, symbol_info.min_lot, symbol_info.max_lot, symbol_info.lot_step)
 
         basis = _basis(request)
-        try:
-            tick = mt5.symbol_tick(user.id, account.id, account.symbol_broker)
-        except Exception as exc:
-            raise conflict(f"MT5 tick lookup failed: {exc}", field="symbolBroker")
-        basis.update_broker_mid((tick.bid + tick.ask) / 2, tick.time)
-
         entry_gc = _optional_number(body, "entryGc")
         reference_gc = _optional_number(body, "referenceGc")
         sl_gc = _optional_number(body, "slGc")
         tp_gc = _optional_number(body, "tpGc")
+        try:
+            tick = mt5.symbol_tick(user.id, account.id, account.symbol_broker)
+        except Exception as exc:
+            raise conflict(f"MT5 tick lookup failed: {exc}", field="symbolBroker")
+        if kind is OrderKind.MARKET and reference_gc is not None:
+            basis.update_gc(reference_gc, tick.time)
+        basis.update_broker_mid((tick.bid + tick.ask) / 2, tick.time)
+
         market_entry_broker: float | None = None
         sl_distance: float | None = None
         tp_distance: float | None = None
@@ -244,7 +246,9 @@ async def create_order(
         order.broker_deal_ticket = result.broker_deal_ticket
         order.fill_price_broker = result.fill_price
         if result.fill_price is not None:
-            order.fill_price_gc_estimate = basis.from_broker(result.fill_price, symbol_map).price
+            fill_gc = basis.from_broker(result.fill_price, symbol_map)
+            order.fill_price_gc_estimate = fill_gc.price
+            order.basis_at_fill = fill_gc.basis
             order.filled_at = order.updated_at
     else:
         order.status = OrderStatus.REJECTED

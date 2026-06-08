@@ -70,3 +70,66 @@ def test_anchored_sync_modifies_when_basis_moves(tmp_path):
         assert saved.entry_broker != 2350.0
     finally:
         cache.close()
+
+
+@pytest.mark.unit
+def test_anchored_sync_waits_for_filled_position_ticket(tmp_path):
+    cache = CacheStore(tmp_path / "app.sqlite")
+    fake = FakeMt5Backend(bid=2338.0, ask=2338.1)
+    manager = Mt5Manager(backend=fake)
+    basis = BasisEngine()
+    try:
+        user = cache.users.create_user("u", "p")
+        account = cache.users.upsert_mt5_account(
+            user_id=user.id,
+            login=1,
+            password="fake",
+            server="Fake-Demo",
+            symbol_broker="XAUUSDm",
+            credential_key="k",
+        )
+        cache.orders.create(
+            OrderRecord(
+                id="ord",
+                user_id=user.id,
+                account_id=account.id,
+                source=OrderSource.API,
+                symbol_internal="GC",
+                contract_internal="GC",
+                source_contract="GC 08-26",
+                symbol_broker="XAUUSDm",
+                side=OrderSide.SELL,
+                kind=OrderKind.MARKET,
+                volume_lots=0.1,
+                gc_anchored=True,
+                status=OrderStatus.FILLED,
+                idempotency_key="i",
+                created_at=1,
+                updated_at=1,
+                entry_gc=2350.0,
+                sl_gc=2353.0,
+                tp_gc=2344.0,
+                entry_broker=2350.0,
+                sl_broker=2353.0,
+                tp_broker=2344.0,
+                broker_order_ticket=10,
+            )
+        )
+        current = now_ms()
+        basis.update_gc(2350.0, current)
+        basis.update_broker_mid(2338.0, current)
+
+        changed = AnchoredSyncEngine(
+            cache,
+            manager,
+            basis,
+            config=AnchoredSyncConfig(threshold_ticks=1, min_interval_ms=0),
+        ).run_once()
+
+        assert changed == 0
+        saved = cache.orders.read("ord", user.id)
+        assert saved is not None
+        assert saved.status is OrderStatus.FILLED
+        assert saved.broker_position_ticket is None
+    finally:
+        cache.close()
