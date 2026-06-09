@@ -193,6 +193,7 @@ class AppRuntime:
         self._retention_task = None
         self._anchored_sync_task = None
         self._reconciliation_task = None
+        self._mt5_manager.close()
         try:
             self._tick_store.close()
         finally:

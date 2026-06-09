@@ -88,15 +88,26 @@ async def connect_mt5(
 
     manager = _runtime_manager(request)
     try:
-        with manager.backend_session() as backend:
-            connector = getattr(backend, "connect_account", None)
-            if callable(connector):
-                connector(
-                    login=login,
-                    password=password,
-                    server=server,
-                    terminal_path=terminal,
-                )
+        connect_session = getattr(manager, "connect_account_session", None)
+        if callable(connect_session):
+            session = connect_session(
+                login=login,
+                password=password,
+                server=server,
+                terminal_path=terminal,
+            )
+        else:
+            session = manager.backend_session()
+        with session as backend:
+            if not callable(connect_session):
+                connector = getattr(backend, "connect_account", None)
+                if callable(connector):
+                    connector(
+                        login=login,
+                        password=password,
+                        server=server,
+                        terminal_path=terminal,
+                    )
             info = backend.account_info(user.id, "pending")
             symbol = _resolve_broker_symbol(
                 backend,

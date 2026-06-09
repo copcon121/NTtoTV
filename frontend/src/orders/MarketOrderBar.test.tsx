@@ -66,6 +66,36 @@ describe("MarketOrderBar", () => {
     expect(screen.getByRole("button", { name: "BUY" })).toBeInTheDocument();
   });
 
+  it("places sell on the left and buy on the right", () => {
+    const onMarketOrder = vi.fn();
+    render(
+      <MarketOrderBar
+        account={{
+          accountId: "acct",
+          login: 123,
+          server: "Exness-Demo",
+          tradeMode: "demo",
+          currency: "USD",
+          balance: 10000,
+          equity: 9999.5,
+        }}
+        openOrderCount={0}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={onMarketOrder}
+      />,
+    );
+
+    const buttons = screen.getAllByRole("button").map((button) => button.textContent);
+    expect(buttons).toEqual(["SELL", "BUY"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "SELL" }));
+    fireEvent.click(screen.getByRole("button", { name: "BUY" }));
+
+    expect(onMarketOrder).toHaveBeenNthCalledWith(1, "sell");
+    expect(onMarketOrder).toHaveBeenNthCalledWith(2, "buy");
+  });
+
   it("renders one control row per open order", () => {
     const onOrderRowBreakEven = vi.fn();
     const onOrderRowClose = vi.fn();

@@ -5,6 +5,8 @@ import {
   FOOTPRINT_SUBSCRIBED_EVENTS,
   GLOBAL_SUBSCRIBED_EVENTS,
   TIMEFRAME_SUBSCRIBED_EVENTS,
+  mergeMt5AccountUpdate,
+  mergeMt5OpenTradeProfitUpdates,
   persistActiveProfileId,
   persistProfileHotSnapshot,
   readActiveProfileId,
@@ -169,5 +171,103 @@ describe("live chart series identity", () => {
       "status",
     ]);
     expect(FOOTPRINT_SUBSCRIBED_EVENTS).toEqual(["footprint_update"]);
+  });
+});
+
+describe("MT5 account updates", () => {
+  it("merges websocket account updates into the connected MT5 account", () => {
+    expect(
+      mergeMt5AccountUpdate(
+        {
+          accountId: "acct_1",
+          login: 257101455,
+          server: "Broker",
+          symbolBroker: "XAUUSDm",
+          tradeMode: "live",
+          currency: "USD",
+          balance: 358.9,
+          equity: 358.9,
+          freeMargin: 100,
+        },
+        {
+          accountId: "acct_1",
+          tradeMode: "live",
+          balance: 401.25,
+          equity: 401.25,
+          freeMargin: 155.5,
+          updatedAt: 10,
+        },
+      ),
+    ).toMatchObject({
+      accountId: "acct_1",
+      login: 257101455,
+      server: "Broker",
+      symbolBroker: "XAUUSDm",
+      balance: 401.25,
+      equity: 401.25,
+      freeMargin: 155.5,
+    });
+  });
+
+  it("ignores websocket account updates for a different account", () => {
+    const current = {
+      accountId: "acct_1",
+      login: 257101455,
+      server: "Broker",
+      tradeMode: "live",
+    };
+
+    expect(
+      mergeMt5AccountUpdate(current, {
+        accountId: "acct_2",
+        tradeMode: "live",
+        balance: 1,
+        equity: 1,
+        freeMargin: 1,
+        updatedAt: 10,
+      }),
+    ).toBe(current);
+  });
+
+  it("merges websocket position profit updates into open trades", () => {
+    const current = {
+      positions: [
+        {
+          brokerPositionTicket: 101,
+          side: "buy" as const,
+          volumeLots: 0.1,
+          entryBroker: 2350,
+          profit: 1.2,
+          updatedAt: 1,
+        },
+        {
+          brokerPositionTicket: 202,
+          side: "sell" as const,
+          volumeLots: 0.1,
+          entryBroker: 2360,
+          profit: -2,
+          updatedAt: 1,
+        },
+      ],
+      orders: [],
+    };
+
+    expect(
+      mergeMt5OpenTradeProfitUpdates(current, [
+        { brokerPositionTicket: 101, profit: 4.5, updatedAt: 20 },
+      ]),
+    ).toEqual({
+      positions: [
+        {
+          brokerPositionTicket: 101,
+          side: "buy",
+          volumeLots: 0.1,
+          entryBroker: 2350,
+          profit: 4.5,
+          updatedAt: 20,
+        },
+      ],
+      orders: [],
+    });
   });
 });

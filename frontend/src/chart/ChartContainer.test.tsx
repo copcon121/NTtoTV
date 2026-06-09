@@ -1,4 +1,4 @@
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -7,6 +7,7 @@ import {
   type VolumeDeltaDatum,
   type AlertLine,
   type OrderLine,
+  type PriceLineSelection,
   type SmcOverlay,
   type OutsideBarSettings,
   DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -64,6 +65,7 @@ class FakePort implements DisposableChartPort {
     onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
     snap?: (price: number) => number;
   }[] = [];
+  selectedPriceLine: PriceLineSelection | undefined;
   screenshotDataUrl = "data:image/png;base64,abc";
   disposed = false;
 
@@ -142,6 +144,14 @@ class FakePort implements DisposableChartPort {
     return () => {
       this.orderDragHandlers = this.orderDragHandlers.filter((h) => h !== handlers);
     };
+  }
+  getSelectedPriceLine(): PriceLineSelection | undefined {
+    return this.selectedPriceLine === undefined
+      ? undefined
+      : { ...this.selectedPriceLine };
+  }
+  clearSelectedPriceLine(): void {
+    this.selectedPriceLine = undefined;
   }
   dispose(): void {
     this.disposed = true;
@@ -655,6 +665,30 @@ describe("ChartContainer", () => {
     expect(handlers.snap?.(2345.07)).toBe(2345.1);
     handlers.onCommit?.("a1", 2350.1);
     expect(onAlertDragCommit).toHaveBeenCalledWith("a1", 2350.1);
+  });
+
+  it("deletes the selected alert line with Delete", () => {
+    const port = new FakePort();
+    port.selectedPriceLine = { kind: "alert", id: "a1" };
+    const factory: ChartPortFactory = () => port;
+    const onAlertDelete = vi.fn();
+
+    render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        alertLines={[{ id: "a1", price: 2345, enabled: true }]}
+        portFactory={factory}
+        onAlertDelete={onAlertDelete}
+      />,
+    );
+
+    fireEvent.keyDown(document, { key: "Delete" });
+
+    expect(onAlertDelete).toHaveBeenCalledWith("a1");
+    expect(port.selectedPriceLine).toBeUndefined();
   });
 
   it("draws order lines and forwards committed order-line drags", () => {

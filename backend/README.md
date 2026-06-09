@@ -35,6 +35,11 @@ also set. The default backend is fake/demo-safe. Keep
 `NTTOTV_CREDENTIAL_KEY` stable across restarts because stored MT5 passwords are
 sealed with it.
 
+The real MT5 backend runs one worker process per connected account. Different
+real MT5 logins must use different `terminalPath` values that point at separate
+MT5 terminal folders/copies; do not point two logins at the same `terminal64.exe`
+or the terminal will relog between accounts.
+
 ## Run
 
 ```bash

@@ -213,6 +213,7 @@ export interface AccountUpdateMessage {
   type: "account_update";
   symbol: string;
   account: TradingAccount;
+  positions?: AccountPositionUpdate[];
 }
 
 export interface BasisUpdateMessage {
@@ -300,6 +301,12 @@ export interface TradingAccount {
   balance: number;
   equity: number;
   freeMargin: number;
+  updatedAt: number;
+}
+
+export interface AccountPositionUpdate {
+  brokerPositionTicket: number;
+  profit?: number;
   updatedAt: number;
 }
 

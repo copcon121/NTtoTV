@@ -108,19 +108,19 @@ export function MarketOrderBar({
             <>
               <button
                 type="button"
-                className="market-button buy"
-                disabled={pending}
-                onClick={() => onMarketOrder("buy")}
-              >
-                BUY
-              </button>
-              <button
-                type="button"
                 className="market-button sell"
                 disabled={pending}
                 onClick={() => onMarketOrder("sell")}
               >
                 SELL
+              </button>
+              <button
+                type="button"
+                className="market-button buy"
+                disabled={pending}
+                onClick={() => onMarketOrder("buy")}
+              >
+                BUY
               </button>
             </>
           ) : null}

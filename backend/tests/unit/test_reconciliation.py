@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.engines.reconciliation import ReconciliationEngine
+from app.models.mt5 import Mt5AccountInfo
 from app.models.orders import OrderKind, OrderRecord, OrderSide, OrderSource, OrderStatus
 from app.mt5.fake import FakeMt5Backend
 from app.mt5.manager import Mt5Manager
@@ -218,5 +219,97 @@ def test_reconciliation_closes_stale_market_fill_without_position(tmp_path):
         assert saved is not None
         assert saved.status is OrderStatus.CLOSED
         assert saved.closed_at is not None
+    finally:
+        cache.close()
+
+
+@pytest.mark.unit
+def test_reconciliation_account_update_includes_position_profit(tmp_path):
+    class PositionBackend:
+        def account_info(self, user_id: str, account_id: str) -> Mt5AccountInfo:
+            return Mt5AccountInfo(
+                account_id=account_id,
+                login=1,
+                server="Fake-Real",
+                trade_mode="demo",
+                currency="USD",
+                balance=10_000.0,
+                equity=10_012.5,
+                margin=0.0,
+                free_margin=9_900.0,
+            )
+
+        def orders(self, user_id: str, account_id: str) -> list[dict]:
+            return []
+
+        def positions(self, user_id: str, account_id: str) -> list[dict]:
+            return [
+                {
+                    "ticket": 555001,
+                    "symbol": "XAUUSDc",
+                    "side": "buy",
+                    "volumeLots": 0.1,
+                    "entryBroker": 4313.998,
+                    "profit": 12.5,
+                    "time": 1780882201749,
+                }
+            ]
+
+    class CapturingRegistry:
+        def __init__(self) -> None:
+            self.events = []
+
+        def enqueue(self, event) -> None:
+            self.events.append(event)
+
+    cache = CacheStore(tmp_path / "app.sqlite")
+    registry = CapturingRegistry()
+    manager = Mt5Manager(backend=PositionBackend())
+    try:
+        user = cache.users.create_user("u", "p")
+        account = cache.users.upsert_mt5_account(
+            user_id=user.id,
+            login=1,
+            password="fake",
+            server="Fake-Real",
+            symbol_broker="XAUUSDc",
+            credential_key="k",
+        )
+        cache.orders.create(
+            OrderRecord(
+                id="ord_profit",
+                user_id=user.id,
+                account_id=account.id,
+                source=OrderSource.API,
+                symbol_internal="GC",
+                contract_internal="GC",
+                source_contract="GC 08-26",
+                symbol_broker="XAUUSDc",
+                side=OrderSide.BUY,
+                kind=OrderKind.MARKET,
+                volume_lots=0.1,
+                gc_anchored=True,
+                status=OrderStatus.FILLED,
+                idempotency_key="i",
+                created_at=1,
+                updated_at=1,
+                broker_position_ticket=555001,
+            )
+        )
+
+        assert ReconciliationEngine(cache, manager, registry).run_once() == 0
+
+        account_events = [
+            event for event in registry.events if event.event_type.value == "account_update"
+        ]
+        assert account_events
+        payload = account_events[-1].payload
+        assert payload["positions"] == [
+            {
+                "brokerPositionTicket": 555001,
+                "profit": 12.5,
+                "updatedAt": 1780882201749,
+            }
+        ]
     finally:
         cache.close()

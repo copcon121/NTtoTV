@@ -37,6 +37,7 @@ import {
   type VolumeDeltaDatum,
   type AlertLine,
   type OrderLine,
+  type PriceLineSelection,
   LightweightChartsAdapter,
 } from "./lightweightChartsAdapter";
 import { type Bar } from "../cache/types";
@@ -76,6 +77,8 @@ export interface DisposableChartPort extends ChartSeriesPort {
   updateBigTrade?(marker: BigTradeMarker): void;
   setAlertLines?(lines: readonly AlertLine[]): void;
   setOrderLines?(lines: readonly OrderLine[]): void;
+  getSelectedPriceLine?(): PriceLineSelection | undefined;
+  clearSelectedPriceLine?(): void;
   priceToCoordinate?(price: number): number | null;
   setEma?(points: readonly EmaPoint[], color?: string): void;
   updateEma?(point: EmaPoint): void;
@@ -193,6 +196,8 @@ export interface ChartContainerProps {
    * parent can persist the new level (Req 16.5).
    */
   onAlertDragCommit?: (id: string, price: number) => void;
+  /** Fired when the selected alert line is deleted with Delete/Backspace. */
+  onAlertDelete?: (id: string) => void;
   /** Fired when an order line is dragged and released. */
   onOrderDragCommit?: (id: string, price: number) => void;
   /** Fired when one selected order group has multiple pending line edits. */
@@ -254,6 +259,12 @@ function matchesVolumeDeltaSeries(
   );
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
 export function filterBigTradeMarkers(
   markers: readonly BigTradeMarker[],
   settings: BigTradeSettings,
@@ -296,6 +307,7 @@ export function ChartContainer({
   onScreenshotCaptureReady,
   onRequestAlertAtPrice,
   onAlertDragCommit,
+  onAlertDelete,
   onOrderDragCommit,
   onOrderDragBatchCommit,
   onOrderClose,
@@ -336,6 +348,10 @@ export function ChartContainer({
     ((id: string, price: number) => void) | undefined
   >(onAlertDragCommit);
   alertDragCommitRef.current = onAlertDragCommit;
+  const alertDeleteRef = useRef<((id: string) => void) | undefined>(
+    onAlertDelete,
+  );
+  alertDeleteRef.current = onAlertDelete;
   const orderDragCommitRef = useRef<
     ((id: string, price: number) => void) | undefined
   >(onOrderDragCommit);
@@ -483,6 +499,28 @@ export function ChartContainer({
     // rebuild the chart (style-only and out of scope for this task).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [factory]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        (event.key !== "Delete" && event.key !== "Backspace") ||
+        isEditableTarget(event.target)
+      ) {
+        return;
+      }
+      const selected = portRef.current?.getSelectedPriceLine?.();
+      if (selected?.kind !== "alert" || alertDeleteRef.current === undefined) {
+        return;
+      }
+      portRef.current?.clearSelectedPriceLine?.();
+      alertDeleteRef.current(selected.id);
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, []);
 
   useEffect(() => {
     const host = hostRef.current;

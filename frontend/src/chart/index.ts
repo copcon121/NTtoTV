@@ -66,6 +66,7 @@ export {
   type AlertLine,
   type OrderLine,
   type OrderLineField,
+  type PriceLineSelection,
   LightweightChartsAdapter,
   toUtcTimestamp,
 } from "./lightweightChartsAdapter";

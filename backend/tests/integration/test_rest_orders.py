@@ -48,6 +48,7 @@ class _StrictSymbolBackend:
         self.active_login = 1
         self.placed_logins: list[int] = []
         self.placed_orders: list[OrderRecord] = []
+        self.closed_orders: list[OrderRecord] = []
 
     def connect_account(
         self,
@@ -106,6 +107,7 @@ class _StrictSymbolBackend:
         return Mt5OrderResult(accepted=True, status="cancelled")
 
     def close_position(self, order: OrderRecord) -> Mt5OrderResult:
+        self.closed_orders.append(order)
         return Mt5OrderResult(accepted=True, status="closed")
 
     def orders(self, user_id: str, account_id: str) -> list[dict]:
@@ -498,6 +500,78 @@ def test_market_order_lifecycle_with_fake_mt5(client: TestClient):
     closed = client.post(f"/api/orders/{order['id']}/close")
     assert closed.status_code == 200
     assert closed.json()["order"]["status"] == "closed"
+
+
+@pytest.mark.integration
+def test_open_order_list_reconciles_manual_mt5_close(client: TestClient):
+    backend = _StrictSymbolBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    assert client.post(
+        "/api/auth/login", json={"username": "local", "password": "local"}
+    ).status_code == 200
+    assert client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 1,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+        },
+    ).status_code == 200
+
+    created = client.post(
+        "/api/orders",
+        json={
+            "source": "market_bar",
+            "side": "buy",
+            "kind": "market",
+            "volumeLots": 0.1,
+            "idempotencyKey": "manual-close-reconcile",
+        },
+    )
+    assert created.status_code == 200
+
+    open_orders = client.get("/api/orders?openOnly=true")
+
+    assert open_orders.status_code == 200
+    assert open_orders.json()["orders"] == []
+    all_orders = client.get("/api/orders").json()["orders"]
+    assert all_orders[0]["status"] == "closed"
+
+
+@pytest.mark.integration
+def test_close_order_treats_missing_broker_position_as_closed(client: TestClient):
+    backend = _StrictSymbolBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    assert client.post(
+        "/api/auth/login", json={"username": "local", "password": "local"}
+    ).status_code == 200
+    assert client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 1,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+        },
+    ).status_code == 200
+    created = client.post(
+        "/api/orders",
+        json={
+            "source": "market_bar",
+            "side": "buy",
+            "kind": "market",
+            "volumeLots": 0.1,
+            "idempotencyKey": "manual-close-button",
+        },
+    )
+    order = created.json()["order"]
+
+    closed = client.post(f"/api/orders/{order['id']}/close")
+
+    assert closed.status_code == 200
+    assert closed.json()["order"]["status"] == "closed"
+    assert backend.closed_orders == []
 
 
 @pytest.mark.integration

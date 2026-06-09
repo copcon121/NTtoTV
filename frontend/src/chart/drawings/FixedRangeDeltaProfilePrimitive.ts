@@ -24,6 +24,7 @@ interface RenderRow {
   bidVolume: number;
   askVolume: number;
   totalVolume: number;
+  inValueArea: boolean;
 }
 
 interface RenderLine {
@@ -39,11 +40,15 @@ interface RenderHandle {
 const COLORS = {
   rangeFill: "rgba(125, 211, 252, 0.10)",
   rangeStroke: "rgba(56, 189, 248, 0.34)",
-  valueAreaFill: "rgba(56, 189, 248, 0.12)",
-  valueAreaStroke: "rgba(56, 189, 248, 0.38)",
+  valueAreaFill: "rgba(37, 99, 235, 0.06)",
+  valueAreaLine: "rgba(37, 99, 235, 0.96)",
+  valueAreaLineHalo: "rgba(255, 255, 255, 0.70)",
   positive: "rgba(45, 191, 204, 0.82)",
+  positiveMuted: "rgba(45, 191, 204, 0.24)",
   negative: "rgba(223, 91, 136, 0.82)",
+  negativeMuted: "rgba(223, 91, 136, 0.24)",
   neutral: "rgba(148, 163, 184, 0.45)",
+  neutralMuted: "rgba(148, 163, 184, 0.16)",
   poc: "#111111",
   pocHalo: "rgba(255, 255, 255, 0.65)",
   text: "#f5f5f5",
@@ -84,16 +89,6 @@ class FixedRangeDeltaProfileRenderer implements IPrimitivePaneRenderer {
           const height = Math.max(1, Math.abs(vah.y - val.y));
           ctx.fillStyle = COLORS.valueAreaFill;
           ctx.fillRect(left, top, width, height);
-          ctx.strokeStyle = COLORS.valueAreaStroke;
-          ctx.lineWidth = 1;
-          ctx.setLineDash([4, 3]);
-          ctx.beginPath();
-          ctx.moveTo(left, vah.y);
-          ctx.lineTo(right, vah.y);
-          ctx.moveTo(left, val.y);
-          ctx.lineTo(right, val.y);
-          ctx.stroke();
-          ctx.setLineDash([]);
         }
 
         const maxVolume = Math.max(
@@ -112,17 +107,22 @@ class FixedRangeDeltaProfileRenderer implements IPrimitivePaneRenderer {
             row.totalVolume > 0 ? totalWidth * (row.askVolume / row.totalVolume) : 0;
           const bidWidth = Math.max(0, totalWidth - askWidth);
           if (askWidth > 0) {
-            ctx.fillStyle = COLORS.positive;
+            ctx.fillStyle = row.inValueArea ? COLORS.positive : COLORS.positiveMuted;
             ctx.fillRect(barLeft, y, askWidth, h);
           }
           if (bidWidth > 0) {
-            ctx.fillStyle = COLORS.negative;
+            ctx.fillStyle = row.inValueArea ? COLORS.negative : COLORS.negativeMuted;
             ctx.fillRect(barLeft + askWidth, y, bidWidth, h);
           }
           if (askWidth <= 0 && bidWidth <= 0) {
-            ctx.fillStyle = COLORS.neutral;
+            ctx.fillStyle = row.inValueArea ? COLORS.neutral : COLORS.neutralMuted;
             ctx.fillRect(barLeft, y, totalWidth, h);
           }
+        }
+
+        if (vah && val) {
+          drawValueAreaLine(ctx, left, right, vah.y);
+          drawValueAreaLine(ctx, left, right, val.y);
         }
 
         const poc = this.lines.find((line) => line.kind === "poc");
@@ -179,6 +179,30 @@ class FixedRangeDeltaProfileRenderer implements IPrimitivePaneRenderer {
   }
 }
 
+function drawValueAreaLine(
+  ctx: CanvasRenderingContext2D,
+  left: number,
+  right: number,
+  y: number,
+): void {
+  ctx.lineCap = "round";
+  ctx.setLineDash([1, 6]);
+  ctx.strokeStyle = COLORS.valueAreaLineHalo;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(left, y);
+  ctx.lineTo(right, y);
+  ctx.stroke();
+  ctx.strokeStyle = COLORS.valueAreaLine;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(left, y);
+  ctx.lineTo(right, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.lineCap = "butt";
+}
+
 class FixedRangeDeltaProfilePaneView implements IPrimitivePaneView {
   private x1 = 0;
   private x2 = 0;
@@ -215,6 +239,7 @@ class FixedRangeDeltaProfilePaneView implements IPrimitivePaneView {
     if (state.status !== "ready" || state.profile.rows.length === 0) return;
 
     const step = inferPriceStep(state.profile);
+    const { vah, val } = state.profile;
     this.rows = state.profile.rows.flatMap((row) => {
       const y = series.priceToCoordinate(row.price);
       if (y === null) return [];
@@ -226,6 +251,7 @@ class FixedRangeDeltaProfilePaneView implements IPrimitivePaneView {
           bidVolume: row.bidVolume,
           askVolume: row.askVolume,
           totalVolume: row.totalVolume,
+          inValueArea: isPriceInsideValueArea(row.price, vah, val),
         },
       ];
     });
@@ -369,4 +395,23 @@ function profileLine(
   if (price === null || !Number.isFinite(price)) return null;
   const y = series.priceToCoordinate(price);
   return y === null ? null : { y: y as number, kind };
+}
+
+export function isPriceInsideValueArea(
+  price: number,
+  vah: number | null,
+  val: number | null,
+): boolean {
+  if (
+    !Number.isFinite(price) ||
+    vah === null ||
+    val === null ||
+    !Number.isFinite(vah) ||
+    !Number.isFinite(val)
+  ) {
+    return true;
+  }
+  const low = Math.min(vah, val);
+  const high = Math.max(vah, val);
+  return price >= low && price <= high;
 }

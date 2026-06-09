@@ -59,8 +59,10 @@ import {
 import { Mt5AccountDialog } from "./orders/Mt5AccountDialog";
 import { ChartSocket } from "./socket/ChartSocket";
 import {
+  type AccountPositionUpdate,
   type AlertEventMessage,
   type ChartEventType,
+  type TradingAccount,
   type TradingOrder,
   type TradingPosition,
   type Timeframe,
@@ -179,6 +181,80 @@ function toAlertLines(alerts: readonly Alert[]): AlertLine[] {
     });
   }
   return lines;
+}
+
+export function mergeMt5AccountUpdate(
+  current: Mt5Account | undefined,
+  update: TradingAccount,
+): Mt5Account | undefined {
+  if (current === undefined || current.accountId !== update.accountId) {
+    return current;
+  }
+  const next = {
+    ...current,
+    tradeMode: update.tradeMode,
+    balance: update.balance,
+    equity: update.equity,
+    freeMargin: update.freeMargin,
+  };
+  return mt5AccountsEqual(current, next) ? current : next;
+}
+
+export function mergeMt5OpenTradeProfitUpdates(
+  current: Mt5OpenTrades,
+  updates: readonly AccountPositionUpdate[] | undefined,
+): Mt5OpenTrades {
+  if (updates === undefined) return current;
+  const byTicket = new Map(
+    updates.map((update) => [update.brokerPositionTicket, update]),
+  );
+  let changed = false;
+  const positions = current.positions
+    .filter((position) => {
+      const keep = byTicket.has(position.brokerPositionTicket);
+      if (!keep) changed = true;
+      return keep;
+    })
+    .map((position) => {
+      const update = byTicket.get(position.brokerPositionTicket);
+      if (!update) return position;
+      const profit =
+        typeof update.profit === "number" && Number.isFinite(update.profit)
+          ? update.profit
+          : position.profit;
+      const next = {
+        ...position,
+        profit,
+        updatedAt: update.updatedAt,
+      };
+      if (
+        next.profit === position.profit &&
+        next.updatedAt === position.updatedAt
+      ) {
+        return position;
+      }
+      changed = true;
+      return next;
+    });
+  return changed ? { ...current, positions } : current;
+}
+
+function mt5AccountsEqual(
+  left: Mt5Account | undefined,
+  right: Mt5Account | undefined,
+): boolean {
+  return (
+    left?.accountId === right?.accountId &&
+    left?.login === right?.login &&
+    left?.server === right?.server &&
+    left?.symbolBroker === right?.symbolBroker &&
+    left?.tradeMode === right?.tradeMode &&
+    left?.currency === right?.currency &&
+    left?.balance === right?.balance &&
+    left?.equity === right?.equity &&
+    left?.margin === right?.margin &&
+    left?.freeMargin === right?.freeMargin
+  );
 }
 
 const OPEN_ORDER_STATUSES = new Set<TradingOrder["status"]>([
@@ -1019,6 +1095,43 @@ export function LiveApp() {
   const currentSeriesKey = seriesDataKey(SYMBOL, contract, timeframe);
   const hasLoadedCurrentSeries = loadedSeriesKey === currentSeriesKey;
 
+  const applyMt5Status = useCallback(
+    (status: Awaited<ReturnType<ApiClient["mt5Status"]>>) => {
+      const account = status.account;
+      if (status.connected && account) {
+        setMt5Account((current) =>
+          mt5AccountsEqual(current, account) ? current : account,
+        );
+        return;
+      }
+      setMt5Account(undefined);
+      setMt5Symbol(undefined);
+      setOrders([]);
+      setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
+      if (status.error) {
+        setOrderError(status.error);
+      }
+    },
+    [],
+  );
+
+  const refreshTradingState = useCallback(async () => {
+    const [ordersResult, openTradesResult, statusResult] = await Promise.allSettled([
+      api.orders(true),
+      api.mt5OpenTrades(),
+      api.mt5Status(),
+    ]);
+    if (ordersResult.status === "fulfilled") {
+      setOrders(ordersResult.value);
+    }
+    if (openTradesResult.status === "fulfilled") {
+      setMt5OpenTrades(openTradesResult.value);
+    }
+    if (statusResult.status === "fulfilled") {
+      applyMt5Status(statusResult.value);
+    }
+  }, [api, applyMt5Status]);
+
   const scheduleDeltaProfileRefresh = useCallback(() => {
     if (deltaProfileRefreshTimerRef.current !== undefined) {
       window.clearTimeout(deltaProfileRefreshTimerRef.current);
@@ -1203,6 +1316,13 @@ export function LiveApp() {
         return isOpenTradingOrder(msg.order) ? [msg.order, ...without] : without;
       });
     });
+    const offAccount = socket.on("account_update", (msg) => {
+      if (msg.symbol !== SYMBOL) return;
+      setMt5Account((current) => mergeMt5AccountUpdate(current, msg.account));
+      setMt5OpenTrades((current) =>
+        mergeMt5OpenTradeProfitUpdates(current, msg.positions),
+      );
+    });
     return () => {
       window.clearInterval(reconnectTimer);
       offOpen();
@@ -1210,6 +1330,7 @@ export function LiveApp() {
       offStatus();
       offAlert();
       offOrder();
+      offAccount();
       socket.close();
     };
   }, [socket]);
@@ -1567,6 +1688,7 @@ export function LiveApp() {
           return isOpenTradingOrder(order) ? [order, ...without] : without;
         });
         setOrderError(rejectedOrderMessage(order));
+        await refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Order failed");
       } finally {
@@ -1627,6 +1749,7 @@ export function LiveApp() {
         });
         setOrderError(rejectedOrderMessage(order));
         removeTransientDrawing(drawing.id);
+        await refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Chart order failed");
       } finally {
@@ -1873,10 +1996,11 @@ export function LiveApp() {
           const without = prev.filter((item) => item.id !== closed.id);
           return isOpenTradingOrder(closed) ? [closed, ...without] : without;
         });
+        await refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Close order failed");
         try {
-          setOrders(await api.orders(true));
+          await refreshTradingState();
         } catch {
           /* Keep the current state if refresh also fails. */
         }
@@ -1901,10 +2025,11 @@ export function LiveApp() {
           const without = prev.filter((item) => item.id !== cancelled.id);
           return isOpenTradingOrder(cancelled) ? [cancelled, ...without] : without;
         });
+        await refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Cancel order failed");
         try {
-          setOrders(await api.orders(true));
+          await refreshTradingState();
         } catch {
           /* Keep the current state if refresh also fails. */
         }
@@ -2006,11 +2131,11 @@ export function LiveApp() {
     void (async () => {
       try {
         await api.closeMt5Position(parsed.ticket);
-        setMt5OpenTrades(await api.mt5OpenTrades());
+        await refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Close MT5 position failed");
         try {
-          setMt5OpenTrades(await api.mt5OpenTrades());
+          await refreshTradingState();
         } catch {
           /* Keep the current state if refresh also fails. */
         }
@@ -2037,11 +2162,11 @@ export function LiveApp() {
     void (async () => {
       try {
         await api.cancelMt5Order(parsed.ticket);
-        setMt5OpenTrades(await api.mt5OpenTrades());
+        await refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Cancel MT5 order failed");
         try {
-          setMt5OpenTrades(await api.mt5OpenTrades());
+          await refreshTradingState();
         } catch {
           /* Keep the current state if refresh also fails. */
         }
@@ -2219,17 +2344,22 @@ export function LiveApp() {
     if (!authUser || !mt5Account) return;
     let cancelled = false;
     const refreshOrders = () => {
-      void Promise.allSettled([api.orders(true), api.mt5OpenTrades()]).then(
-        ([ordersResult, openTradesResult]) => {
-          if (cancelled) return;
-          if (ordersResult.status === "fulfilled") {
-            setOrders(ordersResult.value);
-          }
-          if (openTradesResult.status === "fulfilled") {
-            setMt5OpenTrades(openTradesResult.value);
-          }
-        },
-      );
+      void Promise.allSettled([
+        api.orders(true),
+        api.mt5OpenTrades(),
+        api.mt5Status(),
+      ]).then(([ordersResult, openTradesResult, statusResult]) => {
+        if (cancelled) return;
+        if (ordersResult.status === "fulfilled") {
+          setOrders(ordersResult.value);
+        }
+        if (openTradesResult.status === "fulfilled") {
+          setMt5OpenTrades(openTradesResult.value);
+        }
+        if (statusResult.status === "fulfilled") {
+          applyMt5Status(statusResult.value);
+        }
+      });
     };
     const timer = window.setInterval(refreshOrders, ORDER_REFRESH_INTERVAL_MS);
     const onVisible = () => {
@@ -2241,7 +2371,7 @@ export function LiveApp() {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [api, authUser, mt5Account]);
+  }, [api, applyMt5Status, authUser, mt5Account]);
 
   const onAuthSubmit = (input: {
     username: string;
@@ -2511,6 +2641,7 @@ export function LiveApp() {
             socket={socket}
             onRequestAlertAtPrice={setAlertMenu}
             onAlertDragCommit={onAlertDragCommit}
+            onAlertDelete={onDeleteAlert}
             onOrderDragCommit={onOrderDragCommit}
             onOrderDragBatchCommit={onOrderDragBatchCommit}
             onOrderClose={onCloseOrder}

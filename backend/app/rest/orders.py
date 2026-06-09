@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from dataclasses import replace
+import logging
 import secrets
 from typing import Any, Iterator
 
@@ -11,6 +13,7 @@ from fastapi import APIRouter, Depends, Request
 
 from ..config import settings as default_settings
 from ..engines.basis_engine import BasisEngine, ConvertedPrice
+from ..engines.reconciliation import ReconciliationEngine
 from ..engines.symbol_map import SymbolMap
 from ..models.auth import AuthenticatedUser
 from ..models.orders import (
@@ -34,6 +37,7 @@ from .errors import ApiError, bad_request, conflict, not_found
 from .routes import get_contract_state
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
+logger = logging.getLogger(__name__)
 
 
 def _manager(request: Request) -> Mt5Manager:
@@ -45,6 +49,25 @@ def _manager(request: Request) -> Mt5Manager:
         manager = Mt5Manager()
         request.app.state.mt5_manager = manager
     return manager
+
+
+def _reconcile_user_account(
+    request: Request,
+    cache: CacheStore,
+    user: AuthenticatedUser,
+) -> None:
+    account = cache.users.read_mt5_account(user.id)
+    if account is None:
+        return
+    try:
+        runtime = getattr(request.app.state, "runtime", None)
+        reconciliation = getattr(runtime, "reconciliation", None)
+        if reconciliation is not None:
+            reconciliation.run_account(account)
+            return
+        ReconciliationEngine(cache, _manager(request)).run_account(account)
+    except Exception as exc:
+        logger.debug("open order reconciliation skipped for user %s: %s", user.id, exc)
 
 
 def _basis(request: Request) -> BasisEngine:
@@ -60,10 +83,13 @@ def _basis(request: Request) -> BasisEngine:
 
 @router.get("")
 async def list_orders(
+    request: Request,
     openOnly: bool = False,
     user: AuthenticatedUser = Depends(get_current_user),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
+    if openOnly:
+        await asyncio.to_thread(_reconcile_user_account, request, cache, user)
     orders = cache.orders.list_for_user(user.id, open_only=openOnly)
     return {"orders": [order_to_dict(order) for order in orders]}
 
@@ -394,18 +420,20 @@ async def cancel_order(
     if account is None:
         raise not_found("MT5 account is not connected", field="account")
     with _mt5_session(request, cache, account) as mt5:
+        if _broker_order_missing(mt5, user.id, account, order):
+            return _mark_order_cancelled(request, cache, order, event_type="reconciled")
         try:
             result = mt5.cancel_order(order)
         except Exception as exc:
+            if _broker_order_missing(mt5, user.id, account, order):
+                return _mark_order_cancelled(request, cache, order, event_type="reconciled")
             raise conflict(f"MT5 cancel failed: {exc}", field="account")
     if not result.accepted:
+        with _mt5_session(request, cache, account) as mt5:
+            if _broker_order_missing(mt5, user.id, account, order):
+                return _mark_order_cancelled(request, cache, order, event_type="reconciled")
         raise conflict(result.error_message or "Broker rejected cancellation")
-    order.status = OrderStatus.CANCELLED
-    order.updated_at = now_ms()
-    cache.orders.update(order)
-    cache.orders.append_event(OrderEventRecord(order.id, user.id, "cancelled", {}, now_ms()))
-    _enqueue_order_update(request, order)
-    return {"order": order_to_dict(order)}
+    return _mark_order_cancelled(request, cache, order, event_type="cancelled")
 
 
 @router.post("/{order_id}/close")
@@ -422,20 +450,102 @@ async def close_order(
     if account is None:
         raise not_found("MT5 account is not connected", field="account")
     with _mt5_session(request, cache, account) as mt5:
+        if _broker_position_missing(mt5, user.id, account, order):
+            return _mark_order_closed(request, cache, order, event_type="reconciled")
         try:
             result = mt5.close_position(order)
         except Exception as exc:
+            if _broker_position_missing(mt5, user.id, account, order):
+                return _mark_order_closed(request, cache, order, event_type="reconciled")
             raise conflict(f"MT5 close failed: {exc}", field="account")
     if not result.accepted:
+        with _mt5_session(request, cache, account) as mt5:
+            if _broker_position_missing(mt5, user.id, account, order):
+                return _mark_order_closed(request, cache, order, event_type="reconciled")
         raise conflict(result.error_message or "Broker rejected close")
-    order.status = OrderStatus.CLOSED
     order.broker_deal_ticket = result.broker_deal_ticket or order.broker_deal_ticket
+    return _mark_order_closed(request, cache, order, event_type="closed")
+
+
+def _mark_order_closed(
+    request: Request,
+    cache: CacheStore,
+    order: OrderRecord,
+    *,
+    event_type: str,
+) -> dict[str, Any]:
+    order.status = OrderStatus.CLOSED
+    order.last_broker_error_code = None
+    order.last_broker_error_message = None
     order.closed_at = now_ms()
     order.updated_at = order.closed_at
     cache.orders.update(order)
-    cache.orders.append_event(OrderEventRecord(order.id, user.id, "closed", {}, now_ms()))
+    cache.orders.append_event(
+        OrderEventRecord(order.id, order.user_id, event_type, order_to_dict(order), now_ms())
+    )
     _enqueue_order_update(request, order)
     return {"order": order_to_dict(order)}
+
+
+def _mark_order_cancelled(
+    request: Request,
+    cache: CacheStore,
+    order: OrderRecord,
+    *,
+    event_type: str,
+) -> dict[str, Any]:
+    order.status = OrderStatus.CANCELLED
+    order.last_broker_error_code = None
+    order.last_broker_error_message = None
+    order.updated_at = now_ms()
+    cache.orders.update(order)
+    cache.orders.append_event(
+        OrderEventRecord(order.id, order.user_id, event_type, order_to_dict(order), now_ms())
+    )
+    _enqueue_order_update(request, order)
+    return {"order": order_to_dict(order)}
+
+
+def _broker_position_missing(
+    mt5,
+    user_id: str,
+    account,
+    order: OrderRecord,
+) -> bool:
+    ticket = order.broker_position_ticket
+    if ticket is None:
+        return False
+    try:
+        rows = mt5.positions(user_id, account.id)
+    except Exception:
+        return False
+    return not _ticket_exists(rows, ticket, order.symbol_broker)
+
+
+def _broker_order_missing(
+    mt5,
+    user_id: str,
+    account,
+    order: OrderRecord,
+) -> bool:
+    ticket = order.broker_order_ticket
+    if ticket is None:
+        return False
+    try:
+        rows = mt5.orders(user_id, account.id)
+    except Exception:
+        return False
+    return not _ticket_exists(rows, ticket, order.symbol_broker)
+
+
+def _ticket_exists(rows: list[dict[str, Any]], ticket: int, symbol_broker: str) -> bool:
+    for row in rows:
+        if int(row.get("ticket") or 0) != int(ticket):
+            continue
+        symbol = row.get("symbol")
+        if not symbol or symbol == symbol_broker:
+            return True
+    return False
 
 
 async def _json_body(request: Request) -> dict[str, Any]:

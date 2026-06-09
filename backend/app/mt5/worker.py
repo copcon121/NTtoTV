@@ -97,6 +97,17 @@ class RealMt5Backend:
             )
         self._active_login = expected_login
 
+    def current_login(self) -> int | None:
+        """Return the terminal's current login without changing accounts."""
+        self._ensure()
+        return _account_login(self._mt5.account_info())
+
+    def close(self) -> None:
+        if self._initialized:
+            self._mt5.shutdown()
+        self._initialized = False
+        self._active_login = None
+
     def account_info(self, user_id: str, account_id: str) -> Mt5AccountInfo:
         self._ensure()
         info = self._mt5.account_info()

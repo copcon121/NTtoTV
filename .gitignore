@@ -48,6 +48,7 @@ _data_backups/
 
 # Logs and ad-hoc run outputs
 _import_logs/
+mt5-terminals/
 *.log
 *_out.txt
 nt_test_out.txt

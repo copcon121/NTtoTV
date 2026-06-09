@@ -211,7 +211,7 @@ interface DraggableLineMeta {
 }
 
 type PriceLineDragKind = "alert" | "order";
-type PriceLineSelection =
+export type PriceLineSelection =
   | { kind: "alert"; id: string }
   | { kind: "order"; orderId: string };
 
@@ -1265,7 +1265,13 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.positionSelectedPriceLineHandles();
   }
 
-  private clearSelectedPriceLine(commitPending = true): void {
+  getSelectedPriceLine(): PriceLineSelection | undefined {
+    return this.selectedPriceLine === undefined
+      ? undefined
+      : { ...this.selectedPriceLine };
+  }
+
+  clearSelectedPriceLine(commitPending = true): void {
     const selected = this.selectedPriceLine;
     if (commitPending && selected?.kind === "order") {
       this.flushPendingOrderLineCommits(selected.orderId);

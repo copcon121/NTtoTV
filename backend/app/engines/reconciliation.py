@@ -37,93 +37,98 @@ class ReconciliationEngine:
     def run_once(self) -> int:
         updates = 0
         for account in self._cache.users.read_mt5_accounts():
-            open_orders = self._cache.orders.list_open_for_account(
-                account.user_id, account.id
-            )
-            if not open_orders:
-                continue
             try:
-                with self._mt5.account_session(self._cache, account) as backend:
-                    broker_orders = {
-                        row.get("ticket"): row
-                        for row in backend.orders(account.user_id, account.id)
-                    }
-                    broker_positions = {
-                        row.get("ticket"): row
-                        for row in backend.positions(account.user_id, account.id)
-                    }
-                    for order in open_orders:
-                        changed = False
-                        current_time = now_ms()
-                        if (
-                            order.status in {OrderStatus.FILLED, OrderStatus.SYNC_ERROR}
-                            and order.broker_position_ticket is None
-                        ):
-                            matched_position = _match_broker_position(
-                                order,
-                                broker_positions.values(),
-                            )
-                            if matched_position is not None:
-                                order.broker_position_ticket = int(
-                                    matched_position["ticket"]
-                                )
-                                if order.status is OrderStatus.SYNC_ERROR:
-                                    order.status = OrderStatus.FILLED
-                                    order.last_broker_error_code = None
-                                    order.last_broker_error_message = None
-                                order.updated_at = now_ms()
-                                changed = True
-                            elif (
-                                order.kind is OrderKind.MARKET
-                                and (
-                                    order.broker_order_ticket is None
-                                    or order.broker_order_ticket not in broker_orders
-                                )
-                                and current_time - (
-                                    order.filled_at
-                                    or order.submitted_at
-                                    or order.created_at
-                                )
-                                >= MISSING_MARKET_POSITION_GRACE_MS
-                            ):
-                                order.status = OrderStatus.CLOSED
-                                order.closed_at = current_time
-                                order.updated_at = current_time
-                                changed = True
-                        if (
-                            order.status in BROKER_PENDING_ORDER_STATUSES
-                            and order.broker_order_ticket is not None
-                            and order.broker_position_ticket is None
-                            and order.broker_order_ticket not in broker_orders
-                        ):
-                            order.status = OrderStatus.CANCELLED
-                            order.updated_at = current_time
-                            changed = True
-                        if (
-                            order.status in {OrderStatus.FILLED, OrderStatus.SYNC_ERROR}
-                            and order.broker_position_ticket is not None
-                            and order.broker_position_ticket not in broker_positions
-                        ):
-                            order.status = OrderStatus.CLOSED
-                            order.closed_at = now_ms()
-                            order.updated_at = order.closed_at
-                            changed = True
-                        if changed:
-                            self._cache.orders.update(order)
-                            self._cache.orders.append_event(
-                                OrderEventRecord(
-                                    order_id=order.id,
-                                    user_id=order.user_id,
-                                    event_type="reconciled",
-                                    payload=order_to_dict(order),
-                                    created_at=now_ms(),
-                                )
-                            )
-                            self._emit_order(order)
-                            updates += 1
-                    self._emit_account(account, backend)
+                updates += self.run_account(account)
             except Exception as exc:
                 logger.debug("skipping MT5 reconciliation for account %s: %s", account.id, exc)
+        return updates
+
+    def run_account(self, account) -> int:
+        updates = 0
+        open_orders = self._cache.orders.list_open_for_account(
+            account.user_id, account.id
+        )
+        if not open_orders:
+            return 0
+        with self._mt5.account_session(self._cache, account) as backend:
+            broker_orders = {
+                row.get("ticket"): row
+                for row in backend.orders(account.user_id, account.id)
+            }
+            broker_positions = {
+                row.get("ticket"): row
+                for row in backend.positions(account.user_id, account.id)
+            }
+            for order in open_orders:
+                changed = False
+                current_time = now_ms()
+                if (
+                    order.status in {OrderStatus.FILLED, OrderStatus.SYNC_ERROR}
+                    and order.broker_position_ticket is None
+                ):
+                    matched_position = _match_broker_position(
+                        order,
+                        broker_positions.values(),
+                    )
+                    if matched_position is not None:
+                        order.broker_position_ticket = int(
+                            matched_position["ticket"]
+                        )
+                        if order.status is OrderStatus.SYNC_ERROR:
+                            order.status = OrderStatus.FILLED
+                            order.last_broker_error_code = None
+                            order.last_broker_error_message = None
+                        order.updated_at = now_ms()
+                        changed = True
+                    elif (
+                        order.kind is OrderKind.MARKET
+                        and (
+                            order.broker_order_ticket is None
+                            or order.broker_order_ticket not in broker_orders
+                        )
+                        and current_time - (
+                            order.filled_at
+                            or order.submitted_at
+                            or order.created_at
+                        )
+                        >= MISSING_MARKET_POSITION_GRACE_MS
+                    ):
+                        order.status = OrderStatus.CLOSED
+                        order.closed_at = current_time
+                        order.updated_at = current_time
+                        changed = True
+                if (
+                    order.status in BROKER_PENDING_ORDER_STATUSES
+                    and order.broker_order_ticket is not None
+                    and order.broker_position_ticket is None
+                    and order.broker_order_ticket not in broker_orders
+                ):
+                    order.status = OrderStatus.CANCELLED
+                    order.updated_at = current_time
+                    changed = True
+                if (
+                    order.status in {OrderStatus.FILLED, OrderStatus.SYNC_ERROR}
+                    and order.broker_position_ticket is not None
+                    and order.broker_position_ticket not in broker_positions
+                ):
+                    order.status = OrderStatus.CLOSED
+                    order.closed_at = now_ms()
+                    order.updated_at = order.closed_at
+                    changed = True
+                if changed:
+                    self._cache.orders.update(order)
+                    self._cache.orders.append_event(
+                        OrderEventRecord(
+                            order_id=order.id,
+                            user_id=order.user_id,
+                            event_type="reconciled",
+                            payload=order_to_dict(order),
+                            created_at=now_ms(),
+                        )
+                    )
+                    self._emit_order(order)
+                    updates += 1
+            self._emit_account(account, backend, broker_positions.values())
         return updates
 
     def _emit_order(self, order) -> None:
@@ -143,7 +148,7 @@ class ReconciliationEngine:
             )
         )
 
-    def _emit_account(self, account, backend) -> None:
+    def _emit_account(self, account, backend, broker_positions=()) -> None:
         if self._registry is None:
             return
         info = backend.account_info(account.user_id, account.id)
@@ -158,6 +163,11 @@ class ReconciliationEngine:
                 "freeMargin": info.free_margin,
                 "updatedAt": now_ms(),
             },
+            "positions": [
+                _position_profit_update(row)
+                for row in broker_positions
+                if row.get("ticket") is not None
+            ],
         }
         self._registry.enqueue(
             OutboundEvent(
@@ -221,3 +231,14 @@ def _match_broker_position(order, positions) -> dict | None:
     if best_score > 0 or len(candidates) == 1:
         return best
     return None
+
+
+def _position_profit_update(row: dict) -> dict:
+    out = {
+        "brokerPositionTicket": int(row.get("ticket") or 0),
+        "updatedAt": int(row.get("time") or now_ms()),
+    }
+    profit = row.get("profit")
+    if isinstance(profit, (int, float)):
+        out["profit"] = float(profit)
+    return out
