@@ -481,6 +481,10 @@ body {
   inset: 0;
 }
 
+.chart-focus-toggle {
+  display: none;
+}
+
 .price-line-drag-handle {
   position: absolute;
   z-index: 8;
@@ -523,6 +527,36 @@ body {
   gap: 6px;
   padding: 7px 12px;
   font-size: 12px;
+}
+
+.market-order-drawer {
+  align-items: stretch;
+}
+
+.market-order-drawer.is-closed {
+  min-height: 0;
+  padding: 6px 10px calc(6px + env(safe-area-inset-bottom, 0px));
+  background: transparent;
+  border-top: 0;
+}
+
+.market-order-drawer-toggle {
+  align-self: center;
+  min-width: 112px;
+  min-height: 34px;
+  padding: 0 14px;
+  color: #f3f3f3;
+  background: rgba(18, 18, 18, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.34);
+}
+
+.market-order-drawer.is-open .market-order-drawer-toggle {
+  align-self: flex-end;
 }
 
 .market-order-main {
@@ -984,6 +1018,10 @@ body {
   padding: 6px 0;
   gap: 2px;
   z-index: 10;
+}
+
+.drawing-toolbar-mobile {
+  display: none;
 }
 
 .drawing-toolbar-tools {
@@ -1505,14 +1543,87 @@ body {
     min-width: 0;
   }
 
-  .drawing-toolbar {
-    width: 36px;
-    padding: 5px 0;
+  .app-shell.chart-focus .toolbar {
+    display: none;
+  }
+
+  .drawing-toolbar-desktop {
+    display: none;
+  }
+
+  .chart-container .drawing-toolbar-mobile {
+    position: absolute;
+    left: 50%;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    z-index: 14;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    width: min(360px, calc(100% - 28px));
+    max-width: calc(100% - 28px);
+    height: 48px;
+    padding: 6px;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: rgba(18, 18, 18, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34);
+    transform: translateX(-50%);
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .chart-container .drawing-toolbar-mobile::-webkit-scrollbar {
+    display: none;
+  }
+
+  .drawing-toolbar-mobile .drawing-toolbar-tools {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 4px;
+  }
+
+  .drawing-toolbar-mobile .drawing-toolbar-separator {
+    display: none;
+  }
+
+  .drawing-toolbar-mobile .drawing-tool-delete {
+    flex: 0 0 auto;
+    margin-top: 0;
+    margin-left: 2px;
   }
 
   .drawing-tool-btn {
+    flex: 0 0 auto;
     width: 30px;
     height: 30px;
+  }
+
+  .chart-focus-toggle {
+    position: absolute;
+    top: calc(10px + env(safe-area-inset-top, 0px));
+    right: 12px;
+    z-index: 15;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 58px;
+    height: 32px;
+    padding: 0 10px;
+    color: #f3f3f3;
+    background: rgba(18, 18, 18, 0.90);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 4px;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.32);
+  }
+
+  .app-shell.chart-focus .chart-area {
+    flex: 1 1 auto;
   }
 
   .alert-create {

@@ -40,7 +40,7 @@ class HorizontalRayRenderer implements IPrimitivePaneRenderer {
       ctx.save();
       ctx.lineWidth = this._width;
       ctx.strokeStyle = this._color;
-      ctx.setLineDash([6, 4]);
+      ctx.setLineDash([]);
       ctx.beginPath();
       ctx.moveTo(this._x, this._y);
       ctx.lineTo(this._rightEdge, this._y);

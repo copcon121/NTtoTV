@@ -96,6 +96,53 @@ describe("MarketOrderBar", () => {
     expect(onMarketOrder).toHaveBeenNthCalledWith(2, "buy");
   });
 
+  it("keeps market buttons hidden while the drawer is closed", () => {
+    const onDrawerOpenChange = vi.fn();
+    const account = {
+      accountId: "acct",
+      login: 123,
+      server: "Exness-Demo",
+      tradeMode: "demo" as const,
+      currency: "USD",
+      balance: 10000,
+      equity: 9999.5,
+    };
+
+    const { rerender } = render(
+      <MarketOrderBar
+        account={account}
+        variant="drawer"
+        drawerOpen={false}
+        onDrawerOpenChange={onDrawerOpenChange}
+        openOrderCount={1}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "BUY" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "SELL" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Trade (1)" }));
+    expect(onDrawerOpenChange).toHaveBeenCalledWith(true);
+
+    rerender(
+      <MarketOrderBar
+        account={account}
+        variant="drawer"
+        drawerOpen
+        onDrawerOpenChange={onDrawerOpenChange}
+        openOrderCount={1}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "BUY" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "SELL" })).toBeInTheDocument();
+  });
+
   it("renders one control row per open order", () => {
     const onOrderRowBreakEven = vi.fn();
     const onOrderRowClose = vi.fn();

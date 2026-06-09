@@ -909,6 +909,10 @@ export function resolveEndpoints(
   return { api: "/api", ws };
 }
 
+export function appShellClassName(chartFocusMode: boolean): string {
+  return chartFocusMode ? "app-shell chart-focus" : "app-shell";
+}
+
 /**
  * LiveApp — the composed, runnable application.
  *
@@ -1010,6 +1014,8 @@ export function LiveApp() {
     { price: number; x: number; y: number } | undefined
   >(undefined);
   const [activeTool, setActiveTool] = useState<DrawingToolType | null>(null);
+  const [chartFocusMode, setChartFocusMode] = useState(false);
+  const [marketOrderDrawerOpen, setMarketOrderDrawerOpen] = useState(false);
   const [drawingCount, setDrawingCount] = useState(0);
   const [deleteAllSignal, setDeleteAllSignal] = useState(0);
   const [removeDrawingIds, setRemoveDrawingIds] = useState<readonly string[]>([]);
@@ -1079,6 +1085,20 @@ export function LiveApp() {
       profilePayloadSignatureRef.current === signature ? signature : current,
     );
   };
+
+  const deleteAllDrawings = useCallback(() => {
+    setDeleteAllSignal((s) => s + 1);
+    setDrawingCount(0);
+    setDrawings([]);
+    submittedOrderDrawingIdsRef.current.clear();
+    invalidOrderDrawingIdsRef.current.clear();
+    setActiveTool(null);
+  }, []);
+
+  const toggleChartFocusMode = useCallback(() => {
+    setChartFocusMode((focus) => !focus);
+    setMarketOrderDrawerOpen(false);
+  }, []);
 
   const historyLoader = useRef<HistoryLoader | null>(null);
   const screenshotCaptureRef = useRef<(() => string | undefined) | undefined>(
@@ -2530,7 +2550,7 @@ export function LiveApp() {
   }, [api, lastAlert, profileId, telegramConfig.enabled, telegramConfig.sendScreenshot]);
 
   return (
-    <div className="app-shell">
+    <div className={appShellClassName(chartFocusMode)}>
       <Toolbar>
         <SymbolContractLabel symbol={SYMBOL} contract={contract} hideContract />
         <TimeframeSelector value={timeframe} onChange={setTimeframe} />
@@ -2607,17 +2627,11 @@ export function LiveApp() {
       </Toolbar>
       <main className="chart-area">
         <DrawingToolbar
+          className="drawing-toolbar-desktop"
           activeTool={activeTool}
           drawingCount={drawingCount}
           onToolSelect={setActiveTool}
-          onDeleteAll={() => {
-            setDeleteAllSignal((s) => s + 1);
-            setDrawingCount(0);
-            setDrawings([]);
-            submittedOrderDrawingIdsRef.current.clear();
-            invalidOrderDrawingIdsRef.current.clear();
-            setActiveTool(null);
-          }}
+          onDeleteAll={deleteAllDrawings}
         />
         <div className="chart-stack">
           <ChartContainer
@@ -2660,11 +2674,30 @@ export function LiveApp() {
             onScreenshotCaptureReady={(capture) => {
               screenshotCaptureRef.current = capture;
             }}
-          />
+          >
+            <button
+              type="button"
+              className="chart-focus-toggle"
+              aria-pressed={chartFocusMode}
+              onClick={toggleChartFocusMode}
+            >
+              {chartFocusMode ? "Exit" : "Focus"}
+            </button>
+            <DrawingToolbar
+              className="drawing-toolbar-mobile"
+              activeTool={activeTool}
+              drawingCount={drawingCount}
+              onToolSelect={setActiveTool}
+              onDeleteAll={deleteAllDrawings}
+            />
+          </ChartContainer>
           <MarketOrderBar
             account={mt5Account}
             pending={orderPending}
             error={orderError}
+            variant={chartFocusMode ? "drawer" : "default"}
+            drawerOpen={marketOrderDrawerOpen}
+            onDrawerOpenChange={setMarketOrderDrawerOpen}
             openOrderCount={orderRows.length}
             orderRows={orderRows}
             settings={marketOrderSettings}

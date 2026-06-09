@@ -5,6 +5,7 @@ import {
   FOOTPRINT_SUBSCRIBED_EVENTS,
   GLOBAL_SUBSCRIBED_EVENTS,
   TIMEFRAME_SUBSCRIBED_EVENTS,
+  appShellClassName,
   mergeMt5AccountUpdate,
   mergeMt5OpenTradeProfitUpdates,
   persistActiveProfileId,
@@ -50,6 +51,13 @@ describe("resolveEndpoints", () => {
         host: "charts.example.test",
       }).ws,
     ).toBe("wss://charts.example.test/ws/chart");
+  });
+});
+
+describe("chart focus layout", () => {
+  it("adds the focus class only while chart focus mode is enabled", () => {
+    expect(appShellClassName(false)).toBe("app-shell");
+    expect(appShellClassName(true)).toBe("app-shell chart-focus");
   });
 });
 

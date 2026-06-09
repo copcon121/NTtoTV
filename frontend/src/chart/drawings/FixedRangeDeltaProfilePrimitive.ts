@@ -15,7 +15,7 @@ import type {
   DeltaProfileLoadState,
   DeltaProfileRow,
 } from "../../orderflow/deltaProfile";
-import { anchorToCoordinate, anchorToPoint } from "./coordinates";
+import { anchorToCoordinate } from "./coordinates";
 import type { AnchorPoint, DrawingOptions, DrawingState, IDrawing } from "./types";
 
 interface RenderRow {
@@ -32,15 +32,9 @@ interface RenderLine {
   kind: "poc" | "vah" | "val";
 }
 
-interface RenderHandle {
-  x: number;
-  y: number;
-}
-
 const COLORS = {
-  rangeFill: "rgba(125, 211, 252, 0.10)",
-  rangeStroke: "rgba(56, 189, 248, 0.34)",
-  valueAreaFill: "rgba(37, 99, 235, 0.06)",
+  selection: "#2962ff",
+  selectionFill: "#ffffff",
   valueAreaLine: "rgba(37, 99, 235, 0.96)",
   valueAreaLineHalo: "rgba(255, 255, 255, 0.70)",
   positive: "rgba(45, 191, 204, 0.82)",
@@ -53,7 +47,6 @@ const COLORS = {
   pocHalo: "rgba(255, 255, 255, 0.65)",
   text: "#f5f5f5",
   labelBg: "rgba(16, 16, 16, 0.82)",
-  handle: "#e0b341",
 };
 
 class FixedRangeDeltaProfileRenderer implements IPrimitivePaneRenderer {
@@ -63,7 +56,6 @@ class FixedRangeDeltaProfileRenderer implements IPrimitivePaneRenderer {
     private readonly rows: readonly RenderRow[],
     private readonly lines: readonly RenderLine[],
     private readonly state: DeltaProfileLoadState,
-    private readonly handles: readonly RenderHandle[],
     private readonly selected: boolean,
   ) {}
 
@@ -75,21 +67,10 @@ class FixedRangeDeltaProfileRenderer implements IPrimitivePaneRenderer {
       if (width < 2) return;
 
       ctx.save();
-      ctx.fillStyle = COLORS.rangeFill;
-      ctx.fillRect(left, 0, width, mediaSize.height);
-      ctx.strokeStyle = COLORS.rangeStroke;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(left, 0, width, mediaSize.height);
 
       if (this.state.status === "ready" && this.state.profile.rows.length > 0) {
         const vah = this.lines.find((line) => line.kind === "vah");
         const val = this.lines.find((line) => line.kind === "val");
-        if (vah && val) {
-          const top = Math.min(vah.y, val.y);
-          const height = Math.max(1, Math.abs(vah.y - val.y));
-          ctx.fillStyle = COLORS.valueAreaFill;
-          ctx.fillRect(left, top, width, height);
-        }
 
         const maxVolume = Math.max(
           1,
@@ -151,12 +132,7 @@ class FixedRangeDeltaProfileRenderer implements IPrimitivePaneRenderer {
       }
 
       if (this.selected) {
-        ctx.fillStyle = COLORS.handle;
-        for (const handle of this.handles) {
-          ctx.beginPath();
-          ctx.arc(handle.x, handle.y, 3.5, 0, Math.PI * 2);
-          ctx.fill();
-        }
+        drawSelection(ctx, left, right, mediaSize.height);
       }
       ctx.restore();
     });
@@ -179,6 +155,38 @@ class FixedRangeDeltaProfileRenderer implements IPrimitivePaneRenderer {
   }
 }
 
+function drawSelection(
+  ctx: CanvasRenderingContext2D,
+  left: number,
+  right: number,
+  height: number,
+): void {
+  ctx.setLineDash([]);
+  ctx.strokeStyle = COLORS.selection;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(left, 0);
+  ctx.lineTo(left, height);
+  ctx.moveTo(right, 0);
+  ctx.lineTo(right, height);
+  ctx.stroke();
+
+  const topY = 18;
+  const bottomY = Math.max(18, height - 18);
+  const radius = 7;
+  ctx.fillStyle = COLORS.selectionFill;
+  ctx.strokeStyle = COLORS.selection;
+  ctx.lineWidth = 2;
+  for (const x of [left, right]) {
+    for (const y of [topY, bottomY]) {
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+}
+
 function drawValueAreaLine(
   ctx: CanvasRenderingContext2D,
   left: number,
@@ -186,7 +194,7 @@ function drawValueAreaLine(
   y: number,
 ): void {
   ctx.lineCap = "round";
-  ctx.setLineDash([1, 6]);
+  ctx.setLineDash([]);
   ctx.strokeStyle = COLORS.valueAreaLineHalo;
   ctx.lineWidth = 4;
   ctx.beginPath();
@@ -208,7 +216,6 @@ class FixedRangeDeltaProfilePaneView implements IPrimitivePaneView {
   private x2 = 0;
   private rows: RenderRow[] = [];
   private lines: RenderLine[] = [];
-  private handles: RenderHandle[] = [];
 
   constructor(private readonly source: FixedRangeDeltaProfilePrimitive) {}
 
@@ -222,7 +229,6 @@ class FixedRangeDeltaProfilePaneView implements IPrimitivePaneView {
     this.x2 = 0;
     this.rows = [];
     this.lines = [];
-    this.handles = [];
     if (!chart || !series || anchors.length < 2) return;
 
     const x1 = anchorToCoordinate(chart, series, anchors[0]);
@@ -230,10 +236,6 @@ class FixedRangeDeltaProfilePaneView implements IPrimitivePaneView {
     if (x1 === null || x2 === null) return;
     this.x1 = x1 as number;
     this.x2 = x2 as number;
-    this.handles = anchors
-      .slice(0, 2)
-      .map((anchor) => anchorToPoint(chart, series, anchor))
-      .filter((point): point is RenderHandle => point !== null);
 
     const state = this.source.profileState;
     if (state.status !== "ready" || state.profile.rows.length === 0) return;
@@ -269,7 +271,6 @@ class FixedRangeDeltaProfilePaneView implements IPrimitivePaneView {
       this.rows,
       this.lines,
       this.source.profileState,
-      this.handles,
       this.source.selected,
     );
   }

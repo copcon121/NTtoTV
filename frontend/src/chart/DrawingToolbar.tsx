@@ -10,6 +10,8 @@ import type { DrawingToolType } from "./drawings/types";
 import { DRAWING_TOOLS } from "./drawings/types";
 
 export interface DrawingToolbarProps {
+  /** Optional class name for desktop/mobile layout variants. */
+  className?: string;
   /** Currently active tool, or null if none. */
   activeTool: DrawingToolType | null;
   /** Number of drawings on the chart (shows badge on trash if > 0). */
@@ -21,13 +23,15 @@ export interface DrawingToolbarProps {
 }
 
 export function DrawingToolbar({
+  className,
   activeTool,
   drawingCount,
   onToolSelect,
   onDeleteAll,
 }: DrawingToolbarProps) {
+  const classes = className ? `drawing-toolbar ${className}` : "drawing-toolbar";
   return (
-    <aside className="drawing-toolbar" role="toolbar" aria-label="Drawing tools">
+    <aside className={classes} role="toolbar" aria-label="Drawing tools">
       <div className="drawing-toolbar-tools">
         {DRAWING_TOOLS.map((tool) => {
           const isActive = activeTool === tool.type;
@@ -37,6 +41,7 @@ export function DrawingToolbar({
               type="button"
               className={`drawing-tool-btn${isActive ? " active" : ""}`}
               title={tool.label}
+              aria-label={tool.label}
               aria-pressed={isActive}
               onClick={() => onToolSelect(isActive ? null : tool.type)}
             >
@@ -63,6 +68,7 @@ export function DrawingToolbar({
         type="button"
         className="drawing-tool-btn drawing-tool-delete"
         title={`Delete all drawings${drawingCount > 0 ? ` (${drawingCount})` : ""}`}
+        aria-label={`Delete all drawings${drawingCount > 0 ? ` (${drawingCount})` : ""}`}
         disabled={drawingCount === 0}
         onClick={onDeleteAll}
       >

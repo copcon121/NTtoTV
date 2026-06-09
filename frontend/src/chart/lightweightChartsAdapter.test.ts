@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { toBarDisplayTimestamp, toUtcTimestamp } from "./lightweightChartsAdapter";
+import {
+  VOLUME_DELTA_OVERLAY_PRICE_SCALE_ID,
+  VOLUME_DELTA_OVERLAY_SCALE_MARGINS,
+  toBarDisplayTimestamp,
+  toUtcTimestamp,
+} from "./lightweightChartsAdapter";
 
 describe("lightweightChartsAdapter time conversion", () => {
   it("converts raw ms timestamps to Lightweight UTC seconds with display offset", () => {
@@ -23,5 +28,15 @@ describe("lightweightChartsAdapter time conversion", () => {
     expect(toBarDisplayTimestamp(tradeTime, 5 * 60_000, 5 * 60_000)).toBe(
       Math.floor((bucketStart + 5 * 60_000) / 1_000),
     );
+  });
+});
+
+describe("lightweightChartsAdapter volume delta overlay", () => {
+  it("uses a fixed overlay price scale near the chart bottom", () => {
+    expect(VOLUME_DELTA_OVERLAY_PRICE_SCALE_ID).toBe("volume-delta-overlay");
+    expect(VOLUME_DELTA_OVERLAY_SCALE_MARGINS).toEqual({
+      top: 0.8,
+      bottom: 0.02,
+    });
   });
 });

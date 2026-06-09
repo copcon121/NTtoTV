@@ -91,6 +91,35 @@ function pointerDown(container: HTMLElement, x: number, y: number) {
   );
 }
 
+function pointerMove(container: HTMLElement, x: number, y: number) {
+  container.dispatchEvent(
+    new MouseEvent("pointermove", {
+      bubbles: true,
+      clientX: x,
+      clientY: y,
+    }),
+  );
+}
+
+function pointerUp(container: HTMLElement, x: number, y: number) {
+  container.dispatchEvent(
+    new MouseEvent("pointerup", {
+      bubbles: true,
+      clientX: x,
+      clientY: y,
+    }),
+  );
+}
+
+function pressDelete() {
+  document.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      bubbles: true,
+      key: "Delete",
+    }),
+  );
+}
+
 describe("DrawingManager selection", () => {
   it("keeps rectangle edit handles hidden until the drawing is selected", () => {
     const { attached, chart, clickHandlers, container, manager } = makeHarness();
@@ -117,6 +146,26 @@ describe("DrawingManager selection", () => {
     pointerDown(container, 180, 150);
     expect(rectangle.selected).toBe(false);
     expect(priceAxisView!.visible()).toBe(false);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("resizes a selected rectangle from an edge handle", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("rectangle");
+    placeRectangle(clickHandlers);
+
+    pointerDown(container, 30, 50);
+    pointerDown(container, 35, 20);
+    pointerMove(container, 35, 10);
+    pointerUp(container, 35, 10);
+
+    const [rectangle] = manager.exportState();
+    expect(rectangle.anchors[0].logical).toBe(10);
+    expect(rectangle.anchors[0].price).toBe(10);
+    expect(rectangle.anchors[1].logical).toBe(60);
+    expect(rectangle.anchors[1].price).toBe(80);
 
     manager.dispose();
     container.remove();
@@ -181,6 +230,44 @@ describe("DrawingManager fixed range delta profile", () => {
     expect(profile.anchors).toHaveLength(2);
     expect(profile.anchors[0].logical).toBe(20);
     expect(profile.anchors[1].logical).toBe(80);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("selects fixed-range delta profiles by full-height range and deletes them", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fixed_range_delta_profile");
+
+    clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
+    clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
+
+    pointerDown(container, 50, 160);
+    pressDelete();
+
+    expect(manager.exportState()).toEqual([]);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("resizes fixed-range delta profiles from their vertical range handles", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fixed_range_delta_profile");
+
+    clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
+    clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
+
+    pointerDown(container, 50, 160);
+    pointerDown(container, 80, 160);
+    pointerMove(container, 110, 160);
+    pointerUp(container, 110, 160);
+
+    const [profile] = manager.exportState();
+    expect(profile.anchors[0].logical).toBe(20);
+    expect(profile.anchors[0].price).toBe(40);
+    expect(profile.anchors[1].logical).toBe(110);
+    expect(profile.anchors[1].price).toBe(90);
 
     manager.dispose();
     container.remove();

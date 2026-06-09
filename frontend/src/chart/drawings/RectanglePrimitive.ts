@@ -38,7 +38,6 @@ interface UpdatableAxisView extends ISeriesPrimitiveAxisView {
 }
 
 interface RectangleRenderOptions {
-  fillColor: string;
   labelColor: string;
   labelTextColor: string;
   showLabels: boolean;
@@ -47,8 +46,7 @@ interface RectangleRenderOptions {
 }
 
 const DEFAULT_OPTIONS: RectangleRenderOptions = {
-  fillColor: "rgba(123, 31, 162, 0.18)",
-  labelColor: "rgba(123, 31, 162, 1)",
+  labelColor: "#2962ff",
   labelTextColor: "#ffffff",
   showLabels: true,
   priceLabelFormatter: (price) => price.toFixed(1),
@@ -62,10 +60,8 @@ const DEFAULT_OPTIONS: RectangleRenderOptions = {
 };
 
 function toRenderOptions(options?: DrawingOptions): RectangleRenderOptions {
-  const fillColor = options?.fillColor ?? DEFAULT_OPTIONS.fillColor;
   return {
     ...DEFAULT_OPTIONS,
-    fillColor,
     labelColor: options?.lineColor ?? DEFAULT_OPTIONS.labelColor,
     showLabels: options?.showLabels ?? DEFAULT_OPTIONS.showLabels,
   };
@@ -84,7 +80,6 @@ class RectangleRenderer implements IPrimitivePaneRenderer {
   constructor(
     private readonly p1: ViewPoint,
     private readonly p2: ViewPoint,
-    private readonly fillColor: string,
     private readonly strokeColor: string,
     private readonly selected: boolean,
   ) {}
@@ -103,8 +98,7 @@ class RectangleRenderer implements IPrimitivePaneRenderer {
       const horizontal = positionsBox(this.p1.x, this.p2.x, scope.horizontalPixelRatio);
       const vertical = positionsBox(this.p1.y, this.p2.y, scope.verticalPixelRatio);
       const ctx = scope.context;
-      ctx.fillStyle = this.fillColor;
-      ctx.fillRect(horizontal.position, vertical.position, horizontal.length, vertical.length);
+      ctx.save();
       ctx.strokeStyle = this.strokeColor;
       ctx.lineWidth = Math.max(1, Math.floor(scope.horizontalPixelRatio));
       ctx.strokeRect(
@@ -113,19 +107,41 @@ class RectangleRenderer implements IPrimitivePaneRenderer {
         horizontal.length,
         vertical.length,
       );
-      if (!this.selected) return;
-      ctx.fillStyle = this.strokeColor;
-      const radius = 3 * scope.horizontalPixelRatio;
-      for (const [x, y] of [
-        [horizontal.position, vertical.position],
-        [horizontal.position + horizontal.length, vertical.position],
-        [horizontal.position, vertical.position + vertical.length],
-        [horizontal.position + horizontal.length, vertical.position + vertical.length],
-      ]) {
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, Math.PI * 2);
-        ctx.fill();
+      if (this.selected) {
+        const ratio = Math.max(scope.horizontalPixelRatio, scope.verticalPixelRatio);
+        const left = horizontal.position;
+        const right = horizontal.position + horizontal.length;
+        const top = vertical.position;
+        const bottom = vertical.position + vertical.length;
+        const midX = (left + right) / 2;
+        const midY = (top + bottom) / 2;
+        const cornerRadius = 6 * ratio;
+        const edgeSize = 12 * ratio;
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = this.strokeColor;
+        ctx.lineWidth = Math.max(2, 2 * ratio);
+        for (const [x, y] of [
+          [left, top],
+          [right, top],
+          [left, bottom],
+          [right, bottom],
+        ]) {
+          ctx.beginPath();
+          ctx.arc(x, y, cornerRadius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+        for (const [x, y] of [
+          [midX, top],
+          [right, midY],
+          [midX, bottom],
+          [left, midY],
+        ]) {
+          ctx.fillRect(x - edgeSize / 2, y - edgeSize / 2, edgeSize, edgeSize);
+          ctx.strokeRect(x - edgeSize / 2, y - edgeSize / 2, edgeSize, edgeSize);
+        }
       }
+      ctx.restore();
     });
   }
 }
@@ -158,7 +174,6 @@ class RectanglePaneView implements UpdatablePaneView {
     return new RectangleRenderer(
       this.p1,
       this.p2,
-      this.source.renderOptions.fillColor,
       this.source.renderOptions.labelColor,
       this.source.selected,
     );

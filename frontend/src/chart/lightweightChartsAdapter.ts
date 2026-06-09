@@ -2,7 +2,7 @@
 //
 // This is the ONLY file that talks to the `lightweight-charts` library. It
 // hosts a chart instance with a candlestick series + a MyVolumeDelta-style
-// volume-delta candle series
+// volume-delta overlay candle series
 // and implements {@link ChartSeriesPort} so the pure reducer / controller can
 // drive it (design.md "Frontend Modules": ChartContainer, Req 19.1, 19.2).
 //
@@ -123,6 +123,12 @@ export interface DeltaColors {
   wick: string;
   zeroLine: string;
 }
+
+export const VOLUME_DELTA_OVERLAY_PRICE_SCALE_ID = "volume-delta-overlay";
+export const VOLUME_DELTA_OVERLAY_SCALE_MARGINS = {
+  top: 0.8,
+  bottom: 0.02,
+} as const;
 
 const DEFAULT_DELTA_COLORS: DeltaColors = {
   positive: "#008000",
@@ -251,9 +257,9 @@ const symmetricZeroAutoscale: AutoscaleInfoProvider = (baseImplementation) => {
 export interface LightweightChartsAdapterOptions {
   /** Positive/negative colors for the delta candles. */
   deltaColors?: DeltaColors;
-  /** Fraction of vertical space reserved above the legacy delta overlay (0..1). */
+  /** @deprecated Volume Delta now always renders as a fixed chart overlay. */
   deltaTopMargin?: number;
-  /** Fraction of chart height reserved for the Volume Delta pane (0..1). */
+  /** @deprecated Volume Delta now always renders as a fixed chart overlay. */
   deltaPaneHeightRatio?: number;
   /** Display-only offset from backend bucket-start time to candle chart time. */
   displayTimeOffsetMs?: number;
@@ -436,15 +442,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.chartBackgroundColor =
       options.chartBackgroundColor ?? MZ_FOOTPRINT_COLORS.chartBg;
     const palette = chartContrastPalette(this.chartBackgroundColor);
-    const deltaPaneHeightRatio = Math.min(
-      0.5,
-      Math.max(
-        0.08,
-        options.deltaPaneHeightRatio ??
-          (options.deltaTopMargin !== undefined ? 1 - options.deltaTopMargin : 0.22),
-      ),
-    );
-    const candlePaneHeightRatio = 1 - deltaPaneHeightRatio;
 
     this.chart = createChart(container, {
       autoSize: true,
@@ -500,26 +497,21 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.bigTradeMarkers = createSeriesMarkers(this.candleSeries, []);
     this.smcMarkers = createSeriesMarkers(this.candleSeries, []);
 
-    const candlePane = this.chart.panes()[0];
-    const deltaPane = this.chart.addPane();
-    candlePane?.setStretchFactor(candlePaneHeightRatio);
-    deltaPane.setStretchFactor(deltaPaneHeightRatio);
-
-    // Volume delta in its own pane. Mirrors the local NT
-    // MyVolumeDelta renderer: candle body starts at zero, closes at bar delta,
-    // and the wick spans deltaHigh/deltaLow.
-    this.deltaSeries = deltaPane.addSeries(CandlestickSeries, {
+    // Volume delta overlays the main pane on its own price scale. This keeps
+    // the delta band fixed near the bottom without adding a draggable pane.
+    this.deltaSeries = this.chart.addSeries(CandlestickSeries, {
       upColor: this.deltaColors.positive,
       downColor: this.deltaColors.negative,
       borderUpColor: this.deltaColors.positive,
       borderDownColor: this.deltaColors.negative,
       wickUpColor: this.deltaColors.wick,
       wickDownColor: this.deltaColors.wick,
+      priceScaleId: VOLUME_DELTA_OVERLAY_PRICE_SCALE_ID,
       priceFormat: { type: "volume" },
       priceLineVisible: false,
       lastValueVisible: false,
       autoscaleInfoProvider: symmetricZeroAutoscale,
-    });
+    }, 0);
     this.deltaSeries.createPriceLine({
       price: 0,
       color: this.deltaColors.zeroLine,
@@ -529,7 +521,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       title: "",
     });
     this.deltaSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.08, bottom: 0.08 },
+      scaleMargins: VOLUME_DELTA_OVERLAY_SCALE_MARGINS,
+      borderVisible: false,
     });
 
     this.barCountdownElement = document.createElement("div");

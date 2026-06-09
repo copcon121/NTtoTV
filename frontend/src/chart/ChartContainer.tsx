@@ -18,7 +18,14 @@
 // factory so the component can be exercised under jsdom with a fake port; the
 // pure merge logic lives in `barReducer.ts` and is property-tested in task 12.4.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { type BigTradeMarker } from "./indicatorReducer";
 import { type ChartSeriesPort, ChartSeriesController } from "./chartSeriesController";
@@ -230,6 +237,8 @@ export interface ChartContainerProps {
   fixedRangeDeltaProfiles?: ReadonlyMap<string, DeltaProfileLoadState>;
   /** Footprint display settings. */
   footprintSettings?: FootprintSettings;
+  /** Optional overlay controls rendered inside the chart frame. */
+  children?: ReactNode;
 }
 
 /** True when a `bar_update` message targets this container's series. */
@@ -323,6 +332,7 @@ export function ChartContainer({
   removeDrawingIds,
   fixedRangeDeltaProfiles,
   footprintSettings,
+  children,
 }: ChartContainerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const portRef = useRef<DisposableChartPort | null>(null);
@@ -834,6 +844,7 @@ export function ChartContainer({
           ))}
         </div>
       )}
+      {children}
     </div>
   );
 }

@@ -16,7 +16,7 @@ import type {
   IDrawingManager,
 } from "./types";
 import { DRAWING_TOOLS } from "./types";
-import { anchorFromPoint, anchorToPoint } from "./coordinates";
+import { anchorFromPoint, anchorToCoordinate, anchorToPoint } from "./coordinates";
 import { TrendLinePrimitive } from "./TrendLinePrimitive";
 import { HorizontalRayPrimitive } from "./HorizontalRayPrimitive";
 import { RectanglePrimitive } from "./RectanglePrimitive";
@@ -34,6 +34,43 @@ type DrawingPrimitive =
   | PriceRangePrimitive
   | VerticalLinePrimitive
   | OrderBracketPrimitive;
+
+type RectangleResizeHandle =
+  | "top-left"
+  | "top"
+  | "top-right"
+  | "right"
+  | "bottom-right"
+  | "bottom"
+  | "bottom-left"
+  | "left";
+
+type RectangleSideIndices = {
+  left: 0 | 1;
+  right: 0 | 1;
+  top: 0 | 1;
+  bottom: 0 | 1;
+};
+
+type FixedRangeProfileResizeHandle = "left" | "right";
+
+type FixedRangeProfileSideIndices = {
+  left: 0 | 1;
+  right: 0 | 1;
+};
+
+type AnchorHit =
+  | { drawingId: string; anchorIndex: number }
+  | {
+      drawingId: string;
+      rectangleHandle: RectangleResizeHandle;
+      rectangleSides: RectangleSideIndices;
+    }
+  | {
+      drawingId: string;
+      fixedRangeProfileHandle: FixedRangeProfileResizeHandle;
+      fixedRangeProfileSides: FixedRangeProfileSideIndices;
+    };
 
 let nextId = 1;
 
@@ -75,9 +112,7 @@ export class DrawingManager implements IDrawingManager {
   private _onPointerDown: ((e: PointerEvent) => void) | null = null;
   private _onPointerMove: ((e: PointerEvent) => void) | null = null;
   private _onPointerUp: ((e: PointerEvent) => void) | null = null;
-  private _edit:
-    | { drawingId: string; anchorIndex: number; pointerId: number }
-    | null = null;
+  private _edit: (AnchorHit & { pointerId: number }) | null = null;
   private _editCursorActive = false;
   private _selectedDrawingId: string | null = null;
 
@@ -375,9 +410,32 @@ export class DrawingManager implements IDrawingManager {
       const anchor = this._anchorFromPointerEvent(e);
       const drawing = this._drawings.get(this._edit.drawingId);
       if (anchor !== null && drawing) {
-        const anchors = drawing.anchors.map((current) => ({ ...current }));
-        anchors[this._edit.anchorIndex] = anchor;
-        drawing.setAnchors(anchors);
+        if ("rectangleHandle" in this._edit && drawing.tool === "rectangle") {
+          drawing.setAnchors(
+            resizeRectangleAnchors(
+              drawing.anchors,
+              this._edit.rectangleHandle,
+              this._edit.rectangleSides,
+              anchor,
+            ),
+          );
+        } else if (
+          "fixedRangeProfileHandle" in this._edit &&
+          drawing.tool === "fixed_range_delta_profile"
+        ) {
+          drawing.setAnchors(
+            resizeFixedRangeProfileAnchors(
+              drawing.anchors,
+              this._edit.fixedRangeProfileHandle,
+              this._edit.fixedRangeProfileSides,
+              anchor,
+            ),
+          );
+        } else if ("anchorIndex" in this._edit) {
+          const anchors = drawing.anchors.map((current) => ({ ...current }));
+          anchors[this._edit.anchorIndex] = anchor;
+          drawing.setAnchors(anchors);
+        }
       }
       e.preventDefault();
       return;
@@ -412,18 +470,42 @@ export class DrawingManager implements IDrawingManager {
   private _hitAnchor(
     clientX: number,
     clientY: number,
-  ): { drawingId: string; anchorIndex: number } | null {
+  ): AnchorHit | null {
     if (!this._chart || !this._series) return null;
     const point = this._localPoint(clientX, clientY);
     if (point === null || !this._isInCandlePane(point.y)) return null;
     if (this._selectedDrawingId === null) return null;
     const HIT_PX = 9;
+    const RECTANGLE_HIT_PX = 16;
+    const FIXED_RANGE_PROFILE_HIT_PX = 18;
     let best: { drawingId: string; anchorIndex: number; distance: number } | null = null;
     const selectedDrawing = this._drawings.get(this._selectedDrawingId);
     const drawings = selectedDrawing
       ? [[this._selectedDrawingId, selectedDrawing] as const]
       : [];
     for (const [drawingId, drawing] of drawings) {
+      if (drawing.tool === "rectangle" && drawing.anchors.length >= 2) {
+        const rectangleHit = rectangleHandleHit(
+          this._chart,
+          this._series,
+          drawingId,
+          drawing.anchors,
+          point,
+          RECTANGLE_HIT_PX,
+        );
+        if (rectangleHit !== null) return rectangleHit;
+      }
+      if (drawing.tool === "fixed_range_delta_profile" && drawing.anchors.length >= 2) {
+        const profileHit = fixedRangeProfileHandleHit(
+          this._chart,
+          this._series,
+          drawingId,
+          drawing.anchors,
+          point,
+          FIXED_RANGE_PROFILE_HIT_PX,
+        );
+        if (profileHit !== null) return profileHit;
+      }
       drawing.anchors.forEach((anchor, anchorIndex) => {
         const anchorPoint = anchorToPoint(this._chart!, this._series!, anchor);
         if (anchorPoint === null) return;
@@ -455,6 +537,17 @@ export class DrawingManager implements IDrawingManager {
     const HIT_PX = 7;
     const drawings = [...this._drawings.entries()].reverse();
     for (const [drawingId, drawing] of drawings) {
+      if (drawing.tool === "fixed_range_delta_profile" && drawing.anchors.length >= 2) {
+        const rangeHit = fixedRangeProfileRangeHit(
+          this._chart,
+          this._series,
+          drawing.anchors,
+          point,
+          HIT_PX,
+        );
+        if (rangeHit) return { drawingId };
+        continue;
+      }
       const points = drawing.anchors
         .map((anchor) => anchorToPoint(this._chart!, this._series!, anchor))
         .filter((p): p is { x: number; y: number } => p !== null);
@@ -471,7 +564,6 @@ export class DrawingManager implements IDrawingManager {
           }
           break;
         case "rectangle":
-        case "fixed_range_delta_profile":
           if (points.length >= 2 && pointInBox(point, points[0], points[1], HIT_PX)) {
             return { drawingId };
           }
@@ -656,6 +748,204 @@ function pointInBox(
   const top = Math.min(p1.y, p2.y) - tolerance;
   const bottom = Math.max(p1.y, p2.y) + tolerance;
   return point.x >= left && point.x <= right && point.y >= top && point.y <= bottom;
+}
+
+function pointInVerticalRange(
+  point: { x: number; y: number },
+  x1: number,
+  x2: number,
+  tolerance: number,
+): boolean {
+  const left = Math.min(x1, x2) - tolerance;
+  const right = Math.max(x1, x2) + tolerance;
+  return point.x >= left && point.x <= right;
+}
+
+function rectangleHandleHit(
+  chart: IChartApi,
+  series: ISeriesApi<"Candlestick">,
+  drawingId: string,
+  anchors: readonly AnchorPoint[],
+  point: { x: number; y: number },
+  tolerance: number,
+): AnchorHit | null {
+  const p1 = anchorToPoint(chart, series, anchors[0]);
+  const p2 = anchorToPoint(chart, series, anchors[1]);
+  if (p1 === null || p2 === null) return null;
+
+  let best:
+    | { handle: RectangleResizeHandle; distance: number }
+    | null = null;
+  for (const handlePoint of rectangleHandlePoints(p1, p2)) {
+    const distance = Math.hypot(handlePoint.x - point.x, handlePoint.y - point.y);
+    if (distance <= tolerance && (best === null || distance < best.distance)) {
+      best = { handle: handlePoint.handle, distance };
+    }
+  }
+  if (best === null) return null;
+  return {
+    drawingId,
+    rectangleHandle: best.handle,
+    rectangleSides: rectangleSideIndices(p1, p2),
+  };
+}
+
+function rectangleHandlePoints(
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+): Array<{ handle: RectangleResizeHandle; x: number; y: number }> {
+  const left = Math.min(p1.x, p2.x);
+  const right = Math.max(p1.x, p2.x);
+  const top = Math.min(p1.y, p2.y);
+  const bottom = Math.max(p1.y, p2.y);
+  const midX = (left + right) / 2;
+  const midY = (top + bottom) / 2;
+  return [
+    { handle: "top-left", x: left, y: top },
+    { handle: "top", x: midX, y: top },
+    { handle: "top-right", x: right, y: top },
+    { handle: "right", x: right, y: midY },
+    { handle: "bottom-right", x: right, y: bottom },
+    { handle: "bottom", x: midX, y: bottom },
+    { handle: "bottom-left", x: left, y: bottom },
+    { handle: "left", x: left, y: midY },
+  ];
+}
+
+function rectangleSideIndices(
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+): RectangleSideIndices {
+  return {
+    left: p1.x <= p2.x ? 0 : 1,
+    right: p1.x <= p2.x ? 1 : 0,
+    top: p1.y <= p2.y ? 0 : 1,
+    bottom: p1.y <= p2.y ? 1 : 0,
+  };
+}
+
+function resizeRectangleAnchors(
+  anchors: readonly AnchorPoint[],
+  handle: RectangleResizeHandle,
+  sides: RectangleSideIndices,
+  pointerAnchor: AnchorPoint,
+): AnchorPoint[] {
+  const next = anchors.map((anchor) => ({ ...anchor }));
+  if (next.length < 2) return next;
+
+  const updateX = (index: 0 | 1) => {
+    next[index] = {
+      ...next[index],
+      time: pointerAnchor.time,
+      logical: pointerAnchor.logical,
+    };
+  };
+  const updateY = (index: 0 | 1) => {
+    next[index] = {
+      ...next[index],
+      price: pointerAnchor.price,
+    };
+  };
+
+  if (
+    handle === "left" ||
+    handle === "top-left" ||
+    handle === "bottom-left"
+  ) {
+    updateX(sides.left);
+  }
+  if (
+    handle === "right" ||
+    handle === "top-right" ||
+    handle === "bottom-right"
+  ) {
+    updateX(sides.right);
+  }
+  if (
+    handle === "top" ||
+    handle === "top-left" ||
+    handle === "top-right"
+  ) {
+    updateY(sides.top);
+  }
+  if (
+    handle === "bottom" ||
+    handle === "bottom-left" ||
+    handle === "bottom-right"
+  ) {
+    updateY(sides.bottom);
+  }
+
+  return next;
+}
+
+function fixedRangeProfileHandleHit(
+  chart: IChartApi,
+  series: ISeriesApi<"Candlestick">,
+  drawingId: string,
+  anchors: readonly AnchorPoint[],
+  point: { x: number; y: number },
+  tolerance: number,
+): AnchorHit | null {
+  const x1 = anchorToCoordinate(chart, series, anchors[0]);
+  const x2 = anchorToCoordinate(chart, series, anchors[1]);
+  if (x1 === null || x2 === null) return null;
+
+  const sides = fixedRangeProfileSideIndices(x1 as number, x2 as number);
+  const left = Math.min(x1 as number, x2 as number);
+  const right = Math.max(x1 as number, x2 as number);
+  const leftDistance = Math.abs(point.x - left);
+  const rightDistance = Math.abs(point.x - right);
+  if (leftDistance > tolerance && rightDistance > tolerance) return null;
+  return {
+    drawingId,
+    fixedRangeProfileHandle:
+      leftDistance <= rightDistance ? "left" : "right",
+    fixedRangeProfileSides: sides,
+  };
+}
+
+function fixedRangeProfileRangeHit(
+  chart: IChartApi,
+  series: ISeriesApi<"Candlestick">,
+  anchors: readonly AnchorPoint[],
+  point: { x: number; y: number },
+  tolerance: number,
+): boolean {
+  const x1 = anchorToCoordinate(chart, series, anchors[0]);
+  const x2 = anchorToCoordinate(chart, series, anchors[1]);
+  return (
+    x1 !== null &&
+    x2 !== null &&
+    pointInVerticalRange(point, x1 as number, x2 as number, tolerance)
+  );
+}
+
+function fixedRangeProfileSideIndices(
+  x1: number,
+  x2: number,
+): FixedRangeProfileSideIndices {
+  return {
+    left: x1 <= x2 ? 0 : 1,
+    right: x1 <= x2 ? 1 : 0,
+  };
+}
+
+function resizeFixedRangeProfileAnchors(
+  anchors: readonly AnchorPoint[],
+  handle: FixedRangeProfileResizeHandle,
+  sides: FixedRangeProfileSideIndices,
+  pointerAnchor: AnchorPoint,
+): AnchorPoint[] {
+  const next = anchors.map((anchor) => ({ ...anchor }));
+  if (next.length < 2) return next;
+  const index = sides[handle];
+  next[index] = {
+    ...next[index],
+    time: pointerAnchor.time,
+    logical: pointerAnchor.logical,
+  };
+  return next;
 }
 
 function hitPriceRange(
