@@ -1,0 +1,21 @@
+www.gcflowpy.xyz {
+	redir https://gcflowpy.xyz{uri} permanent
+}
+
+gcflowpy.xyz {
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle /ws/chart* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle {
+		root * C:/Users/Administrator/Desktop/NTtoTV/frontend/dist
+		try_files {path} /index.html
+		file_server
+	}
+}

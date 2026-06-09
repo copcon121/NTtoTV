@@ -47,12 +47,14 @@ _data_backups/
 *.db-shm
 
 # Logs and ad-hoc run outputs
+_run_logs/
 _import_logs/
 mt5-terminals/
 *.log
 *_out.txt
 nt_test_out.txt
 result.txt
+tools/caddy/
 
 # NT historical export samples / market data dumps
 GC *.txt

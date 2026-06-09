@@ -36,7 +36,6 @@ const COLORS = {
   selection: "#2962ff",
   selectionFill: "#ffffff",
   valueAreaLine: "rgba(37, 99, 235, 0.96)",
-  valueAreaLineHalo: "rgba(255, 255, 255, 0.70)",
   positive: "rgba(45, 191, 204, 0.82)",
   positiveMuted: "rgba(45, 191, 204, 0.24)",
   negative: "rgba(223, 91, 136, 0.82)",
@@ -193,16 +192,10 @@ function drawValueAreaLine(
   right: number,
   y: number,
 ): void {
-  ctx.lineCap = "round";
-  ctx.setLineDash([]);
-  ctx.strokeStyle = COLORS.valueAreaLineHalo;
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.moveTo(left, y);
-  ctx.lineTo(right, y);
-  ctx.stroke();
+  ctx.lineCap = "butt";
+  ctx.setLineDash([4, 4]);
   ctx.strokeStyle = COLORS.valueAreaLine;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(left, y);
   ctx.lineTo(right, y);
