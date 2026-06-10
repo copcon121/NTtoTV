@@ -338,6 +338,7 @@ export function ChartContainer({
   const portRef = useRef<DisposableChartPort | null>(null);
   const controllerRef = useRef<ChartSeriesController | null>(null);
   const drawingManagerRef = useRef<DrawingManager | null>(null);
+  const smcThrottleRef = useRef<number | undefined>(undefined);
   const [footprintViewport, setFootprintViewport] =
     useState<FootprintViewport | null>(null);
   const [positionedOrderControls, setPositionedOrderControls] = useState<
@@ -660,13 +661,31 @@ export function ChartContainer({
         return;
       }
       const outcome = controller.apply(message.bar);
-      window.requestAnimationFrame(refreshOrderControlPositions);
 
+      // Only schedule order position refresh when there are active order
+      // controls, avoiding needless rAF work on every tick.
+      if (orderControls && orderControls.length > 0) {
+        window.requestAnimationFrame(refreshOrderControlPositions);
+      }
+
+      // Throttle SMC overlay recomputation: computeSmcOverlay is O(n) over the
+      // entire bar array, so running it on every realtime tick (multiple per
+      // second) blocks the main thread and causes visible freezing. Debounce to
+      // max once per 500ms during live streaming.
       const smcCfg = smcConfigRef.current;
       if (outcome.rendered && smcCfg?.enabled) {
-        portRef.current?.setSmcOverlay?.(
-          computeSmcOverlay(controller.bars, smcCfg),
-        );
+        if (smcThrottleRef.current === undefined) {
+          smcThrottleRef.current = window.setTimeout(() => {
+            smcThrottleRef.current = undefined;
+            const ctrl = controllerRef.current;
+            const cfg = smcConfigRef.current;
+            if (ctrl && cfg?.enabled) {
+              portRef.current?.setSmcOverlay?.(
+                computeSmcOverlay(ctrl.bars, cfg),
+              );
+            }
+          }, 500);
+        }
       }
 
       // Advance the EMA overlay for the same bar when enabled. An in-progress
@@ -715,8 +734,12 @@ export function ChartContainer({
     return () => {
       dispose();
       disposeDelta();
+      if (smcThrottleRef.current !== undefined) {
+        window.clearTimeout(smcThrottleRef.current);
+        smcThrottleRef.current = undefined;
+      }
     };
-  }, [socket, symbol, contract, timeframe, refreshOrderControlPositions]);
+  }, [socket, symbol, contract, timeframe, orderControls, refreshOrderControlPositions]);
 
   // Drawing tool activation / deactivation.
   useEffect(() => {

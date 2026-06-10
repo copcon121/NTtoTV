@@ -847,6 +847,34 @@ body {
   font-size: 12px;
 }
 
+.terminal-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.terminal-hint {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #d0d0d0;
+  background: #1e1e1e;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.terminal-hint:hover {
+  background: #282828;
+}
+
+.terminal-hint.active {
+  background: #0a4f4f;
+  border-color: #008b8b99;
+  color: #fff;
+}
+
 .order-action-rail {
   position: absolute;
   top: 0;

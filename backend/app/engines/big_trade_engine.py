@@ -34,6 +34,7 @@ current group per contract and finalizes it when a non-merge print arrives;
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from app.models.canonical import NormalizedTrade, Side
@@ -45,6 +46,9 @@ __all__ = [
     "DEFAULT_VOLUME_FILTER_ENABLE",
     "BigTradeEngine",
 ]
+
+logger = logging.getLogger(__name__)
+
 
 # Volume-filter defaults (Req 15.3, 15.4; design "BigTrade Reconstruction").
 DEFAULT_MIN_VOLUME = 30
@@ -229,6 +233,20 @@ class BigTradeEngine:
     def _emit_group(self, g: _Group) -> list[BigTrade]:
         if self.dedupe_repeated_timestamp_runs:
             volume, price = self._dedup_repeated_tick_run(g.ticks)
+            if volume != g.volume:
+                logger.warning(
+                    "BigTrade dedup fired: raw_volume=%d -> deduped=%d, "
+                    "ticks=%d, time=%d, side=%s, contract=%s",
+                    g.volume, volume, len(g.ticks), g.time,
+                    g.side.value, g.contract,
+                )
+            elif g.volume >= self.min_volume:
+                logger.debug(
+                    "BigTrade emit: volume=%d, ticks=%d, time=%d, "
+                    "side=%s, contract=%s",
+                    volume, len(g.ticks), g.time,
+                    g.side.value, g.contract,
+                )
         else:
             volume, price = g.volume, g.price
         if not self.passes_filter(volume):
@@ -247,22 +265,54 @@ class BigTradeEngine:
 
     @staticmethod
     def _dedup_repeated_tick_run(ticks: list[tuple[float, int]]) -> tuple[int, float]:
-        """Collapse one exact duplicate subscription replay inside a timestamp.
+        """Collapse duplicate subscription replays inside a timestamp.
 
         A leaked NT MarketData handler can replay the same same-timestamp tape
-        run twice. That turns, for example, 17 one-lot prints into a synthetic
-        34-lot BigTrade that the chart-side NinjaTrader indicator never sees.
-        Only the narrow "two identical halves" pattern is collapsed; normal
-        repeated prints remain counted.
+        run N times (commonly 2x). That turns, for example, 33 one-lot prints
+        into a synthetic 66-lot BigTrade that the chart-side NinjaTrader
+        indicator never sees.
+
+        Detection strategy (checked in order):
+
+        1. **Exact Nx**: the tick list consists of N identical copies of a
+           sub-sequence (N = 2, 3, ...). The first copy is kept.
+        2. **Near 2x**: the first half equals the second half after removing
+           one straggler tick at the boundary (count is odd, ``count-1`` is
+           even, and the two ``(count-1)/2`` halves match). This handles an
+           edge tick that sneaks in between the two replays.
+
+        Only these narrow patterns are collapsed; normal repeated prints (e.g.
+        two genuine 1-lot trades at the same price) are kept.
         """
         if not ticks:
             return 0, 0.0
-        effective = ticks
         count = len(ticks)
-        if count >= 2 and count % 2 == 0:
+        effective = ticks
+
+        # 1) Check for exact Nx repetition (N = 2, 3, 4)
+        for n in (2, 3, 4):
+            if count % n != 0:
+                continue
+            segment_len = count // n
+            if segment_len < 2:
+                continue
+            segment = ticks[:segment_len]
+            if all(ticks[i * segment_len:(i + 1) * segment_len] == segment
+                   for i in range(1, n)):
+                effective = segment
+                break
+
+        # 2) Near-2x: odd count where removing one tick yields two equal halves.
+        #    The straggler can be the first, middle, or last tick.
+        if effective is ticks and count >= 3 and count % 2 == 1:
             mid = count // 2
-            if ticks[:mid] == ticks[mid:]:
+            # straggler at end
+            if ticks[:mid] == ticks[mid:count - 1]:
                 effective = ticks[:mid]
+            # straggler at start
+            elif ticks[1:mid + 1] == ticks[mid + 1:]:
+                effective = ticks[1:mid + 1]
+
         return sum(volume for _, volume in effective), effective[-1][0]
 
     # -- batch (pure oracle) --------------------------------------------------

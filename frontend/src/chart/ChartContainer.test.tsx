@@ -496,40 +496,49 @@ describe("ChartContainer", () => {
   });
 
   it("refreshes the SMC overlay after matching realtime bar updates", () => {
-    const port = new FakePort();
-    const factory: ChartPortFactory = () => port;
-    const ws = new MockWebSocket();
-    const socket = new ChartSocket({ url: "ws://x/ws/chart", factory: () => ws });
-    socket.connect();
-    const smc = {
-      ...DEFAULT_SMC_SETTINGS,
-      enabled: true,
-      swingLength: 2,
-      internalLength: 1,
-    };
+    vi.useFakeTimers();
+    try {
+      const port = new FakePort();
+      const factory: ChartPortFactory = () => port;
+      const ws = new MockWebSocket();
+      const socket = new ChartSocket({ url: "ws://x/ws/chart", factory: () => ws });
+      socket.connect();
+      const smc = {
+        ...DEFAULT_SMC_SETTINGS,
+        enabled: true,
+        swingLength: 2,
+        internalLength: 1,
+      };
 
-    render(
-      <ChartContainer
-        symbol="GC"
-        contract="GC 08-26"
-        timeframe="1m"
-        bars={[
-          ohlc(0, 9.5, 10, 9, 9.5),
-          ohlc(1, 11.5, 12, 11, 11.5),
-          ohlc(2, 10.5, 11, 10, 10.5),
-          ohlc(3, 9.5, 10, 9, 9.5),
-          ohlc(4, 10, 11, 8, 10),
-        ]}
-        smc={smc}
-        socket={socket}
-        portFactory={factory}
-      />,
-    );
+      render(
+        <ChartContainer
+          symbol="GC"
+          contract="GC 08-26"
+          timeframe="1m"
+          bars={[
+            ohlc(0, 9.5, 10, 9, 9.5),
+            ohlc(1, 11.5, 12, 11, 11.5),
+            ohlc(2, 10.5, 11, 10, 10.5),
+            ohlc(3, 9.5, 10, 9, 9.5),
+            ohlc(4, 10, 11, 8, 10),
+          ]}
+          smc={smc}
+          socket={socket}
+          portFactory={factory}
+        />,
+      );
 
-    ws.deliver(barUpdate(ohlc(5, 12.5, 13, 9, 12.5)));
+      ws.deliver(barUpdate(ohlc(5, 12.5, 13, 9, 12.5)));
 
-    const overlay = port.setSmcOverlayCalls[port.setSmcOverlayCalls.length - 1];
-    expect(overlay.lines.some((line) => line.label === "BOS")).toBe(true);
+      // SMC overlay recomputation is throttled to max once per 500ms during
+      // realtime updates to avoid blocking the main thread on every tick.
+      vi.advanceTimersByTime(500);
+
+      const overlay = port.setSmcOverlayCalls[port.setSmcOverlayCalls.length - 1];
+      expect(overlay.lines.some((line) => line.label === "BOS")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ignores bar_update events for a different series", () => {

@@ -15,6 +15,11 @@ from ..models.orders import OrderRecord
 
 __all__ = ["Mt5WorkerProcessBackend"]
 
+# Maximum seconds to wait for a response from the MT5 subprocess worker.
+# If the worker hangs (e.g. MT5 terminal unresponsive), the call raises
+# instead of blocking the thread pool / event loop forever.
+_WORKER_TIMEOUT_S = 30
+
 
 class Mt5WorkerProcessBackend:
     def __init__(self) -> None:
@@ -122,7 +127,34 @@ class Mt5WorkerProcessBackend:
         except OSError as exc:
             self._process = None
             raise RuntimeError(f"MT5 worker write failed: {exc}") from exc
-        raw = process.stdout.readline()
+        # readline() on a subprocess pipe has no native timeout on Windows.
+        # Use a background thread so a hung worker cannot block forever.
+        import threading
+
+        result_box: list[str] = []
+        error_box: list[Exception] = []
+
+        def _read():
+            try:
+                result_box.append(process.stdout.readline())
+            except Exception as exc:
+                error_box.append(exc)
+
+        reader = threading.Thread(target=_read, daemon=True)
+        reader.start()
+        reader.join(timeout=_WORKER_TIMEOUT_S)
+        if reader.is_alive():
+            # Worker did not respond in time — kill it.
+            process.kill()
+            process.wait(timeout=5)
+            self._process = None
+            raise RuntimeError(
+                f"MT5 worker timed out after {_WORKER_TIMEOUT_S}s on {method}"
+            )
+        if error_box:
+            self._process = None
+            raise RuntimeError(f"MT5 worker read failed: {error_box[0]}") from error_box[0]
+        raw = result_box[0] if result_box else ""
         if raw == "":
             code = process.poll()
             self._process = None

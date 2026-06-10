@@ -103,6 +103,9 @@ class Settings:
     broker_pip_value: float = field(
         default_factory=lambda: float(os.getenv("NTTOTV_BROKER_PIP_VALUE", "1.0"))
     )
+    mt5_connect_timeout_ms: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_MT5_CONNECT_TIMEOUT_MS", "5000"))
+    )
     basis_default: float = field(
         default_factory=lambda: float(os.getenv("NTTOTV_BASIS_DEFAULT", "0.0"))
     )

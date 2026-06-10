@@ -36,12 +36,15 @@ class RealMt5Backend:
         if self._initialized:
             return
         if self._terminal_path:
-            ok = self._mt5.initialize(path=self._terminal_path)
+            ok = self._mt5.initialize(
+                path=self._terminal_path,
+                timeout=self._settings.mt5_connect_timeout_ms,
+            )
         else:
-            ok = self._mt5.initialize()
+            ok = self._mt5.initialize(timeout=self._settings.mt5_connect_timeout_ms)
         if not ok:
             code, message = self._mt5.last_error()
-            raise RuntimeError(f"MetaTrader5 initialize failed: {code} {message}")
+            raise RuntimeError(_mt5_error("initialize", code, message, self._terminal_path))
         self._initialized = True
 
     def connect_account(
@@ -69,23 +72,29 @@ class RealMt5Backend:
                 "login": int(login),
                 "password": password,
                 "server": server,
+                "timeout": self._settings.mt5_connect_timeout_ms,
             }
             if self._terminal_path:
                 kwargs["path"] = self._terminal_path
             ok = self._mt5.initialize(**kwargs)
             if not ok:
                 code, message = self._mt5.last_error()
-                raise RuntimeError(f"MetaTrader5 initialize failed: {code} {message}")
+                raise RuntimeError(_mt5_error("initialize", code, message, self._terminal_path))
             self._initialized = True
         expected_login = int(login)
         info = self._mt5.account_info()
         current_login = _account_login(info)
         if current_login != expected_login:
-            ok = self._mt5.login(int(login), password=password, server=server)
+            ok = self._mt5.login(
+                int(login),
+                password=password,
+                server=server,
+                timeout=self._settings.mt5_connect_timeout_ms,
+            )
             if not ok:
                 code, message = self._mt5.last_error()
                 self._active_login = current_login
-                raise RuntimeError(f"MetaTrader5 login failed: {code} {message}")
+                raise RuntimeError(_mt5_error("login", code, message, self._terminal_path))
             info = self._mt5.account_info()
         if info is None:
             code, message = self._mt5.last_error()
@@ -443,6 +452,17 @@ def _retcode_matches(mt5, result, name: str, fallback: int) -> bool:
     if result is None:
         return False
     return int(getattr(result, "retcode", -1)) == int(getattr(mt5, name, fallback))
+
+
+def _mt5_error(action: str, code: int, message: str, terminal_path: str | None) -> str:
+    location = f" for terminal {terminal_path}" if terminal_path else ""
+    hint = ""
+    if int(code) == -10005:
+        hint = (
+            "; IPC timeout. Confirm that this terminal is responsive, restart it, "
+            "or choose a different terminalPath"
+        )
+    return f"MetaTrader5 {action} failed{location}: {code} {message}{hint}"
 
 
 def _account_login(info) -> int | None:

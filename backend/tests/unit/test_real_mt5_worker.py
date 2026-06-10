@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.config import Settings
 from app.models.orders import OrderKind, OrderRecord, OrderSide, OrderSource, OrderStatus
 from app.mt5.worker import RealMt5Backend, _mt5_comment, _mt5_filling_type
 
@@ -46,7 +47,14 @@ def test_connect_account_relogs_when_terminal_account_changes_externally(monkeyp
                 self.current_login = int(login)
             return True
 
-        def login(self, login: int, *, password: str, server: str) -> bool:
+        def login(
+            self,
+            login: int,
+            *,
+            password: str,
+            server: str,
+            timeout: int | None = None,
+        ) -> bool:
             self.login_calls.append(int(login))
             self.current_login = int(login)
             return True
@@ -69,6 +77,41 @@ def test_connect_account_relogs_when_terminal_account_changes_externally(monkeyp
     backend.connect_account(login=257101455, password="pw", server="Exness-MT5Real36")
 
     assert fake.login_calls == [257101455]
+
+
+@pytest.mark.unit
+def test_connect_account_uses_configured_mt5_timeout(monkeypatch):
+    class FakeMt5:
+        def __init__(self) -> None:
+            self.initialize_kwargs: dict | None = None
+            self.login_kwargs: dict | None = None
+            self.current_login = 111
+
+        def initialize(self, **kwargs) -> bool:
+            self.initialize_kwargs = kwargs
+            return True
+
+        def login(self, login: int, **kwargs) -> bool:
+            self.login_kwargs = kwargs
+            self.current_login = int(login)
+            return True
+
+        def account_info(self):
+            return SimpleNamespace(login=self.current_login)
+
+        def last_error(self):
+            return (0, "ok")
+
+    fake = FakeMt5()
+    monkeypatch.setattr("app.mt5.worker.importlib.import_module", lambda _name: fake)
+    backend = RealMt5Backend(settings=Settings(mt5_connect_timeout_ms=1234))
+
+    backend.connect_account(login=222, password="pw", server="Exness-MT5Real8")
+
+    assert fake.initialize_kwargs is not None
+    assert fake.initialize_kwargs["timeout"] == 1234
+    assert fake.login_kwargs is not None
+    assert fake.login_kwargs["timeout"] == 1234
 
 
 @pytest.mark.unit

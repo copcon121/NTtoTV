@@ -92,6 +92,7 @@ export interface Mt5Account {
   login: number;
   server: string;
   symbolBroker?: string;
+  terminalPath?: string;
   tradeMode: string;
   currency?: string;
   balance?: number;
@@ -123,6 +124,13 @@ export interface Mt5Status {
   connected: boolean;
   account: Mt5Account | null;
   error?: string;
+}
+
+export interface Mt5Terminal {
+  path: string;
+  login: number | null;
+  server: string | null;
+  title: string;
 }
 
 export interface OrderSubmitInput {
@@ -251,6 +259,15 @@ export class ApiClient {
   async mt5Symbol(): Promise<Mt5Symbol> {
     const body = await this.getJson<{ symbol: Mt5Symbol }>("/mt5/symbol");
     return body.symbol;
+  }
+
+  async mt5Terminals(): Promise<Mt5Terminal[]> {
+    try {
+      const body = await this.getJson<{ terminals: Mt5Terminal[] }>("/mt5/terminals");
+      return body.terminals;
+    } catch {
+      return [];
+    }
   }
 
   async mt5OpenTrades(): Promise<Mt5OpenTrades> {

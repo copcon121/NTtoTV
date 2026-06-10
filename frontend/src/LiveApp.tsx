@@ -8,6 +8,7 @@ import {
   type Mt5OpenTrades,
   type Mt5PendingOrder,
   type Mt5Symbol,
+  type Mt5Terminal,
 } from "./api/client";
 import { AlertPanel } from "./alerts/AlertPanel";
 import {
@@ -990,6 +991,7 @@ export function LiveApp() {
   const [mt5Account, setMt5Account] = useState<Mt5Account | undefined>(undefined);
   const [mt5Symbol, setMt5Symbol] = useState<Mt5Symbol | undefined>(undefined);
   const [mt5DialogOpen, setMt5DialogOpen] = useState(false);
+  const [mt5Terminals, setMt5Terminals] = useState<Mt5Terminal[]>([]);
   const [mt5Pending, setMt5Pending] = useState(false);
   const [mt5Error, setMt5Error] = useState("");
   const [orders, setOrders] = useState<readonly TradingOrder[]>([]);
@@ -1661,6 +1663,7 @@ export function LiveApp() {
     }
     setMt5Error("");
     setMt5DialogOpen(true);
+    void api.mt5Terminals().then(setMt5Terminals);
   };
   const onLogout = () => {
     void (async () => {
@@ -2327,6 +2330,7 @@ export function LiveApp() {
       if (options.openMt5Setup) {
         setMt5Error("");
         setMt5DialogOpen(true);
+        void api.mt5Terminals().then(setMt5Terminals);
       }
     }
 
@@ -2735,6 +2739,7 @@ export function LiveApp() {
           account={mt5Account}
           pending={mt5Pending}
           error={mt5Error}
+          terminals={mt5Terminals}
           onSubmit={onSubmitMt5Account}
           onClose={() => setMt5DialogOpen(false)}
         />

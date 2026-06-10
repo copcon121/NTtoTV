@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -21,6 +22,82 @@ router = APIRouter(prefix="/api/mt5", tags=["mt5"])
 
 _AUTO_SYMBOL_SENTINELS = {"", "auto", "auto-detect", "autodetect", "detect"}
 _BROKER_SYMBOL_CANDIDATES = ("XAUUSD", "XAUUSDm", "XAUUSDc")
+
+
+@router.get("/terminals")
+async def mt5_terminals(
+    request: Request,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Detect running MT5 terminal processes on this machine."""
+    terminals = await asyncio.to_thread(_detect_terminals)
+    return {"terminals": terminals}
+
+
+def _detect_terminals() -> list[dict[str, Any]]:
+    import json as _json
+    import subprocess as _sp
+
+    try:
+        result = _sp.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "Get-Process terminal64 -ErrorAction SilentlyContinue "
+                "| Select-Object Id, Path, MainWindowTitle "
+                "| ConvertTo-Json -Compress",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+    except Exception:
+        return []
+    try:
+        data = _json.loads(result.stdout)
+    except (ValueError, _json.JSONDecodeError):
+        return []
+    # PowerShell returns a single object (not array) when there is only one
+    # matching process.
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in data:
+        path = str(entry.get("Path") or "")
+        title = str(entry.get("MainWindowTitle") or "")
+        login = _parse_login_from_title(title)
+        server = _parse_server_from_title(title)
+        if not path:
+            continue
+        out.append({"path": path, "login": login, "server": server, "title": title})
+    return out
+
+
+def _parse_login_from_title(title: str) -> int | None:
+    """Extract login from ``'NNN - Server - ...'`` window title."""
+    if not title:
+        return None
+    part = title.split(" - ", 1)[0].strip()
+    try:
+        return int(part)
+    except (ValueError, IndexError):
+        return None
+
+
+def _parse_server_from_title(title: str) -> str | None:
+    """Extract server from ``'NNN - Server - ...'`` window title."""
+    if not title:
+        return None
+    parts = title.split(" - ")
+    if len(parts) >= 2:
+        server = parts[1].strip()
+        return server if server else None
+    return None
 
 
 def _runtime_manager(request: Request):
@@ -87,7 +164,8 @@ async def connect_mt5(
     requested_symbol = _requested_symbol(symbol_value)
 
     manager = _runtime_manager(request)
-    try:
+
+    def _blocking_connect():
         connect_session = getattr(manager, "connect_account_session", None)
         if callable(connect_session):
             session = connect_session(
@@ -116,6 +194,10 @@ async def connect_mt5(
                 requested_symbol,
                 server=info.server or server,
             )
+        return info, symbol
+
+    try:
+        info, symbol = await asyncio.to_thread(_blocking_connect)
     except Exception as exc:
         raise bad_request(f"MT5 connect failed: {exc}", field="account")
     key = _credential_key(request)
@@ -203,8 +285,10 @@ async def mt5_open_trades(
     if account is None:
         raise not_found("MT5 account is not connected", field="account")
     basis = _basis(request)
-    try:
-        with _runtime_manager(request).account_session(cache, account) as backend:
+    manager = _runtime_manager(request)
+
+    def _blocking():
+        with manager.account_session(cache, account) as backend:
             symbol_info = backend.symbol_info(user.id, account.id, account.symbol_broker)
             symbol_map = SymbolMap.from_info(symbol_info)
             _refresh_basis_from_broker_tick(
@@ -224,6 +308,10 @@ async def mt5_open_trades(
                 for row in backend.orders(user.id, account.id)
                 if _matches_symbol(row, account.symbol_broker)
             ]
+        return positions, orders
+
+    try:
+        positions, orders = await asyncio.to_thread(_blocking)
     except ApiError:
         raise
     except Exception as exc:
@@ -241,8 +329,10 @@ async def mt5_close_position(
     account = cache.users.read_mt5_account(user.id)
     if account is None:
         raise not_found("MT5 account is not connected", field="account")
-    try:
-        with _runtime_manager(request).account_session(cache, account) as backend:
+    manager = _runtime_manager(request)
+
+    def _blocking():
+        with manager.account_session(cache, account) as backend:
             row = _find_ticket(
                 backend.positions(user.id, account.id),
                 ticket,
@@ -250,7 +340,10 @@ async def mt5_close_position(
                 field="brokerPositionTicket",
             )
             order = _order_from_position_row(row, user.id, account.id, account.symbol_broker)
-            result = backend.close_position(order)
+            return backend.close_position(order)
+
+    try:
+        result = await asyncio.to_thread(_blocking)
     except ApiError:
         raise
     except Exception as exc:
@@ -419,10 +512,16 @@ async def mt5_status(
     account = cache.users.read_mt5_account(user.id)
     if account is None:
         return {"connected": False, "account": None}
-    try:
-        with _runtime_manager(request).account_session(cache, account) as backend:
+    manager = _runtime_manager(request)
+
+    def _blocking():
+        with manager.account_session(cache, account) as backend:
             info = backend.account_info(user.id, account.id)
             backend.symbol_info(user.id, account.id, account.symbol_broker)
+        return info
+
+    try:
+        info = await asyncio.to_thread(_blocking)
     except Exception as exc:
         return {
             "connected": False,
@@ -445,7 +544,7 @@ async def mt5_account(
     if account is None:
         raise not_found("MT5 account is not connected", field="account")
     try:
-        info = _verified_account_info(request, cache, user, account)
+        info = await asyncio.to_thread(_verified_account_info, request, cache, user, account)
     except Exception as exc:
         raise bad_request(f"MT5 connect failed: {exc}", field="account")
     return {"account": _account_to_dict(account, info)}
@@ -460,9 +559,14 @@ async def mt5_symbol(
     account = cache.users.read_mt5_account(user.id)
     if account is None:
         raise not_found("MT5 account is not connected", field="account")
+    manager = _runtime_manager(request)
+
+    def _blocking():
+        with manager.account_session(cache, account) as backend:
+            return backend.symbol_info(user.id, account.id, account.symbol_broker)
+
     try:
-        with _runtime_manager(request).account_session(cache, account) as backend:
-            info = backend.symbol_info(user.id, account.id, account.symbol_broker)
+        info = await asyncio.to_thread(_blocking)
     except Exception as exc:
         raise bad_request(f"MT5 connect failed: {exc}", field="account")
     return {
@@ -740,6 +844,7 @@ def _account_to_dict(account, info=None) -> dict[str, Any]:
         "login": account.login,
         "server": account.server,
         "symbolBroker": account.symbol_broker,
+        "terminalPath": getattr(account, "terminal_path", None),
         "tradeMode": account.trade_mode,
         "createdAt": account.created_at,
         "updatedAt": account.updated_at,

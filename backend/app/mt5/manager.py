@@ -234,6 +234,7 @@ class Mt5Manager:
             existing = self._worker_backends.get(binding)
             if existing is not None:
                 return existing
+            self._evict_stale_bindings(binding)
             self._validate_worker_binding(binding)
             from .process_client import Mt5WorkerProcessBackend
 
@@ -248,6 +249,26 @@ class Mt5Manager:
         if callable(closer):
             closer()
 
+    def _evict_stale_bindings(self, binding: _TerminalBinding) -> None:
+        """Remove old workers for the same login+terminal but different server.
+
+        This happens when the same MT5 account reconnects with an updated or
+        differently-cased server string.  The old subprocess worker is closed
+        so the new binding can take its place without a conflict error.
+        """
+        stale = [
+            key
+            for key in self._worker_backends
+            if key.login == binding.login
+            and key.terminal_path == binding.terminal_path
+            and key != binding
+        ]
+        for key in stale:
+            backend = self._worker_backends.pop(key, None)
+            closer = getattr(backend, "close", None)
+            if callable(closer):
+                closer()
+
     def _validate_worker_binding(self, binding: _TerminalBinding) -> None:
         for existing in self._worker_backends:
             if existing.login == binding.login and existing.server == binding.server:
@@ -257,11 +278,18 @@ class Mt5Manager:
                         f"{binding.login} is already bound to another terminal path"
                     )
                 continue
+            # Same login on a different server with the same terminal path is
+            # fine — _evict_stale_bindings already cleaned it up above.
+            if existing.login == binding.login:
+                continue
+            # Different logins with no explicit terminal path each get their own
+            # subprocess worker, so there is no shared-terminal conflict.
+            if existing.terminal_path is None and binding.terminal_path is None:
+                continue
+            # One has a path and the other doesn't — ambiguous; could collide
+            # with the system default terminal.
             if existing.terminal_path is None or binding.terminal_path is None:
-                raise RuntimeError(
-                    "Multiple real MT5 accounts require a distinct terminalPath "
-                    "for each account. Run/copy a separate MT5 terminal per user."
-                )
+                continue
             if existing.terminal_path == binding.terminal_path:
                 raise RuntimeError(
                     "MT5 terminal path is already bound to login "
