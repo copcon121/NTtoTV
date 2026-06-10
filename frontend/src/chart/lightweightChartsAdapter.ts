@@ -54,6 +54,10 @@ import {
   type RenderableSmcZone,
   SmcOverlayPrimitive,
 } from "./SmcOverlayPrimitive";
+import {
+  BigTradeBubblePrimitive,
+  type RenderableBigTradeBubble,
+} from "./BigTradeBubblePrimitive";
 import { type Bar } from "../cache/types";
 import { type FootprintViewport } from "../footprint/footprintModel";
 import {
@@ -148,6 +152,10 @@ const MZ_FOOTPRINT_COLORS = {
 
 const DARK_CHART_TEXT = "#d8d8d8";
 const LIGHT_CHART_TEXT = "#111111";
+const BIG_TRADE_BUY_FILL = "rgba(30, 144, 255, 0.18)";
+const BIG_TRADE_BUY_STROKE = "rgba(12, 95, 190, 0.30)";
+const BIG_TRADE_SELL_FILL = "rgba(220, 20, 60, 0.18)";
+const BIG_TRADE_SELL_STROKE = "rgba(170, 12, 42, 0.30)";
 
 interface ChartContrastPalette {
   text: string;
@@ -386,8 +394,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly chart: IChartApi;
   private readonly candleSeries: ISeriesApi<"Candlestick">;
   private readonly deltaSeries: ISeriesApi<"Candlestick">;
-  private readonly bigTradeMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly smcMarkers: ISeriesMarkersPluginApi<Time>;
+  private bigTradePrimitive: BigTradeBubblePrimitive | undefined;
   private smcPrimitive: SmcOverlayPrimitive | undefined;
   private smcOverlay: SmcOverlay = emptySmcOverlay();
   private emaSeriesApi: ISeriesApi<"Line"> | undefined;
@@ -494,8 +502,13 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       priceLineColor: palette.priceLine,
       priceLineStyle: LineStyle.Dashed,
     });
-    this.bigTradeMarkers = createSeriesMarkers(this.candleSeries, []);
     this.smcMarkers = createSeriesMarkers(this.candleSeries, []);
+    this.bigTradePrimitive = new BigTradeBubblePrimitive([]);
+    this.candleSeries.attachPrimitive(
+      this.bigTradePrimitive as unknown as Parameters<
+        typeof this.candleSeries.attachPrimitive
+      >[0],
+    );
 
     // Volume delta overlays the main pane on its own price scale. This keeps
     // the delta band fixed near the bottom without adding a draggable pane.
@@ -1449,24 +1462,24 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       return a.side.localeCompare(b.side);
     });
     const maxVolume = markers.reduce((max, marker) => Math.max(max, marker.volume), 0);
-    const seriesMarkers: SeriesMarker<Time>[] = markers.map((marker) => {
+    const bubbleMarkers: RenderableBigTradeBubble[] = markers.map((marker) => {
       const isBuy = marker.side === "buy";
       return {
+        id: bigTradeKey(marker),
         time: toBarDisplayTimestamp(
           marker.time,
           this.barCountdownDurationMs,
           this.displayTimeOffsetMs,
         ),
-        position: "atPriceMiddle",
         price: marker.price,
-        shape: "circle",
-        color: isBuy ? MZ_FOOTPRINT_COLORS.ask : MZ_FOOTPRINT_COLORS.bid,
-        id: bigTradeKey(marker),
-        text: `${marker.volume}`,
-        size: bubbleRadius(marker.volume, maxVolume, 1, 3),
+        volume: marker.volume,
+        side: marker.side,
+        radius: bubbleRadius(marker.volume, maxVolume, 13, 30),
+        fill: isBuy ? BIG_TRADE_BUY_FILL : BIG_TRADE_SELL_FILL,
+        stroke: isBuy ? BIG_TRADE_BUY_STROKE : BIG_TRADE_SELL_STROKE,
       };
     });
-    this.bigTradeMarkers.setMarkers(seriesMarkers);
+    this.bigTradePrimitive?.setMarkers(bubbleMarkers);
   }
 
   private renderSmcOverlay(): void {
@@ -1653,8 +1666,15 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       );
       this.smcPrimitive = undefined;
     }
+    if (this.bigTradePrimitive !== undefined) {
+      this.candleSeries.detachPrimitive(
+        this.bigTradePrimitive as unknown as Parameters<
+          typeof this.candleSeries.detachPrimitive
+        >[0],
+      );
+      this.bigTradePrimitive = undefined;
+    }
     this.smcMarkers.detach();
-    this.bigTradeMarkers.detach();
     this.chart.remove();
   }
 }

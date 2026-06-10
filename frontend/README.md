@@ -55,3 +55,32 @@ Feature: gc-chart-platform, Property {n}: {property_text}
 
 Use the `propertyTest` / `propertyTag` helpers in `src/test/property.ts` to apply
 the tag consistently.
+
+## Deployment
+
+Production is served at `https://gcflowpy.xyz/` via **Caddy** reverse proxy
+(config in `deploy/caddy/Caddyfile`). Caddy serves the built `frontend/dist`
+directly as static files and proxies `/api/*` and `/ws/chart*` to the backend on
+`127.0.0.1:8000`.
+
+After frontend code changes, run `npm run build` to update `dist/`. Caddy will
+serve the new bundle immediately — no restart needed. Users may need to hard
+refresh (Ctrl+Shift+R) to bypass browser cache.
+
+## Visual styling notes
+
+### Big Trade Bubbles
+
+Big trade markers are drawn as semi-transparent circle bubbles on the candle
+chart via `BigTradeBubblePrimitive.ts`. Current style tuning:
+
+| Property | Buy | Sell |
+| --- | --- | --- |
+| Fill | `rgba(30, 144, 255, 0.18)` | `rgba(220, 20, 60, 0.18)` |
+| Stroke | `rgba(12, 95, 190, 0.30)` | `rgba(170, 12, 42, 0.30)` |
+| Text weight | `400` (normal) | `400` (normal) |
+
+Low opacity ensures candlesticks remain clearly visible behind the bubble
+overlay. The volume label uses normal (non-bold) weight for a cleaner look.
+Color constants live in `lightweightChartsAdapter.ts`; font weight is in
+`BigTradeBubblePrimitive.ts`.
