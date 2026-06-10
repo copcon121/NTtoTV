@@ -27,4 +27,29 @@ describe("DrawingToolbar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete all drawings (2)" }));
     expect(onDeleteAll).toHaveBeenCalledTimes(1);
   });
+
+  it("toggles the mobile toolbar open and closed", () => {
+    render(
+      <DrawingToolbar
+        className="drawing-toolbar-mobile"
+        activeTool={null}
+        drawingCount={0}
+        onToolSelect={vi.fn()}
+        onDeleteAll={vi.fn()}
+      />,
+    );
+
+    const toolbar = screen.getByRole("toolbar", { name: "Drawing tools" });
+    const toggle = screen.getByRole("button", { name: "Open drawing tools" });
+    expect(toolbar).toHaveClass("is-collapsed");
+
+    fireEvent.click(toggle);
+    expect(toolbar).toHaveClass("is-open");
+    expect(
+      screen.getByRole("button", { name: "Close drawing tools" }),
+    ).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close drawing tools" }));
+    expect(toolbar).toHaveClass("is-collapsed");
+  });
 });

@@ -6,6 +6,8 @@
  * (see the screenshot in the user's request).
  */
 
+import { useState } from "react";
+
 import type { DrawingToolType } from "./drawings/types";
 import { DRAWING_TOOLS } from "./drawings/types";
 
@@ -29,9 +31,40 @@ export function DrawingToolbar({
   onToolSelect,
   onDeleteAll,
 }: DrawingToolbarProps) {
-  const classes = className ? `drawing-toolbar ${className}` : "drawing-toolbar";
+  const isMobile = className?.includes("drawing-toolbar-mobile") === true;
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const classes = [
+    "drawing-toolbar",
+    className,
+    isMobile ? (mobileOpen ? "is-open" : "is-collapsed") : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <aside className={classes} role="toolbar" aria-label="Drawing tools">
+      {isMobile && (
+        <button
+          type="button"
+          className="drawing-toolbar-toggle"
+          aria-label={mobileOpen ? "Close drawing tools" : "Open drawing tools"}
+          aria-expanded={mobileOpen}
+          onClick={() => setMobileOpen((open) => !open)}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M4 17 L17 4" />
+            <path d={mobileOpen ? "M8 8 L4 12 L8 16" : "M16 8 L20 12 L16 16"} />
+          </svg>
+        </button>
+      )}
       <div className="drawing-toolbar-tools">
         {DRAWING_TOOLS.map((tool) => {
           const isActive = activeTool === tool.type;

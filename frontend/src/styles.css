@@ -1024,6 +1024,10 @@ body {
   display: none;
 }
 
+.drawing-toolbar-toggle {
+  display: none;
+}
+
 .drawing-toolbar-tools {
   display: flex;
   flex-direction: column;
@@ -1553,36 +1557,68 @@ body {
 
   .chart-container .drawing-toolbar-mobile {
     position: absolute;
-    left: 50%;
+    right: 12px;
     bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     z-index: 14;
     display: flex;
-    flex-direction: row;
+    flex-direction: row-reverse;
     align-items: center;
-    width: min(360px, calc(100% - 28px));
+    width: 44px;
     max-width: calc(100% - 28px);
-    height: 48px;
-    padding: 6px;
-    gap: 6px;
-    overflow-x: auto;
+    height: 44px;
+    padding: 4px;
+    gap: 4px;
+    overflow-x: hidden;
     overflow-y: hidden;
     background: rgba(18, 18, 18, 0.92);
     border: 1px solid rgba(255, 255, 255, 0.16);
     border-radius: 8px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34);
-    transform: translateX(-50%);
+    transition: width 0.16s ease;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
+  }
+
+  .chart-container .drawing-toolbar-mobile.is-open {
+    width: min(390px, calc(100% - 24px));
   }
 
   .chart-container .drawing-toolbar-mobile::-webkit-scrollbar {
     display: none;
   }
 
-  .drawing-toolbar-mobile .drawing-toolbar-tools {
+  .drawing-toolbar-toggle {
     flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    color: #f3f3f3;
+    background: #202020;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .drawing-toolbar-mobile .drawing-toolbar-tools {
+    flex: 1 1 auto;
+    min-width: 0;
     flex-direction: row;
     gap: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .drawing-toolbar-mobile .drawing-toolbar-tools::-webkit-scrollbar {
+    display: none;
+  }
+
+  .drawing-toolbar-mobile.is-collapsed .drawing-toolbar-tools,
+  .drawing-toolbar-mobile.is-collapsed .drawing-toolbar-separator,
+  .drawing-toolbar-mobile.is-collapsed .drawing-tool-delete {
+    display: none;
   }
 
   .drawing-toolbar-mobile .drawing-toolbar-separator {
@@ -1597,8 +1633,8 @@ body {
 
   .drawing-tool-btn {
     flex: 0 0 auto;
-    width: 30px;
-    height: 30px;
+    width: 34px;
+    height: 34px;
   }
 
   .chart-focus-toggle {
@@ -1638,20 +1674,22 @@ body {
     align-items: stretch;
     flex-direction: column;
     gap: 8px;
-    padding: 8px;
+    max-height: min(38dvh, 290px);
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
   }
 
   .market-order-main {
-    flex-wrap: wrap;
-    gap: 8px;
+    display: contents;
   }
 
   .market-order-meta {
+    order: 1;
     width: 100%;
     gap: 6px;
   }
 
   .market-order-settings {
+    order: 2;
     width: 100%;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1666,9 +1704,13 @@ body {
   }
 
   .market-order-actions {
+    order: 4;
     width: 100%;
     display: grid;
     grid-template-columns: 1fr 1fr;
+    margin-top: 0;
+    padding-top: 2px;
+    background: #161616;
   }
 
   .market-order-actions button {
@@ -1677,7 +1719,9 @@ body {
   }
 
   .market-order-rows {
-    max-height: 120px;
+    order: 3;
+    min-height: 0;
+    max-height: 96px;
   }
 
   .market-order-row {

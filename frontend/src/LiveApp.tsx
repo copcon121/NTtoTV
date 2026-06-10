@@ -129,6 +129,7 @@ const DELTA_PROFILE_ROW_TICKS = 1;
 const DELTA_PROFILE_VALUE_AREA_PCT = 70;
 const DELTA_PROFILE_REFRESH_DELAY_MS = 1_000;
 const ORDER_REFRESH_INTERVAL_MS = 3_000;
+const ENABLE_REALTIME_FOOTPRINT_UPDATES = false;
 const MARKET_ORDER_SETTINGS_STORAGE_KEY = "gc-chart-platform.market-order-settings";
 const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
   volumeLots: 0.1,
@@ -1360,10 +1361,14 @@ export function LiveApp() {
   // bookkeeping on the backend.
   useEffect(() => {
     socket.subscribe(SYMBOL, GLOBAL_SUBSCRIBED_EVENTS);
-    socket.subscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
+    if (ENABLE_REALTIME_FOOTPRINT_UPDATES) {
+      socket.subscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
+    }
     return () => {
       socket.unsubscribe(SYMBOL, GLOBAL_SUBSCRIBED_EVENTS);
-      socket.unsubscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
+      if (ENABLE_REALTIME_FOOTPRINT_UPDATES) {
+        socket.unsubscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
+      }
     };
   }, [socket]);
 
@@ -1538,23 +1543,25 @@ export function LiveApp() {
         setLatestPrice((msg.bid + msg.ask) / 2);
       }
     });
-    const offFootprint = socket.on("footprint_update", (msg) => {
-      if (
-        msg.symbol !== SYMBOL ||
-        !matchesChartContract(msg.contract) ||
-        msg.tf !== "1m"
-      ) {
-        return;
-      }
-      setFootprintBars((prev) => mergeFootprint(prev, msg));
-      if (
-        fixedRangeDeltaProfileDrawings(drawingsRef.current).some((drawing) =>
-          footprintTouchesFixedRange(msg.time, drawing, timeframe),
-        )
-      ) {
-        scheduleDeltaProfileRefresh();
-      }
-    });
+    const offFootprint = ENABLE_REALTIME_FOOTPRINT_UPDATES
+      ? socket.on("footprint_update", (msg) => {
+          if (
+            msg.symbol !== SYMBOL ||
+            !matchesChartContract(msg.contract) ||
+            msg.tf !== "1m"
+          ) {
+            return;
+          }
+          setFootprintBars((prev) => mergeFootprint(prev, msg));
+          if (
+            fixedRangeDeltaProfileDrawings(drawingsRef.current).some((drawing) =>
+              footprintTouchesFixedRange(msg.time, drawing, timeframe),
+            )
+          ) {
+            scheduleDeltaProfileRefresh();
+          }
+        })
+      : () => {};
     const offBigTrade = socket.on("big_trade", (msg) => {
       if (msg.symbol !== SYMBOL || !matchesChartContract(msg.contract)) {
         return;
