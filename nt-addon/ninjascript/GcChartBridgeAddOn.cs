@@ -454,10 +454,17 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                         log("market data dispatcher is shutting down for " + key);
                         return;
                     }
-                    instrument.Dispatcher.InvokeAsync(delegate
+                    if (instrument.Dispatcher.CheckAccess())
                     {
                         instrument.MarketData.Update += handler;
-                    });
+                    }
+                    else
+                    {
+                        instrument.Dispatcher.Invoke(delegate
+                        {
+                            instrument.MarketData.Update += handler;
+                        });
+                    }
                     subs[key] = sub;
                     log("subscribed " + key + " (Level 1 stream)");
                 }
@@ -490,10 +497,18 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 if (sub.Handler != null && !sub.Instrument.Dispatcher.HasShutdownStarted)
                 {
                     EventHandler<MarketDataEventArgs> handler = sub.Handler;
-                    sub.Instrument.Dispatcher.InvokeAsync(delegate
+                    if (sub.Instrument.Dispatcher.CheckAccess())
                     {
                         sub.Instrument.MarketData.Update -= handler;
-                    });
+                    }
+                    else
+                    {
+                        sub.Instrument.Dispatcher.Invoke(delegate
+                        {
+                            sub.Instrument.MarketData.Update -= handler;
+                        });
+                    }
+                    sub.Handler = null;
                 }
             }
             catch

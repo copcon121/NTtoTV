@@ -218,7 +218,7 @@ class Pipeline:
                     min_trade_size=seed.min_trade_size if seed is not None else 0,
                 )
         self._fp = footprint or FootprintEngine()
-        self._bt = big_trade or BigTradeEngine()
+        self._bt = big_trade or BigTradeEngine(dedupe_repeated_timestamp_runs=True)
         self._alerts = alert_engine or AlertEngine(cache)
         self._basis = basis_engine
         self._send_alert_text = (

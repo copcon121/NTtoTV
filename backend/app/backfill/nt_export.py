@@ -704,7 +704,7 @@ def rebuild_derived_cache(
     bar_engine = BarAggregator()
     vd_engines = {tf: VolumeDeltaEngine(timeframe=tf) for tf in SUPPORTED_TFS}
     footprint_engine = FootprintEngine()
-    big_trade_engine = BigTradeEngine()
+    big_trade_engine = BigTradeEngine(dedupe_repeated_timestamp_runs=True)
 
     bars: dict[tuple[str, int], BarRecord] = {}
     volume_deltas: dict[tuple[str, int], VolumeDeltaRecord] = {}

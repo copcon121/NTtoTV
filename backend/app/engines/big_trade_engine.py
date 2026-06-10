@@ -63,6 +63,7 @@ class _Group:
     side: Side
     volume: int
     price: float
+    ticks: list[tuple[float, int]]
 
 
 class BigTradeEngine:
@@ -74,6 +75,7 @@ class BigTradeEngine:
         min_volume: int = DEFAULT_MIN_VOLUME,
         max_volume: int = DEFAULT_MAX_VOLUME,
         volume_filter_enable: bool = DEFAULT_VOLUME_FILTER_ENABLE,
+        dedupe_repeated_timestamp_runs: bool = False,
     ) -> None:
         if min_volume < 0:
             raise ValueError("min_volume must be >= 0")
@@ -82,6 +84,7 @@ class BigTradeEngine:
         self.min_volume = min_volume
         self.max_volume = max_volume
         self.volume_filter_enable = volume_filter_enable
+        self.dedupe_repeated_timestamp_runs = dedupe_repeated_timestamp_runs
 
         # Continuous classification state, keyed by contract.
         self._prev_price: dict[str, float] = {}
@@ -175,6 +178,7 @@ class BigTradeEngine:
         if current is not None and t.time == current.time and side == current.side:
             current.volume += t.volume
             current.price = t.price  # NT MarkerPosition=Last uses LastPrice
+            current.ticks.append((t.price, t.volume))
         else:
             if current is not None:
                 emitted = self._emit_group(current)
@@ -219,10 +223,15 @@ class BigTradeEngine:
             side=side,
             volume=t.volume,
             price=t.price,
+            ticks=[(t.price, t.volume)],
         )
 
     def _emit_group(self, g: _Group) -> list[BigTrade]:
-        if not self.passes_filter(g.volume):
+        if self.dedupe_repeated_timestamp_runs:
+            volume, price = self._dedup_repeated_tick_run(g.ticks)
+        else:
+            volume, price = g.volume, g.price
+        if not self.passes_filter(volume):
             return []
         return [
             BigTrade(
@@ -230,11 +239,31 @@ class BigTradeEngine:
                 contract=g.contract,
                 trade_id=g.trade_id,
                 time=g.time,
-                price=g.price,
-                volume=g.volume,
+                price=price,
+                volume=volume,
                 side=g.side,
             )
         ]
+
+    @staticmethod
+    def _dedup_repeated_tick_run(ticks: list[tuple[float, int]]) -> tuple[int, float]:
+        """Collapse one exact duplicate subscription replay inside a timestamp.
+
+        A leaked NT MarketData handler can replay the same same-timestamp tape
+        run twice. That turns, for example, 17 one-lot prints into a synthetic
+        34-lot BigTrade that the chart-side NinjaTrader indicator never sees.
+        Only the narrow "two identical halves" pattern is collapsed; normal
+        repeated prints remain counted.
+        """
+        if not ticks:
+            return 0, 0.0
+        effective = ticks
+        count = len(ticks)
+        if count >= 2 and count % 2 == 0:
+            mid = count // 2
+            if ticks[:mid] == ticks[mid:]:
+                effective = ticks[:mid]
+        return sum(volume for _, volume in effective), effective[-1][0]
 
     # -- batch (pure oracle) --------------------------------------------------
 

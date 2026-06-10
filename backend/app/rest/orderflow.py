@@ -184,7 +184,7 @@ def _rebuild_big_trades(
     ``BigTradeEngine`` applies the NT BigTrade defaults (MinVolume=30,
     MaxVolume=-1, VolumeFilterEnable=true).
     """
-    engine = BigTradeEngine()
+    engine = BigTradeEngine(dedupe_repeated_timestamp_runs=True)
     out: list[BigTradeRecord] = []
     had_raw_trades = False
     for trade in _trades_with_prevailing_quote(tick_store, contract, frm, to):
