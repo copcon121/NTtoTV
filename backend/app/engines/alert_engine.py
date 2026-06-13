@@ -47,22 +47,35 @@ from ..models.messages import AlertEvent
 from ..models.timestamp import CanonicalTimestamp
 from ..storage.cache_store import CacheStore
 from ..storage.records import AlertEventRecord, AlertRecord
+from .smc_external import SmcBar, SmcExternalBreakState, SmcStrategyTrigger
 
 __all__ = [
     "ALERT_TYPES",
     "LEVEL_ALERT_TYPES",
+    "SMC_DEFAULT_LOOKAHEAD_BARS",
+    "SMC_DEFAULT_MAX_BARS",
+    "SMC_DEFAULT_PAUSE_ON_INSIDE_BARS",
+    "SMC_DEFAULT_SWING_LENGTH",
+    "SMC_EXTERNAL_BREAK_BIG_TRADE",
     "Alert",
     "MarketContext",
     "AlertEngine",
 ]
 
-# Type literals for the six supported alert types. (Req 16.1)
+# Type literals for supported alert types. (Req 16.1)
 PRICE_CROSSES_LEVEL = "price_crosses_level"
 BAR_CLOSES_ABOVE = "bar_closes_above"
 BAR_CLOSES_BELOW = "bar_closes_below"
 VOLUME_DELTA_THRESHOLD = "volume_delta_threshold"
 BIG_TRADE_THRESHOLD = "big_trade_threshold"
 STACKED_IMBALANCE = "stacked_imbalance"
+SMC_EXTERNAL_BREAK_BIG_TRADE = "smc_external_break_big_trade"
+
+SMC_DEFAULT_SWING_LENGTH = 50
+SMC_DEFAULT_LOOKAHEAD_BARS = 5
+SMC_DEFAULT_MAX_BARS = 20
+SMC_DEFAULT_PAUSE_ON_INSIDE_BARS = True
+_SMC_WARMUP_MIN_BARS = 300
 
 ALERT_TYPES: frozenset[str] = frozenset(
     {
@@ -72,6 +85,7 @@ ALERT_TYPES: frozenset[str] = frozenset(
         VOLUME_DELTA_THRESHOLD,
         BIG_TRADE_THRESHOLD,
         STACKED_IMBALANCE,
+        SMC_EXTERNAL_BREAK_BIG_TRADE,
     }
 )
 
@@ -136,6 +150,9 @@ class MarketContext:
     # bar_closes_* / volume_delta_threshold / stacked_imbalance (closed bar only)
     bar_closed: bool = False
     bar_time: CanonicalTimestamp | None = None
+    bar_open: float | None = None
+    bar_high: float | None = None
+    bar_low: float | None = None
     bar_close: float | None = None
     bar_volume_delta: int | None = None
     bar_stacked_imbalance: bool | None = None
@@ -186,9 +203,13 @@ class AlertEngine:
         self._alerts: dict[str, Alert] = {}
         self._price_state: dict[str, _PriceCrossState] = {}
         self._bar_state: dict[str, _BarState] = {}
+        self._smc_state: dict[str, SmcExternalBreakState] = {}
         if store is not None:
             for rec in store.read_alerts(profile_id=None):
-                self._alerts[rec.id] = Alert.from_record(rec)
+                alert = Alert.from_record(rec)
+                self._alerts[rec.id] = alert
+                if alert.enabled:
+                    self._warm_smc_alert(alert)
 
     # -- registration ---------------------------------------------------------
 
@@ -199,6 +220,7 @@ class AlertEngine:
         # (e.g. a changed level) starts from a clean fire-once state.
         self._price_state.pop(alert.id, None)
         self._bar_state.pop(alert.id, None)
+        self._smc_state.pop(alert.id, None)
         if self._store is not None:
             from ..models.timestamp import now_ms
 
@@ -217,6 +239,8 @@ class AlertEngine:
                     updated_at=now,
                 )
             )
+        if alert.enabled:
+            self._warm_smc_alert(alert)
         return alert
 
     def delete(self, alert_id: str) -> None:
@@ -224,6 +248,7 @@ class AlertEngine:
         self._alerts.pop(alert_id, None)
         self._price_state.pop(alert_id, None)
         self._bar_state.pop(alert_id, None)
+        self._smc_state.pop(alert_id, None)
         if self._store is not None:
             self._store.delete_alert(alert_id)
 
@@ -233,6 +258,9 @@ class AlertEngine:
         if alert is None:
             return
         alert.enabled = enabled
+        if enabled:
+            self._smc_state.pop(alert.id, None)
+            self._warm_smc_alert(alert)
         self._persist_enabled(alert)
 
     def alerts(self) -> list[Alert]:
@@ -292,6 +320,8 @@ class AlertEngine:
             return self._eval_big_trade(alert, ctx)
         if alert.type == STACKED_IMBALANCE:
             return self._eval_stacked_imbalance(alert, ctx)
+        if alert.type == SMC_EXTERNAL_BREAK_BIG_TRADE:
+            return self._eval_smc_external_break_big_trade(alert, ctx)
         return None
 
     # -- price_crosses_level (Req 16.6, 17.5, 17.7) ---------------------------
@@ -377,6 +407,36 @@ class AlertEngine:
         )
         return self._make_event(alert, ctx, price=price, level=None)
 
+    # -- smc_external_break_big_trade ----------------------------------------
+
+    def _eval_smc_external_break_big_trade(
+        self, alert: Alert, ctx: MarketContext
+    ) -> AlertEvent | None:
+        state = self._smc_state_for(alert)
+        trigger: SmcStrategyTrigger | None = None
+
+        if ctx.bar_closed:
+            bar = self._smc_bar_from_context(ctx)
+            if bar is not None:
+                trigger = state.on_closed_bar(bar)
+
+        if trigger is None and ctx.big_trade_volume is not None:
+            price = (
+                float(ctx.big_trade_price)
+                if ctx.big_trade_price is not None
+                else 0.0
+            )
+            trigger = state.on_big_trade(
+                time=ctx.time,
+                price=price,
+                volume=int(ctx.big_trade_volume),
+                threshold=self._smc_big_trade_threshold(alert),
+            )
+
+        if trigger is None:
+            return None
+        return self._make_smc_event(alert, ctx, trigger)
+
     # -- per-closed-bar fire-once + re-arm gate (Req 17.6, 17.8) --------------
 
     def _bar_gate(
@@ -426,6 +486,128 @@ class AlertEngine:
             profile_id=alert.profile_id,
         )
 
+    def _make_smc_event(
+        self,
+        alert: Alert,
+        ctx: MarketContext,
+        trigger: SmcStrategyTrigger,
+    ) -> AlertEvent:
+        return AlertEvent(
+            alert_id=alert.id,
+            alert_type=alert.type,
+            symbol=ctx.symbol,
+            contract=ctx.contract,
+            time=trigger.time,
+            price=trigger.price,
+            message=self._smc_message(alert, trigger),
+            level=trigger.setup.level,
+            profile_id=alert.profile_id,
+        )
+
+    def _smc_state_for(self, alert: Alert) -> SmcExternalBreakState:
+        state = self._smc_state.get(alert.id)
+        if state is None:
+            state = self._new_smc_state(alert)
+            self._smc_state[alert.id] = state
+        return state
+
+    def _warm_smc_alert(self, alert: Alert) -> None:
+        if alert.type != SMC_EXTERNAL_BREAK_BIG_TRADE:
+            return
+        state = self._new_smc_state(alert)
+        if self._store is not None:
+            limit = max(
+                _SMC_WARMUP_MIN_BARS,
+                self._smc_swing_length(alert) * 4
+                + self._smc_lookahead_bars(alert)
+                + self._smc_max_bars(alert)
+                + 20,
+            )
+            for rec in self._store.read_bars(
+                alert.symbol,
+                alert.symbol,
+                "1m",
+                limit=limit,
+            ):
+                if not rec.closed:
+                    continue
+                state.on_closed_bar(
+                    SmcBar(
+                        time=rec.time,
+                        open=rec.open,
+                        high=rec.high,
+                        low=rec.low,
+                        close=rec.close,
+                    ),
+                    emit=False,
+                )
+        self._smc_state[alert.id] = state
+
+    def _new_smc_state(self, alert: Alert) -> SmcExternalBreakState:
+        return SmcExternalBreakState(
+            swing_length=self._smc_swing_length(alert),
+            lookahead_bars=self._smc_lookahead_bars(alert),
+            max_bars=self._smc_max_bars(alert),
+            pause_on_inside_bars=self._smc_pause_on_inside_bars(alert),
+        )
+
+    @staticmethod
+    def _smc_bar_from_context(ctx: MarketContext) -> SmcBar | None:
+        if ctx.bar_time is None or ctx.bar_close is None:
+            return None
+        if ctx.bar_open is None or ctx.bar_high is None or ctx.bar_low is None:
+            return None
+        return SmcBar(
+            time=ctx.bar_time,
+            open=float(ctx.bar_open),
+            high=float(ctx.bar_high),
+            low=float(ctx.bar_low),
+            close=float(ctx.bar_close),
+        )
+
+    @staticmethod
+    def _smc_swing_length(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get("swingLength"),
+            SMC_DEFAULT_SWING_LENGTH,
+        )
+
+    @staticmethod
+    def _smc_lookahead_bars(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get(
+                "effectiveLookaheadBars",
+                alert.params.get("lookaheadBars"),
+            ),
+            SMC_DEFAULT_LOOKAHEAD_BARS,
+        )
+
+    @staticmethod
+    def _smc_max_bars(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get("maxBars"),
+            SMC_DEFAULT_MAX_BARS,
+        )
+
+    @staticmethod
+    def _smc_pause_on_inside_bars(alert: Alert) -> bool:
+        raw = alert.params.get(
+            "pauseOnInsideBars",
+            SMC_DEFAULT_PAUSE_ON_INSIDE_BARS,
+        )
+        return raw if isinstance(raw, bool) else SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
+
+    @staticmethod
+    def _smc_big_trade_threshold(alert: Alert) -> float:
+        raw = alert.params.get("bigTradeThreshold", 50)
+        if isinstance(raw, bool):
+            return 50.0
+        try:
+            threshold = float(raw)
+        except (TypeError, ValueError):
+            return 50.0
+        return threshold if threshold > 0 else 50.0
+
     def _persist_enabled(self, alert: Alert) -> None:
         if self._store is None:
             return
@@ -454,3 +636,36 @@ class AlertEngine:
         if alert.type == STACKED_IMBALANCE:
             return f"{sym} stacked imbalance"
         return f"{sym} alert"
+
+    @staticmethod
+    def _smc_message(alert: Alert, trigger: SmcStrategyTrigger) -> str:
+        direction = "bullish" if trigger.setup.direction == 1 else "bearish"
+        threshold = _fmt_num(AlertEngine._smc_big_trade_threshold(alert))
+        level = _fmt_num(trigger.setup.level)
+        if trigger.trigger == "big_trade":
+            volume = _fmt_num(trigger.big_trade_volume)
+            return (
+                f"{alert.symbol} external {direction} {trigger.setup.kind} "
+                f"big trade {volume} > {threshold} at level {level}"
+            )
+        close = _fmt_num(trigger.price)
+        return (
+            f"{alert.symbol} external {direction} {trigger.setup.kind} "
+            f"retest close {close} at level {level} (BT > {threshold})"
+        )
+
+
+def _positive_int_param(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _fmt_num(value: int | float | None) -> str:
+    if value is None:
+        return "unknown"
+    return f"{float(value):g}"

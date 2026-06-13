@@ -25,7 +25,17 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from ..engines.alert_engine import ALERT_TYPES, LEVEL_ALERT_TYPES, Alert, AlertEngine
+from ..engines.alert_engine import (
+    ALERT_TYPES,
+    LEVEL_ALERT_TYPES,
+    SMC_DEFAULT_LOOKAHEAD_BARS,
+    SMC_DEFAULT_MAX_BARS,
+    SMC_DEFAULT_PAUSE_ON_INSIDE_BARS,
+    SMC_DEFAULT_SWING_LENGTH,
+    SMC_EXTERNAL_BREAK_BIG_TRADE,
+    Alert,
+    AlertEngine,
+)
 from ..models.timestamp import now_ms
 from ..storage.cache_store import CacheStore
 from ..storage.records import AlertRecord
@@ -86,6 +96,7 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
     """
     if not isinstance(params, dict):
         raise validation_error("'params' must be an object", field="params")
+    params = dict(params)
 
     if alert_type in LEVEL_ALERT_TYPES:
         level = params.get("level")
@@ -101,11 +112,52 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 f"alert type {alert_type!r} requires a numeric 'threshold'",
                 field="threshold",
             )
+    elif alert_type == SMC_EXTERNAL_BREAK_BIG_TRADE:
+        threshold = params.get("bigTradeThreshold")
+        if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
+            raise validation_error(
+                f"alert type {alert_type!r} requires a numeric 'bigTradeThreshold'",
+                field="bigTradeThreshold",
+            )
+        if float(threshold) <= 0:
+            raise validation_error(
+                "'bigTradeThreshold' must be greater than zero",
+                field="bigTradeThreshold",
+            )
+        for key in (
+            "swingLength",
+            "lookaheadBars",
+            "effectiveLookaheadBars",
+            "maxBars",
+        ):
+            _validate_optional_positive_number(params, key)
+        pause = params.get("pauseOnInsideBars")
+        if pause is not None and not isinstance(pause, bool):
+            raise validation_error(
+                "'pauseOnInsideBars' must be a boolean",
+                field="pauseOnInsideBars",
+            )
+        params["bigTradeThreshold"] = threshold
+        params["swingLength"] = SMC_DEFAULT_SWING_LENGTH
+        params["lookaheadBars"] = SMC_DEFAULT_LOOKAHEAD_BARS
+        params["effectiveLookaheadBars"] = SMC_DEFAULT_LOOKAHEAD_BARS
+        params["maxBars"] = SMC_DEFAULT_MAX_BARS
+        params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
     repeat = params.get("repeat")
     if repeat is not None and not isinstance(repeat, bool):
         raise validation_error("'repeat' must be a boolean", field="repeat")
     # stacked_imbalance has no required params.
     return params
+
+
+def _validate_optional_positive_number(params: dict[str, Any], key: str) -> None:
+    if key not in params:
+        return
+    value = params[key]
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise validation_error(f"'{key}' must be numeric", field=key)
+    if float(value) <= 0:
+        raise validation_error(f"'{key}' must be greater than zero", field=key)
 
 
 @router.get("/alerts")

@@ -131,7 +131,10 @@ Networking rule:
 - Browser should use same-origin `/api` and `/ws/chart`, not hard-code `:8000`
   in frontend code, or REST and websocket can split across different backend
   processes.
-- Vite dev default port is `9999` via `frontend/vite.config.ts`.
+- Current browser/public entrypoint is `https://gcflowpy.xyz/`. Do not assume
+  local port `9999` is in use; that was the old Vite dev URL.
+- Vite can still run locally for development if explicitly started, but production
+  traffic is served through Caddy on `gcflowpy.xyz`.
 
 ## NT AddOn Layout
 
@@ -187,10 +190,10 @@ cd frontend
 npm run dev
 ```
 
-Frontend URL defaults to:
+Current browser URL:
 
 ```text
-http://127.0.0.1:9999/
+https://gcflowpy.xyz/
 ```
 
 Backend tests:
@@ -363,7 +366,7 @@ NT-specific:
 Frontend frozen / no data:
 
 1. Check backend: `GET /api/health`.
-2. Check frontend dev server port `9999`.
+2. Check public frontend/domain: `https://gcflowpy.xyz/`.
 3. Check `/api/contracts?symbol=GC`; active should normally be `GC 08-26`.
 4. Check `/api/history?symbol=GC&contract=GC&tf=1m&limit=5`.
 5. Check backend log for `/ws/nt` and `/ws/chart` accepted connections.
@@ -391,12 +394,14 @@ Gap/history import:
 After the latest fixes:
 
 - Backend process runs on port `8000`.
-- Frontend dev server runs on port `9999`.
-- Public/browser entrypoint is `http://127.0.0.1:9999/` or the VPS hostname/IP
-  on port `9999`; frontend proxies `/api` and `/ws` to backend.
+- Frontend/public browser entrypoint is `https://gcflowpy.xyz/`.
+- Port `9999` is no longer the active user-facing frontend route; only use it
+  if a local Vite dev server was explicitly started for development.
+- Caddy serves the frontend/domain and proxies `/api` and `/ws` to backend
+  loopback.
 - Backend port `8000` has an inbound Windows Firewall block rule:
   `NTtoTV Block Backend 8000 Inbound`. Local loopback still works for the
-  frontend proxy and health checks.
+  Caddy proxy and health checks.
 - Current real MT5 backend runtime env uses live trading enabled and invite-code
   gated self-registration:
   `NTTOTV_MT5_BACKEND=real`, `NTTOTV_TRADING_ENABLED=1`,

@@ -91,6 +91,9 @@ class Settings:
     invite_code: str | None = field(
         default_factory=lambda: os.getenv("NTTOTV_INVITE_CODE")
     )
+    auth_session_ttl_days: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_SESSION_TTL_DAYS", "30"))
+    )
     default_broker_symbol: str = field(
         default_factory=lambda: os.getenv("NTTOTV_BROKER_SYMBOL", "XAUUSDm")
     )
@@ -120,6 +123,14 @@ class Settings:
     @property
     def ticks_dir(self) -> Path:
         return self.data_dir / self.ticks_subdir
+
+    @property
+    def auth_session_ttl_seconds(self) -> int:
+        return max(1, self.auth_session_ttl_days) * 24 * 60 * 60
+
+    @property
+    def auth_session_ttl_ms(self) -> int:
+        return self.auth_session_ttl_seconds * 1000
 
 
 # A shared default instance. Tests may construct their own Settings as needed.

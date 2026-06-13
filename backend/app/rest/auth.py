@@ -35,6 +35,20 @@ def get_current_user(
     return user
 
 
+def _create_session_cookie(response: Response, cache: CacheStore, user_id: str) -> None:
+    token = cache.users.create_session(
+        user_id,
+        ttl_ms=default_settings.auth_session_ttl_ms,
+    )
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        httponly=True,
+        samesite="lax",
+        max_age=default_settings.auth_session_ttl_seconds,
+    )
+
+
 @router.post("/login")
 async def login(
     request: Request,
@@ -51,14 +65,7 @@ async def login(
         if rec is None:
             raise ApiError(401, ErrorCode.UNAUTHORIZED, "Invalid username or password")
 
-    token = cache.users.create_session(rec.id)
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        samesite="lax",
-        max_age=12 * 60 * 60,
-    )
+    _create_session_cookie(response, cache, rec.id)
     return {"user": {"id": rec.id, "username": rec.username}}
 
 
@@ -73,14 +80,7 @@ async def register(
     if cache.users.read_user_by_username(username) is not None:
         raise conflict("Username already exists", field="username")
     rec = cache.users.create_user(username, password)
-    token = cache.users.create_session(rec.id)
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        samesite="lax",
-        max_age=12 * 60 * 60,
-    )
+    _create_session_cookie(response, cache, rec.id)
     return {"user": {"id": rec.id, "username": rec.username}}
 
 
@@ -105,14 +105,7 @@ async def refresh(
     if user is None:
         raise ApiError(401, ErrorCode.UNAUTHORIZED, "Authentication required")
     cache.users.delete_session(request.cookies.get(SESSION_COOKIE))
-    token = cache.users.create_session(user.id)
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        samesite="lax",
-        max_age=12 * 60 * 60,
-    )
+    _create_session_cookie(response, cache, user.id)
     return {"user": _user_to_dict(user)}
 
 

@@ -14,8 +14,9 @@ from app.storage.cache_store import CacheStore
 
 
 @pytest.fixture()
-def app_client(tmp_path):
-    settings = Settings(data_dir=tmp_path)
+def app_client(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    settings = Settings(data_dir=tmp_path, invite_code=None)
+    monkeypatch.setattr(auth_routes, "default_settings", settings)
     cache = CacheStore(tmp_path / "app.sqlite")
     app = create_app(lifespan=False)
     app.state.contract_state = ContractStateStore(cache, settings=settings)
@@ -50,6 +51,25 @@ def test_register_creates_session_and_duplicate_conflicts(app_client: TestClient
         "/api/auth/login", json={"username": "alice", "password": "secret"}
     )
     assert login.status_code == 200
+
+
+@pytest.mark.integration
+def test_session_cookie_uses_configured_ttl(
+    app_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        auth_routes,
+        "default_settings",
+        Settings(auth_session_ttl_days=7, invite_code=None),
+    )
+
+    registered = app_client.post(
+        "/api/auth/register", json={"username": "alice", "password": "secret"}
+    )
+
+    assert registered.status_code == 200
+    assert "Max-Age=604800" in registered.headers["set-cookie"]
 
 
 @pytest.mark.integration
@@ -119,7 +139,10 @@ def test_me_profile_requires_auth_and_is_scoped_by_user(app_client: TestClient):
 
 
 @pytest.mark.integration
-def test_first_user_profile_seeds_from_legacy_default(tmp_path):
+def test_first_user_profile_seeds_from_legacy_default(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     db_path = tmp_path / "app.sqlite"
     conn = sqlite3.connect(db_path)
     try:
@@ -142,7 +165,8 @@ def test_first_user_profile_seeds_from_legacy_default(tmp_path):
     finally:
         conn.close()
 
-    settings = Settings(data_dir=tmp_path)
+    settings = Settings(data_dir=tmp_path, invite_code=None)
+    monkeypatch.setattr(auth_routes, "default_settings", settings)
     cache = CacheStore(db_path)
     app = create_app(lifespan=False)
     app.state.contract_state = ContractStateStore(cache, settings=settings)

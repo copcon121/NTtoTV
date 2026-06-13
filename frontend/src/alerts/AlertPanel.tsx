@@ -55,6 +55,12 @@ export interface AlertPanelProps {
 }
 
 const DEFAULT_TOAST_MS = 4000;
+const SMC_STRATEGY_TYPE: AlertType = "smc_external_break_big_trade";
+const SMC_BIG_TRADE_DEFAULT = "50";
+const SMC_SWING_LENGTH = 50;
+const SMC_LOOKAHEAD_BARS = 5;
+const SMC_MAX_BARS = 20;
+const SMC_PAUSE_ON_INSIDE_BARS = true;
 
 function defaultPlaySound(): void {
   // Best-effort: a short beep via the Web Audio API when available. Wrapped so
@@ -74,6 +80,44 @@ function defaultPlaySound(): void {
   } catch {
     // ignore — sound is a non-critical enhancement
   }
+}
+
+function isLevelAlertType(type: AlertType): boolean {
+  return (
+    type === "price_crosses_level" ||
+    type === "bar_closes_above" ||
+    type === "bar_closes_below"
+  );
+}
+
+function isThresholdAlertType(type: AlertType): boolean {
+  return type === "volume_delta_threshold" || type === "big_trade_threshold";
+}
+
+function alertInputLabel(type: AlertType): string {
+  if (isLevelAlertType(type)) return "Alert level";
+  if (type === SMC_STRATEGY_TYPE) return "BigTrade threshold";
+  return "Alert threshold";
+}
+
+function alertInputPlaceholder(type: AlertType): string {
+  if (isLevelAlertType(type)) return "level";
+  if (type === SMC_STRATEGY_TYPE) return "BT threshold";
+  return "threshold";
+}
+
+function alertDescription(alert: Alert): string {
+  if (alert.type === SMC_STRATEGY_TYPE) {
+    const threshold = alert.params.bigTradeThreshold;
+    const repeat = alert.params.repeat === true ? " (repeat)" : "";
+    return `External BOS/CHoCH, BT > ${String(threshold)}${repeat}`;
+  }
+  return [
+    alert.type,
+    "level" in alert.params ? ` @ ${String(alert.params.level)}` : "",
+    "threshold" in alert.params ? ` >= ${String(alert.params.threshold)}` : "",
+    alert.params.repeat === true ? " (repeat)" : "",
+  ].join("");
 }
 
 export function AlertPanel({
@@ -121,19 +165,42 @@ export function AlertPanel({
     setToast((prev) => (prev !== null && alertIds.has(prev.alertId) ? prev : null));
   }, [alertIds]);
 
-  // Whether the selected alert type uses a price `level` or a `threshold`.
-  const isLevelType =
-    newType === "price_crosses_level" ||
-    newType === "bar_closes_above" ||
-    newType === "bar_closes_below";
-  const isThresholdType =
-    newType === "volume_delta_threshold" || newType === "big_trade_threshold";
+  // Whether the selected alert type uses a price `level`, a threshold, or the
+  // dynamic SMC strategy's BigTrade threshold.
+  const isLevelType = isLevelAlertType(newType);
+  const isThresholdType = isThresholdAlertType(newType);
+  const isSmcStrategyType = newType === SMC_STRATEGY_TYPE;
+  const showRepeat = isThresholdType || isSmcStrategyType;
   const paramKey = isLevelType ? "level" : "threshold";
+
+  const changeType = (type: AlertType) => {
+    setNewType(type);
+    if (type === SMC_STRATEGY_TYPE) {
+      setNewValue((value) => value || SMC_BIG_TRADE_DEFAULT);
+      setNewRepeat(true);
+    }
+  };
 
   const submitCreate = (e: FormEvent) => {
     e.preventDefault();
     const value = Number(newValue);
     if (!Number.isFinite(value)) return;
+    if (isSmcStrategyType) {
+      onCreate?.({
+        type: newType,
+        params: {
+          bigTradeThreshold: value,
+          swingLength: SMC_SWING_LENGTH,
+          lookaheadBars: SMC_LOOKAHEAD_BARS,
+          effectiveLookaheadBars: SMC_LOOKAHEAD_BARS,
+          maxBars: SMC_MAX_BARS,
+          pauseOnInsideBars: SMC_PAUSE_ON_INSIDE_BARS,
+          repeat: newRepeat,
+        },
+      });
+      setNewValue(SMC_BIG_TRADE_DEFAULT);
+      return;
+    }
     onCreate?.({
       type: newType,
       params: {
@@ -184,23 +251,26 @@ export function AlertPanel({
         <select
           aria-label="Alert type"
           value={newType}
-          onChange={(e) => setNewType(e.target.value as AlertType)}
+          onChange={(e) => changeType(e.target.value as AlertType)}
         >
           <option value="price_crosses_level">Price crosses</option>
           <option value="bar_closes_above">Bar closes above</option>
           <option value="bar_closes_below">Bar closes below</option>
           <option value="volume_delta_threshold">Volume delta ≥</option>
           <option value="big_trade_threshold">Big trade ≥</option>
+          <option value="smc_external_break_big_trade">
+            External BOS/CHoCH + BigTrade
+          </option>
         </select>
         <input
           type="number"
           step="any"
-          aria-label={isLevelType ? "Alert level" : "Alert threshold"}
-          placeholder={isLevelType ? "level" : "threshold"}
+          aria-label={alertInputLabel(newType)}
+          placeholder={alertInputPlaceholder(newType)}
           value={newValue}
           onChange={(e) => setNewValue(e.target.value)}
         />
-        {isThresholdType && (
+        {showRepeat && (
           <label className="alert-repeat">
             <input
               type="checkbox"
@@ -217,12 +287,7 @@ export function AlertPanel({
       <ul className="alert-list">
         {alerts.map((alert) => (
           <li key={alert.id} className="alert-line" data-testid={`alert-${alert.id}`}>
-            <span className="alert-desc">
-              {alert.type}
-              {"level" in alert.params ? ` @ ${String(alert.params.level)}` : ""}
-              {"threshold" in alert.params ? ` >= ${String(alert.params.threshold)}` : ""}
-              {alert.params.repeat === true ? " (repeat)" : ""}
-            </span>
+            <span className="alert-desc">{alertDescription(alert)}</span>
             <label className="alert-toggle">
               <input
                 type="checkbox"

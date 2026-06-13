@@ -507,7 +507,7 @@ class LuxSmc {
 
     for (let i = this.fvgs.length - 1; i >= 0; i -= 1) {
       const fvg = this.fvgs[i];
-      if (!fvg.active || currentIndex - fvg.barIndex > this.maxZoneAge) {
+      if (!fvg.active) {
         fvg.active = false;
         this.fvgs.splice(i, 1);
         continue;

@@ -19,7 +19,7 @@ import asyncio
 import pytest
 
 from app.engines.contract_resolver import ContractResolver
-from app.engines.alert_engine import Alert
+from app.engines.alert_engine import Alert, SMC_EXTERNAL_BREAK_BIG_TRADE
 from app.ingest.control_plane import ControlPlaneCoordinator
 from app.models.canonical import NormalizedTrade
 from app.models.messages import (
@@ -119,6 +119,50 @@ def test_accepted_trade_runs_engines_persists_and_streams(pipeline_env):
         e.event_type == EventType.BAR_UPDATE and e.payload["contract"] == _SYMBOL
         for e in captured
     )
+
+
+def _smc_alert(repeat=True):
+    params = {
+        "bigTradeThreshold": 50,
+        "swingLength": 50,
+        "lookaheadBars": 5,
+        "effectiveLookaheadBars": 5,
+        "maxBars": 20,
+        "pauseOnInsideBars": True,
+    }
+    if repeat:
+        params["repeat"] = True
+    return Alert(
+        id="smc",
+        symbol=_SYMBOL,
+        type=SMC_EXTERNAL_BREAK_BIG_TRADE,
+        params=params,
+    )
+
+
+async def _feed_ohlc_bar(pipeline, index, open_, high, low, close, seq):
+    base = _BASE + index * 60_000
+    for offset, price in (
+        (1_000, open_),
+        (2_000, high),
+        (3_000, low),
+        (4_000, close),
+    ):
+        await pipeline.on_trade(
+            _trade(base + offset, price, 1, seq=seq, ask=price)
+        )
+        seq += 1
+    return seq
+
+
+async def _feed_bullish_external_break_setup(pipeline):
+    seq = 0
+    seq = await _feed_ohlc_bar(pipeline, 0, 95, 99, 91, 95, seq)
+    seq = await _feed_ohlc_bar(pipeline, 1, 95, 100, 90, 95, seq)
+    for i in range(2, 52):
+        seq = await _feed_ohlc_bar(pipeline, i, 95, 99, 91, 95, seq)
+    seq = await _feed_ohlc_bar(pipeline, 52, 95, 102, 94, 101, seq)
+    return seq
 
 
 @pytest.mark.integration
@@ -287,6 +331,50 @@ def test_backend_skips_alert_text_fallback_when_chart_client_connected(tmp_path)
     finally:
         tick_store.close()
         cache.close()
+
+
+@pytest.mark.integration
+def test_pipeline_smc_strategy_alert_fires_on_qualifying_big_trade(pipeline_env):
+    pipeline, cache, tick_store, resolver, captured = pipeline_env
+    pipeline.alert_engine.upsert(_smc_alert())
+
+    async def run():
+        seq = await _feed_bullish_external_break_setup(pipeline)
+        await pipeline.on_trade(
+            _trade(_BASE + 53 * 60_000 + 1_000, 101.5, 80, seq=seq, ask=101.5)
+        )
+        await pipeline.on_trade(
+            _trade(_BASE + 53 * 60_000 + 2_000, 101.6, 1, seq=seq + 1, ask=101.6)
+        )
+
+    asyncio.run(run())
+
+    alerts = [e.payload for e in captured if e.event_type == EventType.ALERT_EVENT]
+    assert alerts
+    assert alerts[-1]["alertType"] == SMC_EXTERNAL_BREAK_BIG_TRADE
+    assert alerts[-1]["level"] == 100
+    assert "big trade 80 > 50" in alerts[-1]["message"]
+
+
+@pytest.mark.integration
+def test_pipeline_smc_strategy_alert_fires_on_retest_close(pipeline_env):
+    pipeline, cache, tick_store, resolver, captured = pipeline_env
+    pipeline.alert_engine.upsert(_smc_alert())
+
+    async def run():
+        seq = await _feed_bullish_external_break_setup(pipeline)
+        seq = await _feed_ohlc_bar(pipeline, 53, 101, 102, 99, 100, seq)
+        await pipeline.on_trade(
+            _trade(_BASE + 54 * 60_000 + 1_000, 100.5, 1, seq=seq, ask=100.5)
+        )
+
+    asyncio.run(run())
+
+    alerts = [e.payload for e in captured if e.event_type == EventType.ALERT_EVENT]
+    assert alerts
+    assert alerts[-1]["alertType"] == SMC_EXTERNAL_BREAK_BIG_TRADE
+    assert alerts[-1]["level"] == 100
+    assert "retest close 100" in alerts[-1]["message"]
 
 
 @pytest.mark.integration

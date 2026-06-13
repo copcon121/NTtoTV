@@ -25,7 +25,7 @@ __all__ = [
 
 SESSION_COOKIE = "nttotv_session"
 _PBKDF2_ITERATIONS = 210_000
-_SESSION_TTL_MS = 12 * 60 * 60 * 1000
+_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 
 def hash_password(password: str, *, salt: bytes | None = None) -> str:

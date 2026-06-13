@@ -24,6 +24,21 @@ const alerts: Alert[] = [
     params: { threshold: 30 },
     enabled: false,
   },
+  {
+    id: "a_3",
+    symbol: "GC",
+    type: "smc_external_break_big_trade",
+    params: {
+      bigTradeThreshold: 50,
+      swingLength: 50,
+      lookaheadBars: 5,
+      effectiveLookaheadBars: 5,
+      maxBars: 20,
+      pauseOnInsideBars: true,
+      repeat: true,
+    },
+    enabled: true,
+  },
 ];
 
 function event(overrides: Partial<AlertEventMessage> = {}): AlertEventMessage {
@@ -46,6 +61,9 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     render(<AlertPanel alerts={alerts} />);
     expect(screen.getByTestId("alert-a_1")).toBeInTheDocument();
     expect(screen.getByTestId("alert-a_2")).toBeInTheDocument();
+    expect(screen.getByTestId("alert-a_3")).toHaveTextContent(
+      "External BOS/CHoCH, BT > 50 (repeat)",
+    );
     expect(screen.getByLabelText("Enable a_1")).toBeChecked();
     expect(screen.getByLabelText("Enable a_2")).not.toBeChecked();
     expect(screen.getByLabelText("Delete a_1")).toBeInTheDocument();
@@ -109,6 +127,36 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(onCreate).toHaveBeenCalledWith({
       type: "volume_delta_threshold",
       params: { threshold: 100, repeat: true },
+    });
+  });
+
+  it("raises onCreate with SMC strategy params and configurable threshold", () => {
+    const onCreate = vi.fn();
+    render(<AlertPanel alerts={alerts} onCreate={onCreate} />);
+    fireEvent.change(screen.getByLabelText("Alert type"), {
+      target: { value: "smc_external_break_big_trade" },
+    });
+
+    expect(screen.getByLabelText("BigTrade threshold")).toHaveValue(50);
+    expect(screen.getByLabelText("Repeat alert")).toBeChecked();
+
+    fireEvent.change(screen.getByLabelText("BigTrade threshold"), {
+      target: { value: "75" },
+    });
+    fireEvent.click(screen.getByLabelText("Repeat alert"));
+    fireEvent.click(screen.getByText("Add"));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      type: "smc_external_break_big_trade",
+      params: {
+        bigTradeThreshold: 75,
+        swingLength: 50,
+        lookaheadBars: 5,
+        effectiveLookaheadBars: 5,
+        maxBars: 20,
+        pauseOnInsideBars: true,
+        repeat: false,
+      },
     });
   });
 

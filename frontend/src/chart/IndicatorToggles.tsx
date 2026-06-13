@@ -129,6 +129,7 @@ export function IndicatorToggles({
   const [smcSwingDraft, setSmcSwingDraft] = useState(String(smc.swingLength));
   const [smcInternalDraft, setSmcInternalDraft] = useState(String(smc.internalLength));
   const [smcFvgExtendDraft, setSmcFvgExtendDraft] = useState(String(smc.fvgExtendBars));
+  const [smcFvgLimitDraft, setSmcFvgLimitDraft] = useState(String(smc.maxFairValueGaps));
   const [vaPercentDraft, setVaPercentDraft] = useState(String(footprintSettings.vaPercent));
   const [imbMinVolDraft, setImbMinVolDraft] = useState(String(footprintSettings.imbalanceMinVolume));
   const [btMinVolDraft, setBtMinVolDraft] = useState(String(bigTradeSettings.minVolume));
@@ -151,6 +152,10 @@ export function IndicatorToggles({
   useEffect(() => {
     setSmcFvgExtendDraft(String(smc.fvgExtendBars));
   }, [smc.fvgExtendBars]);
+
+  useEffect(() => {
+    setSmcFvgLimitDraft(String(smc.maxFairValueGaps));
+  }, [smc.maxFairValueGaps]);
 
   useEffect(() => {
     setBtMinVolDraft(String(bigTradeSettings.minVolume));
@@ -240,6 +245,15 @@ export function IndicatorToggles({
       onSmcChange({ ...smc, fvgExtendBars: parsed });
     } else {
       setSmcFvgExtendDraft(String(smc.fvgExtendBars));
+    }
+  };
+
+  const commitSmcFvgLimit = () => {
+    const parsed = Math.round(Number(smcFvgLimitDraft));
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 50) {
+      onSmcChange({ ...smc, maxFairValueGaps: parsed });
+    } else {
+      setSmcFvgLimitDraft(String(smc.maxFairValueGaps));
     }
   };
 
@@ -464,6 +478,25 @@ export function IndicatorToggles({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       commitSmcFvgExtend();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Active FVG</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={50}
+                  className="ema-length-input"
+                  aria-label="SMC active FVG display limit"
+                  value={smcFvgLimitDraft}
+                  onChange={(e) => setSmcFvgLimitDraft(e.currentTarget.value)}
+                  onBlur={commitSmcFvgLimit}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitSmcFvgLimit();
                       e.currentTarget.blur();
                     }
                   }}

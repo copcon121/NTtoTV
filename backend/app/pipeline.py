@@ -390,11 +390,11 @@ class Pipeline:
 
     async def _run_trade_engines(self, trade: NormalizedTrade) -> None:
         # 1) OHLCV bars across all timeframes. (Req 9.3)
-        alert_ctx_bar: tuple[int, float] | None = None
+        alert_ctx_bar: BarUpdate | None = None
         bar_updates = self._bars.on_trade(trade)
         for update in bar_updates:
             if update.closed and update.tf == _ALERT_BAR_TF:
-                alert_ctx_bar = (update.bar.time, update.bar.close)
+                alert_ctx_bar = update
 
         # 2) VolumeDelta across all timeframes so the lower delta-candle series
         # follows the charted timeframe (Req 13). The alert context pairs with
@@ -449,7 +449,7 @@ class Pipeline:
         self,
         trade: NormalizedTrade,
         *,
-        closed_bar: tuple[int, float] | None,
+        closed_bar: BarUpdate | None,
         vd_update: VolumeDeltaUpdate | None,
         fp_update: FootprintUpdate | None,
         big_trades: list[BigTrade],
@@ -467,7 +467,7 @@ class Pipeline:
         # Closed-bar conditions (bar_closes_*, volume_delta_threshold,
         # stacked_imbalance) keyed to the 1m bar close. (Req 16.7)
         if closed_bar is not None:
-            bar_time, bar_close = closed_bar
+            bar = closed_bar.bar
             stacked = (
                 len(fp_update.stacked_imbalance) > 0 if fp_update is not None else None
             )
@@ -476,8 +476,11 @@ class Pipeline:
                 contract=trade.contract,
                 time=trade.time,
                 bar_closed=True,
-                bar_time=bar_time,
-                bar_close=bar_close,
+                bar_time=bar.time,
+                bar_open=bar.open,
+                bar_high=bar.high,
+                bar_low=bar.low,
+                bar_close=bar.close,
                 bar_volume_delta=vd_update.delta if vd_update is not None else None,
                 bar_stacked_imbalance=stacked,
             )

@@ -115,6 +115,65 @@ describe("SMC overlay", () => {
     );
   });
 
+  it("omits mitigated FVG zones from the active display limit", () => {
+    const overlay = computeSmcOverlay(
+      [
+        bar(0, 9.5, 10, 9, 9.5),
+        bar(60_000, 11.2, 12, 11, 11.5),
+        bar(120_000, 13.2, 14, 13, 13.5),
+        bar(180_000, 10.5, 13.2, 9.5, 10.5),
+      ],
+      {
+        ...DEFAULT_SMC_SETTINGS,
+        enabled: true,
+        swingLength: 1,
+        internalLength: 1,
+        showPremiumDiscount: false,
+        showSwingOrderBlocks: false,
+        showInternalOrderBlocks: false,
+        maxFairValueGaps: 30,
+      },
+    );
+
+    expect(overlay.zones.filter((zone) => zone.kind === "fvg")).toEqual([]);
+  });
+
+  it("keeps unfilled FVG zones active beyond the generic zone age", () => {
+    const bars = [
+      bar(0, 9.5, 10, 9, 9.5),
+      bar(60_000, 11.2, 12, 11, 11.5),
+      bar(120_000, 13.2, 14, 13, 13.5),
+    ];
+    for (let i = 3; i < 230; i += 1) {
+      bars.push(bar(i * 60_000, 13.6, 14.5, 13.2, 13.8));
+    }
+
+    const overlay = computeSmcOverlay(
+      bars,
+      {
+        ...DEFAULT_SMC_SETTINGS,
+        enabled: true,
+        swingLength: 1,
+        internalLength: 1,
+        maxZoneAge: 220,
+        showPremiumDiscount: false,
+        showSwingOrderBlocks: false,
+        showInternalOrderBlocks: false,
+        maxFairValueGaps: 30,
+      },
+    );
+
+    expect(overlay.zones.filter((zone) => zone.kind === "fvg")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          startTime: 60_000,
+          top: 13,
+          bottom: 10,
+        }),
+      ]),
+    );
+  });
+
   it("draws premium, equilibrium, and discount zones from the live swing range", () => {
     const overlay = computeSmcOverlay(
       [

@@ -33,6 +33,11 @@ from app.config import Settings
 from app.engines.alert_engine import (
     ALERT_TYPES,
     LEVEL_ALERT_TYPES,
+    SMC_DEFAULT_LOOKAHEAD_BARS,
+    SMC_DEFAULT_MAX_BARS,
+    SMC_DEFAULT_PAUSE_ON_INSIDE_BARS,
+    SMC_DEFAULT_SWING_LENGTH,
+    SMC_EXTERNAL_BREAK_BIG_TRADE,
 )
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
@@ -53,6 +58,16 @@ _APP = create_app()
 _numbers = st.one_of(
     st.integers(min_value=-1_000_000, max_value=1_000_000),
     st.floats(allow_nan=False, allow_infinity=False, width=32),
+)
+_positive_numbers = st.one_of(
+    st.integers(min_value=1, max_value=1_000_000),
+    st.floats(
+        min_value=1.0,
+        max_value=1_000_000,
+        allow_nan=False,
+        allow_infinity=False,
+        width=32,
+    ),
 )
 
 # JSON-safe scalar values for arbitrary extra params keys.
@@ -80,6 +95,13 @@ def _params_for(alert_type: str):
             params["level"] = draw(_numbers)
         elif alert_type in _THRESHOLD_TYPES:
             params["threshold"] = draw(_numbers)
+        elif alert_type == SMC_EXTERNAL_BREAK_BIG_TRADE:
+            params["bigTradeThreshold"] = draw(_positive_numbers)
+            params["swingLength"] = SMC_DEFAULT_SWING_LENGTH
+            params["lookaheadBars"] = SMC_DEFAULT_LOOKAHEAD_BARS
+            params["effectiveLookaheadBars"] = SMC_DEFAULT_LOOKAHEAD_BARS
+            params["maxBars"] = SMC_DEFAULT_MAX_BARS
+            params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
         # stacked_imbalance: no required field.
         return params
 
