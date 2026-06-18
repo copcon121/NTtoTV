@@ -141,7 +141,7 @@ const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
 const DELTA_PROFILE_ROW_TICKS = 1;
 const DELTA_PROFILE_VALUE_AREA_PCT = 70;
 const DELTA_PROFILE_REFRESH_DELAY_MS = 1_000;
-const ORDER_REFRESH_INTERVAL_MS = 3_000;
+const ORDER_REFRESH_INTERVAL_MS = 5_000;
 const ENABLE_REALTIME_FOOTPRINT_UPDATES = false;
 const MARKET_ORDER_SETTINGS_STORAGE_KEY = "gc-chart-platform.market-order-settings";
 const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
@@ -1338,6 +1338,7 @@ export function LiveApp() {
   const deltaProfileRequestKeysRef = useRef(new Map<string, string>());
   const deltaProfileFetchKeysRef = useRef(new Map<string, string>());
   const deltaProfileRefreshTimerRef = useRef<number | undefined>(undefined);
+  const latestPriceThrottleRef = useRef<number | undefined>(undefined);
 
   const profilePayload = useMemo<ChartProfilePayload>(
     () => ({
@@ -1476,7 +1477,10 @@ export function LiveApp() {
 
   useEffect(() => {
     if (!authUser || !profileHydrated) return;
-    persistProfileHotSnapshot(authUser.id, profileId, profilePayload);
+    const timer = window.setTimeout(() => {
+      persistProfileHotSnapshot(authUser.id, profileId, profilePayload);
+    }, 2_000);
+    return () => window.clearTimeout(timer);
   }, [authUser, profileHydrated, profileId, profilePayload]);
 
   useEffect(() => {
@@ -1662,7 +1666,7 @@ export function LiveApp() {
     });
     const offClose = socket.onClose(() => setConnection("disconnected"));
     socket.connect();
-    const reconnectTimer = window.setInterval(reconnect, 1500);
+    const reconnectTimer = window.setInterval(reconnect, 5000);
     const offStatus = socket.on("status", (msg) => {
       setConnection((prev) => (prev === msg.state ? prev : msg.state));
     });
@@ -1911,7 +1915,13 @@ export function LiveApp() {
     });
     const offQuotePrice = socket.on("quote_update", (msg) => {
       if (msg.symbol === SYMBOL && matchesChartContract(msg.contract)) {
+        // Throttle price state updates to ~4Hz to avoid re-rendering the
+        // entire component tree (orderRows, MarketOrderBar) on every tick.
+        if (latestPriceThrottleRef.current !== undefined) return;
         setLatestPrice((msg.bid + msg.ask) / 2);
+        latestPriceThrottleRef.current = window.setTimeout(() => {
+          latestPriceThrottleRef.current = undefined;
+        }, 250);
       }
     });
     const offFootprint = ENABLE_REALTIME_FOOTPRINT_UPDATES
@@ -1948,6 +1958,10 @@ export function LiveApp() {
       offQuotePrice();
       offFootprint();
       offBigTrade();
+      if (latestPriceThrottleRef.current !== undefined) {
+        window.clearTimeout(latestPriceThrottleRef.current);
+        latestPriceThrottleRef.current = undefined;
+      }
     };
   }, [socket, contract, timeframe, scheduleDeltaProfileRefresh]);
 
@@ -2867,10 +2881,30 @@ export function LiveApp() {
       ]).then(([ordersResult, openTradesResult, statusResult]) => {
         if (cancelled) return;
         if (ordersResult.status === "fulfilled") {
-          setOrders(ordersResult.value);
+          const next = ordersResult.value;
+          setOrders((prev) => {
+            if (prev.length !== next.length) return next;
+            for (let i = 0; i < prev.length; i++) {
+              if (prev[i].id !== next[i].id || prev[i].status !== next[i].status) return next;
+            }
+            return prev;
+          });
         }
         if (openTradesResult.status === "fulfilled") {
-          setMt5OpenTrades(openTradesResult.value);
+          const next = openTradesResult.value;
+          setMt5OpenTrades((prev) => {
+            if (
+              prev.positions.length !== next.positions.length ||
+              prev.orders.length !== next.orders.length
+            ) return next;
+            for (let i = 0; i < prev.positions.length; i++) {
+              if (
+                prev.positions[i].brokerPositionTicket !== next.positions[i].brokerPositionTicket ||
+                prev.positions[i].profit !== next.positions[i].profit
+              ) return next;
+            }
+            return prev;
+          });
         }
         if (statusResult.status === "fulfilled") {
           applyMt5Status(statusResult.value);

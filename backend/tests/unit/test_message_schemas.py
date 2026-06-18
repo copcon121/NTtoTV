@@ -160,6 +160,17 @@ def test_trade_preserves_missing_quote_snapshot():
 
 
 @pytest.mark.unit
+def test_trade_preserves_optional_nt_time_ticks():
+    wire = {
+        **_trade_wire(),
+        "timeTicks": 638858610886080001,
+    }
+    trade = trade_from_dict(wire)
+    assert trade.time_ticks == 638858610886080001
+    assert trade_to_dict(trade) == wire
+
+
+@pytest.mark.unit
 def test_quote_round_trips_through_canonical_model():
     quote = _quote()
     assert quote_from_dict(quote_to_dict(quote)) == quote

@@ -59,7 +59,8 @@ namespace NtAddOn.Tests.MarketData
                 bid: 2345.5,
                 ask: 2345.7,
                 bestBid: 2345.5,
-                bestAsk: 2345.7);
+                bestAsk: 2345.7,
+                timeTicks: 638858610886080001L);
 
             Assert.Equal(NormalizedEvent.TradeType, trade.Type);
             Assert.Equal("GC", trade.Symbol);
@@ -71,6 +72,7 @@ namespace NtAddOn.Tests.MarketData
             Assert.Equal(2345.7, trade.Ask);
             Assert.Equal(2345.5, trade.BestBid);
             Assert.Equal(2345.7, trade.BestAsk);
+            Assert.Equal(638858610886080001L, trade.TimeTicks);
             Assert.Equal(Channel.Trade, trade.Channel);
 
             // normalize + enqueue only: the event reached the sink unchanged.

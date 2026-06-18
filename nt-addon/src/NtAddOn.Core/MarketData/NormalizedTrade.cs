@@ -7,6 +7,9 @@ namespace NtAddOn.Core.MarketData
     /// documented trade message shape: type (via <see cref="NormalizedEvent.Type"/>),
     /// symbol, contract, time, price, volume, bid, ask, bestBid, bestAsk, and
     /// sequence. Times are Canonical_Timestamp (ms since Unix epoch UTC).
+    /// TimeTicks optionally preserves NinjaTrader's UTC DateTime.Ticks so the
+    /// Backend can match indicator timestamp equality at sub-millisecond
+    /// precision.
     ///
     /// The bid/ask and bestBid/bestAsk snapshots are the quote state captured
     /// alongside the print; they are nullable because a trade can arrive before
@@ -33,6 +36,9 @@ namespace NtAddOn.Core.MarketData
         /// <summary>Best ask snapshot at the time of the print, if known (Req 1.1).</summary>
         public double? BestAsk { get; }
 
+        /// <summary>Original NinjaTrader UTC DateTime.Ticks, when available.</summary>
+        public long? TimeTicks { get; }
+
         /// <summary>
         /// Constructs a normalized trade. <paramref name="contract"/> is the
         /// originating Candidate_Contract tag (Req 1.6); <paramref name="sequence"/>
@@ -49,7 +55,8 @@ namespace NtAddOn.Core.MarketData
             double? ask,
             double? bestBid,
             double? bestAsk,
-            long sequence)
+            long sequence,
+            long? timeTicks = null)
             : base(symbol, contract, Channel.Trade, time, sequence)
         {
             Price = price;
@@ -58,6 +65,7 @@ namespace NtAddOn.Core.MarketData
             Ask = ask;
             BestBid = bestBid;
             BestAsk = bestAsk;
+            TimeTicks = timeTicks;
         }
     }
 }

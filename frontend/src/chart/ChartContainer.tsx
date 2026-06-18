@@ -769,7 +769,12 @@ export function ChartContainer({
   ]);
 
   useEffect(() => {
-    portRef.current?.setSmcOverlay?.(computeSmcOverlay(bars ?? [], smc));
+    // Defer SMC recomputation by 100ms so the chart renders bars first
+    // without blocking the main thread on O(n) structure detection.
+    const timer = window.setTimeout(() => {
+      portRef.current?.setSmcOverlay?.(computeSmcOverlay(bars ?? [], smc));
+    }, 100);
+    return () => window.clearTimeout(timer);
   }, [symbol, contract, timeframe, bars, smc]);
 
   useEffect(() => {

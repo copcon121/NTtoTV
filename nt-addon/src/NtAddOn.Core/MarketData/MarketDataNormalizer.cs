@@ -59,12 +59,13 @@ namespace NtAddOn.Core.MarketData
             double? bid,
             double? ask,
             double? bestBid,
-            double? bestAsk)
+            double? bestAsk,
+            long? timeTicks = null)
         {
             var streamId = new StreamId(_symbol, contract, Channel.Trade);
             var sequence = _sequenceSource.Next(streamId);
             var trade = new NormalizedTrade(
-                _symbol, contract, time, price, volume, bid, ask, bestBid, bestAsk, sequence);
+                _symbol, contract, time, price, volume, bid, ask, bestBid, bestAsk, sequence, timeTicks);
 
             _sink.Enqueue(trade);
             return trade;

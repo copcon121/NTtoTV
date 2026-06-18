@@ -524,7 +524,9 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             try
             {
                 if (e == null) return;
-                long timeMs = ToUnixMs(e.Time.ToUniversalTime());
+                DateTime utcTime = e.Time.ToUniversalTime();
+                long timeMs = ToUnixMs(utcTime);
+                long timeTicks = utcTime.Ticks;
                 Snapshot snap;
                 lock (snapGate)
                 {
@@ -536,7 +538,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
 
                     if (e.MarketDataType == MarketDataType.Last)
                     {
-                        EnqueueTrade(contract, timeMs, e.Price, e.Volume, snap.Bid, snap.Ask);
+                        EnqueueTrade(contract, timeMs, timeTicks, e.Price, e.Volume, snap.Bid, snap.Ask);
                     }
                     else if (e.MarketDataType == MarketDataType.Bid)
                     {
@@ -558,17 +560,18 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             }
         }
 
-        private void EnqueueTrade(string contract, long timeMs, double price, long volume, double? bid, double? ask)
+        private void EnqueueTrade(string contract, long timeMs, long timeTicks, double price, long volume, double? bid, double? ask)
         {
             lock (seqGate)
             {
                 long seq = NextSeq(contract, "trade");
-                StringBuilder sb = new StringBuilder(192);
+                StringBuilder sb = new StringBuilder(224);
                 sb.Append('{');
                 Str(sb, "type", "trade"); sb.Append(',');
                 Str(sb, "symbol", Symbol); sb.Append(',');
                 Str(sb, "contract", contract); sb.Append(',');
                 Num(sb, "time", timeMs); sb.Append(',');
+                Num(sb, "timeTicks", timeTicks); sb.Append(',');
                 Dbl(sb, "price", price); sb.Append(',');
                 Num(sb, "volume", volume); sb.Append(',');
                 NullableDbl(sb, "bid", bid); sb.Append(',');

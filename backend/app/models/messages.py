@@ -157,7 +157,7 @@ def _expect_type(data: dict[str, Any], expected: str) -> None:
 
 def trade_to_dict(trade: NormalizedTrade) -> dict[str, Any]:
     """Serialize a ``NormalizedTrade`` into the `trade` wire shape. (Req 1.1)"""
-    return {
+    payload = {
         "type": "trade",
         "symbol": trade.symbol,
         "contract": trade.contract,
@@ -170,6 +170,9 @@ def trade_to_dict(trade: NormalizedTrade) -> dict[str, Any]:
         "bestAsk": trade.best_ask,
         "sequence": trade.sequence,
     }
+    if trade.time_ticks is not None:
+        payload["timeTicks"] = trade.time_ticks
+    return payload
 
 
 def trade_from_dict(data: dict[str, Any]) -> NormalizedTrade:
@@ -186,6 +189,9 @@ def trade_from_dict(data: dict[str, Any]) -> NormalizedTrade:
         best_bid=None if data.get("bestBid") is None else float(data["bestBid"]),
         best_ask=None if data.get("bestAsk") is None else float(data["bestAsk"]),
         sequence=int(data["sequence"]),
+        time_ticks=(
+            None if data.get("timeTicks") is None else int(data["timeTicks"])
+        ),
     )
 
 

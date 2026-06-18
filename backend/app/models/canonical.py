@@ -41,7 +41,10 @@ class NormalizedTrade:
 
     Contains type (implicit), symbol, contract, time, price, volume, bid, ask,
     bestBid, bestAsk, and sequence. ``bid``/``ask``/``best_bid``/``best_ask``
-    may be ``None`` when no snapshot is available.
+    may be ``None`` when no snapshot is available. ``time_ticks`` optionally
+    carries NinjaTrader's original UTC ``DateTime.Ticks`` for components, such
+    as BigTrade reconstruction, that must preserve NT's sub-millisecond
+    timestamp equality.
     """
 
     symbol: str
@@ -54,6 +57,7 @@ class NormalizedTrade:
     best_bid: float | None
     best_ask: float | None
     sequence: int
+    time_ticks: int | None = None
 
 
 @dataclass(slots=True)

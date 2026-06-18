@@ -16,7 +16,7 @@ import pytest
 
 from app.models import NormalizedQuote, NormalizedTrade, from_canonical_ms, to_canonical_ms
 from app.storage import TickStore, sanitize_contract
-from app.storage.tick_store import SYMBOL
+from app.storage.tick_store import SYMBOL, trade_event_key
 
 
 def _ms(year, month, day, hour=0, minute=0, second=0, micro=0) -> int:
@@ -25,7 +25,14 @@ def _ms(year, month, day, hour=0, minute=0, second=0, micro=0) -> int:
     )
 
 
-def _trade(contract: str, time_ms: int, sequence: int, price: float = 2345.6, volume: int = 3):
+def _trade(
+    contract: str,
+    time_ms: int,
+    sequence: int,
+    price: float = 2345.6,
+    volume: int = 3,
+    time_ticks: int | None = None,
+):
     return NormalizedTrade(
         symbol="GC",
         contract=contract,
@@ -37,6 +44,7 @@ def _trade(contract: str, time_ms: int, sequence: int, price: float = 2345.6, vo
         best_bid=price - 0.1,
         best_ask=price + 0.1,
         sequence=sequence,
+        time_ticks=time_ticks,
     )
 
 
@@ -151,6 +159,77 @@ def test_record_and_read_range_round_trip(store: TickStore):
     assert [r.sequence for r in out] == [1, 2]
     assert out[0].price == 2345.6 and out[0].volume == 2
     assert out[1].price == 2346.0 and out[1].volume == 5
+
+
+@pytest.mark.unit
+def test_record_and_read_range_preserves_nt_time_ticks(store: TickStore):
+    contract = "GC 08-26"
+    time_ticks = 638858610886080001
+    trade = _trade(
+        contract,
+        _ms(2026, 8, 1, 10),
+        sequence=1,
+        time_ticks=time_ticks,
+    )
+
+    store.record_trade(trade)
+
+    out = list(store.read_range(contract, _ms(2026, 8, 1, 0), _ms(2026, 8, 1, 23)))
+    assert len(out) == 1
+    assert out[0].time_ticks == time_ticks
+
+
+@pytest.mark.unit
+def test_read_range_accepts_legacy_shard_without_nt_time_ticks(tmp_path: Path):
+    store = TickStore(ticks_dir=tmp_path / "ticks")
+    contract = "GC 08-26"
+    time_ms = _ms(2026, 8, 1, 10)
+    path = store.shard_path(contract, date(2026, 8, 1))
+    path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE ticks (
+                event_key  TEXT    NOT NULL,
+                sequence   INTEGER NOT NULL,
+                time       INTEGER NOT NULL,
+                price      REAL    NOT NULL,
+                volume     INTEGER NOT NULL,
+                bid        REAL,
+                ask        REAL,
+                best_bid   REAL,
+                best_ask   REAL,
+                side       TEXT,
+                PRIMARY KEY (event_key)
+            );
+            CREATE INDEX idx_ticks_time ON ticks(time);
+            CREATE INDEX idx_ticks_sequence ON ticks(sequence);
+            """
+        )
+        conn.execute(
+            "INSERT INTO ticks "
+            "(event_key, sequence, time, price, volume, bid, ask, best_bid, best_ask, side) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+            (
+                trade_event_key(1, time_ms, 2345.6, 2, 2345.5, 2345.7, 2345.5, 2345.7),
+                1,
+                time_ms,
+                2345.6,
+                2,
+                2345.5,
+                2345.7,
+                2345.5,
+                2345.7,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    out = list(store.read_range(contract, _ms(2026, 8, 1, 0), _ms(2026, 8, 1, 23)))
+    assert len(out) == 1
+    assert out[0].time_ticks is None
 
 
 @pytest.mark.unit

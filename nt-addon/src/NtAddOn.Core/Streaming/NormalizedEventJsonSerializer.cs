@@ -61,11 +61,11 @@ namespace NtAddOn.Core.Streaming
         }
 
         // Trade shape (Req 1.1):
-        // {"type":"trade","symbol":..,"contract":..,"time":..,"price":..,
-        //  "volume":..,"bid":..,"ask":..,"bestBid":..,"bestAsk":..,"sequence":..}
+        // {"type":"trade","symbol":..,"contract":..,"time":..,"timeTicks":..,
+        //  "price":..,"volume":..,"bid":..,"ask":..,"bestBid":..,"bestAsk":..,"sequence":..}
         private static string SerializeTrade(NormalizedTrade t)
         {
-            var sb = new StringBuilder(192);
+            var sb = new StringBuilder(224);
             sb.Append('{');
             AppendString(sb, "type", NormalizedEvent.TradeType);
             sb.Append(',');
@@ -75,6 +75,11 @@ namespace NtAddOn.Core.Streaming
             sb.Append(',');
             AppendLong(sb, "time", t.Time);
             sb.Append(',');
+            if (t.TimeTicks.HasValue)
+            {
+                AppendLong(sb, "timeTicks", t.TimeTicks.Value);
+                sb.Append(',');
+            }
             AppendDouble(sb, "price", t.Price);
             sb.Append(',');
             AppendLong(sb, "volume", t.Volume);

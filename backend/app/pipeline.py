@@ -100,6 +100,7 @@ def _trade_for_contract(trade: NormalizedTrade, contract: str) -> NormalizedTrad
         best_bid=trade.best_bid,
         best_ask=trade.best_ask,
         sequence=trade.sequence,
+        time_ticks=trade.time_ticks,
     )
 
 

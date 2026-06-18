@@ -64,6 +64,7 @@ class _Group:
     contract: str
     trade_id: int
     time: int
+    time_key: int
     side: Side
     volume: int
     price: float
@@ -174,12 +175,17 @@ class BigTradeEngine:
 
         emitted: list[BigTrade] = []
         current = self._current.get(t.contract)
-        if current is not None and t.time < current.time:
+        time_key = self._merge_time_key(t)
+        if current is not None and time_key < current.time_key:
             # Out-of-order trade for an already-flushed timestamp: ignore it,
             # but its side still advances classification state above.
             return emitted
 
-        if current is not None and t.time == current.time and side == current.side:
+        if (
+            current is not None
+            and time_key == current.time_key
+            and side == current.side
+        ):
             current.volume += t.volume
             current.price = t.price  # NT MarkerPosition=Last uses LastPrice
             current.ticks.append((t.price, t.volume))
@@ -224,11 +230,24 @@ class BigTradeEngine:
             contract=t.contract,
             trade_id=trade_id,
             time=t.time,
+            time_key=self._merge_time_key(t),
             side=side,
             volume=t.volume,
             price=t.price,
             ticks=[(t.price, t.volume)],
         )
+
+    @staticmethod
+    def _merge_time_key(t: NormalizedTrade) -> int:
+        """Timestamp equality key for NT ReconstructTape grouping.
+
+        NinjaTrader's BigTradeIndicator compares ``MarketDataEventArgs.Time``
+        directly. The chart still uses canonical milliseconds, but when the NT
+        bridge provides UTC ``DateTime.Ticks`` we must use that higher-precision
+        value for merge equality so distinct NT event times inside one
+        millisecond do not collapse into one synthetic BigTrade.
+        """
+        return t.time_ticks if t.time_ticks is not None else t.time
 
     def _emit_group(self, g: _Group) -> list[BigTrade]:
         if self.dedupe_repeated_timestamp_runs:

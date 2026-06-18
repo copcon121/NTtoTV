@@ -674,36 +674,45 @@ describe("ChartContainer", () => {
   });
 
   it("computes and draws the SMC overlay from loaded bars", () => {
-    const port = new FakePort();
-    const factory: ChartPortFactory = () => port;
-    const smc = {
-      ...DEFAULT_SMC_SETTINGS,
-      enabled: true,
-      swingLength: 2,
-      internalLength: 1,
-    };
+    vi.useFakeTimers();
+    try {
+      const port = new FakePort();
+      const factory: ChartPortFactory = () => port;
+      const smc = {
+        ...DEFAULT_SMC_SETTINGS,
+        enabled: true,
+        swingLength: 2,
+        internalLength: 1,
+      };
 
-    render(
-      <ChartContainer
-        symbol="GC"
-        contract="GC 08-26"
-        timeframe="1m"
-        bars={[
-          ohlc(0, 9.5, 10, 9, 9.5),
-          ohlc(1, 11.5, 12, 11, 11.5),
-          ohlc(2, 10.5, 11, 10, 10.5),
-          ohlc(3, 9.5, 10, 9, 9.5),
-          ohlc(4, 10, 11, 8, 10),
-          ohlc(5, 12.5, 13, 9, 12.5),
-        ]}
-        smc={smc}
-        portFactory={factory}
-      />,
-    );
+      render(
+        <ChartContainer
+          symbol="GC"
+          contract="GC 08-26"
+          timeframe="1m"
+          bars={[
+            ohlc(0, 9.5, 10, 9, 9.5),
+            ohlc(1, 11.5, 12, 11, 11.5),
+            ohlc(2, 10.5, 11, 10, 10.5),
+            ohlc(3, 9.5, 10, 9, 9.5),
+            ohlc(4, 10, 11, 8, 10),
+            ohlc(5, 12.5, 13, 9, 12.5),
+          ]}
+          smc={smc}
+          portFactory={factory}
+        />,
+      );
 
-    const overlay = port.setSmcOverlayCalls[0];
-    expect(overlay.lines.some((line) => line.label === "BOS")).toBe(true);
-    expect(overlay.zones.some((zone) => zone.kind === "ob")).toBe(true);
+      // SMC overlay computation is deferred by 100ms to avoid blocking the
+      // initial chart render.
+      vi.advanceTimersByTime(100);
+
+      const overlay = port.setSmcOverlayCalls[0];
+      expect(overlay.lines.some((line) => line.label === "BOS")).toBe(true);
+      expect(overlay.zones.some((zone) => zone.kind === "ob")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refreshes the SMC overlay after matching realtime bar updates", () => {

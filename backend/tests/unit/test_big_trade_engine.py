@@ -16,7 +16,7 @@ SYMBOL = "GC"
 CONTRACT = "GC 08-26"
 
 
-def _t(time, price, volume, bid=None, ask=None, seq=0) -> NormalizedTrade:
+def _t(time, price, volume, bid=None, ask=None, seq=0, time_ticks=None) -> NormalizedTrade:
     return NormalizedTrade(
         symbol=SYMBOL,
         contract=CONTRACT,
@@ -28,6 +28,7 @@ def _t(time, price, volume, bid=None, ask=None, seq=0) -> NormalizedTrade:
         best_bid=None,
         best_ask=None,
         sequence=seq,
+        time_ticks=time_ticks,
     )
 
 
@@ -77,6 +78,21 @@ def test_merge_same_timestamp_and_side_sums_volume_last_price():
     b = out[0]
     assert b.volume == 35 and b.price == 100.1 and b.side is Side.BUY
     assert b.trade_id == 1
+
+
+@pytest.mark.unit
+def test_distinct_nt_time_ticks_inside_same_millisecond_do_not_merge():
+    eng = BigTradeEngine(min_volume=1)
+    out = eng.merge_stream(
+        [
+            _t(1000, 100.0, 46, bid=100.0, time_ticks=638858610886080001),
+            _t(1000, 99.9, 43, bid=100.0, time_ticks=638858610886080002),
+        ]
+    )
+    assert [(b.trade_id, b.time, b.volume, b.price) for b in out] == [
+        (1, 1000, 46, 100.0),
+        (2, 1000, 43, 99.9),
+    ]
 
 
 @pytest.mark.unit

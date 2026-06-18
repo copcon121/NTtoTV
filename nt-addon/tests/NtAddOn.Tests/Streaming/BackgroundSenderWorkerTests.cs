@@ -38,6 +38,7 @@ namespace NtAddOn.Tests.Streaming
             Assert.Single(socket.Sends);
             Assert.Equal(WebSocketMessageKind.Text, socket.Sends[0].Kind);
             Assert.Contains("\"type\":\"trade\"", socket.Sends[0].Text);
+            Assert.Contains("\"timeTicks\":638858610886080007", socket.Sends[0].Text);
             Assert.Contains("\"sequence\":7", socket.Sends[0].Text);
             Assert.NotEqual(callerThread, socket.Sends[0].ThreadId);
         }
@@ -142,7 +143,8 @@ namespace NtAddOn.Tests.Streaming
                 ask: 2400.6,
                 bestBid: 2400.4,
                 bestAsk: 2400.6,
-                sequence: sequence);
+                sequence: sequence,
+                timeTicks: 638858610886080000L + sequence);
         }
 
         private static NormalizedQuote Quote(long sequence)

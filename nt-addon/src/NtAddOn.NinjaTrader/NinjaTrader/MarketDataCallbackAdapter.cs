@@ -71,7 +71,9 @@ namespace NtAddOn.NinjaTrader
             // exchange/local zone (DateTimeKind is typically Unspecified).
             // Convert to a UTC instant before producing the Canonical_Timestamp
             // (ms since Unix epoch UTC). (Glossary: Canonical_Timestamp)
-            var timeMs = CanonicalTimestamp.FromDateTime(e.Time.ToUniversalTime());
+            var utcTime = e.Time.ToUniversalTime();
+            var timeMs = CanonicalTimestamp.FromDateTime(utcTime);
+            var timeTicks = utcTime.Ticks;
             var snapshot = _snapshots.GetOrAdd(contract, _ => new QuoteSnapshot());
 
             switch (e.MarketDataType)
@@ -88,7 +90,8 @@ namespace NtAddOn.NinjaTrader
                         snapshot.Bid,
                         snapshot.Ask,
                         snapshot.Bid,
-                        snapshot.Ask);
+                        snapshot.Ask,
+                        timeTicks);
                     break;
 
                 case MarketDataType.Bid:
