@@ -65,7 +65,9 @@ import { type FootprintViewport } from "../footprint/footprintModel";
 import {
   countdownBarStartMs,
   formatBarCountdown,
+  remainingObservedBarTimeMs,
   remainingBarTimeMs,
+  shouldUseObservedBarCountdown,
 } from "./barCountdown";
 import {
   DEFAULT_TIMEZONE_OFFSET_MINUTES,
@@ -533,6 +535,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private barCountdownDurationMs: number;
   private barCountdownTimer: number | undefined;
   private latestBar: Bar | undefined;
+  private latestBarFirstSeenAtMs: number | undefined;
+  private latestBarUsesObservedCountdown = false;
   private timezoneOffsetMinutes: number;
 
   constructor(container: HTMLElement, options: LightweightChartsAdapterOptions = {}) {
@@ -783,6 +787,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.candleBars.length > 0
         ? { ...this.candleBars[this.candleBars.length - 1] }
         : undefined;
+    this.latestBarFirstSeenAtMs = undefined;
+    this.latestBarUsesObservedCountdown = false;
     this.updateBarCountdown();
   }
 
@@ -798,7 +804,17 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       toUtcTimestamp(bar.time, this.displayTimeOffsetMs) as number,
       { ...bar },
     );
+    const previousLatestTime = this.latestBar?.time;
     if (this.latestBar === undefined || bar.time >= this.latestBar.time) {
+      if (previousLatestTime === undefined || bar.time > previousLatestTime) {
+        const now = Date.now();
+        this.latestBarFirstSeenAtMs = now;
+        this.latestBarUsesObservedCountdown = shouldUseObservedBarCountdown(
+          bar.time,
+          this.barCountdownDurationMs,
+          now,
+        );
+      }
       this.latestBar = { ...bar };
       this.updateBarCountdown();
     }
@@ -964,16 +980,19 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       return;
     }
     const now = Date.now();
-    const countdownStart = countdownBarStartMs(
-      bar.time,
-      this.barCountdownDurationMs,
-      now,
-    );
-    const remaining = remainingBarTimeMs(
-      countdownStart,
-      this.barCountdownDurationMs,
-      now,
-    );
+    const remaining =
+      this.latestBarUsesObservedCountdown &&
+      this.latestBarFirstSeenAtMs !== undefined
+        ? remainingObservedBarTimeMs(
+            this.latestBarFirstSeenAtMs,
+            this.barCountdownDurationMs,
+            now,
+          )
+        : remainingBarTimeMs(
+            countdownBarStartMs(bar.time, this.barCountdownDurationMs, now),
+            this.barCountdownDurationMs,
+            now,
+          );
     const y = this.candleSeries.priceToCoordinate(bar.close);
     const scaleWidth = this.candleSeries.priceScale().width();
     const paneHeight = this.chart.paneSize(0).height;

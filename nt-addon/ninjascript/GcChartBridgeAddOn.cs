@@ -279,6 +279,16 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
         private readonly Dictionary<string, Snapshot> snapshots = new Dictionary<string, Snapshot>(StringComparer.Ordinal);
         private readonly object snapGate = new object();
 
+        // Guard against duplicate MarketData callbacks from a leaked handler.
+        // A reconnect can briefly race the NT dispatcher; if an old handler was
+        // not detached, the same exchange event is delivered twice with a new
+        // bridge sequence. Dropping the exact immediate replay keeps bars,
+        // volume delta, footprint, and big trades aligned with NT charts.
+        private readonly Dictionary<string, LastMarketEvent> lastMarketEvents = new Dictionary<string, LastMarketEvent>(StringComparer.Ordinal);
+        private readonly object eventGate = new object();
+        private long duplicateMarketDataEvents;
+        private DateTime lastDuplicateMarketDataLogUtc = DateTime.MinValue;
+
         // Active subscriptions: contract -> Instrument + handler.
         private readonly Dictionary<string, Sub> subs = new Dictionary<string, Sub>(StringComparer.Ordinal);
         private readonly object subGate = new object();
@@ -362,10 +372,6 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             {
                 foreach (string key in subs.Keys)
                     contracts.Add(key);
-                // Tear down stale requests so we don't leak or double-deliver.
-                foreach (Sub sub in subs.Values)
-                    Detach(sub);
-                subs.Clear();
             }
             if (contracts.Count == 0)
             {
@@ -374,7 +380,29 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                     contracts.Add(sourceContract);
             }
             for (int i = 0; i < contracts.Count; i++)
-                Subscribe(contracts[i]);
+            {
+                string contract = contracts[i];
+                bool shouldSubscribe = true;
+                lock (subGate)
+                {
+                    Sub sub;
+                    if (subs.TryGetValue(contract, out sub))
+                    {
+                        if (Detach(sub))
+                        {
+                            subs.Remove(contract);
+                        }
+                        else
+                        {
+                            shouldSubscribe = false;
+                            log("kept existing market data handler for " + contract +
+                                " because detach failed; duplicate guard remains active");
+                        }
+                    }
+                }
+                if (shouldSubscribe)
+                    Subscribe(contract);
+            }
         }
 
         private string InitialContract()
@@ -484,17 +512,33 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             {
                 Sub sub;
                 if (!subs.TryGetValue(key, out sub)) return;
-                Detach(sub);
-                subs.Remove(key);
-                log("unsubscribed " + key);
+                if (Detach(sub))
+                {
+                    subs.Remove(key);
+                    log("unsubscribed " + key);
+                }
+                else
+                {
+                    log("unsubscribe deferred for " + key +
+                        " because market data detach failed");
+                }
             }
         }
 
-        private static void Detach(Sub sub)
+        private static bool Detach(Sub sub)
         {
             try
             {
-                if (sub.Handler != null && !sub.Instrument.Dispatcher.HasShutdownStarted)
+                if (sub == null || sub.Handler == null)
+                    return true;
+                if (sub.Instrument == null ||
+                    sub.Instrument.Dispatcher == null ||
+                    sub.Instrument.Dispatcher.HasShutdownStarted)
+                {
+                    sub.Handler = null;
+                    return true;
+                }
+                if (sub.Handler != null)
                 {
                     EventHandler<MarketDataEventArgs> handler = sub.Handler;
                     if (sub.Instrument.Dispatcher.CheckAccess())
@@ -510,10 +554,11 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                     }
                     sub.Handler = null;
                 }
+                return true;
             }
             catch
             {
-                // request may already be torn down
+                return false;
             }
         }
 
@@ -527,6 +572,8 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 DateTime utcTime = e.Time.ToUniversalTime();
                 long timeMs = ToUnixMs(utcTime);
                 long timeTicks = utcTime.Ticks;
+                if (IsDuplicateMarketData(contract, e, timeTicks))
+                    return;
                 Snapshot snap;
                 lock (snapGate)
                 {
@@ -557,6 +604,37 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             catch (Exception ex)
             {
                 log("market data update error for " + contract + ": " + ex.Message);
+            }
+        }
+
+        private bool IsDuplicateMarketData(string contract, MarketDataEventArgs e, long timeTicks)
+        {
+            string key = contract + "|" + e.MarketDataType.ToString();
+            DateTime nowUtc = DateTime.UtcNow;
+            lock (eventGate)
+            {
+                LastMarketEvent last;
+                if (lastMarketEvents.TryGetValue(key, out last) &&
+                    last.TimeTicks == timeTicks &&
+                    last.Price == e.Price &&
+                    last.Volume == e.Volume &&
+                    (nowUtc - last.SeenUtc).TotalMilliseconds <= 250.0)
+                {
+                    duplicateMarketDataEvents = duplicateMarketDataEvents + 1;
+                    if ((nowUtc - lastDuplicateMarketDataLogUtc).TotalSeconds >= 10.0)
+                    {
+                        lastDuplicateMarketDataLogUtc = nowUtc;
+                        log("dropped duplicate " + e.MarketDataType.ToString() +
+                            " event for " + contract +
+                            " timeTicks=" + timeTicks.ToString(CultureInfo.InvariantCulture) +
+                            " price=" + e.Price.ToString("R", CultureInfo.InvariantCulture) +
+                            " volume=" + e.Volume.ToString(CultureInfo.InvariantCulture) +
+                            " totalDropped=" + duplicateMarketDataEvents.ToString(CultureInfo.InvariantCulture));
+                    }
+                    return true;
+                }
+                lastMarketEvents[key] = new LastMarketEvent(timeTicks, e.Price, e.Volume, nowUtc);
+                return false;
             }
         }
 
@@ -934,6 +1012,22 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             public double? Ask;
             public long BidSize;
             public long AskSize;
+        }
+
+        private sealed class LastMarketEvent
+        {
+            public readonly long TimeTicks;
+            public readonly double Price;
+            public readonly long Volume;
+            public readonly DateTime SeenUtc;
+
+            public LastMarketEvent(long timeTicks, double price, long volume, DateTime seenUtc)
+            {
+                TimeTicks = timeTicks;
+                Price = price;
+                Volume = volume;
+                SeenUtc = seenUtc;
+            }
         }
 
         private sealed class Sub

@@ -108,6 +108,22 @@ def test_duplicate_timestamp_run_guard_counts_one_transport_copy():
 
 
 @pytest.mark.unit
+def test_duplicate_single_large_print_guard_counts_one_transport_copy():
+    eng = BigTradeEngine(dedupe_repeated_timestamp_runs=True)
+
+    out = eng.merge_stream(
+        [
+            _t(1000, 101.0, 72, ask=101.0, time_ticks=639173879039480000),
+            _t(1000, 101.0, 72, ask=101.0, time_ticks=639173879039480000),
+        ]
+    )
+
+    assert [(b.time, b.price, b.volume, b.side) for b in out] == [
+        (1000, 101.0, 72, Side.BUY)
+    ]
+
+
+@pytest.mark.unit
 def test_opposite_sides_same_timestamp_not_merged():
     eng = BigTradeEngine(min_volume=1)
     out = eng.merge_stream(

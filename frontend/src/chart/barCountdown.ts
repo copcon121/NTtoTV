@@ -27,6 +27,25 @@ export function remainingBarTimeMs(
   return Math.max(0, barStartMs + durationMs - nowMs);
 }
 
+export function shouldUseObservedBarCountdown(
+  latestBarStartMs: number,
+  durationMs: number,
+  nowMs = Date.now(),
+): boolean {
+  if (durationMs <= 0) return false;
+  const currentBucketStart = Math.floor(nowMs / durationMs) * durationMs;
+  return latestBarStartMs > currentBucketStart;
+}
+
+export function remainingObservedBarTimeMs(
+  barFirstSeenMs: number,
+  durationMs: number,
+  nowMs = Date.now(),
+): number {
+  const elapsedMs = Math.max(0, nowMs - barFirstSeenMs);
+  return Math.max(0, durationMs - elapsedMs);
+}
+
 export function countdownBarStartMs(
   latestBarStartMs: number,
   durationMs: number,

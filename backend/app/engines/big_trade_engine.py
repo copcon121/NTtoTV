@@ -253,7 +253,13 @@ class BigTradeEngine:
         if self.dedupe_repeated_timestamp_runs:
             volume, price = self._dedup_repeated_tick_run(g.ticks)
             if volume != g.volume:
-                logger.warning(
+                log_level = (
+                    logging.WARNING
+                    if self.passes_filter(g.volume) or self.passes_filter(volume)
+                    else logging.DEBUG
+                )
+                logger.log(
+                    log_level,
                     "BigTrade dedup fired: raw_volume=%d -> deduped=%d, "
                     "ticks=%d, time=%d, side=%s, contract=%s",
                     g.volume, volume, len(g.ticks), g.time,
@@ -294,14 +300,15 @@ class BigTradeEngine:
         Detection strategy (checked in order):
 
         1. **Exact Nx**: the tick list consists of N identical copies of a
-           sub-sequence (N = 2, 3, ...). The first copy is kept.
+           sub-sequence (N = 2, 3, ...), including a single large print replayed
+           with the same NT timestamp. The first copy is kept.
         2. **Near 2x**: the first half equals the second half after removing
            one straggler tick at the boundary (count is odd, ``count-1`` is
            even, and the two ``(count-1)/2`` halves match). This handles an
            edge tick that sneaks in between the two replays.
 
-        Only these narrow patterns are collapsed; normal repeated prints (e.g.
-        two genuine 1-lot trades at the same price) are kept.
+        Only these narrow patterns are collapsed; mixed prints at the same
+        timestamp are kept.
         """
         if not ticks:
             return 0, 0.0
@@ -313,7 +320,7 @@ class BigTradeEngine:
             if count % n != 0:
                 continue
             segment_len = count // n
-            if segment_len < 2:
+            if segment_len < 1:
                 continue
             segment = ticks[:segment_len]
             if all(ticks[i * segment_len:(i + 1) * segment_len] == segment

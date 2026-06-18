@@ -1339,6 +1339,28 @@ export function LiveApp() {
   const deltaProfileFetchKeysRef = useRef(new Map<string, string>());
   const deltaProfileRefreshTimerRef = useRef<number | undefined>(undefined);
   const latestPriceThrottleRef = useRef<number | undefined>(undefined);
+  const latestPricePendingRef = useRef<number | undefined>(undefined);
+
+  const publishLatestPrice = useCallback((price: number) => {
+    latestPricePendingRef.current = price;
+    if (latestPriceThrottleRef.current !== undefined) return;
+
+    const flush = () => {
+      const pending = latestPricePendingRef.current;
+      latestPricePendingRef.current = undefined;
+      if (pending !== undefined) {
+        setLatestPrice(pending);
+      }
+      latestPriceThrottleRef.current = window.setTimeout(() => {
+        latestPriceThrottleRef.current = undefined;
+        if (latestPricePendingRef.current !== undefined) {
+          flush();
+        }
+      }, 250);
+    };
+
+    flush();
+  }, []);
 
   const profilePayload = useMemo<ChartProfilePayload>(
     () => ({
@@ -1910,18 +1932,12 @@ export function LiveApp() {
         matchesChartContract(msg.contract) &&
         msg.tf === timeframe
       ) {
-        setLatestPrice(msg.bar.close);
+        publishLatestPrice(msg.bar.close);
       }
     });
     const offQuotePrice = socket.on("quote_update", (msg) => {
       if (msg.symbol === SYMBOL && matchesChartContract(msg.contract)) {
-        // Throttle price state updates to ~4Hz to avoid re-rendering the
-        // entire component tree (orderRows, MarketOrderBar) on every tick.
-        if (latestPriceThrottleRef.current !== undefined) return;
-        setLatestPrice((msg.bid + msg.ask) / 2);
-        latestPriceThrottleRef.current = window.setTimeout(() => {
-          latestPriceThrottleRef.current = undefined;
-        }, 250);
+        publishLatestPrice((msg.bid + msg.ask) / 2);
       }
     });
     const offFootprint = ENABLE_REALTIME_FOOTPRINT_UPDATES
@@ -1962,8 +1978,9 @@ export function LiveApp() {
         window.clearTimeout(latestPriceThrottleRef.current);
         latestPriceThrottleRef.current = undefined;
       }
+      latestPricePendingRef.current = undefined;
     };
-  }, [socket, contract, timeframe, scheduleDeltaProfileRefresh]);
+  }, [socket, contract, timeframe, scheduleDeltaProfileRefresh, publishLatestPrice]);
 
   const onToggleAlert = (id: string, enabled: boolean) => {
     if (!authUser) {

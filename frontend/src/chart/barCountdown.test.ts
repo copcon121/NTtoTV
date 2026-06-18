@@ -4,7 +4,9 @@ import {
   barDurationForTimeframe,
   countdownBarStartMs,
   formatBarCountdown,
+  remainingObservedBarTimeMs,
   remainingBarTimeMs,
+  shouldUseObservedBarCountdown,
 } from "./barCountdown";
 
 describe("bar countdown", () => {
@@ -29,6 +31,16 @@ describe("bar countdown", () => {
         200_000,
       ),
     ).toBe(40_000);
+  });
+
+  it("uses an observed countdown when the feed opens a future bar", () => {
+    expect(shouldUseObservedBarCountdown(180_000, 60_000, 167_000)).toBe(true);
+    expect(remainingObservedBarTimeMs(10_000, 60_000, 10_000)).toBe(60_000);
+    expect(remainingObservedBarTimeMs(10_000, 60_000, 13_250)).toBe(56_750);
+  });
+
+  it("does not use observed countdown for the local wall-clock bucket", () => {
+    expect(shouldUseObservedBarCountdown(120_000, 60_000, 167_000)).toBe(false);
   });
 
   it("formats intraday and multi-hour countdowns like TradingView", () => {
