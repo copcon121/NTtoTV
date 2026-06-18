@@ -39,6 +39,22 @@ const alerts: Alert[] = [
     },
     enabled: true,
   },
+  {
+    id: "a_4",
+    symbol: "GC",
+    type: "smc_zone_touch_big_trade",
+    params: {
+      bigTradeThreshold: 30,
+      swingLength: 50,
+      maxZoneAge: 220,
+      fvgAutoThreshold: true,
+      fvgThresholdLookback: 60,
+      fvgThresholdMultiplier: 1.5,
+      fvgVolumeConfirmation: false,
+      repeat: true,
+    },
+    enabled: true,
+  },
 ];
 
 function event(overrides: Partial<AlertEventMessage> = {}): AlertEventMessage {
@@ -63,6 +79,9 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(screen.getByTestId("alert-a_2")).toBeInTheDocument();
     expect(screen.getByTestId("alert-a_3")).toHaveTextContent(
       "External BOS/CHoCH, BT > 50 (repeat)",
+    );
+    expect(screen.getByTestId("alert-a_4")).toHaveTextContent(
+      "M1 external OB/FVG touch, BT > 30 (repeat)",
     );
     expect(screen.getByLabelText("Enable a_1")).toBeChecked();
     expect(screen.getByLabelText("Enable a_2")).not.toBeChecked();
@@ -156,6 +175,36 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
         maxBars: 20,
         pauseOnInsideBars: true,
         repeat: false,
+      },
+    });
+  });
+
+  it("raises onCreate with M1 OB/FVG zone touch params", () => {
+    const onCreate = vi.fn();
+    render(<AlertPanel alerts={alerts} onCreate={onCreate} />);
+    fireEvent.change(screen.getByLabelText("Alert type"), {
+      target: { value: "smc_zone_touch_big_trade" },
+    });
+
+    expect(screen.getByLabelText("BigTrade threshold")).toHaveValue(30);
+    expect(screen.getByLabelText("Repeat alert")).toBeChecked();
+
+    fireEvent.change(screen.getByLabelText("BigTrade threshold"), {
+      target: { value: "35" },
+    });
+    fireEvent.click(screen.getByText("Add"));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      type: "smc_zone_touch_big_trade",
+      params: {
+        bigTradeThreshold: 35,
+        swingLength: 50,
+        maxZoneAge: 220,
+        fvgAutoThreshold: true,
+        fvgThresholdLookback: 60,
+        fvgThresholdMultiplier: 1.5,
+        fvgVolumeConfirmation: false,
+        repeat: true,
       },
     });
   });

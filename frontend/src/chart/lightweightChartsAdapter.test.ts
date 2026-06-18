@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  VOLUME_OVERLAY_PRICE_SCALE_ID,
+  VOLUME_OVERLAY_SCALE_MARGINS,
   VOLUME_DELTA_OVERLAY_PRICE_SCALE_ID,
   VOLUME_DELTA_OVERLAY_SCALE_MARGINS,
+  CVD_OVERLAY_PRICE_SCALE_ID,
+  CVD_OVERLAY_SCALE_MARGINS,
+  isUtcPlus7SessionHighlightTime,
   toBarDisplayTimestamp,
   toUtcTimestamp,
 } from "./lightweightChartsAdapter";
@@ -29,6 +34,19 @@ describe("lightweightChartsAdapter time conversion", () => {
       Math.floor((bucketStart + 5 * 60_000) / 1_000),
     );
   });
+
+  it("marks chart bars displayed at 08:01 and 20:01 UTC+7", () => {
+    const oneMinute = 60_000;
+    const oldEightAm = Date.UTC(2026, 5, 3, 0, 59, 0);
+    const eightOhOneAm = Date.UTC(2026, 5, 3, 1, 0, 0);
+    const eightOhOnePm = Date.UTC(2026, 5, 3, 13, 0, 0);
+    const ordinaryBar = Date.UTC(2026, 5, 3, 1, 1, 0);
+
+    expect(isUtcPlus7SessionHighlightTime(oldEightAm, oneMinute)).toBe(false);
+    expect(isUtcPlus7SessionHighlightTime(eightOhOneAm, oneMinute)).toBe(true);
+    expect(isUtcPlus7SessionHighlightTime(eightOhOnePm, oneMinute)).toBe(true);
+    expect(isUtcPlus7SessionHighlightTime(ordinaryBar, oneMinute)).toBe(false);
+  });
 });
 
 describe("lightweightChartsAdapter volume delta overlay", () => {
@@ -37,6 +55,26 @@ describe("lightweightChartsAdapter volume delta overlay", () => {
     expect(VOLUME_DELTA_OVERLAY_SCALE_MARGINS).toEqual({
       top: 0.8,
       bottom: 0.02,
+    });
+  });
+});
+
+describe("lightweightChartsAdapter volume overlay", () => {
+  it("uses a dedicated histogram price scale pinned to the chart bottom", () => {
+    expect(VOLUME_OVERLAY_PRICE_SCALE_ID).toBe("volume-overlay");
+    expect(VOLUME_OVERLAY_SCALE_MARGINS).toEqual({
+      top: 0.76,
+      bottom: 0,
+    });
+  });
+});
+
+describe("lightweightChartsAdapter CVD overlay", () => {
+  it("uses a dedicated line price scale near the chart bottom", () => {
+    expect(CVD_OVERLAY_PRICE_SCALE_ID).toBe("cvd-overlay");
+    expect(CVD_OVERLAY_SCALE_MARGINS).toEqual({
+      top: 0.72,
+      bottom: 0.04,
     });
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { ApiClient } from "./client";
+import { DEFAULT_EMA_SETTINGS } from "../chart/IndicatorToggles";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -150,7 +151,7 @@ describe("ApiClient auth, MT5, and user profile", () => {
       chartBackgroundColor: "#101010",
       showFootprint: false,
       showBigTrades: true,
-      ema: { enabled: false, period: 200, color: "#2962ff" },
+      ema: { ...DEFAULT_EMA_SETTINGS },
       smc: { enabled: false },
       footprintSettings: {},
       drawings: [],
@@ -225,6 +226,138 @@ describe("ApiClient auth, MT5, and user profile", () => {
     expect(fetchFn).toHaveBeenCalledWith(
       "/api/orderflow/delta-profile?symbol=GC&contract=GC&from=1000&to=2000&rowTicks=1&valueAreaPct=70",
       expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("loads latest analyst report and triggers a manual analyst run", async () => {
+    const report = {
+      reportId: "r-1",
+      snapshotId: "s-1",
+      symbol: "GC",
+      contract: "GC",
+      createdAt: 1,
+      bias: "bullish",
+      decision: "buy_candidate",
+      confidence: 0.68,
+      reason: ["H1 bullish"],
+      invalidIf: "M5 close below support",
+      nextConfirmation: "M1 positive CVD flip",
+      riskState: "candidate",
+      allowedToAlert: true,
+      allowedToAutoTrade: false,
+    };
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ report }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          snapshot: { snapshotId: "s-2" },
+          report,
+          llmEnabled: true,
+          error: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          available: false,
+          enabled: false,
+          reason: "30-minute auto analyst has been replaced by event-driven POI scanner",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          available: false,
+          enabled: false,
+          reason: "30-minute auto analyst has been replaced by event-driven POI scanner",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          available: true,
+          enabled: false,
+          profileId: "desk",
+          providerMode: "real",
+          llmEnabled: true,
+          reason: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          available: true,
+          enabled: true,
+          profileId: "desk",
+          providerMode: "real",
+          llmEnabled: true,
+          reason: null,
+        }),
+      );
+    const api = new ApiClient({ fetchFn });
+
+    await expect(api.analystLatest("GC", "GC")).resolves.toMatchObject({
+      decision: "buy_candidate",
+    });
+    await expect(api.runAnalyst("GC", "GC", "desk")).resolves.toMatchObject({
+      report: { reportId: "r-1" },
+      llmEnabled: true,
+    });
+    await expect(api.analystAutoSend()).resolves.toMatchObject({
+      available: false,
+      enabled: false,
+    });
+    await expect(api.setAnalystAutoSend(false)).resolves.toMatchObject({
+      available: false,
+      enabled: false,
+    });
+    await expect(api.analystEventAi("desk")).resolves.toMatchObject({
+      available: true,
+      enabled: false,
+      profileId: "desk",
+    });
+    await expect(api.setAnalystEventAi(true, "desk")).resolves.toMatchObject({
+      enabled: true,
+      providerMode: "real",
+    });
+
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      1,
+      "/api/analyst/latest?symbol=GC&contract=GC",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      2,
+      "/api/analyst/run?symbol=GC&contract=GC&profileId=desk",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+      }),
+    );
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      3,
+      "/api/analyst/auto-send",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      4,
+      "/api/analyst/auto-send",
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "same-origin",
+        body: JSON.stringify({ enabled: false }),
+      }),
+    );
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      5,
+      "/api/analyst/event-ai?profileId=desk",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      6,
+      "/api/analyst/event-ai?profileId=desk",
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "same-origin",
+        body: JSON.stringify({ enabled: true }),
+      }),
     );
   });
 });

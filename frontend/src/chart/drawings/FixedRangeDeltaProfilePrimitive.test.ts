@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { isPriceInsideValueArea } from "./FixedRangeDeltaProfilePrimitive";
+import {
+  isPriceInsideValueArea,
+  normalizeFixedRangeProfileMode,
+} from "./FixedRangeDeltaProfilePrimitive";
 
 describe("FixedRangeDeltaProfilePrimitive value area rows", () => {
   it("keeps prices between VAL and VAH in the value area", () => {
@@ -15,5 +18,13 @@ describe("FixedRangeDeltaProfilePrimitive value area rows", () => {
     expect(isPriceInsideValueArea(4514.2, null, 4514.0)).toBe(true);
     expect(isPriceInsideValueArea(4514.2, 4514.4, null)).toBe(true);
     expect(isPriceInsideValueArea(4514.2, Number.NaN, 4514.0)).toBe(true);
+  });
+});
+
+describe("FixedRangeDeltaProfilePrimitive mode", () => {
+  it("defaults legacy or invalid profile mode to bid/ask split", () => {
+    expect(normalizeFixedRangeProfileMode(undefined)).toBe("bidAsk");
+    expect(normalizeFixedRangeProfileMode("delta")).toBe("bidAsk");
+    expect(normalizeFixedRangeProfileMode("volume")).toBe("volume");
   });
 });

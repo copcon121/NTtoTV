@@ -135,6 +135,10 @@ Networking rule:
   local port `9999` is in use; that was the old Vite dev URL.
 - Vite can still run locally for development if explicitly started, but production
   traffic is served through Caddy on `gcflowpy.xyz`.
+- Important: after frontend/UI changes that must appear on the public domain,
+  run `cd frontend; npm run build` so `frontend/dist` is updated. Then verify
+  `https://gcflowpy.xyz/` references the new `/assets/index-*.js` bundle; a
+  source-only change will not show up on the domain.
 
 ## NT AddOn Layout
 
@@ -338,6 +342,9 @@ Frontend-specific:
 - Do not reintroduce a contract selector unless the user explicitly asks.
 - `CHART_CONTRACT` is `GC`.
 - Run `npm run typecheck` or `npm run build` after TypeScript/UI changes.
+- For user-visible frontend changes on `https://gcflowpy.xyz/`, prefer
+  `npm run build` over typecheck alone, because Caddy serves the built
+  `frontend/dist` bundle.
 
 NT-specific:
 
@@ -399,6 +406,9 @@ After the latest fixes:
   if a local Vite dev server was explicitly started for development.
 - Caddy serves the frontend/domain and proxies `/api` and `/ws` to backend
   loopback.
+- Frontend source changes are not visible on `https://gcflowpy.xyz/` until
+  `frontend/dist` is rebuilt with `npm run build`; confirm the domain's
+  `index.html` points to the new hashed asset.
 - Backend port `8000` has an inbound Windows Firewall block rule:
   `NTtoTV Block Backend 8000 Inbound`. Local loopback still works for the
   Caddy proxy and health checks.

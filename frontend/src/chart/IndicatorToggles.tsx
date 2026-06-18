@@ -5,6 +5,13 @@ import {
   type OutsideBarSettings,
 } from "./outsideBar";
 import { type SmcSettings } from "./smc";
+import {
+  BIG_TRADE_SESSIONS,
+  DEFAULT_BIG_TRADE_SESSION_MIN_VOLUMES,
+  normalizeBigTradeSessionMinVolumes,
+  type BigTradeSession,
+  type BigTradeSessionMinVolumes,
+} from "./bigTradeSessions";
 
 /**
  * IndicatorToggles — TradingView-style "Indicators" dropdown.
@@ -19,6 +26,36 @@ export interface EmaSettings {
   enabled: boolean;
   period: number;
   color: string;
+  showEma200: boolean;
+  ema200Color: string;
+}
+
+export const DEFAULT_EMA_SETTINGS: EmaSettings = {
+  enabled: false,
+  period: 21,
+  color: "#2962ff",
+  showEma200: false,
+  ema200Color: "#e0b341",
+};
+
+export function normalizeEmaSettings(input?: Partial<EmaSettings> | null): EmaSettings {
+  const rawPeriod = Number(input?.period ?? DEFAULT_EMA_SETTINGS.period);
+  const period = Number.isFinite(rawPeriod)
+    ? Math.max(1, Math.round(rawPeriod))
+    : DEFAULT_EMA_SETTINGS.period;
+  return {
+    enabled: Boolean(input?.enabled),
+    period,
+    color:
+      typeof input?.color === "string"
+        ? input.color
+        : DEFAULT_EMA_SETTINGS.color,
+    showEma200: Boolean(input?.showEma200),
+    ema200Color:
+      typeof input?.ema200Color === "string"
+        ? input.ema200Color
+        : DEFAULT_EMA_SETTINGS.ema200Color,
+  };
 }
 
 export interface FootprintSettings {
@@ -32,6 +69,7 @@ export interface FootprintSettings {
 export interface BigTradeSettings {
   minVolume: number;
   maxVisible: number;
+  sessionMinVolumes?: BigTradeSessionMinVolumes;
 }
 
 export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
@@ -43,11 +81,15 @@ export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
 };
 
 export const DEFAULT_BIG_TRADE_SETTINGS: BigTradeSettings = {
-  minVolume: 30,
+  minVolume: DEFAULT_BIG_TRADE_SESSION_MIN_VOLUMES.asia,
   maxVisible: 500,
+  sessionMinVolumes: DEFAULT_BIG_TRADE_SESSION_MIN_VOLUMES,
 };
 
 export interface IndicatorTogglesProps {
+  volume?: boolean;
+  volumeDelta?: boolean;
+  cvd?: boolean;
   footprint: boolean;
   bigTrades: boolean;
   ema: EmaSettings;
@@ -56,6 +98,10 @@ export interface IndicatorTogglesProps {
   footprintSettings: FootprintSettings;
   bigTradeSettings?: BigTradeSettings;
   footprintDisabled?: boolean;
+  bigTradeDisabled?: boolean;
+  onVolumeChange?: (enabled: boolean) => void;
+  onVolumeDeltaChange?: (enabled: boolean) => void;
+  onCvdChange?: (enabled: boolean) => void;
   onFootprintChange: (enabled: boolean) => void;
   onBigTradesChange: (enabled: boolean) => void;
   onEmaChange: (next: EmaSettings) => void;
@@ -102,6 +148,9 @@ function IndicatorRow({ label, checked, disabled = false, onChange, trailing }: 
 }
 
 export function IndicatorToggles({
+  volume = false,
+  volumeDelta = false,
+  cvd = false,
   footprint,
   bigTrades,
   ema,
@@ -110,6 +159,10 @@ export function IndicatorToggles({
   footprintSettings,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
   footprintDisabled = false,
+  bigTradeDisabled = false,
+  onVolumeChange = () => {},
+  onVolumeDeltaChange = () => {},
+  onCvdChange = () => {},
   onFootprintChange,
   onBigTradesChange,
   onEmaChange,
@@ -130,9 +183,24 @@ export function IndicatorToggles({
   const [smcInternalDraft, setSmcInternalDraft] = useState(String(smc.internalLength));
   const [smcFvgExtendDraft, setSmcFvgExtendDraft] = useState(String(smc.fvgExtendBars));
   const [smcFvgLimitDraft, setSmcFvgLimitDraft] = useState(String(smc.maxFairValueGaps));
+  const [smcFvgLookbackDraft, setSmcFvgLookbackDraft] = useState(
+    String(smc.fvgThresholdLookback),
+  );
+  const [smcFvgThresholdDraft, setSmcFvgThresholdDraft] = useState(
+    String(smc.fvgThresholdMultiplier),
+  );
   const [vaPercentDraft, setVaPercentDraft] = useState(String(footprintSettings.vaPercent));
   const [imbMinVolDraft, setImbMinVolDraft] = useState(String(footprintSettings.imbalanceMinVolume));
-  const [btMinVolDraft, setBtMinVolDraft] = useState(String(bigTradeSettings.minVolume));
+  const [btSessionMinVolDrafts, setBtSessionMinVolDrafts] = useState<
+    Record<BigTradeSession, string>
+  >(() => {
+    const minVolumes = normalizeBigTradeSessionMinVolumes(bigTradeSettings);
+    return {
+      asia: String(minVolumes.asia),
+      eu: String(minVolumes.eu),
+      us: String(minVolumes.us),
+    };
+  });
   const [btLimitDraft, setBtLimitDraft] = useState(String(bigTradeSettings.maxVisible));
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -158,8 +226,26 @@ export function IndicatorToggles({
   }, [smc.maxFairValueGaps]);
 
   useEffect(() => {
-    setBtMinVolDraft(String(bigTradeSettings.minVolume));
-  }, [bigTradeSettings.minVolume]);
+    setSmcFvgLookbackDraft(String(smc.fvgThresholdLookback));
+  }, [smc.fvgThresholdLookback]);
+
+  useEffect(() => {
+    setSmcFvgThresholdDraft(String(smc.fvgThresholdMultiplier));
+  }, [smc.fvgThresholdMultiplier]);
+
+  useEffect(() => {
+    const minVolumes = normalizeBigTradeSessionMinVolumes(bigTradeSettings);
+    setBtSessionMinVolDrafts({
+      asia: String(minVolumes.asia),
+      eu: String(minVolumes.eu),
+      us: String(minVolumes.us),
+    });
+  }, [
+    bigTradeSettings.minVolume,
+    bigTradeSettings.sessionMinVolumes?.asia,
+    bigTradeSettings.sessionMinVolumes?.eu,
+    bigTradeSettings.sessionMinVolumes?.us,
+  ]);
 
   useEffect(() => {
     setBtLimitDraft(String(bigTradeSettings.maxVisible));
@@ -197,9 +283,12 @@ export function IndicatorToggles({
   }, [open]);
 
   const activeCount =
+    (volume ? 1 : 0) +
+    (volumeDelta ? 1 : 0) +
+    (cvd ? 1 : 0) +
     (footprint ? 1 : 0) +
     (bigTrades ? 1 : 0) +
-    (ema.enabled ? 1 : 0) +
+    (ema.enabled || ema.showEma200 ? 1 : 0) +
     (smc.enabled ? 1 : 0) +
     (outsideBar.enabled ? 1 : 0);
 
@@ -257,6 +346,24 @@ export function IndicatorToggles({
     }
   };
 
+  const commitSmcFvgLookback = () => {
+    const parsed = Math.round(Number(smcFvgLookbackDraft));
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 500) {
+      onSmcChange({ ...smc, fvgThresholdLookback: parsed });
+    } else {
+      setSmcFvgLookbackDraft(String(smc.fvgThresholdLookback));
+    }
+  };
+
+  const commitSmcFvgThreshold = () => {
+    const parsed = Number(smcFvgThresholdDraft);
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 10) {
+      onSmcChange({ ...smc, fvgThresholdMultiplier: parsed });
+    } else {
+      setSmcFvgThresholdDraft(String(smc.fvgThresholdMultiplier));
+    }
+  };
+
   const commitImbMinVol = () => {
     const parsed = Math.round(Number(imbMinVolDraft));
     if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1000) {
@@ -266,12 +373,25 @@ export function IndicatorToggles({
     }
   };
 
-  const commitBtMinVol = () => {
-    const parsed = Math.round(Number(btMinVolDraft));
+  const commitBtSessionMinVol = (session: BigTradeSession) => {
+    const parsed = Math.round(Number(btSessionMinVolDrafts[session]));
+    const current = normalizeBigTradeSessionMinVolumes(bigTradeSettings);
     if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 100000) {
-      onBigTradeSettingsChange({ ...bigTradeSettings, minVolume: parsed });
+      const nextSessionMinVolumes = { ...current, [session]: parsed };
+      onBigTradeSettingsChange({
+        ...bigTradeSettings,
+        minVolume: Math.min(
+          nextSessionMinVolumes.asia,
+          nextSessionMinVolumes.eu,
+          nextSessionMinVolumes.us,
+        ),
+        sessionMinVolumes: nextSessionMinVolumes,
+      });
     } else {
-      setBtMinVolDraft(String(bigTradeSettings.minVolume));
+      setBtSessionMinVolDrafts((drafts) => ({
+        ...drafts,
+        [session]: String(current[session]),
+      }));
     }
   };
 
@@ -302,6 +422,21 @@ export function IndicatorToggles({
       </button>
       {open && (
         <div className="indicator-menu" role="menu" aria-label="Indicator list">
+          <IndicatorRow
+            label="Volume"
+            checked={volume}
+            onChange={onVolumeChange}
+          />
+          <IndicatorRow
+            label="Volume Delta"
+            checked={volumeDelta}
+            onChange={onVolumeDeltaChange}
+          />
+          <IndicatorRow
+            label="CVD"
+            checked={cvd}
+            onChange={onCvdChange}
+          />
           <IndicatorRow
             label={`EMA ${ema.period}`}
             checked={ema.enabled}
@@ -366,6 +501,22 @@ export function IndicatorToggles({
                     onChange={(e) => onEmaChange({ ...ema, color: e.currentTarget.value })}
                   />
                 </div>
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={ema.showEma200}
+                    aria-label="EMA 200"
+                    onChange={(e) =>
+                      onEmaChange({
+                        ...ema,
+                        showEma200: e.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>EMA 200</span>
+                </label>
               </div>
             </div>
           )}
@@ -462,6 +613,75 @@ export function IndicatorToggles({
                     }
                   />
                   <span>Show PD</span>
+                </label>
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={smc.fvgAutoThreshold}
+                    onChange={(e) =>
+                      onSmcChange({
+                        ...smc,
+                        fvgAutoThreshold: e.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>Auto FVG threshold</span>
+                </label>
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">FVG lookback</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  className="ema-length-input"
+                  aria-label="SMC FVG threshold lookback"
+                  value={smcFvgLookbackDraft}
+                  onChange={(e) => setSmcFvgLookbackDraft(e.currentTarget.value)}
+                  onBlur={commitSmcFvgLookback}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitSmcFvgLookback();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">FVG factor</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={10}
+                  step={0.1}
+                  className="ema-length-input"
+                  aria-label="SMC FVG threshold multiplier"
+                  value={smcFvgThresholdDraft}
+                  onChange={(e) => setSmcFvgThresholdDraft(e.currentTarget.value)}
+                  onBlur={commitSmcFvgThreshold}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitSmcFvgThreshold();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={smc.fvgVolumeConfirmation}
+                    onChange={(e) =>
+                      onSmcChange({
+                        ...smc,
+                        fvgVolumeConfirmation: e.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>FVG volume confirmation</span>
                 </label>
               </div>
               <div className="ema-setting-line">
@@ -661,6 +881,7 @@ export function IndicatorToggles({
           <IndicatorRow
             label="BigTrade"
             checked={bigTrades}
+            disabled={bigTradeDisabled}
             onChange={onBigTradesChange}
             trailing={
               <button
@@ -676,25 +897,33 @@ export function IndicatorToggles({
           />
           {btSettingsOpen && (
             <div className="ema-settings" aria-label="BigTrade settings panel">
-              <div className="ema-setting-line">
-                <span className="ema-setting-label">Min Vol</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={100000}
-                  className="ema-length-input"
-                  aria-label="BigTrade min volume"
-                  value={btMinVolDraft}
-                  onChange={(e) => setBtMinVolDraft(e.currentTarget.value)}
-                  onBlur={commitBtMinVol}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      commitBtMinVol();
-                      e.currentTarget.blur();
-                    }
-                  }}
-                />
-              </div>
+              {BIG_TRADE_SESSIONS.map(({ key, label }) => (
+                <div className="ema-setting-line" key={key}>
+                  <span className="ema-setting-label">{label}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100000}
+                    className="ema-length-input"
+                    aria-label={`BigTrade ${label} min volume`}
+                    value={btSessionMinVolDrafts[key]}
+                    onChange={(e) => {
+                      const value = e.currentTarget.value;
+                      setBtSessionMinVolDrafts((drafts) => ({
+                        ...drafts,
+                        [key]: value,
+                      }));
+                    }}
+                    onBlur={() => commitBtSessionMinVol(key)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        commitBtSessionMinVol(key);
+                        e.currentTarget.blur();
+                      }
+                    }}
+                  />
+                </div>
+              ))}
               <div className="ema-setting-line">
                 <span className="ema-setting-label">Limit</span>
                 <input

@@ -27,6 +27,7 @@ DEFAULT_RESOLVER_QUOTE_WEIGHT = 0.1
 # User-facing symbols supported by the platform. v1 ships GC only; the Frontend
 # presents the symbol as ``GC`` (Req 10.1, 18.1).
 DEFAULT_SUPPORTED_SYMBOLS = ("GC",)
+DEFAULT_OPENAI_BASE_URL = "http://43.228.214.251:20128/v1"
 
 # Configured GC Candidate_Contract list. The REST contracts endpoints surface
 # this set, and the active-contract state (Req 18.2, 18.3) defaults to the first
@@ -116,6 +117,65 @@ class Settings:
         default_factory=lambda: int(os.getenv("NTTOTV_BASIS_STALE_AFTER_MS", "5000"))
     )
 
+    # Experimental analyst. Disabled by default and isolated in a separate
+    # SQLite database so it can be removed without touching the market cache.
+    analyst_enabled: bool = field(
+        default_factory=lambda: os.getenv("NTTOTV_ANALYST_ENABLED", "0") == "1"
+    )
+    analyst_db_name: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_ANALYST_DB_NAME", "analyst.sqlite")
+    )
+    analyst_event_provider: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_ANALYST_EVENT_PROVIDER", "mock")
+    )
+    analyst_manual_provider: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_ANALYST_MANUAL_PROVIDER", "real")
+    )
+    analyst_tick_size: float = field(
+        default_factory=lambda: float(os.getenv("NTTOTV_ANALYST_TICK_SIZE", "0.1"))
+    )
+    analyst_event_cooldown_s: int = field(
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_ANALYST_EVENT_COOLDOWN_S", "1800")
+        )
+    )
+    analyst_scanner_queue_size: int = field(
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_ANALYST_SCANNER_QUEUE_SIZE", "1")
+        )
+    )
+    analyst_m1_internal_enabled: bool = field(
+        default_factory=lambda: os.getenv("NTTOTV_ANALYST_M1_INTERNAL_ENABLED", "1")
+        != "0"
+    )
+    openai_api_key: str | None = field(
+        default_factory=lambda: os.getenv("NTTOTV_OPENAI_API_KEY")
+    )
+    openai_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "NTTOTV_OPENAI_BASE_URL",
+            os.getenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL),
+        )
+    )
+    llm_model: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_LLM_MODEL", "cx/gpt-5.5")
+    )
+    llm_reasoning_effort: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_LLM_REASONING_EFFORT", "medium")
+    )
+    llm_manual_reasoning_effort: str = field(
+        default_factory=lambda: os.getenv(
+            "NTTOTV_LLM_MANUAL_REASONING_EFFORT",
+            "high",
+        )
+    )
+    llm_event_reasoning_effort: str = field(
+        default_factory=lambda: os.getenv(
+            "NTTOTV_LLM_EVENT_REASONING_EFFORT",
+            os.getenv("NTTOTV_LLM_REASONING_EFFORT", "high"),
+        )
+    )
+
     @property
     def cache_db_path(self) -> Path:
         return self.data_dir / self.cache_db_name
@@ -123,6 +183,10 @@ class Settings:
     @property
     def ticks_dir(self) -> Path:
         return self.data_dir / self.ticks_subdir
+
+    @property
+    def analyst_db_path(self) -> Path:
+        return self.data_dir / self.analyst_db_name
 
     @property
     def auth_session_ttl_seconds(self) -> int:

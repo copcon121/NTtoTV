@@ -9,8 +9,9 @@ function bar(
   high: number,
   low: number,
   close: number,
+  volume = 1,
 ): Bar {
-  return { time, open, high, low, close, volume: 1 };
+  return { time, open, high, low, close, volume };
 }
 
 describe("SMC overlay", () => {
@@ -113,6 +114,118 @@ describe("SMC overlay", () => {
         extendBars: 3,
       }),
     );
+  });
+
+  it("filters weak FVG zones when auto threshold is enabled", () => {
+    const bars = [
+      bar(0, 100, 101, 99, 100.5),
+      bar(60_000, 100.5, 101.5, 99.5, 100),
+      bar(120_000, 100, 101.4, 99.4, 100.4),
+      bar(180_000, 100.4, 101.2, 99.2, 100),
+      bar(240_000, 100, 101, 99, 100.2),
+      bar(300_000, 100.95, 101.08, 100.9, 101.05),
+      bar(360_000, 101.15, 101.4, 101.1, 101.3),
+    ];
+    const baseSettings = {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      swingLength: 1,
+      internalLength: 1,
+      showPremiumDiscount: false,
+      showSwingOrderBlocks: false,
+      showInternalOrderBlocks: false,
+      maxFairValueGaps: 30,
+    };
+
+    const autoOverlay = computeSmcOverlay(bars, baseSettings);
+    const manualOverlay = computeSmcOverlay(bars, {
+      ...baseSettings,
+      fvgAutoThreshold: false,
+    });
+
+    expect(autoOverlay.zones.filter((zone) => zone.kind === "fvg")).toEqual([]);
+    expect(manualOverlay.zones).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "fvg",
+          direction: 1,
+          top: 101.1,
+          bottom: 101,
+        }),
+      ]),
+    );
+  });
+
+  it("uses rolling FVG body threshold instead of all-history volatility", () => {
+    const bars = [
+      bar(0, 100, 111, 99, 110),
+      bar(60_000, 110, 111, 99, 100),
+      bar(120_000, 100, 111, 99, 110),
+      bar(180_000, 100, 100.2, 99.8, 100.1),
+      bar(240_000, 100.1, 100.2, 99.8, 100),
+      bar(300_000, 100, 100.1, 99.9, 100.05),
+      bar(360_000, 100.05, 100.35, 100, 100.3),
+      bar(420_000, 100.3, 100.45, 100.2, 100.35),
+    ];
+    const baseSettings = {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      swingLength: 1,
+      internalLength: 1,
+      showPremiumDiscount: false,
+      showSwingOrderBlocks: false,
+      showInternalOrderBlocks: false,
+      maxFairValueGaps: 30,
+    };
+
+    const rollingOverlay = computeSmcOverlay(bars, {
+      ...baseSettings,
+      fvgThresholdLookback: 3,
+    });
+    const longOverlay = computeSmcOverlay(bars, {
+      ...baseSettings,
+      fvgThresholdLookback: 20,
+    });
+
+    expect(rollingOverlay.zones).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "fvg",
+          direction: 1,
+          top: 100.2,
+          bottom: 100.1,
+        }),
+      ]),
+    );
+    expect(longOverlay.zones.filter((zone) => zone.kind === "fvg")).toEqual([]);
+  });
+
+  it("can require a volume anomaly for FVG zones", () => {
+    const bars = [
+      bar(0, 9.5, 10, 9, 9.5, 100),
+      bar(60_000, 11.2, 12, 11, 11.5, 5),
+      bar(120_000, 13.2, 14, 13, 13.5, 100),
+    ];
+    const baseSettings = {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      swingLength: 1,
+      internalLength: 1,
+      fvgAutoThreshold: false,
+      showPremiumDiscount: false,
+      showSwingOrderBlocks: false,
+      showInternalOrderBlocks: false,
+      maxFairValueGaps: 30,
+    };
+
+    const withoutVolumeFilter = computeSmcOverlay(bars, baseSettings);
+    const withVolumeFilter = computeSmcOverlay(bars, {
+      ...baseSettings,
+      fvgVolumeConfirmation: true,
+    });
+
+    expect(withoutVolumeFilter.zones.some((zone) => zone.kind === "fvg")).toBe(true);
+    expect(withVolumeFilter.zones.filter((zone) => zone.kind === "fvg")).toEqual([]);
   });
 
   it("omits mitigated FVG zones from the active display limit", () => {

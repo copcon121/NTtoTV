@@ -13,7 +13,8 @@ export type AlertType =
   | "volume_delta_threshold"
   | "big_trade_threshold"
   | "stacked_imbalance"
-  | "smc_external_break_big_trade";
+  | "smc_external_break_big_trade"
+  | "smc_zone_touch_big_trade";
 
 /** An alert definition as returned by `GET /api/alerts`. */
 export interface Alert {

@@ -6,11 +6,13 @@ import {
   type DisposableChartPort,
   type VolumeDeltaDatum,
   type AlertLine,
+  type EmaLineData,
   type OrderLine,
   type PriceLineSelection,
   type SmcOverlay,
   type OutsideBarSettings,
   DEFAULT_OUTSIDE_BAR_SETTINGS,
+  DEFAULT_BIG_TRADE_SETTINGS,
   ChartContainer,
   filterBigTradeMarkers,
 } from "./index";
@@ -46,8 +48,14 @@ class FakePort implements DisposableChartPort {
   displayTimeOffsetCalls: number[] = [];
   timezoneOffsetCalls: number[] = [];
   barCountdownDurationCalls: number[] = [];
+  setVolumeVisibleCalls: boolean[] = [];
+  setVolumeDeltaVisibleCalls: boolean[] = [];
+  setCvdVisibleCalls: boolean[] = [];
   setVolumeDeltaCalls: VolumeDeltaDatum[][] = [];
   updateVolumeDeltaCalls: VolumeDeltaDatum[] = [];
+  setEmaLinesCalls: EmaLineData[][] = [];
+  updateEmaLineCalls: { id: string; point: { time: number; value: number } }[] = [];
+  clearEmaLinesCalls = 0;
   setBigTradesCalls: BigTradeMarker[][] = [];
   setAlertLinesCalls: AlertLine[][] = [];
   setOrderLinesCalls: OrderLine[][] = [];
@@ -87,11 +95,34 @@ class FakePort implements DisposableChartPort {
   setBarCountdownDuration(durationMs: number): void {
     this.barCountdownDurationCalls.push(durationMs);
   }
+  setVolumeVisible(visible: boolean): void {
+    this.setVolumeVisibleCalls.push(visible);
+  }
+  setVolumeDeltaVisible(visible: boolean): void {
+    this.setVolumeDeltaVisibleCalls.push(visible);
+  }
+  setCvdVisible(visible: boolean): void {
+    this.setCvdVisibleCalls.push(visible);
+  }
   setVolumeDelta(points: readonly VolumeDeltaDatum[]): void {
     this.setVolumeDeltaCalls.push(points.map((point) => ({ ...point })));
   }
   updateVolumeDelta(point: VolumeDeltaDatum): void {
     this.updateVolumeDeltaCalls.push({ ...point });
+  }
+  setEmaLines(lines: readonly EmaLineData[]): void {
+    this.setEmaLinesCalls.push(
+      lines.map((line) => ({
+        ...line,
+        points: line.points.map((point) => ({ ...point })),
+      })),
+    );
+  }
+  updateEmaLine(id: string, point: { time: number; value: number }): void {
+    this.updateEmaLineCalls.push({ id, point: { ...point } });
+  }
+  clearEmaLines(): void {
+    this.clearEmaLinesCalls += 1;
   }
   setBigTrades(markers: readonly BigTradeMarker[]): void {
     this.setBigTradesCalls.push(markers.map((marker) => ({ ...marker })));
@@ -330,6 +361,93 @@ describe("ChartContainer", () => {
     expect(port.setOutsideBarCalls).toEqual([enabled, recolored]);
   });
 
+  it("toggles the TradingView-style volume overlay through the port", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+
+    const { rerender } = render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        showVolume
+        portFactory={factory}
+      />,
+    );
+
+    rerender(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        showVolume={false}
+        portFactory={factory}
+      />,
+    );
+
+    expect(port.setVolumeVisibleCalls).toEqual([true, false]);
+  });
+
+  it("toggles the volume delta overlay through the port", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+
+    const { rerender } = render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        showVolumeDelta
+        portFactory={factory}
+      />,
+    );
+
+    rerender(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        showVolumeDelta={false}
+        portFactory={factory}
+      />,
+    );
+
+    expect(port.setVolumeDeltaVisibleCalls).toEqual([true, false]);
+  });
+
+  it("toggles the CVD line through the port", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+
+    const { rerender } = render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        showCvd
+        portFactory={factory}
+      />,
+    );
+
+    rerender(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        showCvd={false}
+        portFactory={factory}
+      />,
+    );
+
+    expect(port.setCvdVisibleCalls).toEqual([true, false]);
+  });
+
   it("supplies a screenshot capture callback while mounted", () => {
     const port = new FakePort();
     const factory: ChartPortFactory = () => port;
@@ -400,7 +518,7 @@ describe("ChartContainer", () => {
       />,
     );
 
-    ws.deliver(deltaUpdate(30, 9));
+    ws.deliver(deltaUpdate(30, 9, { cumulativeDelta: 25 }));
     ws.deliver(deltaUpdate(40, -4, { contract: "GC 10-26" }));
 
     expect(port.setVolumeDeltaCalls).toHaveLength(1);
@@ -409,7 +527,77 @@ describe("ChartContainer", () => {
       { time: 20, delta: -3, deltaHigh: 2, deltaLow: -6, openDelta: -1, closeDelta: -3 },
     ]);
     expect(port.updateVolumeDeltaCalls).toEqual([
-      { time: 30, delta: 9, deltaHigh: 9, deltaLow: 0, openDelta: 0, closeDelta: 9 },
+      {
+        time: 30,
+        delta: 9,
+        deltaHigh: 9,
+        deltaLow: 0,
+        openDelta: 0,
+        closeDelta: 9,
+        cumulativeDelta: 25,
+      },
+    ]);
+  });
+
+  it("draws the primary EMA and optional EMA 200 as separate lines", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+
+    render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10), bar(20)]}
+        ema={{
+          enabled: true,
+          period: 21,
+          color: "#2962ff",
+          showEma200: true,
+          ema200Color: "#e0b341",
+        }}
+        portFactory={factory}
+      />,
+    );
+
+    const lines = port.setEmaLinesCalls[0];
+    expect(lines.map((line) => line.id)).toEqual(["primary", "ema-200"]);
+    expect(lines[0].points).toHaveLength(2);
+    expect(lines[1].points).toHaveLength(2);
+    expect(lines[0].color).toBe("#2962ff");
+    expect(lines[1].color).toBe("#e0b341");
+  });
+
+  it("updates both EMA lines from matching realtime bar updates", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const ws = new MockWebSocket();
+    const socket = new ChartSocket({ url: "ws://x/ws/chart", factory: () => ws });
+    socket.connect();
+
+    render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10), bar(20)]}
+        ema={{
+          enabled: true,
+          period: 21,
+          color: "#2962ff",
+          showEma200: true,
+          ema200Color: "#e0b341",
+        }}
+        socket={socket}
+        portFactory={factory}
+      />,
+    );
+
+    ws.deliver(barUpdate(bar(30)));
+
+    expect(port.updateEmaLineCalls.map((call) => call.id)).toEqual([
+      "primary",
+      "ema-200",
     ]);
   });
 
@@ -460,6 +648,29 @@ describe("ChartContainer", () => {
     expect(
       filterBigTradeMarkers(markers, { minVolume: 30, maxVisible: 2 }),
     ).toEqual(markers.slice(2));
+  });
+
+  it("filters BigTrade markers by New York session thresholds", () => {
+    const asia = Date.UTC(2026, 5, 16, 2, 0); // 22:00 ET previous day
+    const asiaEnd = Date.UTC(2026, 5, 16, 5, 59); // 01:59 ET
+    const euStart = Date.UTC(2026, 5, 16, 6, 0); // 02:00 ET
+    const eu = Date.UTC(2026, 5, 16, 11, 0); // 07:00 ET
+    const us = Date.UTC(2026, 5, 16, 14, 0); // 10:00 ET
+    const markers: BigTradeMarker[] = [
+      { time: asia, price: 4500.1, volume: 30, side: "buy" },
+      { time: asiaEnd, price: 4500.2, volume: 30, side: "buy" },
+      { time: euStart, price: 4500.3, volume: 49, side: "buy" },
+      { time: eu, price: 4500.4, volume: 50, side: "sell" },
+      { time: us, price: 4500.5, volume: 99, side: "sell" },
+      { time: us + 1, price: 4500.6, volume: 100, side: "buy" },
+    ];
+
+    expect(filterBigTradeMarkers(markers, DEFAULT_BIG_TRADE_SETTINGS)).toEqual([
+      markers[0],
+      markers[1],
+      markers[3],
+      markers[5],
+    ]);
   });
 
   it("computes and draws the SMC overlay from loaded bars", () => {

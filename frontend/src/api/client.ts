@@ -40,6 +40,7 @@ export interface VolumeDeltaBar {
   deltaLow: number;
   openDelta: number;
   closeDelta: number;
+  cumulativeDelta?: number;
 }
 
 export interface FootprintRestBar {
@@ -174,6 +175,54 @@ export interface Mt5TradePatchInput {
   entryGc?: number | null;
   slGc?: number | null;
   tpGc?: number | null;
+}
+
+export interface AnalystReport {
+  reportId: string;
+  snapshotId: string;
+  symbol: string;
+  contract: string;
+  createdAt: number;
+  bias: string;
+  decision:
+    | "no_trade"
+    | "wait_for_buy"
+    | "wait_for_sell"
+    | "buy_candidate"
+    | "sell_candidate";
+  confidence: number;
+  reason: string[];
+  invalidIf: string;
+  nextConfirmation: string;
+  riskState: string;
+  allowedToAlert: boolean;
+  allowedToAutoTrade: false;
+  rawResponse?: Record<string, unknown>;
+}
+
+export interface AnalystRunResponse {
+  snapshot: Record<string, unknown>;
+  report: AnalystReport | null;
+  llmEnabled: boolean;
+  error: string | null;
+  telegram?: { sent: boolean; reason?: string };
+}
+
+export interface AnalystAutoSendState {
+  available: boolean;
+  enabled: boolean;
+  running?: boolean;
+  intervalSeconds?: number;
+  reason?: string;
+}
+
+export interface AnalystEventAiState {
+  available: boolean;
+  enabled: boolean;
+  profileId: string;
+  providerMode: "real";
+  llmEnabled: boolean;
+  reason?: string | null;
 }
 
 export class ApiClient {
@@ -382,6 +431,76 @@ export class ApiClient {
     if (!res.ok) throw new Error(await this.errorMessage(res, "POST /orders/close"));
     const body = (await res.json()) as { order: TradingOrder };
     return body.order;
+  }
+
+  async analystLatest(
+    symbol = "GC",
+    contract = "GC",
+  ): Promise<AnalystReport | null> {
+    const params = new URLSearchParams({ symbol, contract });
+    const body = await this.getJson<{ report: AnalystReport | null }>(
+      `/analyst/latest?${params.toString()}`,
+    );
+    return body.report;
+  }
+
+  async runAnalyst(
+    symbol = "GC",
+    contract = "GC",
+    profileId?: string,
+  ): Promise<AnalystRunResponse> {
+    const params = new URLSearchParams({ symbol, contract });
+    if (profileId) params.set("profileId", profileId);
+    const res = await this.fetchFn(
+      `${this.basePath}/analyst/run?${params.toString()}`,
+      { method: "POST", credentials: "same-origin" },
+    );
+    if (!res.ok) {
+      throw new Error(await this.errorMessage(res, "POST /analyst/run"));
+    }
+    return (await res.json()) as AnalystRunResponse;
+  }
+
+  async analystAutoSend(): Promise<AnalystAutoSendState> {
+    return this.getJson<AnalystAutoSendState>("/analyst/auto-send");
+  }
+
+  async setAnalystAutoSend(enabled: boolean): Promise<AnalystAutoSendState> {
+    const res = await this.fetchFn(`${this.basePath}/analyst/auto-send`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      throw new Error(await this.errorMessage(res, "PUT /analyst/auto-send"));
+    }
+    return (await res.json()) as AnalystAutoSendState;
+  }
+
+  async analystEventAi(profileId = "default"): Promise<AnalystEventAiState> {
+    return this.getJson<AnalystEventAiState>(
+      `/analyst/event-ai?${this.profileQuery(profileId)}`,
+    );
+  }
+
+  async setAnalystEventAi(
+    enabled: boolean,
+    profileId = "default",
+  ): Promise<AnalystEventAiState> {
+    const res = await this.fetchFn(
+      `${this.basePath}/analyst/event-ai?${this.profileQuery(profileId)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ enabled }),
+      },
+    );
+    if (!res.ok) {
+      throw new Error(await this.errorMessage(res, "PUT /analyst/event-ai"));
+    }
+    return (await res.json()) as AnalystEventAiState;
   }
 
   /** List the available symbols (Req 18.1). v1: `["GC"]`. */

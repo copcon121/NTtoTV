@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ApiClient,
+  type AnalystEventAiState,
+  type AnalystReport,
   type AuthUser,
   type Mt5Account,
   type Mt5ConnectInput,
@@ -21,9 +23,15 @@ import { DrawingToolbar } from "./chart/DrawingToolbar";
 import {
   IndicatorToggles,
   DEFAULT_BIG_TRADE_SETTINGS,
+  DEFAULT_EMA_SETTINGS,
   DEFAULT_FOOTPRINT_SETTINGS,
+  normalizeEmaSettings,
 } from "./chart/IndicatorToggles";
-import type { BigTradeSettings, FootprintSettings } from "./chart/IndicatorToggles";
+import type {
+  BigTradeSettings,
+  EmaSettings,
+  FootprintSettings,
+} from "./chart/IndicatorToggles";
 import { TimeframeSelector } from "./chart/TimeframeSelector";
 import { SymbolContractLabel } from "./chart/SymbolContractLabel";
 import { Toolbar } from "./chart/Toolbar";
@@ -71,7 +79,11 @@ import {
 import type { ChartProfilePayload } from "./profiles/types";
 import type { DeltaProfileLoadState } from "./orderflow/deltaProfile";
 import { StatusIndicator, type ConnectionState } from "./status/StatusIndicator";
-import type { DrawingState, DrawingToolType } from "./chart/drawings/types";
+import type {
+  DrawingState,
+  DrawingToolType,
+  FixedRangeProfileMode,
+} from "./chart/drawings/types";
 import { fixedRangeMsFromAnchors } from "./chart/timeframeRange";
 import {
   DEFAULT_TIMEZONE_OFFSET_MINUTES,
@@ -101,7 +113,6 @@ const PROFILE_TIMEFRAMES = new Set<Timeframe>([
 ]);
 export const GLOBAL_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "quote_update",
-  "big_trade",
   "alert_event",
   "order_update",
   "position_update",
@@ -110,6 +121,7 @@ export const GLOBAL_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "risk_update",
   "status",
 ];
+export const BIG_TRADE_SUBSCRIBED_EVENTS: ChartEventType[] = ["big_trade"];
 export const TIMEFRAME_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "bar_update",
   "volume_delta_update",
@@ -138,6 +150,25 @@ const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
   tpDistanceGc: 6,
 };
 const EMPTY_MT5_OPEN_TRADES: Mt5OpenTrades = { positions: [], orders: [] };
+
+export interface ChartLimitOrderDraft {
+  source: "chart_bracket";
+  side: "buy" | "sell";
+  kind: "limit";
+  volumeLots: number;
+  entryGc: number;
+  referenceGc: number;
+  slGc: number;
+  tpGc: number;
+  gcAnchored: true;
+}
+
+export interface ChartMenuState {
+  price: number;
+  x: number;
+  y: number;
+  referencePrice?: number;
+}
 
 function newIdempotencyKey(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -283,6 +314,45 @@ function rejectedOrderMessage(order: TradingOrder): string {
 
 function roundGcPrice(price: number): number {
   return Math.round(price * 10) / 10;
+}
+
+export function buildChartLimitOrderDraft(input: {
+  entryPrice: number;
+  referencePrice: number | undefined;
+  settings: MarketOrderSettings;
+}): ChartLimitOrderDraft | undefined {
+  const referencePrice = input.referencePrice;
+  if (
+    !Number.isFinite(input.entryPrice) ||
+    typeof referencePrice !== "number" ||
+    !Number.isFinite(referencePrice)
+  ) {
+    return undefined;
+  }
+  const settings = sanitizeMarketOrderSettings(input.settings);
+  const entryGc = roundGcPrice(input.entryPrice);
+  const referenceGc = roundGcPrice(referencePrice);
+  if (entryGc === referenceGc) return undefined;
+  const side: "buy" | "sell" = entryGc < referenceGc ? "buy" : "sell";
+  const slGc =
+    side === "buy"
+      ? roundGcPrice(entryGc - settings.slDistanceGc)
+      : roundGcPrice(entryGc + settings.slDistanceGc);
+  const tpGc =
+    side === "buy"
+      ? roundGcPrice(entryGc + settings.tpDistanceGc)
+      : roundGcPrice(entryGc - settings.tpDistanceGc);
+  return {
+    source: "chart_bracket",
+    side,
+    kind: "limit",
+    volumeLots: settings.volumeLots,
+    entryGc,
+    referenceGc,
+    slGc,
+    tpGc,
+    gcAnchored: true,
+  };
 }
 
 function sanitizeMarketOrderSettings(
@@ -854,6 +924,208 @@ function AlertToolbarButton({
   );
 }
 
+const ANALYST_LABELS: Record<string, string> = {
+  no_trade: "Không giao dịch",
+  wait_for_buy: "Chờ mua",
+  wait_for_sell: "Chờ bán",
+  buy_candidate: "Ứng viên mua",
+  sell_candidate: "Ứng viên bán",
+  bullish: "Thiên mua",
+  bearish: "Thiên bán",
+  range: "Đi ngang",
+  unknown: "Chưa rõ",
+  wait: "Chờ",
+  candidate: "Có setup",
+};
+
+function analystLabel(value: string): string {
+  return ANALYST_LABELS[value] ?? value.replace(/_/g, " ");
+}
+
+function formatAnalystTimestamp(timestamp: number): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      month: "short",
+      day: "2-digit",
+    }).format(new Date(timestamp));
+  } catch {
+    return "";
+  }
+}
+
+function formatAnalystConfidence(confidence: number): string {
+  return `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}%`;
+}
+
+function analystEventAiLabel(state: AnalystEventAiState | undefined): string {
+  if (!state) return "Not loaded";
+  if (!state.available || !state.llmEnabled) return "Not configured";
+  return state.enabled ? "On" : "Off";
+}
+
+function AnalystPanel({
+  open,
+  pending,
+  report,
+  error,
+  eventAi,
+  eventAiPending,
+  authenticated,
+  onRun,
+  onToggleEventAi,
+  onClose,
+}: {
+  open: boolean;
+  pending: boolean;
+  report?: AnalystReport;
+  error: string;
+  eventAi?: AnalystEventAiState;
+  eventAiPending: boolean;
+  authenticated: boolean;
+  onRun: () => void;
+  onToggleEventAi: () => void;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="analyst-panel" role="dialog" aria-label="Báo cáo AI nhận định">
+      <div className="analyst-panel-header">
+        <div>
+          <div className="analyst-panel-title">AI nhận định</div>
+          {report && (
+            <div className="analyst-panel-time">
+              {formatAnalystTimestamp(report.createdAt)}
+            </div>
+          )}
+        </div>
+        <div className="analyst-panel-actions">
+          <button type="button" onClick={onRun} disabled={pending || !authenticated}>
+            {pending ? "Đang chạy" : "Kiểm tra"}
+          </button>
+          <button type="button" aria-label="Đóng AI nhận định" onClick={onClose}>
+            x
+          </button>
+        </div>
+      </div>
+      {error && <div className="analyst-panel-error">{error}</div>}
+      {authenticated && (
+      <div className="analyst-auto-send-control">
+        <div>
+          <span>Event scanner LLM</span>
+          <strong>{analystEventAiLabel(eventAi)}</strong>
+        </div>
+        <button
+          type="button"
+          disabled={eventAiPending || !eventAi?.available || !eventAi.llmEnabled}
+          onClick={onToggleEventAi}
+        >
+          {eventAiPending ? "Saving" : eventAi?.enabled ? "Off" : "On"}
+        </button>
+      </div>
+      )}
+      {pending && <div className="analyst-panel-muted">Đang đọc trạng thái thị trường...</div>}
+      {!report && !pending ? (
+        <div className="analyst-panel-muted">Chưa có nhận định AI.</div>
+      ) : null}
+      {report && (
+        <div className="analyst-report">
+          <div className="analyst-report-grid">
+            <div>
+              <span>Quyết định</span>
+              <strong>{analystLabel(report.decision)}</strong>
+            </div>
+            <div>
+              <span>Xu hướng</span>
+              <strong>{analystLabel(report.bias)}</strong>
+            </div>
+            <div>
+              <span>Độ tin cậy</span>
+              <strong>{formatAnalystConfidence(report.confidence)}</strong>
+            </div>
+            <div>
+              <span>Rủi ro</span>
+              <strong>{analystLabel(report.riskState)}</strong>
+            </div>
+          </div>
+          <ul className="analyst-reasons">
+            {report.reason.map((reason, index) => (
+              <li key={`${report.reportId}:${index}`}>{reason}</li>
+            ))}
+          </ul>
+          <div className="analyst-condition">
+            <span>Vô hiệu nếu</span>
+            <p>{report.invalidIf}</p>
+          </div>
+          <div className="analyst-condition">
+            <span>Xác nhận tiếp theo</span>
+            <p>{report.nextConfirmation}</p>
+          </div>
+          <div className="analyst-auto-trade">Auto-trade đang tắt</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ChartContextMenu({
+  menu,
+  limitDraft,
+  orderPending = false,
+  onClose,
+  onAddAlert,
+  onPlaceLimitOrder,
+}: {
+  menu: ChartMenuState;
+  limitDraft?: ChartLimitOrderDraft;
+  orderPending?: boolean;
+  onClose: () => void;
+  onAddAlert: (price: number) => void;
+  onPlaceLimitOrder: (draft: ChartLimitOrderDraft) => void;
+}) {
+  const alertPrice = roundGcPrice(menu.price);
+  return (
+    <>
+      <div
+        className="chart-menu-backdrop"
+        onClick={onClose}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onClose();
+        }}
+      />
+      <div
+        className="chart-menu"
+        role="menu"
+        style={{ left: menu.x, top: menu.y }}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          className="chart-menu-item"
+          onClick={() => onAddAlert(menu.price)}
+        >
+          Add alert at {alertPrice.toFixed(1)}
+        </button>
+        {limitDraft !== undefined && (
+          <button
+            type="button"
+            role="menuitem"
+            className={`chart-menu-item chart-menu-order ${limitDraft.side}`}
+            disabled={orderPending}
+            onClick={() => onPlaceLimitOrder(limitDraft)}
+          >
+            {orderPending
+              ? "Placing..."
+              : `Place ${limitDraft.side.toUpperCase()} LIMIT at ${limitDraft.entryGc.toFixed(1)}`}
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
 function formatTelegramAlertMessage(event: AlertEventMessage): string {
   const time = new Date(event.time).toISOString().replace("T", " ").slice(0, 19);
   return [
@@ -915,6 +1187,16 @@ export function appShellClassName(chartFocusMode: boolean): string {
   return chartFocusMode ? "app-shell chart-focus" : "app-shell";
 }
 
+export function bigTradesEnabledForTimeframe(timeframe: Timeframe): boolean {
+  return timeframe === "1m";
+}
+
+function normalizeFixedRangeProfileMode(
+  mode: unknown,
+): FixedRangeProfileMode {
+  return mode === "volume" ? "volume" : "bidAsk";
+}
+
 /**
  * LiveApp — the composed, runnable application.
  *
@@ -953,9 +1235,12 @@ export function LiveApp() {
     string | undefined
   >(undefined);
   const [bigTrades, setBigTrades] = useState<readonly BigTradeMarker[]>([]);
+  const [showVolume, setShowVolume] = useState(true);
+  const [showVolumeDelta, setShowVolumeDelta] = useState(true);
+  const [showCvd, setShowCvd] = useState(true);
   const [showFootprint, setShowFootprint] = useState(false);
   const [showBigTrades, setShowBigTrades] = useState(true);
-  const [ema, setEma] = useState({ enabled: false, period: 200, color: "#2962ff" });
+  const [ema, setEma] = useState<EmaSettings>(() => ({ ...DEFAULT_EMA_SETTINGS }));
   const [smc, setSmc] = useState<SmcSettings>(() => ({ ...DEFAULT_SMC_SETTINGS }));
   const [outsideBar, setOutsideBar] = useState<OutsideBarSettings>(() => ({
     ...DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -975,6 +1260,16 @@ export function LiveApp() {
   const [alerts, setAlerts] = useState<readonly Alert[]>([]);
   const [lastAlert, setLastAlert] = useState<AlertEventMessage | undefined>(undefined);
   const [alertPanelOpen, setAlertPanelOpen] = useState(false);
+  const [analystPanelOpen, setAnalystPanelOpen] = useState(false);
+  const [analystReport, setAnalystReport] = useState<AnalystReport | undefined>(
+    undefined,
+  );
+  const [analystEventAi, setAnalystEventAi] = useState<
+    AnalystEventAiState | undefined
+  >(undefined);
+  const [analystPending, setAnalystPending] = useState(false);
+  const [analystEventAiPending, setAnalystEventAiPending] = useState(false);
+  const [analystError, setAnalystError] = useState("");
   const [telegramConfig, setTelegramConfig] =
     useState<TelegramNotificationConfig>({
       enabled: false,
@@ -1012,11 +1307,13 @@ export function LiveApp() {
     useState<MarketOrderSettings>(() => readMarketOrderSettings());
   const [orderPending, setOrderPending] = useState(false);
   const [orderError, setOrderError] = useState("");
-  // TradingView-style "Add alert at {price}" menu, anchored at the click point.
-  const [alertMenu, setAlertMenu] = useState<
-    { price: number; x: number; y: number } | undefined
-  >(undefined);
+  // TradingView-style chart context menu, anchored at the click point.
+  const [chartMenu, setChartMenu] = useState<ChartMenuState | undefined>(
+    undefined,
+  );
   const [activeTool, setActiveTool] = useState<DrawingToolType | null>(null);
+  const [fixedRangeProfileMode, setFixedRangeProfileMode] =
+    useState<FixedRangeProfileMode>("bidAsk");
   const [chartFocusMode, setChartFocusMode] = useState(false);
   const [marketOrderDrawerOpen, setMarketOrderDrawerOpen] = useState(false);
   const [drawingCount, setDrawingCount] = useState(0);
@@ -1047,6 +1344,9 @@ export function LiveApp() {
       version: 1,
       timeframe,
       chartBackgroundColor,
+      showVolume,
+      showVolumeDelta,
+      showCvd,
       showFootprint,
       showBigTrades,
       ema: { ...ema },
@@ -1056,6 +1356,7 @@ export function LiveApp() {
       bigTradeSettings: { ...bigTradeSettings },
       marketOrderSettings: { ...marketOrderSettings },
       timezoneOffsetMinutes,
+      fixedRangeProfileMode,
       drawings: profileDrawings(drawings),
     }),
     [
@@ -1064,10 +1365,14 @@ export function LiveApp() {
       drawings,
       ema,
       footprintSettings,
+      fixedRangeProfileMode,
       marketOrderSettings,
       outsideBar,
       showBigTrades,
       showFootprint,
+      showVolume,
+      showVolumeDelta,
+      showCvd,
       smc,
       timeframe,
       timezoneOffsetMinutes,
@@ -1302,6 +1607,46 @@ export function LiveApp() {
     timeframe,
   ]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadLatest = () => {
+      void api
+        .analystLatest(SYMBOL, contract)
+        .then((report) => {
+          if (!cancelled) setAnalystReport(report ?? undefined);
+        })
+        .catch(() => {
+          if (!cancelled) setAnalystReport(undefined);
+        });
+    };
+    loadLatest();
+    const shouldPoll = analystPanelOpen || analystEventAi?.enabled === true;
+    const timer = shouldPoll ? window.setInterval(loadLatest, 10_000) : undefined;
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearInterval(timer);
+    };
+  }, [api, contract, analystEventAi?.enabled, analystPanelOpen]);
+
+  useEffect(() => {
+    if (!authUser || !profileHydrated) {
+      setAnalystEventAi(undefined);
+      return;
+    }
+    let cancelled = false;
+    void api
+      .analystEventAi(profileId)
+      .then((state) => {
+        if (!cancelled) setAnalystEventAi(state);
+      })
+      .catch(() => {
+        if (!cancelled) setAnalystEventAi(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, authUser, profileHydrated, profileId]);
+
   // Connect the socket once and keep it for the component's lifetime. Status
   // + alert handlers are attached here; subscription management lives in its
   // own effect below so status churn never tears down the connection.
@@ -1358,9 +1703,8 @@ export function LiveApp() {
     };
   }, [socket]);
 
-  // Global events do not belong to a bar timeframe. Keep them subscribed once
-  // so changing 1m -> 5m does not mix global and timeframe-scoped unsubscribe
-  // bookkeeping on the backend.
+  // Keep always-needed global events subscribed once; BigTrade is subscribed
+  // separately only on 1m because rendering those markers is expensive.
   useEffect(() => {
     socket.subscribe(SYMBOL, GLOBAL_SUBSCRIBED_EVENTS);
     if (ENABLE_REALTIME_FOOTPRINT_UPDATES) {
@@ -1373,6 +1717,16 @@ export function LiveApp() {
       }
     };
   }, [socket]);
+
+  useEffect(() => {
+    if (!bigTradesEnabledForTimeframe(timeframe)) {
+      return;
+    }
+    socket.subscribe(SYMBOL, BIG_TRADE_SUBSCRIBED_EVENTS);
+    return () => {
+      socket.unsubscribe(SYMBOL, BIG_TRADE_SUBSCRIBED_EVENTS);
+    };
+  }, [socket, timeframe]);
 
   // Resolve profile-scoped alerts when the active profile changes.
   useEffect(() => {
@@ -1458,14 +1812,24 @@ export function LiveApp() {
                 );
                 if (!cancelled) {
                   setVolumeDeltaSeriesKey(requestedSeriesKey);
-                  setVolumeDelta(delta.map((point) => ({
-                    time: point.time,
-                    delta: point.delta,
-                    deltaHigh: point.deltaHigh,
-                    deltaLow: point.deltaLow,
-                    openDelta: point.openDelta,
-                    closeDelta: point.closeDelta,
-                  })));
+                  let runningCvd = 0;
+                  setVolumeDelta(delta.map((point) => {
+                    const explicit = point.cumulativeDelta;
+                    const cumulativeDelta =
+                      explicit !== undefined && Number.isFinite(explicit)
+                        ? explicit
+                        : runningCvd + point.closeDelta;
+                    runningCvd = cumulativeDelta;
+                    return {
+                      time: point.time,
+                      delta: point.delta,
+                      deltaHigh: point.deltaHigh,
+                      deltaLow: point.deltaLow,
+                      openDelta: point.openDelta,
+                      closeDelta: point.closeDelta,
+                      cumulativeDelta,
+                    };
+                  }));
                 }
               } catch {
                 if (!cancelled) {
@@ -1502,6 +1866,11 @@ export function LiveApp() {
   }, [contract]);
 
   useEffect(() => {
+    if (!bigTradesEnabledForTimeframe(timeframe)) {
+      setLoadedOverlayContract(undefined);
+      setBigTrades((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
     if (!hasLoadedCurrentSeries || loadedOverlayContract === contract) {
       return;
     }
@@ -1526,7 +1895,7 @@ export function LiveApp() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [api, contract, hasLoadedCurrentSeries, loadedOverlayContract]);
+  }, [api, contract, timeframe, hasLoadedCurrentSeries, loadedOverlayContract]);
 
   useEffect(() => {
     const matchesChartContract = (messageContract: string) =>
@@ -1565,7 +1934,11 @@ export function LiveApp() {
         })
       : () => {};
     const offBigTrade = socket.on("big_trade", (msg) => {
-      if (msg.symbol !== SYMBOL || !matchesChartContract(msg.contract)) {
+      if (
+        !bigTradesEnabledForTimeframe(timeframe) ||
+        msg.symbol !== SYMBOL ||
+        !matchesChartContract(msg.contract)
+      ) {
         return;
       }
       setBigTrades((prev) => applyBigTrade(prev, msg).markers);
@@ -1651,6 +2024,81 @@ export function LiveApp() {
       }
     })();
   };
+  const onToggleAnalystPanel = () => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
+    setAnalystPanelOpen((open) => {
+      const next = !open;
+      if (next) setAlertPanelOpen(false);
+      return next;
+    });
+  };
+  const onRunAnalyst = () => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
+    if (analystPending) return;
+    setAnalystPanelOpen(true);
+    setAlertPanelOpen(false);
+    setAnalystPending(true);
+    setAnalystError("");
+    void (async () => {
+      try {
+        const result = await api.runAnalyst(SYMBOL, contract, profileId);
+        if (result.report) {
+          setAnalystReport(result.report);
+        }
+        if (result.error) {
+          setAnalystError(result.error);
+        } else if (!result.report) {
+          setAnalystError(
+            result.llmEnabled
+              ? "LLM không trả về nhận định."
+              : "LLM đang tắt.",
+          );
+        }
+      } catch (error) {
+        setAnalystError(
+          error instanceof Error ? error.message : "Không gọi được AI nhận định.",
+        );
+      } finally {
+        setAnalystPending(false);
+      }
+    })();
+  };
+  const onToggleAnalystEventAi = () => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
+    if (
+      analystEventAiPending ||
+      !analystEventAi?.available ||
+      !analystEventAi.llmEnabled
+    ) {
+      return;
+    }
+    const nextEnabled = !analystEventAi.enabled;
+    setAnalystEventAiPending(true);
+    setAnalystError("");
+    void (async () => {
+      try {
+        const next = await api.setAnalystEventAi(nextEnabled, profileId);
+        setAnalystEventAi(next);
+      } catch (error) {
+        setAnalystError(
+          error instanceof Error
+            ? error.message
+            : "Không đổi được chế độ tự gửi AI.",
+        );
+      } finally {
+        setAnalystEventAiPending(false);
+      }
+    })();
+  };
   const onTradingLogin = () => {
     setAuthMode("login");
     setAuthError("");
@@ -1679,6 +2127,8 @@ export function LiveApp() {
         setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
         setAlerts([]);
         setLastAlert(undefined);
+        setAnalystEventAi(undefined);
+        setAnalystPanelOpen(false);
         setTelegramConfig({
           enabled: false,
           chatId: "",
@@ -2209,11 +2659,47 @@ export function LiveApp() {
       }
     })();
   };
+  const currentChartReferencePrice = () =>
+    latestPrice ?? (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
+
+  const onRequestChartMenu = (info: { price: number; x: number; y: number }) => {
+    setChartMenu({ ...info, referencePrice: currentChartReferencePrice() });
+  };
+
   // Create a price-crosses-level alert at the price the user right-clicked.
   const onConfirmAlertAtPrice = (price: number) => {
     const rounded = roundGcPrice(price);
     onCreateAlert({ type: "price_crosses_level", params: { level: rounded } });
-    setAlertMenu(undefined);
+    setChartMenu(undefined);
+  };
+
+  const onConfirmLimitOrderDraft = (draft: ChartLimitOrderDraft) => {
+    setChartMenu(undefined);
+    if (orderPending) return;
+    if (!mt5Account) {
+      setOrderError("Connect MT5 before placing chart orders.");
+      return;
+    }
+    setOrderPending(true);
+    setOrderError("");
+    void (async () => {
+      try {
+        const order = await api.createOrder({
+          ...draft,
+          idempotencyKey: newIdempotencyKey(),
+        });
+        setOrders((prev) => {
+          const without = prev.filter((item) => item.id !== order.id);
+          return isOpenTradingOrder(order) ? [order, ...without] : without;
+        });
+        setOrderError(rejectedOrderMessage(order));
+        await refreshTradingState();
+      } catch (error) {
+        setOrderError(error instanceof Error ? error.message : "Chart order failed");
+      } finally {
+        setOrderPending(false);
+      }
+    })();
   };
   // Persist a dragged alert line's new level (optimistic + PATCH).
   const onAlertDragCommit = (id: string, price: number) => {
@@ -2226,7 +2712,6 @@ export function LiveApp() {
     void api.patchAlertParams(id, { level }, profileId);
   };
   const applyProfilePayload = (payload: ChartProfilePayload) => {
-    const emaPeriod = Number(payload.ema?.period ?? 200);
     if (isTimeframe(payload.timeframe)) {
       setTimeframe(payload.timeframe);
     }
@@ -2236,14 +2721,11 @@ export function LiveApp() {
         : DEFAULT_CHART_BACKGROUND,
     );
     setShowFootprint(Boolean(payload.showFootprint));
+    setShowVolume(payload.showVolume !== false);
+    setShowVolumeDelta(payload.showVolumeDelta !== false);
+    setShowCvd(payload.showCvd !== false);
     setShowBigTrades(payload.showBigTrades !== false);
-    setEma({
-      enabled: Boolean(payload.ema?.enabled),
-      period: Number.isFinite(emaPeriod)
-        ? Math.max(1, Math.round(emaPeriod))
-        : 200,
-      color: typeof payload.ema?.color === "string" ? payload.ema.color : "#2962ff",
-    });
+    setEma(normalizeEmaSettings(payload.ema));
     setSmc({ ...DEFAULT_SMC_SETTINGS, ...(payload.smc ?? {}) });
     setOutsideBar(normalizeOutsideBarSettings(payload.outsideBar));
     setFootprintSettings({
@@ -2259,6 +2741,9 @@ export function LiveApp() {
     }
     setTimezoneOffsetMinutes(
       normalizeTimezoneOffsetMinutes(payload.timezoneOffsetMinutes),
+    );
+    setFixedRangeProfileMode(
+      normalizeFixedRangeProfileMode(payload.fixedRangeProfileMode),
     );
     const nextDrawings = Array.isArray(payload.drawings)
       ? cloneDrawings(payload.drawings)
@@ -2501,7 +2986,18 @@ export function LiveApp() {
   const chartFootprintBars = hasLoadedCurrentSeries
     ? footprintBars
     : EMPTY_FOOTPRINT_BARS;
-  const chartBigTrades = hasLoadedCurrentSeries ? bigTrades : EMPTY_BIG_TRADES;
+  const bigTradeOverlayEnabled = bigTradesEnabledForTimeframe(timeframe);
+  const chartBigTrades = hasLoadedCurrentSeries && bigTradeOverlayEnabled
+    ? bigTrades
+    : EMPTY_BIG_TRADES;
+  const chartMenuLimitDraft =
+    chartMenu === undefined
+      ? undefined
+      : buildChartLimitOrderDraft({
+          entryPrice: chartMenu.price,
+          referencePrice: chartMenu.referencePrice,
+          settings: marketOrderSettings,
+        });
 
   useEffect(() => {
     if (
@@ -2566,14 +3062,21 @@ export function LiveApp() {
         <SymbolContractLabel symbol={SYMBOL} contract={contract} hideContract />
         <TimeframeSelector value={timeframe} onChange={setTimeframe} />
         <IndicatorToggles
+          volume={showVolume}
+          volumeDelta={showVolumeDelta}
+          cvd={showCvd}
           footprint={showFootprint}
-          bigTrades={showBigTrades}
+          bigTrades={showBigTrades && bigTradeOverlayEnabled}
           ema={ema}
           smc={smc}
           outsideBar={outsideBar}
           footprintSettings={footprintSettings}
           bigTradeSettings={bigTradeSettings}
           footprintDisabled={timeframe !== "1m"}
+          bigTradeDisabled={!bigTradeOverlayEnabled}
+          onVolumeChange={setShowVolume}
+          onVolumeDeltaChange={setShowVolumeDelta}
+          onCvdChange={setShowCvd}
           onFootprintChange={setShowFootprint}
           onBigTradesChange={setShowBigTrades}
           onEmaChange={setEma}
@@ -2611,11 +3114,41 @@ export function LiveApp() {
             onChange={(e) => setChartBackgroundColor(e.currentTarget.value)}
           />
         </label>
+        <div className="analyst-popover">
+          <button
+            type="button"
+            className={`analyst-toolbar-button${analystPanelOpen ? " is-open" : ""}`}
+            title="AI nhận định"
+            aria-label="AI nhận định"
+            aria-expanded={analystPanelOpen}
+            onClick={onToggleAnalystPanel}
+          >
+            AI
+          </button>
+          <AnalystPanel
+            open={analystPanelOpen}
+            pending={analystPending}
+            report={analystReport}
+            error={analystError}
+            eventAi={analystEventAi}
+            eventAiPending={analystEventAiPending}
+            authenticated={Boolean(authUser)}
+            onRun={onRunAnalyst}
+            onToggleEventAi={onToggleAnalystEventAi}
+            onClose={() => setAnalystPanelOpen(false)}
+          />
+        </div>
         <div className="alert-popover">
           <AlertToolbarButton
             open={alertPanelOpen}
             alertCount={alerts.length}
-            onClick={() => setAlertPanelOpen((open) => !open)}
+            onClick={() =>
+              setAlertPanelOpen((open) => {
+                const next = !open;
+                if (next) setAnalystPanelOpen(false);
+                return next;
+              })
+            }
           />
           <AlertPanel
             open={alertPanelOpen}
@@ -2641,7 +3174,9 @@ export function LiveApp() {
           className="drawing-toolbar-desktop"
           activeTool={activeTool}
           drawingCount={drawingCount}
+          fixedRangeProfileMode={fixedRangeProfileMode}
           onToolSelect={setActiveTool}
+          onFixedRangeProfileModeChange={setFixedRangeProfileMode}
           onDeleteAll={deleteAllDrawings}
         />
         <div className="chart-stack">
@@ -2658,13 +3193,16 @@ export function LiveApp() {
             ema={ema}
             smc={smc}
             outsideBar={outsideBar}
+            showVolume={showVolume}
+            showVolumeDelta={showVolumeDelta}
+            showCvd={showCvd}
             showFootprint={showFootprint && timeframe === "1m"}
-            showBigTrades={showBigTrades}
+            showBigTrades={showBigTrades && bigTradeOverlayEnabled}
             bigTradeSettings={bigTradeSettings}
             chartBackgroundColor={chartBackgroundColor}
             timezoneOffsetMinutes={timezoneOffsetMinutes}
             socket={socket}
-            onRequestAlertAtPrice={setAlertMenu}
+            onRequestAlertAtPrice={onRequestChartMenu}
             onAlertDragCommit={onAlertDragCommit}
             onAlertDelete={onDeleteAlert}
             onOrderDragCommit={onOrderDragCommit}
@@ -2673,6 +3211,7 @@ export function LiveApp() {
             onOrderCancel={onCancelOrder}
             priceSnap={roundGcPrice}
             activeTool={activeTool}
+            fixedRangeProfileMode={fixedRangeProfileMode}
             onToolDeselect={() => setActiveTool(null)}
             onDrawingCountChange={setDrawingCount}
             drawings={drawings}
@@ -2698,7 +3237,9 @@ export function LiveApp() {
               className="drawing-toolbar-mobile"
               activeTool={activeTool}
               drawingCount={drawingCount}
+              fixedRangeProfileMode={fixedRangeProfileMode}
               onToolSelect={setActiveTool}
+              onFixedRangeProfileModeChange={setFixedRangeProfileMode}
               onDeleteAll={deleteAllDrawings}
             />
           </ChartContainer>
@@ -2743,31 +3284,15 @@ export function LiveApp() {
           onSubmit={onSubmitMt5Account}
           onClose={() => setMt5DialogOpen(false)}
         />
-        {alertMenu !== undefined && (
-          <>
-            <div
-              className="alert-menu-backdrop"
-              onClick={() => setAlertMenu(undefined)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setAlertMenu(undefined);
-              }}
-            />
-            <div
-              className="alert-menu"
-              role="menu"
-              style={{ left: alertMenu.x, top: alertMenu.y }}
-            >
-              <button
-                type="button"
-                role="menuitem"
-                className="alert-menu-item"
-                onClick={() => onConfirmAlertAtPrice(alertMenu.price)}
-              >
-                Add alert at {(Math.round(alertMenu.price * 10) / 10).toFixed(1)}
-              </button>
-            </div>
-          </>
+        {chartMenu !== undefined && (
+          <ChartContextMenu
+            menu={chartMenu}
+            limitDraft={chartMenuLimitDraft}
+            orderPending={orderPending}
+            onClose={() => setChartMenu(undefined)}
+            onAddAlert={onConfirmAlertAtPrice}
+            onPlaceLimitOrder={onConfirmLimitOrderDraft}
+          />
         )}
       </main>
     </div>

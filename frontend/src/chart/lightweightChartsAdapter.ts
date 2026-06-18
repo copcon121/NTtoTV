@@ -1,8 +1,8 @@
 // chart module — Lightweight Charts adapter (the real ChartSeriesPort).
 //
 // This is the ONLY file that talks to the `lightweight-charts` library. It
-// hosts a chart instance with a candlestick series + a MyVolumeDelta-style
-// volume-delta overlay candle series
+// hosts a chart instance with a candlestick series, TradingView-style volume
+// histogram, and a MyVolumeDelta-style volume-delta overlay candle series
 // and implements {@link ChartSeriesPort} so the pure reducer / controller can
 // drive it (design.md "Frontend Modules": ChartContainer, Req 19.1, 19.2).
 //
@@ -18,6 +18,7 @@
 import {
   type AutoscaleInfoProvider,
   type CandlestickData,
+  type HistogramData,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
@@ -36,6 +37,7 @@ import {
   PriceLineSource,
   createSeriesMarkers,
   createChart,
+  HistogramSeries,
 } from "lightweight-charts";
 
 import { type BigTradeMarker, bubbleRadius } from "./indicatorReducer";
@@ -81,6 +83,7 @@ export interface VolumeDeltaDatum {
   deltaLow: number;
   openDelta: number;
   closeDelta: number;
+  cumulativeDelta?: number;
 }
 
 /**
@@ -133,6 +136,16 @@ export const VOLUME_DELTA_OVERLAY_SCALE_MARGINS = {
   top: 0.8,
   bottom: 0.02,
 } as const;
+export const CVD_OVERLAY_PRICE_SCALE_ID = "cvd-overlay";
+export const CVD_OVERLAY_SCALE_MARGINS = {
+  top: 0.72,
+  bottom: 0.04,
+} as const;
+export const VOLUME_OVERLAY_PRICE_SCALE_ID = "volume-overlay";
+export const VOLUME_OVERLAY_SCALE_MARGINS = {
+  top: 0.76,
+  bottom: 0,
+} as const;
 
 const DEFAULT_DELTA_COLORS: DeltaColors = {
   positive: "#008000",
@@ -149,6 +162,14 @@ const MZ_FOOTPRINT_COLORS = {
   bid: "#fa8072",
   ask: "#008b8b",
 };
+const VOLUME_UP_COLOR = "rgba(38, 166, 154, 0.50)";
+const VOLUME_DOWN_COLOR = "rgba(239, 83, 80, 0.50)";
+const CVD_LINE_COLOR = "#e0b341";
+const SESSION_HIGHLIGHT_UTC_PLUS_7_MINUTES = 7 * 60;
+const SESSION_HIGHLIGHT_HOURS_UTC_PLUS_7 = new Set([8, 20]);
+const SESSION_HIGHLIGHT_MINUTE_UTC_PLUS_7 = 1;
+const SESSION_HIGHLIGHT_BODY_COLOR = "rgba(255, 213, 79, 0.78)";
+const SESSION_HIGHLIGHT_LINE_COLOR = "#ffd54f";
 
 const DARK_CHART_TEXT = "#d8d8d8";
 const LIGHT_CHART_TEXT = "#111111";
@@ -217,6 +238,15 @@ const ORDER_LINE_COLORS: Record<OrderLineField | "entrySell", string> = {
 
 /** EMA overlay line color (TradingView-style blue). */
 const EMA_LINE_COLOR = "#2962ff";
+
+type EmaLineWidth = 1 | 2 | 3 | 4;
+
+export interface EmaLineData {
+  id: string;
+  points: readonly EmaPoint[];
+  color?: string;
+  lineWidth?: EmaLineWidth;
+}
 
 interface DraggableLineMeta {
   price: number;
@@ -299,12 +329,44 @@ export function toBarDisplayTimestamp(
   return toUtcTimestamp(bucketStart, displayTimeOffsetMs);
 }
 
+export function isUtcPlus7SessionHighlightTime(
+  timeMs: number,
+  displayTimeOffsetMs = 0,
+): boolean {
+  return utcPlus7SessionHighlightHour(timeMs, displayTimeOffsetMs) !== undefined;
+}
+
+function utcPlus7SessionHighlightHour(
+  timeMs: number,
+  displayTimeOffsetMs = 0,
+): 8 | 20 | undefined {
+  if (!Number.isFinite(timeMs) || !Number.isFinite(displayTimeOffsetMs)) {
+    return undefined;
+  }
+  const local = new Date(
+    timeMs +
+      displayTimeOffsetMs +
+      SESSION_HIGHLIGHT_UTC_PLUS_7_MINUTES * 60_000,
+  );
+  const hour = local.getUTCHours();
+  const matches =
+    local.getUTCMinutes() === SESSION_HIGHLIGHT_MINUTE_UTC_PLUS_7 &&
+    local.getUTCSeconds() === 0 &&
+    local.getUTCMilliseconds() === 0 &&
+    SESSION_HIGHLIGHT_HOURS_UTC_PLUS_7.has(hour);
+  return matches ? (hour as 8 | 20) : undefined;
+}
+
 function toCandle(
   bar: Bar,
   displayTimeOffsetMs: number,
   previousBar?: Bar,
   outsideBar: OutsideBarSettings = DEFAULT_OUTSIDE_BAR_SETTINGS,
 ): CandlestickData {
+  const highlight = isUtcPlus7SessionHighlightTime(
+    bar.time,
+    displayTimeOffsetMs,
+  );
   const obColor = outsideBarColor(bar, previousBar, outsideBar);
   const candle: CandlestickData = {
     time: toUtcTimestamp(bar.time, displayTimeOffsetMs),
@@ -313,6 +375,14 @@ function toCandle(
     low: bar.low,
     close: bar.close,
   };
+  if (highlight) {
+    return {
+      ...candle,
+      color: SESSION_HIGHLIGHT_BODY_COLOR,
+      borderColor: SESSION_HIGHLIGHT_LINE_COLOR,
+      wickColor: SESSION_HIGHLIGHT_LINE_COLOR,
+    };
+  }
   if (obColor === undefined) {
     return candle;
   }
@@ -345,6 +415,28 @@ function toVolumeDelta(
     color: bodyColor,
     borderColor: bodyColor,
     wickColor: colors.wick,
+  };
+}
+
+function toCvdLineData(
+  point: VolumeDeltaDatum,
+  value: number,
+  displayTimeOffsetMs: number,
+): LineData {
+  return {
+    time: toUtcTimestamp(point.time, displayTimeOffsetMs),
+    value,
+  };
+}
+
+function toVolumeHistogram(
+  bar: Bar,
+  displayTimeOffsetMs: number,
+): HistogramData {
+  return {
+    time: toUtcTimestamp(bar.time, displayTimeOffsetMs),
+    value: Math.max(0, bar.volume),
+    color: bar.close >= bar.open ? VOLUME_UP_COLOR : VOLUME_DOWN_COLOR,
   };
 }
 
@@ -386,25 +478,31 @@ function smcMarkerColor(marker: SmcMarker, swingLabelColor: string): string {
 }
 
 /**
- * Hosts a Lightweight Charts instance (candles + volume) and implements the
+ * Hosts a Lightweight Charts instance (candles + volume overlays) and implements the
  * incremental {@link ChartSeriesPort}. Construct it with a container element;
  * dispose it with {@link dispose} to release the chart.
  */
 export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly chart: IChartApi;
   private readonly candleSeries: ISeriesApi<"Candlestick">;
+  private readonly volumeSeries: ISeriesApi<"Histogram">;
   private readonly deltaSeries: ISeriesApi<"Candlestick">;
+  private readonly cvdSeries: ISeriesApi<"Line">;
   private readonly smcMarkers: ISeriesMarkersPluginApi<Time>;
+  private readonly sessionMarkers: ISeriesMarkersPluginApi<Time>;
   private bigTradePrimitive: BigTradeBubblePrimitive | undefined;
   private smcPrimitive: SmcOverlayPrimitive | undefined;
   private smcOverlay: SmcOverlay = emptySmcOverlay();
-  private emaSeriesApi: ISeriesApi<"Line"> | undefined;
-  private emaColor: string = EMA_LINE_COLOR;
-  private emaLastTime: number | undefined;
+  private readonly emaSeriesById = new Map<string, ISeriesApi<"Line">>();
+  private readonly emaLastTimeById = new Map<string, number>();
+  private readonly emaColorById = new Map<string, string>();
   private readonly deltaColors: DeltaColors;
   private candleBars: BarSeries = [];
   private outsideBar: OutsideBarSettings;
   private readonly barsByTime = new Map<number, Bar>();
+  private readonly volumeDeltaByTime = new Map<number, VolumeDeltaDatum>();
+  private cvdLastTime: number | undefined;
+  private cvdLastValue = 0;
   private readonly bigTradesByKey = new Map<string, BigTradeMarker>();
   private readonly alertLinesById = new Map<string, IPriceLine>();
   // Live price/style per alert line, used for drag hit-testing + updates.
@@ -503,12 +601,28 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       priceLineStyle: LineStyle.Dashed,
     });
     this.smcMarkers = createSeriesMarkers(this.candleSeries, []);
+    this.sessionMarkers = createSeriesMarkers(this.candleSeries, []);
     this.bigTradePrimitive = new BigTradeBubblePrimitive([]);
     this.candleSeries.attachPrimitive(
       this.bigTradePrimitive as unknown as Parameters<
         typeof this.candleSeries.attachPrimitive
       >[0],
     );
+
+    // TradingView-style Volume indicator: a histogram overlaid at the bottom
+    // of the main pane, on its own autoscaled price scale.
+    this.volumeSeries = this.chart.addSeries(HistogramSeries, {
+      color: VOLUME_UP_COLOR,
+      priceScaleId: VOLUME_OVERLAY_PRICE_SCALE_ID,
+      priceFormat: { type: "volume" },
+      priceLineVisible: false,
+      lastValueVisible: false,
+      base: 0,
+    }, 0);
+    this.volumeSeries.priceScale().applyOptions({
+      scaleMargins: VOLUME_OVERLAY_SCALE_MARGINS,
+      borderVisible: false,
+    });
 
     // Volume delta overlays the main pane on its own price scale. This keeps
     // the delta band fixed near the bottom without adding a draggable pane.
@@ -535,6 +649,22 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     });
     this.deltaSeries.priceScale().applyOptions({
       scaleMargins: VOLUME_DELTA_OVERLAY_SCALE_MARGINS,
+      borderVisible: false,
+    });
+
+    // CVD uses the same volume-delta feed but renders as its own cumulative
+    // line so its scale does not distort the per-bar delta candles.
+    this.cvdSeries = this.chart.addSeries(LineSeries, {
+      color: CVD_LINE_COLOR,
+      lineWidth: 2,
+      priceScaleId: CVD_OVERLAY_PRICE_SCALE_ID,
+      priceFormat: { type: "volume" },
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    }, 0);
+    this.cvdSeries.priceScale().applyOptions({
+      scaleMargins: CVD_OVERLAY_SCALE_MARGINS,
       borderVisible: false,
     });
 
@@ -570,6 +700,10 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.displayTimeOffsetMs = offsetMs;
     this.rebuildBarsByDisplayTime();
     this.renderCandleSeries();
+    this.renderSessionMarkers();
+    this.renderVolumeSeries();
+    this.renderVolumeDeltaSeries();
+    this.renderCvdSeries();
     this.renderBigTradeMarkers();
     this.renderSmcOverlay();
   }
@@ -643,6 +777,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.candleBars = bars.map((bar) => ({ ...bar }));
     this.rebuildBarsByDisplayTime();
     this.renderCandleSeries();
+    this.renderSessionMarkers();
+    this.renderVolumeSeries();
     this.latestBar =
       this.candleBars.length > 0
         ? { ...this.candleBars[this.candleBars.length - 1] }
@@ -656,6 +792,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.candleBars = result.bars;
     this.updateCandleAt(result.index);
     this.updateCandleAt(result.index + 1);
+    this.renderSessionMarkers();
+    this.updateVolumeAt(result.index);
     this.barsByTime.set(
       toUtcTimestamp(bar.time, this.displayTimeOffsetMs) as number,
       { ...bar },
@@ -672,6 +810,21 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderCandleSeries();
   }
 
+  /** Show or hide the TradingView-style Volume histogram overlay. */
+  setVolumeVisible(visible: boolean): void {
+    this.volumeSeries.applyOptions({ visible });
+  }
+
+  /** Show or hide the MyVolumeDelta-style overlay candles. */
+  setVolumeDeltaVisible(visible: boolean): void {
+    this.deltaSeries.applyOptions({ visible });
+  }
+
+  /** Show or hide the cumulative volume-delta line. */
+  setCvdVisible(visible: boolean): void {
+    this.cvdSeries.applyOptions({ visible });
+  }
+
   private renderCandleSeries(): void {
     this.candleSeries.setData(
       this.candleBars.map((bar, index) =>
@@ -683,6 +836,92 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         ),
       ),
     );
+  }
+
+  private renderVolumeSeries(): void {
+    this.volumeSeries.setData(
+      this.candleBars.map((bar) =>
+        toVolumeHistogram(bar, this.displayTimeOffsetMs),
+      ),
+    );
+  }
+
+  private renderVolumeDeltaSeries(): void {
+    this.deltaSeries.setData(
+      [...this.volumeDeltaByTime.values()]
+        .sort((a, b) => a.time - b.time)
+        .map((point) =>
+          toVolumeDelta(point, this.deltaColors, this.displayTimeOffsetMs),
+        ),
+    );
+  }
+
+  private renderCvdSeries(): void {
+    const data: LineData[] = [];
+    let running = 0;
+    this.cvdLastTime = undefined;
+    this.cvdLastValue = 0;
+    for (const point of [...this.volumeDeltaByTime.values()].sort(
+      (a, b) => a.time - b.time,
+    )) {
+      const explicit = point.cumulativeDelta;
+      const value =
+        explicit !== undefined && Number.isFinite(explicit)
+          ? explicit
+          : running + point.closeDelta;
+      running = value;
+      data.push(toCvdLineData(point, value, this.displayTimeOffsetMs));
+      this.cvdLastTime = point.time;
+      this.cvdLastValue = value;
+    }
+    this.cvdSeries.setData(data);
+  }
+
+  private updateCvdPoint(
+    point: VolumeDeltaDatum,
+    previous: VolumeDeltaDatum | undefined,
+  ): void {
+    const explicit = point.cumulativeDelta;
+    if (explicit !== undefined && Number.isFinite(explicit)) {
+      if (this.cvdLastTime === undefined || point.time >= this.cvdLastTime) {
+        this.cvdSeries.update(
+          toCvdLineData(point, explicit, this.displayTimeOffsetMs),
+        );
+        this.cvdLastTime = point.time;
+        this.cvdLastValue = explicit;
+      } else {
+        this.renderCvdSeries();
+      }
+      return;
+    }
+
+    if (this.cvdLastTime === undefined) {
+      this.cvdLastTime = point.time;
+      this.cvdLastValue = point.closeDelta;
+      this.cvdSeries.update(
+        toCvdLineData(point, this.cvdLastValue, this.displayTimeOffsetMs),
+      );
+      return;
+    }
+
+    if (point.time > this.cvdLastTime) {
+      this.cvdLastValue += point.closeDelta;
+      this.cvdLastTime = point.time;
+      this.cvdSeries.update(
+        toCvdLineData(point, this.cvdLastValue, this.displayTimeOffsetMs),
+      );
+      return;
+    }
+
+    if (point.time === this.cvdLastTime && previous !== undefined) {
+      this.cvdLastValue = this.cvdLastValue - previous.closeDelta + point.closeDelta;
+      this.cvdSeries.update(
+        toCvdLineData(point, this.cvdLastValue, this.displayTimeOffsetMs),
+      );
+      return;
+    }
+
+    this.renderCvdSeries();
   }
 
   private rebuildBarsByDisplayTime(): void {
@@ -706,6 +945,16 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.outsideBar,
     );
     this.candleSeries.update(candle, index < this.candleBars.length - 1);
+  }
+
+  private updateVolumeAt(index: number): void {
+    if (index < 0 || index >= this.candleBars.length) {
+      return;
+    }
+    this.volumeSeries.update(
+      toVolumeHistogram(this.candleBars[index], this.displayTimeOffsetMs),
+      index < this.candleBars.length - 1,
+    );
   }
 
   private updateBarCountdown(): void {
@@ -751,84 +1000,135 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   /**
-   * Set (or replace) the EMA overlay line on the candle price scale. An empty
-   * series removes the line entirely so a disabled overlay leaves no trace.
-   * An optional `color` restyles the line (used by the EMA settings panel).
+   * Set (or replace) all EMA overlay lines on the candle price scale. Missing
+   * ids are removed, so disabled overlays leave no trace.
    */
+  setEmaLines(lines: readonly EmaLineData[]): void {
+    const nextIds = new Set<string>();
+    for (const line of lines) {
+      if (line.points.length === 0) {
+        continue;
+      }
+      nextIds.add(line.id);
+      const color = line.color ?? this.emaColorById.get(line.id) ?? EMA_LINE_COLOR;
+      const lineWidth = line.lineWidth ?? 2;
+      const series = this.ensureEmaSeries(line.id, color, lineWidth);
+      const data = line.points.map((point) => ({
+        time: toUtcTimestamp(point.time, this.displayTimeOffsetMs),
+        value: point.value,
+      }));
+      series.setData(data);
+      const last = data[data.length - 1];
+      if (last !== undefined) {
+        this.emaLastTimeById.set(line.id, last.time as number);
+      }
+    }
+    for (const [id, series] of this.emaSeriesById) {
+      if (!nextIds.has(id)) {
+        this.chart.removeSeries(series);
+        this.emaSeriesById.delete(id);
+        this.emaLastTimeById.delete(id);
+        this.emaColorById.delete(id);
+      }
+    }
+  }
+
+  /** Backwards-compatible single-line EMA setter. */
   setEma(points: readonly EmaPoint[], color?: string): void {
-    if (color !== undefined) {
-      this.emaColor = color;
-      this.emaSeriesApi?.applyOptions({ color });
-    }
-    if (points.length === 0) {
-      this.clearEma();
-      return;
-    }
-    const series = this.ensureEmaSeries();
-    const data = points.map((point) => ({
-      time: toUtcTimestamp(point.time, this.displayTimeOffsetMs),
-      value: point.value,
-    }));
-    series.setData(data);
-    this.emaLastTime = data.length > 0 ? (data[data.length - 1].time as number) : undefined;
+    this.setEmaLines(
+      points.length === 0 ? [] : [{ id: "primary", points, color }],
+    );
   }
 
-  /** Restyle the EMA line color without touching its data. */
+  /** Restyle the primary EMA line color without touching its data. */
   setEmaColor(color: string): void {
-    this.emaColor = color;
-    this.emaSeriesApi?.applyOptions({ color });
+    this.emaColorById.set("primary", color);
+    this.emaSeriesById.get("primary")?.applyOptions({ color });
   }
 
-  /** Apply one incremental EMA point (no-op when the overlay is off). */
-  updateEma(point: EmaPoint): void {
-    if (this.emaSeriesApi === undefined) return;
+  /** Apply one incremental EMA point to a named line (no-op when off). */
+  updateEmaLine(id: string, point: EmaPoint): void {
+    const series = this.emaSeriesById.get(id);
+    if (series === undefined) return;
     const time = toUtcTimestamp(point.time, this.displayTimeOffsetMs) as number;
     // Lightweight Charts throws if update() is called with a time older than
     // the series' last point; skip stale ticks so a single out-of-order update
     // can never crash the render path.
-    if (this.emaLastTime !== undefined && time < this.emaLastTime) {
+    const lastTime = this.emaLastTimeById.get(id);
+    if (lastTime !== undefined && time < lastTime) {
       return;
     }
-    this.emaSeriesApi.update({ time, value: point.value } as LineData);
-    this.emaLastTime = time;
+    series.update({ time, value: point.value } as LineData);
+    this.emaLastTimeById.set(id, time);
   }
 
-  /** Remove the EMA overlay line. */
-  clearEma(): void {
-    if (this.emaSeriesApi !== undefined) {
-      this.chart.removeSeries(this.emaSeriesApi);
-      this.emaSeriesApi = undefined;
+  /** Apply one incremental primary EMA point (no-op when the overlay is off). */
+  updateEma(point: EmaPoint): void {
+    this.updateEmaLine("primary", point);
+  }
+
+  /** Remove all EMA overlay lines. */
+  clearEmaLines(): void {
+    for (const series of this.emaSeriesById.values()) {
+      this.chart.removeSeries(series);
     }
-    this.emaLastTime = undefined;
+    this.emaSeriesById.clear();
+    this.emaLastTimeById.clear();
+    this.emaColorById.clear();
   }
 
-  private ensureEmaSeries(): ISeriesApi<"Line"> {
-    if (this.emaSeriesApi === undefined) {
-      this.emaSeriesApi = this.chart.addSeries(LineSeries, {
-        color: this.emaColor,
-        lineWidth: 2,
+  /** Remove the primary EMA overlay line. */
+  clearEma(): void {
+    const series = this.emaSeriesById.get("primary");
+    if (series !== undefined) {
+      this.chart.removeSeries(series);
+      this.emaSeriesById.delete("primary");
+      this.emaLastTimeById.delete("primary");
+      this.emaColorById.delete("primary");
+    }
+  }
+
+  private ensureEmaSeries(
+    id: string,
+    color: string,
+    lineWidth: EmaLineWidth,
+  ): ISeriesApi<"Line"> {
+    let series = this.emaSeriesById.get(id);
+    if (series === undefined) {
+      series = this.chart.addSeries(LineSeries, {
+        color,
+        lineWidth,
         priceLineVisible: false,
         lastValueVisible: true,
         crosshairMarkerVisible: false,
       });
+      this.emaSeriesById.set(id, series);
+    } else {
+      series.applyOptions({ color, lineWidth });
     }
-    return this.emaSeriesApi;
+    this.emaColorById.set(id, color);
+    return series;
   }
 
   /** Bulk-load volume-delta history into the MyVolumeDelta-style candles. */
   setVolumeDelta(points: readonly VolumeDeltaDatum[]): void {
-    this.deltaSeries.setData(
-      points.map((point) =>
-        toVolumeDelta(point, this.deltaColors, this.displayTimeOffsetMs),
-      ),
-    );
+    this.volumeDeltaByTime.clear();
+    for (const point of points) {
+      this.volumeDeltaByTime.set(point.time, { ...point });
+    }
+    this.renderVolumeDeltaSeries();
+    this.renderCvdSeries();
   }
 
   /** Apply one incremental volume-delta update. */
   updateVolumeDelta(point: VolumeDeltaDatum): void {
+    const previous = this.volumeDeltaByTime.get(point.time);
+    const next = { ...point };
+    this.volumeDeltaByTime.set(point.time, next);
     this.deltaSeries.update(
-      toVolumeDelta(point, this.deltaColors, this.displayTimeOffsetMs),
+      toVolumeDelta(next, this.deltaColors, this.displayTimeOffsetMs),
     );
+    this.updateCvdPoint(next, previous);
   }
 
   /** Bulk-load BigTrade markers on the candle series. */
@@ -1453,6 +1753,26 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
   }
 
+  private renderSessionMarkers(): void {
+    const markers: SeriesMarker<Time>[] = [];
+    for (const bar of this.candleBars) {
+      const hour = utcPlus7SessionHighlightHour(
+        bar.time,
+        this.displayTimeOffsetMs,
+      );
+      if (hour === undefined) continue;
+      markers.push({
+        time: toUtcTimestamp(bar.time, this.displayTimeOffsetMs),
+        position: hour === 8 ? "aboveBar" : "belowBar",
+        shape: "circle",
+        color: SESSION_HIGHLIGHT_LINE_COLOR,
+        id: `session:${hour}:${bar.time}`,
+        size: 1.35,
+      });
+    }
+    this.sessionMarkers.setMarkers(markers);
+  }
+
   private renderBigTradeMarkers(): void {
     const markers = [...this.bigTradesByKey.values()].sort((a, b) => {
       if (a.time !== b.time) return a.time - b.time;
@@ -1675,6 +1995,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.bigTradePrimitive = undefined;
     }
     this.smcMarkers.detach();
+    this.sessionMarkers.detach();
     this.chart.remove();
   }
 }

@@ -9,6 +9,10 @@ export interface SmcSettings {
   showPremiumDiscount: boolean;
   showSwingOrderBlocks: boolean;
   showInternalOrderBlocks: boolean;
+  fvgAutoThreshold: boolean;
+  fvgThresholdLookback: number;
+  fvgThresholdMultiplier: number;
+  fvgVolumeConfirmation: boolean;
   fvgExtendBars: number;
   maxZoneAge: number;
   maxMarkers: number;
@@ -27,6 +31,10 @@ export const DEFAULT_SMC_SETTINGS: SmcSettings = {
   showPremiumDiscount: true,
   showSwingOrderBlocks: true,
   showInternalOrderBlocks: true,
+  fvgAutoThreshold: true,
+  fvgThresholdLookback: 60,
+  fvgThresholdMultiplier: 1.5,
+  fvgVolumeConfirmation: false,
   fvgExtendBars: 3,
   maxZoneAge: 220,
   maxMarkers: 120,
@@ -38,6 +46,8 @@ export const DEFAULT_SMC_SETTINGS: SmcSettings = {
 
 type Direction = 1 | -1;
 type Scope = "swing" | "internal";
+
+const FVG_VOLUME_LOOKBACK = 20;
 
 export type SmcMarkerKind =
   | "bos"
@@ -200,12 +210,18 @@ class LuxSmc {
   private readonly swingLength: number;
   private readonly internalLength: number;
   private readonly maxZoneAge: number;
+  private readonly fvgAutoThreshold: boolean;
+  private readonly fvgThresholdLookback: number;
+  private readonly fvgThresholdMultiplier: number;
+  private readonly fvgVolumeConfirmation: boolean;
   private readonly maxBuffer: number;
 
   private readonly highs: number[] = [];
   private readonly lows: number[] = [];
   private readonly closes: number[] = [];
   private readonly opens: number[] = [];
+  private readonly volumes: number[] = [];
+  private readonly bodyDeltaPercents: number[] = [];
   private readonly timestamps: number[] = [];
   private readonly indices: number[] = [];
 
@@ -217,13 +233,29 @@ class LuxSmc {
   private lastSwingLeg = 0;
   private lastInternalLeg = 0;
 
-  constructor(settings: Pick<SmcSettings, "swingLength" | "internalLength" | "maxZoneAge">) {
+  constructor(
+    settings: Pick<
+      SmcSettings,
+      | "swingLength"
+      | "internalLength"
+      | "maxZoneAge"
+      | "fvgAutoThreshold"
+      | "fvgThresholdLookback"
+      | "fvgThresholdMultiplier"
+      | "fvgVolumeConfirmation"
+    >,
+  ) {
     this.swingLength = Math.max(1, Math.round(settings.swingLength));
     this.internalLength = Math.max(1, Math.round(settings.internalLength));
     this.maxZoneAge = Math.max(1, Math.round(settings.maxZoneAge));
+    this.fvgAutoThreshold = settings.fvgAutoThreshold;
+    this.fvgThresholdLookback = settings.fvgThresholdLookback;
+    this.fvgThresholdMultiplier = settings.fvgThresholdMultiplier;
+    this.fvgVolumeConfirmation = settings.fvgVolumeConfirmation;
     this.maxBuffer = Math.max(
       2000,
       this.maxZoneAge + Math.max(this.swingLength, this.internalLength) * 4,
+      this.fvgThresholdLookback + FVG_VOLUME_LOOKBACK + 10,
     );
   }
 
@@ -232,6 +264,8 @@ class LuxSmc {
     this.lows.push(bar.low);
     this.closes.push(bar.close);
     this.opens.push(bar.open);
+    this.volumes.push(bar.volume);
+    this.bodyDeltaPercents.push(candleBodyDeltaPercent(bar.open, bar.close));
     this.timestamps.push(bar.time);
     this.indices.push(barIndex);
 
@@ -240,6 +274,8 @@ class LuxSmc {
       this.lows.shift();
       this.closes.shift();
       this.opens.shift();
+      this.volumes.shift();
+      this.bodyDeltaPercents.shift();
       this.timestamps.shift();
       this.indices.shift();
     }
@@ -463,12 +499,21 @@ class LuxSmc {
     if (this.highs.length < 3) return;
     const currLow = this.lows[this.lows.length - 1];
     const currHigh = this.highs[this.highs.length - 1];
-    const prevClose = this.closes[this.closes.length - 2];
+    const prevPos = this.closes.length - 2;
+    const prevClose = this.closes[prevPos];
+    const prevBodyDeltaPercent = this.bodyDeltaPercents[prevPos] ?? 0;
+    const threshold = this.fvgBodyThreshold(prevPos);
+    const volumeConfirmed = this.fvgVolumeConfirmed(prevPos);
     const prev2High = this.highs[this.highs.length - 3];
     const prev2Low = this.lows[this.lows.length - 3];
     const prevTimestamp = this.timestamps[this.timestamps.length - 2];
 
-    if (currLow > prev2High && prevClose > prev2High) {
+    if (
+      currLow > prev2High &&
+      prevClose > prev2High &&
+      prevBodyDeltaPercent > threshold &&
+      volumeConfirmed
+    ) {
       const gap = currLow - prev2High;
       if (gap > 0) {
         this.fvgs.unshift({
@@ -483,7 +528,12 @@ class LuxSmc {
       }
     }
 
-    if (currHigh < prev2Low && prevClose < prev2Low) {
+    if (
+      currHigh < prev2Low &&
+      prevClose < prev2Low &&
+      -prevBodyDeltaPercent > threshold &&
+      volumeConfirmed
+    ) {
       const gap = prev2Low - currHigh;
       if (gap > 0) {
         this.fvgs.unshift({
@@ -499,6 +549,29 @@ class LuxSmc {
     }
 
     if (this.fvgs.length > 50) this.fvgs.pop();
+  }
+
+  private fvgBodyThreshold(prevPos: number): number {
+    if (!this.fvgAutoThreshold) return 0;
+    const averageBody = rollingAbsAverage(
+      this.bodyDeltaPercents,
+      prevPos,
+      this.fvgThresholdLookback,
+    );
+    return averageBody * this.fvgThresholdMultiplier;
+  }
+
+  private fvgVolumeConfirmed(prevPos: number): boolean {
+    if (!this.fvgVolumeConfirmation) return true;
+    const volume = this.volumes[prevPos];
+    if (!Number.isFinite(volume) || volume <= 0) return true;
+    const averageVolume = rollingAverage(
+      this.volumes,
+      prevPos,
+      FVG_VOLUME_LOOKBACK,
+      (value) => Number.isFinite(value) && value > 0,
+    );
+    return averageVolume <= 0 || volume > averageVolume;
   }
 
   private maintainZones(high: number, low: number, currentIndex: number): void {
@@ -595,7 +668,46 @@ class LuxSmc {
   }
 }
 
+function candleBodyDeltaPercent(open: number, close: number): number {
+  if (!Number.isFinite(open) || !Number.isFinite(close) || open === 0) {
+    return 0;
+  }
+  return (close - open) / Math.abs(open);
+}
+
+function rollingAbsAverage(
+  values: readonly number[],
+  endExclusive: number,
+  lookback: number,
+): number {
+  return rollingAverage(values, endExclusive, lookback, Number.isFinite, Math.abs);
+}
+
+function rollingAverage(
+  values: readonly number[],
+  endExclusive: number,
+  lookback: number,
+  include: (value: number) => boolean = Number.isFinite,
+  map: (value: number) => number = (value) => value,
+): number {
+  const start = Math.max(0, endExclusive - Math.max(1, lookback));
+  let sum = 0;
+  let count = 0;
+  for (let i = start; i < endExclusive; i += 1) {
+    const value = values[i];
+    if (!include(value)) continue;
+    sum += map(value);
+    count += 1;
+  }
+  return count > 0 ? sum / count : 0;
+}
+
 function settingsWithDefaults(settings?: Partial<SmcSettings>): SmcSettings {
+  const rawFvgThresholdLookback =
+    settings?.fvgThresholdLookback ?? DEFAULT_SMC_SETTINGS.fvgThresholdLookback;
+  const rawFvgThresholdMultiplier =
+    settings?.fvgThresholdMultiplier ??
+    DEFAULT_SMC_SETTINGS.fvgThresholdMultiplier;
   return {
     ...DEFAULT_SMC_SETTINGS,
     ...settings,
@@ -640,6 +752,29 @@ function settingsWithDefaults(settings?: Partial<SmcSettings>): SmcSettings {
     ),
     showPremiumDiscount:
       settings?.showPremiumDiscount ?? DEFAULT_SMC_SETTINGS.showPremiumDiscount,
+    fvgAutoThreshold:
+      settings?.fvgAutoThreshold ?? DEFAULT_SMC_SETTINGS.fvgAutoThreshold,
+    fvgThresholdLookback: Math.min(
+      500,
+      Math.max(
+        1,
+        Number.isFinite(rawFvgThresholdLookback)
+          ? Math.round(rawFvgThresholdLookback)
+          : DEFAULT_SMC_SETTINGS.fvgThresholdLookback,
+      ),
+    ),
+    fvgThresholdMultiplier: Math.min(
+      10,
+      Math.max(
+        0,
+        Number.isFinite(rawFvgThresholdMultiplier)
+          ? rawFvgThresholdMultiplier
+          : DEFAULT_SMC_SETTINGS.fvgThresholdMultiplier,
+      ),
+    ),
+    fvgVolumeConfirmation:
+      settings?.fvgVolumeConfirmation ??
+      DEFAULT_SMC_SETTINGS.fvgVolumeConfirmation,
     fvgExtendBars: Math.max(
       1,
       Math.round(settings?.fvgExtendBars ?? DEFAULT_SMC_SETTINGS.fvgExtendBars),

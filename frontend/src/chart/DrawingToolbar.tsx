@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 
-import type { DrawingToolType } from "./drawings/types";
+import type { DrawingToolType, FixedRangeProfileMode } from "./drawings/types";
 import { DRAWING_TOOLS } from "./drawings/types";
 
 export interface DrawingToolbarProps {
@@ -18,8 +18,12 @@ export interface DrawingToolbarProps {
   activeTool: DrawingToolType | null;
   /** Number of drawings on the chart (shows badge on trash if > 0). */
   drawingCount: number;
+  /** Mode used for newly placed fixed range profile drawings. */
+  fixedRangeProfileMode?: FixedRangeProfileMode;
   /** Called when a tool button is clicked. Same tool = deselect (null). */
   onToolSelect: (tool: DrawingToolType | null) => void;
+  /** Called when the fixed range profile mode changes. */
+  onFixedRangeProfileModeChange?: (mode: FixedRangeProfileMode) => void;
   /** Called when the delete-all button is clicked. */
   onDeleteAll: () => void;
 }
@@ -28,7 +32,9 @@ export function DrawingToolbar({
   className,
   activeTool,
   drawingCount,
+  fixedRangeProfileMode = "bidAsk",
   onToolSelect,
+  onFixedRangeProfileModeChange = () => {},
   onDeleteAll,
 }: DrawingToolbarProps) {
   const isMobile = className?.includes("drawing-toolbar-mobile") === true;
@@ -93,6 +99,59 @@ export function DrawingToolbar({
             </button>
           );
         })}
+      </div>
+
+      <div
+        className="drawing-profile-mode"
+        role="group"
+        aria-label="Fixed range profile mode"
+      >
+        <button
+          type="button"
+          className={`drawing-profile-mode-btn${
+            fixedRangeProfileMode === "bidAsk" ? " active" : ""
+          }`}
+          title="Bid/ask fixed profile"
+          aria-label="Bid/ask fixed profile"
+          aria-pressed={fixedRangeProfileMode === "bidAsk"}
+          onClick={() => onFixedRangeProfileModeChange("bidAsk")}
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M5 7 h7 M12 7 h7 M5 12 h10 M15 12 h4 M5 17 h5 M10 17 h9" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={`drawing-profile-mode-btn${
+            fixedRangeProfileMode === "volume" ? " active" : ""
+          }`}
+          title="Volume fixed profile"
+          aria-label="Volume fixed profile"
+          aria-pressed={fixedRangeProfileMode === "volume"}
+          onClick={() => onFixedRangeProfileModeChange("volume")}
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M5 7 h14 M5 12 h10 M5 17 h6" />
+          </svg>
+        </button>
       </div>
 
       <div className="drawing-toolbar-separator" />

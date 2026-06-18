@@ -19,7 +19,11 @@ import asyncio
 import pytest
 
 from app.engines.contract_resolver import ContractResolver
-from app.engines.alert_engine import Alert, SMC_EXTERNAL_BREAK_BIG_TRADE
+from app.engines.alert_engine import (
+    Alert,
+    SMC_EXTERNAL_BREAK_BIG_TRADE,
+    SMC_ZONE_TOUCH_BIG_TRADE,
+)
 from app.ingest.control_plane import ControlPlaneCoordinator
 from app.models.canonical import NormalizedTrade
 from app.models.messages import (
@@ -136,6 +140,26 @@ def _smc_alert(repeat=True):
         id="smc",
         symbol=_SYMBOL,
         type=SMC_EXTERNAL_BREAK_BIG_TRADE,
+        params=params,
+    )
+
+
+def _smc_zone_alert(repeat=True):
+    params = {
+        "bigTradeThreshold": 30,
+        "swingLength": 50,
+        "maxZoneAge": 220,
+        "fvgAutoThreshold": True,
+        "fvgThresholdLookback": 60,
+        "fvgThresholdMultiplier": 1.5,
+        "fvgVolumeConfirmation": False,
+    }
+    if repeat:
+        params["repeat"] = True
+    return Alert(
+        id="zone",
+        symbol=_SYMBOL,
+        type=SMC_ZONE_TOUCH_BIG_TRADE,
         params=params,
     )
 
@@ -375,6 +399,30 @@ def test_pipeline_smc_strategy_alert_fires_on_retest_close(pipeline_env):
     assert alerts[-1]["alertType"] == SMC_EXTERNAL_BREAK_BIG_TRADE
     assert alerts[-1]["level"] == 100
     assert "retest close 100" in alerts[-1]["message"]
+
+
+@pytest.mark.integration
+def test_pipeline_smc_zone_touch_alert_fires_on_order_block_big_trade(pipeline_env):
+    pipeline, cache, tick_store, resolver, captured = pipeline_env
+    pipeline.alert_engine.upsert(_smc_zone_alert())
+
+    async def run():
+        seq = await _feed_bullish_external_break_setup(pipeline)
+        await pipeline.on_trade(
+            _trade(_BASE + 53 * 60_000 + 1_000, 95.0, 31, seq=seq, ask=95.0)
+        )
+        await pipeline.on_trade(
+            _trade(_BASE + 53 * 60_000 + 2_000, 101.6, 1, seq=seq + 1, ask=101.6)
+        )
+
+    asyncio.run(run())
+
+    alerts = [e.payload for e in captured if e.event_type == EventType.ALERT_EVENT]
+    assert alerts
+    assert alerts[-1]["alertType"] == SMC_ZONE_TOUCH_BIG_TRADE
+    assert alerts[-1]["level"] == 95
+    assert "Bull OB" in alerts[-1]["message"]
+    assert "big trade 31 > 30" in alerts[-1]["message"]
 
 
 @pytest.mark.integration

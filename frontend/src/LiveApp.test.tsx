@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  BIG_TRADE_SUBSCRIBED_EVENTS,
   CHART_CONTRACT,
+  ChartContextMenu,
   FOOTPRINT_SUBSCRIBED_EVENTS,
   GLOBAL_SUBSCRIBED_EVENTS,
   TIMEFRAME_SUBSCRIBED_EVENTS,
   appShellClassName,
+  bigTradesEnabledForTimeframe,
+  buildChartLimitOrderDraft,
   mergeMt5AccountUpdate,
   mergeMt5OpenTradeProfitUpdates,
   persistActiveProfileId,
@@ -15,9 +20,16 @@ import {
   resolveEndpoints,
   seriesDataKey,
 } from "./LiveApp";
-import { DEFAULT_FOOTPRINT_SETTINGS } from "./chart/IndicatorToggles";
+import {
+  DEFAULT_EMA_SETTINGS,
+  DEFAULT_FOOTPRINT_SETTINGS,
+} from "./chart/IndicatorToggles";
 import { DEFAULT_SMC_SETTINGS } from "./chart/smc";
 import type { ChartProfilePayload } from "./profiles/types";
+
+afterEach(() => {
+  cleanup();
+});
 
 const profilePayload: ChartProfilePayload = {
   version: 1,
@@ -25,7 +37,7 @@ const profilePayload: ChartProfilePayload = {
   chartBackgroundColor: "#101010",
   showFootprint: false,
   showBigTrades: true,
-  ema: { enabled: false, period: 200, color: "#2962ff" },
+  ema: { ...DEFAULT_EMA_SETTINGS },
   smc: DEFAULT_SMC_SETTINGS,
   footprintSettings: DEFAULT_FOOTPRINT_SETTINGS,
   drawings: [],
@@ -58,6 +70,102 @@ describe("chart focus layout", () => {
   it("adds the focus class only while chart focus mode is enabled", () => {
     expect(appShellClassName(false)).toBe("app-shell");
     expect(appShellClassName(true)).toBe("app-shell chart-focus");
+  });
+});
+
+describe("mobile chart limit order draft", () => {
+  const settings = {
+    volumeLots: 0.12,
+    slDistanceGc: 3,
+    tpDistanceGc: 6,
+  };
+
+  it("builds a buy limit bracket below the reference price", () => {
+    expect(
+      buildChartLimitOrderDraft({
+        entryPrice: 2360.04,
+        referencePrice: 2370.02,
+        settings,
+      }),
+    ).toEqual({
+      source: "chart_bracket",
+      side: "buy",
+      kind: "limit",
+      volumeLots: 0.12,
+      entryGc: 2360,
+      referenceGc: 2370,
+      slGc: 2357,
+      tpGc: 2366,
+      gcAnchored: true,
+    });
+  });
+
+  it("builds a sell limit bracket above the reference price", () => {
+    expect(
+      buildChartLimitOrderDraft({
+        entryPrice: 2380.04,
+        referencePrice: 2370.02,
+        settings,
+      }),
+    ).toEqual({
+      source: "chart_bracket",
+      side: "sell",
+      kind: "limit",
+      volumeLots: 0.12,
+      entryGc: 2380,
+      referenceGc: 2370,
+      slGc: 2383,
+      tpGc: 2374,
+      gcAnchored: true,
+    });
+  });
+
+  it("does not create a limit draft at the rounded reference price", () => {
+    expect(
+      buildChartLimitOrderDraft({
+        entryPrice: 2370.04,
+        referencePrice: 2370.02,
+        settings,
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("ChartContextMenu", () => {
+  it("keeps add alert and adds the limit order action", () => {
+    const draft = buildChartLimitOrderDraft({
+      entryPrice: 2360.04,
+      referencePrice: 2370.02,
+      settings: {
+        volumeLots: 0.12,
+        slDistanceGc: 3,
+        tpDistanceGc: 6,
+      },
+    });
+    expect(draft).toBeDefined();
+    const onClose = vi.fn();
+    const onAddAlert = vi.fn();
+    const onPlaceLimitOrder = vi.fn();
+
+    render(
+      <ChartContextMenu
+        menu={{ price: 2360.04, x: 12, y: 24, referencePrice: 2370.02 }}
+        limitDraft={draft}
+        onClose={onClose}
+        onAddAlert={onAddAlert}
+        onPlaceLimitOrder={onPlaceLimitOrder}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Add alert at 2360.0" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Place BUY LIMIT at 2360.0" }),
+    );
+
+    expect(onAddAlert).toHaveBeenCalledWith(2360.04);
+    expect(onPlaceLimitOrder).toHaveBeenCalledWith(draft);
   });
 });
 
@@ -162,6 +270,12 @@ describe("live chart series identity", () => {
     );
   });
 
+  it("enables BigTrade overlays only on 1m", () => {
+    expect(bigTradesEnabledForTimeframe("1m")).toBe(true);
+    expect(bigTradesEnabledForTimeframe("5m")).toBe(false);
+    expect(bigTradesEnabledForTimeframe("1D")).toBe(false);
+  });
+
   it("keeps timeframe-scoped socket events separate from global events", () => {
     expect(TIMEFRAME_SUBSCRIBED_EVENTS).toEqual([
       "bar_update",
@@ -169,7 +283,6 @@ describe("live chart series identity", () => {
     ]);
     expect(GLOBAL_SUBSCRIBED_EVENTS).toEqual([
       "quote_update",
-      "big_trade",
       "alert_event",
       "order_update",
       "position_update",
@@ -178,6 +291,7 @@ describe("live chart series identity", () => {
       "risk_update",
       "status",
     ]);
+    expect(BIG_TRADE_SUBSCRIBED_EVENTS).toEqual(["big_trade"]);
     expect(FOOTPRINT_SUBSCRIBED_EVENTS).toEqual(["footprint_update"]);
   });
 });

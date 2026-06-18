@@ -22,6 +22,8 @@ export type DrawingToolType =
   | "horizontal_ray"
   | "vertical_line";
 
+export type FixedRangeProfileMode = "bidAsk" | "volume";
+
 export interface DrawingToolDef {
   type: DrawingToolType;
   label: string;
@@ -33,6 +35,12 @@ export interface DrawingToolDef {
 
 /** Registry of available tools. */
 export const DRAWING_TOOLS: readonly DrawingToolDef[] = [
+  {
+    type: "order_bracket",
+    label: "Order",
+    anchors: 3,
+    icon: "M4 5 h16 M4 12 h10 M4 19 h16 M7 5 v14 M17 5 v14 M14 9 l4 3 -4 3",
+  },
   {
     type: "trendline",
     label: "Trend Line",
@@ -69,12 +77,6 @@ export const DRAWING_TOOLS: readonly DrawingToolDef[] = [
     anchors: 2,
     icon: "M4 6 h16 M4 18 h16 M12 6 v12 M8 9 L12 6 L16 9 M8 15 L12 18 L16 15",
   },
-  {
-    type: "order_bracket",
-    label: "Order",
-    anchors: 3,
-    icon: "M4 6 h16 M4 12 h16 M4 18 h16 M8 6 v12 M16 6 v12",
-  },
 ] as const;
 
 /* ------------------------------------------------------------------ */
@@ -103,6 +105,8 @@ export interface DrawingOptions {
   lineColor?: string;
   lineWidth?: number;
   fillColor?: string;
+  /** For fixed range profile: bid/ask split or total volume rows. */
+  fixedRangeProfileMode?: FixedRangeProfileMode;
   /** For price range: show percentage and absolute diff labels. */
   showLabels?: boolean;
 }
@@ -148,7 +152,7 @@ export interface IDrawingManager {
   ): void;
 
   /** Start interactive placement for the given tool type. */
-  startDrawing(tool: DrawingToolType): void;
+  startDrawing(tool: DrawingToolType, options?: DrawingOptions): void;
 
   /** Cancel any in-progress interactive placement. */
   cancelDrawing(): void;

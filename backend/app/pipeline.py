@@ -171,6 +171,7 @@ def _big_trade_for_contract(bt: BigTrade, contract: str) -> BigTrade:
 
 
 AlertTextSender = Callable[[AlertEvent], Awaitable[None] | None]
+AnalystEventSink = Callable[[], None]
 
 
 class Pipeline:
@@ -191,6 +192,7 @@ class Pipeline:
         alert_engine: AlertEngine | None = None,
         basis_engine: BasisEngine | None = None,
         send_alert_text: AlertTextSender | None = None,
+        analyst_event_sink: AnalystEventSink | None = None,
         control_plane: ControlPlaneCoordinator | None = None,
         validator: SequenceValidator | None = None,
     ) -> None:
@@ -226,6 +228,7 @@ class Pipeline:
             if send_alert_text is not None
             else self._send_telegram_alert_text
         )
+        self._analyst_event_sink = analyst_event_sink
 
         # Ingestion coordinator: validation + raw-tick recording (before
         # throttling) + degraded-status seam wired to the registry. (Req 4.4, 4.5)
@@ -429,6 +432,11 @@ class Pipeline:
             footprint_updates,
             big_trades,
         )
+        if self._analyst_event_sink is not None:
+            try:
+                self._analyst_event_sink()
+            except Exception as exc:
+                logger.warning("analyst event enqueue failed: %s", exc)
 
         for update in bar_updates:
             await self._enqueue(OutboundEvent.from_message(update))
@@ -481,6 +489,7 @@ class Pipeline:
                 bar_high=bar.high,
                 bar_low=bar.low,
                 bar_close=bar.close,
+                bar_volume=bar.volume,
                 bar_volume_delta=vd_update.delta if vd_update is not None else None,
                 bar_stacked_imbalance=stacked,
             )

@@ -14,6 +14,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from starlette.concurrency import run_in_threadpool
 
+from ..analyst.poi_models import PoiEvent
+from ..analyst.schemas import AnalystReport
 from ..models.messages import AlertEvent
 from ..models.timestamp import now_ms
 from ..storage.cache_store import CacheStore
@@ -263,6 +265,134 @@ def format_telegram_alert_message(event: AlertEvent) -> str:
     )
 
 
+def _label(value: str) -> str:
+    return {
+        "bullish": "Tăng",
+        "bearish": "Giảm",
+        "range": "Sideway",
+        "unknown": "Chưa rõ",
+        "no_trade": "Không trade",
+        "wait_for_buy": "Chờ mua",
+        "wait_for_sell": "Chờ bán",
+        "buy_candidate": "Mua tiềm năng",
+        "sell_candidate": "Bán tiềm năng",
+        "wait": "Chờ",
+        "candidate": "Có setup",
+    }.get(value, value.replace("_", " "))
+
+
+def format_telegram_analyst_report_message(report: AnalystReport) -> str:
+    timestamp = datetime.fromtimestamp(report.created_at / 1000, UTC).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    reasons = "\n".join(f"- {reason}" for reason in report.reason[:3])
+    return "\n".join(
+        [
+            f"AI đọc market {report.symbol} {report.contract}",
+            f"Quyết định: {_label(report.decision)} ({report.decision})",
+            f"Bias: {_label(report.bias)} ({report.bias})",
+            f"Độ tin cậy: {round(max(0.0, min(1.0, report.confidence)) * 100)}%",
+            f"Rủi ro: {_label(report.risk_state)}",
+            "Lý do:",
+            reasons,
+            f"Vô hiệu nếu: {report.invalid_if}",
+            f"Xác nhận tiếp theo: {report.next_confirmation}",
+            f"Thời gian: {timestamp} UTC",
+            "Auto-trade: false",
+        ]
+    )
+
+
+def format_telegram_poi_event_message(event: PoiEvent) -> str:
+    timestamp = datetime.fromtimestamp(event.created_at / 1000, UTC).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    response = event.response or {}
+    active = event.input_snapshot.get("activePoi", {})
+    reasons = response.get("reason", [])
+    if isinstance(reasons, str):
+        reasons = [reasons]
+    if not isinstance(reasons, list):
+        reasons = []
+    reason_text = "\n".join(f"- {str(reason)}" for reason in reasons[:3])
+    poi_summary = str(response.get("activePoiSummary", "")).strip()
+    if not poi_summary:
+        poi_summary = (
+            f"{active.get('timeframe', '')} {active.get('side', '')} "
+            f"{active.get('kind', '')} {active.get('bottom')}-{active.get('top')}"
+        ).strip()
+    decision = str(response.get("decision", event.decision or "unknown"))
+    bias = str(response.get("bias", "unknown"))
+    risk_state = str(response.get("riskState", "no_trade"))
+    confidence = event.confidence
+    if confidence is None:
+        try:
+            confidence = float(response.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+    return "\n".join(
+        [
+            f"AI POI scanner {event.symbol} {event.contract}",
+            f"Event: {event.event_type}",
+            f"POI: {poi_summary}",
+            f"Quyết định: {_label(decision)} ({decision})",
+            f"Bias: {_label(bias)} ({bias})",
+            f"Độ tin cậy: {round(max(0.0, min(1.0, confidence)) * 100)}%",
+            f"Rủi ro: {_label(risk_state)}",
+            "Lý do:",
+            reason_text or "- Không có lý do.",
+            f"Vô hiệu nếu: {response.get('invalidIf', '')}",
+            f"Xác nhận tiếp theo: {response.get('nextConfirmation', '')}",
+            f"Thời gian: {timestamp} UTC",
+            "Auto-trade: false",
+        ]
+    )
+
+
+def send_telegram_message_for_profile(
+    cache: CacheStore,
+    profile_id: str,
+    *,
+    message: str,
+    screenshot_data_url: str | None = None,
+) -> dict[str, Any]:
+    config = _read_config(cache, profile_id)
+    if not bool(config.get("enabled", False)):
+        return {"sent": False, "reason": "disabled"}
+    token = str(config.get("botToken", "")).strip()
+    chat_id = str(config.get("chatId", "")).strip()
+    if not token or not chat_id:
+        return {"sent": False, "reason": "not_configured"}
+    if not bool(config.get("sendScreenshot", True)):
+        screenshot_data_url = None
+    _send_telegram(config, message=message, screenshot_data_url=screenshot_data_url)
+    return {"sent": True}
+
+
+def send_telegram_analyst_report(
+    cache: CacheStore,
+    profile_id: str,
+    report: AnalystReport,
+) -> dict[str, Any]:
+    return send_telegram_message_for_profile(
+        cache,
+        profile_id,
+        message=format_telegram_analyst_report_message(report),
+    )
+
+
+def send_telegram_poi_event(
+    cache: CacheStore,
+    profile_id: str,
+    event: PoiEvent,
+) -> dict[str, Any]:
+    return send_telegram_message_for_profile(
+        cache,
+        profile_id,
+        message=format_telegram_poi_event_message(event),
+    )
+
+
 def send_telegram_alert_from_event(
     cache: CacheStore,
     event: AlertEvent,
@@ -276,21 +406,12 @@ def send_telegram_alert_from_event(
     and by the ingest pipeline as a text-only fallback when no chart client is
     connected.
     """
-    config = _read_config(cache, event.profile_id)
-    if not bool(config.get("enabled", False)):
-        return {"sent": False, "reason": "disabled"}
-    token = str(config.get("botToken", "")).strip()
-    chat_id = str(config.get("chatId", "")).strip()
-    if not token or not chat_id:
-        return {"sent": False, "reason": "not_configured"}
-    if not bool(config.get("sendScreenshot", True)):
-        screenshot_data_url = None
-    _send_telegram(
-        config,
+    return send_telegram_message_for_profile(
+        cache,
+        event.profile_id,
         message=message if message is not None else format_telegram_alert_message(event),
         screenshot_data_url=screenshot_data_url,
     )
-    return {"sent": True}
 
 
 @router.get("/telegram")

@@ -61,6 +61,7 @@ export {
 
 export {
   type DeltaColors,
+  type EmaLineData,
   type LightweightChartsAdapterOptions,
   type VolumeDeltaDatum,
   type AlertLine,
@@ -68,6 +69,10 @@ export {
   type OrderLineField,
   type PriceLineSelection,
   LightweightChartsAdapter,
+  CVD_OVERLAY_PRICE_SCALE_ID,
+  CVD_OVERLAY_SCALE_MARGINS,
+  VOLUME_OVERLAY_PRICE_SCALE_ID,
+  VOLUME_OVERLAY_SCALE_MARGINS,
   toUtcTimestamp,
 } from "./lightweightChartsAdapter";
 

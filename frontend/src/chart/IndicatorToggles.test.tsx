@@ -5,6 +5,7 @@ import {
   IndicatorToggles,
   type EmaSettings,
   DEFAULT_BIG_TRADE_SETTINGS,
+  DEFAULT_EMA_SETTINGS,
   DEFAULT_FOOTPRINT_SETTINGS,
 } from "./IndicatorToggles";
 import { DEFAULT_OUTSIDE_BAR_SETTINGS } from "./outsideBar";
@@ -14,7 +15,7 @@ afterEach(() => {
   cleanup();
 });
 
-const EMA: EmaSettings = { enabled: false, period: 200, color: "#2962ff" };
+const EMA: EmaSettings = { ...DEFAULT_EMA_SETTINGS };
 const SMC: SmcSettings = { ...DEFAULT_SMC_SETTINGS };
 
 function open() {
@@ -23,6 +24,9 @@ function open() {
 
 describe("IndicatorToggles", () => {
   it("opens the dropdown and toggles each indicator", () => {
+    const onVolume = vi.fn();
+    const onVolumeDelta = vi.fn();
+    const onCvd = vi.fn();
     const onFootprint = vi.fn();
     const onBigTrades = vi.fn();
     const onEma = vi.fn();
@@ -33,6 +37,9 @@ describe("IndicatorToggles", () => {
         bigTrades
         ema={EMA}
         smc={SMC}
+        onVolumeChange={onVolume}
+        onVolumeDeltaChange={onVolumeDelta}
+        onCvdChange={onCvd}
         onFootprintChange={onFootprint}
         onBigTradesChange={onBigTrades}
         onEmaChange={onEma}
@@ -42,14 +49,20 @@ describe("IndicatorToggles", () => {
       />,
     );
 
-    expect(screen.queryByLabelText("EMA 200")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("EMA 21")).not.toBeInTheDocument();
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA 200"));
+    fireEvent.click(screen.getByLabelText("Volume"));
+    fireEvent.click(screen.getByLabelText("Volume Delta"));
+    fireEvent.click(screen.getByLabelText("CVD"));
+    fireEvent.click(screen.getByLabelText("EMA 21"));
     fireEvent.click(screen.getByLabelText("SMC"));
     fireEvent.click(screen.getByLabelText("Footprint"));
     fireEvent.click(screen.getByLabelText("BigTrade"));
 
+    expect(onVolume).toHaveBeenCalledWith(true);
+    expect(onVolumeDelta).toHaveBeenCalledWith(true);
+    expect(onCvd).toHaveBeenCalledWith(true);
     expect(onEma).toHaveBeenCalledWith({ ...EMA, enabled: true });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, enabled: true });
     expect(onFootprint).toHaveBeenCalledWith(true);
@@ -76,7 +89,31 @@ describe("IndicatorToggles", () => {
     open();
     expect(screen.getByLabelText("Footprint")).toBeDisabled();
     expect(screen.getByLabelText("BigTrade")).not.toBeDisabled();
-    expect(screen.getByLabelText("EMA 200")).not.toBeDisabled();
+    expect(screen.getByLabelText("EMA 21")).not.toBeDisabled();
+    expect(screen.getByLabelText("SMC")).not.toBeDisabled();
+  });
+
+  it("can disable BigTrade independently", () => {
+    render(
+      <IndicatorToggles
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        bigTradeDisabled
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    expect(screen.getByLabelText("Footprint")).not.toBeDisabled();
+    expect(screen.getByLabelText("BigTrade")).toBeDisabled();
+    expect(screen.getByLabelText("EMA 21")).not.toBeDisabled();
     expect(screen.getByLabelText("SMC")).not.toBeDisabled();
   });
 
@@ -160,6 +197,30 @@ describe("IndicatorToggles", () => {
     expect(onEma).toHaveBeenCalledWith({ ...EMA, period: 21 });
   });
 
+  it("toggles EMA 200 inside the EMA settings panel", () => {
+    const onEma = vi.fn();
+    render(
+      <IndicatorToggles
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={onEma}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    fireEvent.click(screen.getByLabelText("EMA settings"));
+    fireEvent.click(screen.getByLabelText("EMA 200"));
+
+    expect(onEma).toHaveBeenCalledWith({ ...EMA, showEma200: true });
+  });
+
   it("edits the SMC lengths and FVG controls via the settings panel", () => {
     const onSmc = vi.fn();
     render(
@@ -181,13 +242,21 @@ describe("IndicatorToggles", () => {
     fireEvent.click(screen.getByLabelText("SMC settings"));
     const swing = screen.getByLabelText("SMC swing length");
     const internal = screen.getByLabelText("SMC internal length");
+    const fvgLookback = screen.getByLabelText("SMC FVG threshold lookback");
     const fvgExtend = screen.getByLabelText("SMC FVG extend bars");
     const fvgLimit = screen.getByLabelText("SMC active FVG display limit");
+    const fvgFactor = screen.getByLabelText("SMC FVG threshold multiplier");
+    const fvgVolume = screen.getByLabelText("FVG volume confirmation");
     const showPd = screen.getByLabelText("Show PD");
     fireEvent.change(swing, { target: { value: "21" } });
     fireEvent.blur(swing);
     fireEvent.change(internal, { target: { value: "3" } });
     fireEvent.blur(internal);
+    fireEvent.change(fvgLookback, { target: { value: "90" } });
+    fireEvent.blur(fvgLookback);
+    fireEvent.change(fvgFactor, { target: { value: "1.8" } });
+    fireEvent.blur(fvgFactor);
+    fireEvent.click(fvgVolume);
     fireEvent.change(fvgExtend, { target: { value: "2" } });
     fireEvent.blur(fvgExtend);
     fireEvent.change(fvgLimit, { target: { value: "4" } });
@@ -196,6 +265,9 @@ describe("IndicatorToggles", () => {
 
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, swingLength: 21 });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, internalLength: 3 });
+    expect(onSmc).toHaveBeenCalledWith({ ...SMC, fvgThresholdLookback: 90 });
+    expect(onSmc).toHaveBeenCalledWith({ ...SMC, fvgThresholdMultiplier: 1.8 });
+    expect(onSmc).toHaveBeenCalledWith({ ...SMC, fvgVolumeConfirmation: true });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, fvgExtendBars: 2 });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, maxFairValueGaps: 4 });
     expect(onSmc).toHaveBeenCalledWith({
@@ -252,7 +324,7 @@ describe("IndicatorToggles", () => {
     fireEvent.blur(input);
 
     expect(onEma).not.toHaveBeenCalled();
-    expect(input.value).toBe("200"); // reverted
+    expect(input.value).toBe("21"); // reverted
   });
 
   it("edits BigTrade display settings", () => {
@@ -276,16 +348,45 @@ describe("IndicatorToggles", () => {
 
     open();
     fireEvent.click(screen.getByLabelText("BigTrade settings"));
-    const minVol = screen.getByLabelText("BigTrade min volume");
+    const asia = screen.getByLabelText("BigTrade Asia min volume");
+    const eu = screen.getByLabelText("BigTrade EU min volume");
+    const us = screen.getByLabelText("BigTrade US min volume");
     const limit = screen.getByLabelText("BigTrade display limit");
-    fireEvent.change(minVol, { target: { value: "80" } });
-    fireEvent.blur(minVol);
+    fireEvent.change(asia, { target: { value: "35" } });
+    fireEvent.blur(asia);
+    fireEvent.change(eu, { target: { value: "60" } });
+    fireEvent.blur(eu);
+    fireEvent.change(us, { target: { value: "120" } });
+    fireEvent.blur(us);
     fireEvent.change(limit, { target: { value: "200" } });
     fireEvent.blur(limit);
 
     expect(onBigTradeSettings).toHaveBeenCalledWith({
       ...DEFAULT_BIG_TRADE_SETTINGS,
-      minVolume: 80,
+      minVolume: 35,
+      sessionMinVolumes: {
+        asia: 35,
+        eu: 50,
+        us: 100,
+      },
+    });
+    expect(onBigTradeSettings).toHaveBeenCalledWith({
+      ...DEFAULT_BIG_TRADE_SETTINGS,
+      minVolume: 30,
+      sessionMinVolumes: {
+        asia: 30,
+        eu: 60,
+        us: 100,
+      },
+    });
+    expect(onBigTradeSettings).toHaveBeenCalledWith({
+      ...DEFAULT_BIG_TRADE_SETTINGS,
+      minVolume: 30,
+      sessionMinVolumes: {
+        asia: 30,
+        eu: 50,
+        us: 120,
+      },
     });
     expect(onBigTradeSettings).toHaveBeenCalledWith({
       ...DEFAULT_BIG_TRADE_SETTINGS,

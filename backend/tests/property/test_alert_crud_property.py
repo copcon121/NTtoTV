@@ -38,6 +38,12 @@ from app.engines.alert_engine import (
     SMC_DEFAULT_PAUSE_ON_INSIDE_BARS,
     SMC_DEFAULT_SWING_LENGTH,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
+    SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD,
+    SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK,
+    SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER,
+    SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION,
+    SMC_ZONE_DEFAULT_MAX_ZONE_AGE,
+    SMC_ZONE_TOUCH_BIG_TRADE,
 )
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
@@ -102,6 +108,14 @@ def _params_for(alert_type: str):
             params["effectiveLookaheadBars"] = SMC_DEFAULT_LOOKAHEAD_BARS
             params["maxBars"] = SMC_DEFAULT_MAX_BARS
             params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
+        elif alert_type == SMC_ZONE_TOUCH_BIG_TRADE:
+            params["bigTradeThreshold"] = draw(_positive_numbers)
+            params["swingLength"] = SMC_DEFAULT_SWING_LENGTH
+            params["maxZoneAge"] = SMC_ZONE_DEFAULT_MAX_ZONE_AGE
+            params["fvgAutoThreshold"] = SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD
+            params["fvgThresholdLookback"] = SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK
+            params["fvgThresholdMultiplier"] = SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER
+            params["fvgVolumeConfirmation"] = SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION
         # stacked_imbalance: no required field.
         return params
 

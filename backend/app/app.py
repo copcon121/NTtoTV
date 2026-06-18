@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from . import __version__
+from .analyst.routes import router as analyst_router
 from .ingest.endpoint import router as nt_router
 from .registry.endpoint import router as chart_router
 from .rest.alerts import router as alerts_router
@@ -86,6 +87,7 @@ def create_app(*, lifespan: bool = True) -> FastAPI:
     app.include_router(orders_router)
     app.include_router(profiles_router)
     app.include_router(orderflow_router)
+    app.include_router(analyst_router)
     app.include_router(nt_router)
     app.include_router(chart_router)
 

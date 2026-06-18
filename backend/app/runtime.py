@@ -23,6 +23,9 @@ from datetime import datetime, timezone
 
 from .config import Settings
 from .config import settings as default_settings
+from .analyst.event_provider import LlmAnalystEventProvider, MockAnalystEventProvider
+from .analyst.poi_scanner import PoiScanner
+from .analyst.store import AnalystStore
 from .engines.anchored_sync import AnchoredSyncEngine
 from .engines.basis_engine import BasisEngine
 from .engines.contract_resolver import ContractResolver
@@ -79,6 +82,24 @@ class AppRuntime:
         )
         if resolver is None and s.gc_candidate_contracts:
             self._contract_state.set_active(self._symbol, s.gc_candidate_contracts[-1])
+        self._analyst_store: AnalystStore | None = (
+            AnalystStore(s.analyst_db_path) if s.analyst_enabled else None
+        )
+        self._poi_scanner: PoiScanner | None = None
+        if self._analyst_store is not None:
+            self._poi_scanner = PoiScanner(
+                cache=self._cache,
+                store=self._analyst_store,
+                provider=MockAnalystEventProvider(),
+                real_provider=LlmAnalystEventProvider.from_settings(s),
+                provider_mode=s.analyst_event_provider,
+                symbol=self._symbol,
+                contract=self._symbol,
+                tick_size=s.analyst_tick_size,
+                cooldown_seconds=s.analyst_event_cooldown_s,
+                queue_size=s.analyst_scanner_queue_size,
+                m1_internal_enabled=s.analyst_m1_internal_enabled,
+            )
         # The pipeline; control plane is bound per /ws/nt connection so its
         # send_control targets the live socket.
         self._pipeline = Pipeline(
@@ -88,6 +109,9 @@ class AppRuntime:
             resolver=self._resolver,
             symbol=self._symbol,
             basis_engine=self._basis_engine,
+            analyst_event_sink=(
+                None if self._poi_scanner is None else self._poi_scanner.enqueue_latest
+            ),
         )
         self._flush_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -140,6 +164,29 @@ class AppRuntime:
         return self._reconciliation
 
     @property
+    def analyst_store(self) -> AnalystStore | None:
+        return self._analyst_store
+
+    @property
+    def poi_scanner(self) -> PoiScanner | None:
+        return self._poi_scanner
+
+    @property
+    def analyst_auto_send_available(self) -> bool:
+        return False
+
+    @property
+    def analyst_auto_send_enabled(self) -> bool:
+        return False
+
+    @property
+    def analyst_auto_send_running(self) -> bool:
+        return False
+
+    async def set_analyst_auto_send_enabled(self, enabled: bool) -> None:
+        return
+
+    @property
     def symbol(self) -> str:
         return self._symbol
 
@@ -172,6 +219,8 @@ class AppRuntime:
             self._anchored_sync_task = asyncio.create_task(self._anchored_sync_loop())
         if self._reconciliation_task is None:
             self._reconciliation_task = asyncio.create_task(self._reconciliation_loop())
+        if self._poi_scanner is not None:
+            self._poi_scanner.start()
 
     async def stop(self) -> None:
         """Cancel the background loops and close the stores."""
@@ -193,11 +242,17 @@ class AppRuntime:
         self._retention_task = None
         self._anchored_sync_task = None
         self._reconciliation_task = None
+        if self._poi_scanner is not None:
+            await self._poi_scanner.stop()
         self._mt5_manager.close()
         try:
             self._tick_store.close()
         finally:
-            self._cache.close()
+            try:
+                self._cache.close()
+            finally:
+                if self._analyst_store is not None:
+                    self._analyst_store.close()
 
     async def _anchored_sync_loop(self) -> None:
         while True:

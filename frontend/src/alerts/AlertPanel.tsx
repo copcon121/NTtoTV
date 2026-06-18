@@ -55,12 +55,19 @@ export interface AlertPanelProps {
 }
 
 const DEFAULT_TOAST_MS = 4000;
-const SMC_STRATEGY_TYPE: AlertType = "smc_external_break_big_trade";
-const SMC_BIG_TRADE_DEFAULT = "50";
+const SMC_EXTERNAL_BREAK_TYPE: AlertType = "smc_external_break_big_trade";
+const SMC_ZONE_TOUCH_TYPE: AlertType = "smc_zone_touch_big_trade";
+const SMC_EXTERNAL_BIG_TRADE_DEFAULT = "50";
+const SMC_ZONE_BIG_TRADE_DEFAULT = "30";
 const SMC_SWING_LENGTH = 50;
 const SMC_LOOKAHEAD_BARS = 5;
 const SMC_MAX_BARS = 20;
 const SMC_PAUSE_ON_INSIDE_BARS = true;
+const SMC_ZONE_MAX_AGE = 220;
+const SMC_FVG_AUTO_THRESHOLD = true;
+const SMC_FVG_THRESHOLD_LOOKBACK = 60;
+const SMC_FVG_THRESHOLD_MULTIPLIER = 1.5;
+const SMC_FVG_VOLUME_CONFIRMATION = false;
 
 function defaultPlaySound(): void {
   // Best-effort: a short beep via the Web Audio API when available. Wrapped so
@@ -94,23 +101,32 @@ function isThresholdAlertType(type: AlertType): boolean {
   return type === "volume_delta_threshold" || type === "big_trade_threshold";
 }
 
+function isSmcAlertType(type: AlertType): boolean {
+  return type === SMC_EXTERNAL_BREAK_TYPE || type === SMC_ZONE_TOUCH_TYPE;
+}
+
 function alertInputLabel(type: AlertType): string {
   if (isLevelAlertType(type)) return "Alert level";
-  if (type === SMC_STRATEGY_TYPE) return "BigTrade threshold";
+  if (isSmcAlertType(type)) return "BigTrade threshold";
   return "Alert threshold";
 }
 
 function alertInputPlaceholder(type: AlertType): string {
   if (isLevelAlertType(type)) return "level";
-  if (type === SMC_STRATEGY_TYPE) return "BT threshold";
+  if (isSmcAlertType(type)) return "BT threshold";
   return "threshold";
 }
 
 function alertDescription(alert: Alert): string {
-  if (alert.type === SMC_STRATEGY_TYPE) {
+  if (alert.type === SMC_EXTERNAL_BREAK_TYPE) {
     const threshold = alert.params.bigTradeThreshold;
     const repeat = alert.params.repeat === true ? " (repeat)" : "";
     return `External BOS/CHoCH, BT > ${String(threshold)}${repeat}`;
+  }
+  if (alert.type === SMC_ZONE_TOUCH_TYPE) {
+    const threshold = alert.params.bigTradeThreshold;
+    const repeat = alert.params.repeat === true ? " (repeat)" : "";
+    return `M1 external OB/FVG touch, BT > ${String(threshold)}${repeat}`;
   }
   return [
     alert.type,
@@ -169,14 +185,18 @@ export function AlertPanel({
   // dynamic SMC strategy's BigTrade threshold.
   const isLevelType = isLevelAlertType(newType);
   const isThresholdType = isThresholdAlertType(newType);
-  const isSmcStrategyType = newType === SMC_STRATEGY_TYPE;
-  const showRepeat = isThresholdType || isSmcStrategyType;
+  const isExternalBreakType = newType === SMC_EXTERNAL_BREAK_TYPE;
+  const isZoneTouchType = newType === SMC_ZONE_TOUCH_TYPE;
+  const showRepeat = isThresholdType || isSmcAlertType(newType);
   const paramKey = isLevelType ? "level" : "threshold";
 
   const changeType = (type: AlertType) => {
     setNewType(type);
-    if (type === SMC_STRATEGY_TYPE) {
-      setNewValue((value) => value || SMC_BIG_TRADE_DEFAULT);
+    if (type === SMC_EXTERNAL_BREAK_TYPE) {
+      setNewValue((value) => value || SMC_EXTERNAL_BIG_TRADE_DEFAULT);
+      setNewRepeat(true);
+    } else if (type === SMC_ZONE_TOUCH_TYPE) {
+      setNewValue((value) => value || SMC_ZONE_BIG_TRADE_DEFAULT);
       setNewRepeat(true);
     }
   };
@@ -185,7 +205,7 @@ export function AlertPanel({
     e.preventDefault();
     const value = Number(newValue);
     if (!Number.isFinite(value)) return;
-    if (isSmcStrategyType) {
+    if (isExternalBreakType) {
       onCreate?.({
         type: newType,
         params: {
@@ -198,7 +218,24 @@ export function AlertPanel({
           repeat: newRepeat,
         },
       });
-      setNewValue(SMC_BIG_TRADE_DEFAULT);
+      setNewValue(SMC_EXTERNAL_BIG_TRADE_DEFAULT);
+      return;
+    }
+    if (isZoneTouchType) {
+      onCreate?.({
+        type: newType,
+        params: {
+          bigTradeThreshold: value,
+          swingLength: SMC_SWING_LENGTH,
+          maxZoneAge: SMC_ZONE_MAX_AGE,
+          fvgAutoThreshold: SMC_FVG_AUTO_THRESHOLD,
+          fvgThresholdLookback: SMC_FVG_THRESHOLD_LOOKBACK,
+          fvgThresholdMultiplier: SMC_FVG_THRESHOLD_MULTIPLIER,
+          fvgVolumeConfirmation: SMC_FVG_VOLUME_CONFIRMATION,
+          repeat: newRepeat,
+        },
+      });
+      setNewValue(SMC_ZONE_BIG_TRADE_DEFAULT);
       return;
     }
     onCreate?.({
@@ -260,6 +297,9 @@ export function AlertPanel({
           <option value="big_trade_threshold">Big trade ≥</option>
           <option value="smc_external_break_big_trade">
             External BOS/CHoCH + BigTrade
+          </option>
+          <option value="smc_zone_touch_big_trade">
+            M1 OB/FVG touch + BigTrade
           </option>
         </select>
         <input

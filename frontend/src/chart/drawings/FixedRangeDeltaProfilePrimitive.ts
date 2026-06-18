@@ -16,7 +16,13 @@ import type {
   DeltaProfileRow,
 } from "../../orderflow/deltaProfile";
 import { anchorToCoordinate } from "./coordinates";
-import type { AnchorPoint, DrawingOptions, DrawingState, IDrawing } from "./types";
+import type {
+  AnchorPoint,
+  DrawingOptions,
+  DrawingState,
+  FixedRangeProfileMode,
+  IDrawing,
+} from "./types";
 
 interface RenderRow {
   y: number;
@@ -42,6 +48,8 @@ const COLORS = {
   negativeMuted: "rgba(223, 91, 136, 0.24)",
   neutral: "rgba(148, 163, 184, 0.45)",
   neutralMuted: "rgba(148, 163, 184, 0.16)",
+  volume: "rgba(38, 166, 154, 0.58)",
+  volumeMuted: "rgba(38, 166, 154, 0.22)",
   poc: "#111111",
   pocHalo: "rgba(255, 255, 255, 0.65)",
   text: "#f5f5f5",
@@ -55,6 +63,7 @@ class FixedRangeDeltaProfileRenderer implements IPrimitivePaneRenderer {
     private readonly rows: readonly RenderRow[],
     private readonly lines: readonly RenderLine[],
     private readonly state: DeltaProfileLoadState,
+    private readonly mode: FixedRangeProfileMode,
     private readonly selected: boolean,
   ) {}
 
@@ -83,6 +92,11 @@ class FixedRangeDeltaProfileRenderer implements IPrimitivePaneRenderer {
           if (y > mediaSize.height || y + h < 0) continue;
 
           const totalWidth = Math.max(1, (row.totalVolume / maxVolume) * maxBarWidth);
+          if (this.mode === "volume") {
+            ctx.fillStyle = row.inValueArea ? COLORS.volume : COLORS.volumeMuted;
+            ctx.fillRect(barLeft, y, totalWidth, h);
+            continue;
+          }
           const askWidth =
             row.totalVolume > 0 ? totalWidth * (row.askVolume / row.totalVolume) : 0;
           const bidWidth = Math.max(0, totalWidth - askWidth);
@@ -264,6 +278,7 @@ class FixedRangeDeltaProfilePaneView implements IPrimitivePaneView {
       this.rows,
       this.lines,
       this.source.profileState,
+      this.source.profileMode,
       this.source.selected,
     );
   }
@@ -301,6 +316,10 @@ export class FixedRangeDeltaProfilePrimitive
 
   get profileState(): DeltaProfileLoadState {
     return this._profileState;
+  }
+
+  get profileMode(): FixedRangeProfileMode {
+    return normalizeFixedRangeProfileMode(this._options?.fixedRangeProfileMode);
   }
 
   setAnchors(anchors: AnchorPoint[]): void {
@@ -408,4 +427,10 @@ export function isPriceInsideValueArea(
   const low = Math.min(vah, val);
   const high = Math.max(vah, val);
   return price >= low && price <= high;
+}
+
+export function normalizeFixedRangeProfileMode(
+  mode: string | null | undefined,
+): FixedRangeProfileMode {
+  return mode === "volume" ? "volume" : "bidAsk";
 }

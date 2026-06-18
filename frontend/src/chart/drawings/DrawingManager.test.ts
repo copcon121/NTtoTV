@@ -220,7 +220,9 @@ describe("DrawingManager trendline constraints", () => {
 describe("DrawingManager fixed range delta profile", () => {
   it("places and exports fixed-range delta profile drawings", () => {
     const { clickHandlers, container, manager } = makeHarness();
-    manager.startDrawing("fixed_range_delta_profile");
+    manager.startDrawing("fixed_range_delta_profile", {
+      fixedRangeProfileMode: "volume",
+    });
 
     clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
     clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
@@ -230,6 +232,7 @@ describe("DrawingManager fixed range delta profile", () => {
     expect(profile.anchors).toHaveLength(2);
     expect(profile.anchors[0].logical).toBe(20);
     expect(profile.anchors[1].logical).toBe(80);
+    expect(profile.options?.fixedRangeProfileMode).toBe("volume");
 
     manager.dispose();
     container.remove();

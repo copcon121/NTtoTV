@@ -33,6 +33,12 @@ from ..engines.alert_engine import (
     SMC_DEFAULT_PAUSE_ON_INSIDE_BARS,
     SMC_DEFAULT_SWING_LENGTH,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
+    SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD,
+    SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK,
+    SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER,
+    SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION,
+    SMC_ZONE_DEFAULT_MAX_ZONE_AGE,
+    SMC_ZONE_TOUCH_BIG_TRADE,
     Alert,
     AlertEngine,
 )
@@ -112,7 +118,7 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 f"alert type {alert_type!r} requires a numeric 'threshold'",
                 field="threshold",
             )
-    elif alert_type == SMC_EXTERNAL_BREAK_BIG_TRADE:
+    elif alert_type in (SMC_EXTERNAL_BREAK_BIG_TRADE, SMC_ZONE_TOUCH_BIG_TRADE):
         threshold = params.get("bigTradeThreshold")
         if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
             raise validation_error(
@@ -124,6 +130,26 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 "'bigTradeThreshold' must be greater than zero",
                 field="bigTradeThreshold",
             )
+        if alert_type == SMC_ZONE_TOUCH_BIG_TRADE:
+            for key in (
+                "swingLength",
+                "maxZoneAge",
+                "fvgThresholdLookback",
+                "fvgThresholdMultiplier",
+            ):
+                _validate_optional_positive_number(params, key)
+            for key in ("fvgAutoThreshold", "fvgVolumeConfirmation"):
+                value = params.get(key)
+                if value is not None and not isinstance(value, bool):
+                    raise validation_error(f"'{key}' must be a boolean", field=key)
+            params["bigTradeThreshold"] = threshold
+            params["swingLength"] = SMC_DEFAULT_SWING_LENGTH
+            params["maxZoneAge"] = SMC_ZONE_DEFAULT_MAX_ZONE_AGE
+            params["fvgAutoThreshold"] = SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD
+            params["fvgThresholdLookback"] = SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK
+            params["fvgThresholdMultiplier"] = SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER
+            params["fvgVolumeConfirmation"] = SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION
+            return _validate_repeat_param(params)
         for key in (
             "swingLength",
             "lookaheadBars",
@@ -143,10 +169,14 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         params["effectiveLookaheadBars"] = SMC_DEFAULT_LOOKAHEAD_BARS
         params["maxBars"] = SMC_DEFAULT_MAX_BARS
         params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
+    # stacked_imbalance has no required params.
+    return _validate_repeat_param(params)
+
+
+def _validate_repeat_param(params: dict[str, Any]) -> dict[str, Any]:
     repeat = params.get("repeat")
     if repeat is not None and not isinstance(repeat, bool):
         raise validation_error("'repeat' must be a boolean", field="repeat")
-    # stacked_imbalance has no required params.
     return params
 
 

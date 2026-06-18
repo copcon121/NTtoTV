@@ -43,6 +43,7 @@ import {
   type LightweightChartsAdapterOptions,
   type VolumeDeltaDatum,
   type AlertLine,
+  type EmaLineData,
   type OrderLine,
   type PriceLineSelection,
   LightweightChartsAdapter,
@@ -50,10 +51,13 @@ import {
 import { type Bar } from "../cache/types";
 import { FootprintCanvas } from "../footprint/FootprintCanvas";
 import {
+  DEFAULT_EMA_SETTINGS,
   DEFAULT_BIG_TRADE_SETTINGS,
+  type EmaSettings,
   type BigTradeSettings,
   type FootprintSettings,
 } from "./IndicatorToggles";
+import { bigTradeMinVolumeForTime } from "./bigTradeSessions";
 import {
   type FootprintBar,
   type FootprintViewport,
@@ -61,7 +65,11 @@ import {
 import type { ChartSocket } from "../socket/ChartSocket";
 import type { BarUpdateMessage, Timeframe, VolumeDeltaUpdateMessage } from "../socket/messages";
 import { DrawingManager } from "./drawings/DrawingManager";
-import type { DrawingState, DrawingToolType } from "./drawings/types";
+import type {
+  DrawingState,
+  DrawingToolType,
+  FixedRangeProfileMode,
+} from "./drawings/types";
 import { barDurationForTimeframe } from "./barCountdown";
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES } from "./timezone";
 import { displayOffsetForTimeframe } from "./timeframeRange";
@@ -78,6 +86,9 @@ export interface DisposableChartPort extends ChartSeriesPort {
   setTimezoneOffsetMinutes?(offsetMinutes: number): void;
   takeScreenshotDataUrl?(): string | undefined;
   setBarCountdownDuration?(durationMs: number): void;
+  setVolumeVisible?(visible: boolean): void;
+  setVolumeDeltaVisible?(visible: boolean): void;
+  setCvdVisible?(visible: boolean): void;
   setVolumeDelta?(points: readonly VolumeDeltaDatum[]): void;
   updateVolumeDelta?(point: VolumeDeltaDatum): void;
   setBigTrades?(markers: readonly BigTradeMarker[]): void;
@@ -88,8 +99,11 @@ export interface DisposableChartPort extends ChartSeriesPort {
   clearSelectedPriceLine?(): void;
   priceToCoordinate?(price: number): number | null;
   setEma?(points: readonly EmaPoint[], color?: string): void;
+  setEmaLines?(lines: readonly EmaLineData[]): void;
   updateEma?(point: EmaPoint): void;
+  updateEmaLine?(id: string, point: EmaPoint): void;
   clearEma?(): void;
+  clearEmaLines?(): void;
   setSmcOverlay?(overlay: SmcOverlay): void;
   setOutsideBar?(settings: OutsideBarSettings): void;
   setChartBackgroundColor?(color: string): void;
@@ -138,6 +152,55 @@ interface PositionedOrderControl extends OrderControl {
 const defaultPortFactory: ChartPortFactory = (container, options) =>
   new LightweightChartsAdapter(container, options);
 
+const PRIMARY_EMA_LINE_ID = "primary";
+const EMA_200_LINE_ID = "ema-200";
+const EMA_200_PERIOD = 200;
+
+interface EmaLineConfig {
+  id: string;
+  period: number;
+  color: string;
+  lineWidth?: 1 | 2 | 3 | 4;
+}
+
+interface EmaLineState {
+  closedValue: number | undefined;
+  time: number;
+  displayValue: number;
+}
+
+function normalizedEmaPeriod(value: number | undefined, fallback: number): number {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) && parsed >= 1
+    ? Math.max(1, Math.round(parsed))
+    : fallback;
+}
+
+function emaLineConfigs(ema?: Partial<EmaSettings>): EmaLineConfig[] {
+  const configs: EmaLineConfig[] = [];
+  if (ema?.enabled) {
+    configs.push({
+      id: PRIMARY_EMA_LINE_ID,
+      period: normalizedEmaPeriod(ema.period, DEFAULT_EMA_SETTINGS.period),
+      color:
+        typeof ema.color === "string"
+          ? ema.color
+          : DEFAULT_EMA_SETTINGS.color,
+    });
+  }
+  if (ema?.showEma200) {
+    configs.push({
+      id: EMA_200_LINE_ID,
+      period: EMA_200_PERIOD,
+      color:
+        typeof ema.ema200Color === "string"
+          ? ema.ema200Color
+          : DEFAULT_EMA_SETTINGS.ema200Color,
+    });
+  }
+  return configs;
+}
+
 export interface ChartContainerProps {
   symbol: string;
   contract: string;
@@ -161,9 +224,15 @@ export interface ChartContainerProps {
    * is drawn on the candle scale, computed from `bars` (Req 19.3 — explicitly
    * added overlay). `color` restyles the line.
    */
-  ema?: { enabled: boolean; period?: number; color?: string };
+  ema?: Partial<EmaSettings>;
   /** Show the footprint canvas overlay. Footprint is M1-only. */
   showFootprint?: boolean;
+  /** Show TradingView-style volume histogram at the bottom of the chart. */
+  showVolume?: boolean;
+  /** Show MyVolumeDelta-style candles at the bottom of the chart. */
+  showVolumeDelta?: boolean;
+  /** Show cumulative volume delta as a line at the bottom of the chart. */
+  showCvd?: boolean;
   /** Show BigTrade markers on the candle series. */
   showBigTrades?: boolean;
   /** BigTrade display-only filters. */
@@ -219,6 +288,8 @@ export interface ChartContainerProps {
   priceSnap?: (price: number) => number;
   /** Active drawing tool type (null = no tool selected). */
   activeTool?: DrawingToolType | null;
+  /** Mode used when placing new fixed-range profile drawings. */
+  fixedRangeProfileMode?: FixedRangeProfileMode;
   /** Called when drawing placement completes (deselects the tool). */
   onToolDeselect?: () => void;
   /** Called when the drawing count changes. */
@@ -278,15 +349,13 @@ export function filterBigTradeMarkers(
   markers: readonly BigTradeMarker[],
   settings: BigTradeSettings,
 ): readonly BigTradeMarker[] {
-  const rawMinVolume = Math.round(Number(settings.minVolume));
   const rawMaxVisible = Math.round(Number(settings.maxVisible));
-  const minVolume = Number.isFinite(rawMinVolume)
-    ? Math.max(0, rawMinVolume)
-    : DEFAULT_BIG_TRADE_SETTINGS.minVolume;
   const maxVisible = Number.isFinite(rawMaxVisible)
     ? Math.max(1, rawMaxVisible)
     : DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
-  const filtered = markers.filter((marker) => marker.volume >= minVolume);
+  const filtered = markers.filter(
+    (marker) => marker.volume >= bigTradeMinVolumeForTime(marker.time, settings),
+  );
   return filtered.length > maxVisible ? filtered.slice(-maxVisible) : filtered;
 }
 
@@ -303,6 +372,9 @@ export function ChartContainer({
   orderControls,
   ema,
   showFootprint = false,
+  showVolume = true,
+  showVolumeDelta = true,
+  showCvd = false,
   showBigTrades = true,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
   smc,
@@ -323,6 +395,7 @@ export function ChartContainer({
   onOrderCancel,
   priceSnap,
   activeTool,
+  fixedRangeProfileMode = "bidAsk",
   onToolDeselect,
   onDrawingCountChange,
   drawings,
@@ -378,9 +451,7 @@ export function ChartContainer({
   // `time` is the current bar's time; `displayValue` is the EMA currently drawn
   // for `time`. Tracking the closed base separately avoids compounding when the
   // same in-progress bar updates many times.
-  const emaStateRef = useRef<
-    { closedValue: number | undefined; time: number; displayValue: number } | undefined
-  >(undefined);
+  const emaStateRef = useRef<Map<string, EmaLineState>>(new Map());
   // Latest EMA config, read by the live bar handler without re-subscribing.
   const emaConfigRef = useRef(ema);
   emaConfigRef.current = ema;
@@ -398,6 +469,26 @@ export function ChartContainer({
   // Create the chart port + controller once per mount. The factory is captured
   // in a memo so re-renders don't rebuild the chart.
   const factory = useMemo(() => portFactory, [portFactory]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const preventBrowserGesture = (event: Event) => {
+      event.preventDefault();
+    };
+    const options: AddEventListenerOptions = { capture: true, passive: false };
+
+    // iOS Safari can still browser-zoom a canvas despite viewport meta; keep
+    // native gestures off the chart surface so Lightweight Charts owns pinch.
+    host.addEventListener("gesturestart", preventBrowserGesture, options);
+    host.addEventListener("gesturechange", preventBrowserGesture, options);
+    host.addEventListener("gestureend", preventBrowserGesture, options);
+    return () => {
+      host.removeEventListener("gesturestart", preventBrowserGesture, options);
+      host.removeEventListener("gesturechange", preventBrowserGesture, options);
+      host.removeEventListener("gestureend", preventBrowserGesture, options);
+    };
+  }, []);
 
   const refreshFootprintViewport = () => {
     const host = hostRef.current;
@@ -567,6 +658,18 @@ export function ChartContainer({
   }, [outsideBar]);
 
   useEffect(() => {
+    portRef.current?.setVolumeVisible?.(showVolume);
+  }, [showVolume]);
+
+  useEffect(() => {
+    portRef.current?.setVolumeDeltaVisible?.(showVolumeDelta);
+  }, [showVolumeDelta]);
+
+  useEffect(() => {
+    portRef.current?.setCvdVisible?.(showCvd);
+  }, [showCvd]);
+
+  useEffect(() => {
     const controller = controllerRef.current;
     if (!controller) {
       return;
@@ -614,28 +717,56 @@ export function ChartContainer({
   }, [symbol, contract, timeframe, bars, orderControls, refreshOrderControlPositions]);
 
   // EMA overlay (Req 19.3). Recompute from the loaded bars whenever the bars,
-  // series identity, or EMA config change. Disabled -> clear the line.
+  // series identity, or EMA config changes. Disabled lines are removed.
   useEffect(() => {
     const port = portRef.current;
     if (!port) return;
-    if (!ema?.enabled) {
-      port.clearEma?.();
-      emaStateRef.current = undefined;
+    const configs = emaLineConfigs(ema);
+    if (configs.length === 0) {
+      if (port.clearEmaLines) {
+        port.clearEmaLines();
+      } else {
+        port.clearEma?.();
+      }
+      emaStateRef.current = new Map();
       return;
     }
-    const period = ema.period ?? 200;
-    const series = emaSeries(bars ?? [], period);
-    port.setEma?.(series, ema.color);
-    const last = series[series.length - 1];
-    const prev = series[series.length - 2];
-    emaStateRef.current = last
-      ? {
+    const nextState = new Map<string, EmaLineState>();
+    const lines = configs.map((config) => {
+      const series = emaSeries(bars ?? [], config.period);
+      const last = series[series.length - 1];
+      const prev = series[series.length - 2];
+      if (last !== undefined) {
+        nextState.set(config.id, {
           closedValue: prev ? prev.value : undefined,
           time: last.time,
           displayValue: last.value,
-        }
-      : undefined;
-  }, [symbol, contract, timeframe, bars, ema?.enabled, ema?.period, ema?.color]);
+        });
+      }
+      return {
+        id: config.id,
+        points: series,
+        color: config.color,
+        lineWidth: config.lineWidth,
+      };
+    });
+    if (port.setEmaLines) {
+      port.setEmaLines(lines);
+    } else if (lines.length > 0) {
+      port.setEma?.(lines[0].points, lines[0].color);
+    }
+    emaStateRef.current = nextState;
+  }, [
+    symbol,
+    contract,
+    timeframe,
+    bars,
+    ema?.enabled,
+    ema?.period,
+    ema?.color,
+    ema?.showEma200,
+    ema?.ema200Color,
+  ]);
 
   useEffect(() => {
     portRef.current?.setSmcOverlay?.(computeSmcOverlay(bars ?? [], smc));
@@ -693,25 +824,37 @@ export function ChartContainer({
       // EMA; a new bar steps forward and becomes the new base.
       const emaCfg = emaConfigRef.current;
       const port = portRef.current;
-      if (emaCfg?.enabled && port?.updateEma) {
-        const period = emaCfg.period ?? 200;
-        const state = emaStateRef.current;
+      const emaConfigs = emaLineConfigs(emaCfg);
+      if (emaConfigs.length > 0 && port) {
+        const stateById = emaStateRef.current;
         const bar = message.bar;
-        let closedValue: number | undefined;
-        if (state === undefined) {
-          // No prior EMA: seed from this close.
-          closedValue = undefined;
-        } else if (bar.time > state.time) {
-          // A new bar started: the previous bar's displayed EMA is now closed.
-          closedValue = state.displayValue;
-        } else {
-          // Same in-progress bar: keep the same closed base so repeated updates
-          // don't compound.
-          closedValue = state.closedValue;
+        for (const config of emaConfigs) {
+          const state = stateById.get(config.id);
+          let closedValue: number | undefined;
+          if (state === undefined) {
+            // No prior EMA: seed from this close.
+            closedValue = undefined;
+          } else if (bar.time > state.time) {
+            // A new bar started: the previous bar's displayed EMA is now closed.
+            closedValue = state.displayValue;
+          } else {
+            // Same in-progress bar: keep the same closed base so repeated
+            // updates don't compound.
+            closedValue = state.closedValue;
+          }
+          const value = nextEma(closedValue, bar.close, config.period);
+          stateById.set(config.id, {
+            closedValue,
+            time: bar.time,
+            displayValue: value,
+          });
+          const point = { time: bar.time, value };
+          if (port.updateEmaLine) {
+            port.updateEmaLine(config.id, point);
+          } else if (config.id === PRIMARY_EMA_LINE_ID) {
+            port.updateEma?.(point);
+          }
         }
-        const value = nextEma(closedValue, bar.close, period);
-        emaStateRef.current = { closedValue, time: bar.time, displayValue: value };
-        port.updateEma({ time: bar.time, value });
       }
     });
     const disposeDelta = socket.on("volume_delta_update", (message) => {
@@ -729,6 +872,9 @@ export function ChartContainer({
         deltaLow: message.deltaLow,
         openDelta: message.openDelta,
         closeDelta: message.closeDelta,
+        ...(message.cumulativeDelta !== undefined
+          ? { cumulativeDelta: message.cumulativeDelta }
+          : {}),
       });
     });
     return () => {
@@ -746,11 +892,16 @@ export function ChartContainer({
     const mgr = drawingManagerRef.current;
     if (!mgr) return;
     if (activeTool) {
-      mgr.startDrawing(activeTool);
+      mgr.startDrawing(
+        activeTool,
+        activeTool === "fixed_range_delta_profile"
+          ? { fixedRangeProfileMode }
+          : undefined,
+      );
     } else {
       mgr.cancelDrawing();
     }
-  }, [activeTool]);
+  }, [activeTool, fixedRangeProfileMode]);
 
   // Notify parent of drawing count changes.
   useEffect(() => {

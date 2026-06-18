@@ -97,6 +97,7 @@ export class DrawingManager implements IDrawingManager {
     tool: DrawingToolType;
     anchorsNeeded: number;
     anchors: AnchorPoint[];
+    options?: DrawingOptions;
     preview: DrawingPrimitive | null;
   } | null = null;
 
@@ -156,7 +157,7 @@ export class DrawingManager implements IDrawingManager {
     container.addEventListener("pointercancel", this._onPointerUp);
   }
 
-  startDrawing(tool: DrawingToolType): void {
+  startDrawing(tool: DrawingToolType, options?: DrawingOptions): void {
     // Cancel any in-progress drawing first
     this.cancelDrawing();
     this._selectDrawing(null);
@@ -168,6 +169,7 @@ export class DrawingManager implements IDrawingManager {
       tool,
       anchorsNeeded: def.anchors,
       anchors: [],
+      options,
       preview: null,
     };
 
@@ -222,6 +224,7 @@ export class DrawingManager implements IDrawingManager {
             this._placement.tool,
             `preview-${uid()}`,
             previewAnchors,
+            this._placement.options,
           );
           if (preview) {
             preview.setSelected(true);
@@ -604,6 +607,7 @@ export class DrawingManager implements IDrawingManager {
       this._placement.tool,
       id,
       this._placement.anchors,
+      this._placement.options,
     );
 
     if (drawing) {

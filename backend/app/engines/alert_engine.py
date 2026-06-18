@@ -47,7 +47,13 @@ from ..models.messages import AlertEvent
 from ..models.timestamp import CanonicalTimestamp
 from ..storage.cache_store import CacheStore
 from ..storage.records import AlertEventRecord, AlertRecord
-from .smc_external import SmcBar, SmcExternalBreakState, SmcStrategyTrigger
+from .smc_external import (
+    SmcBar,
+    SmcExternalBreakState,
+    SmcStrategyTrigger,
+    SmcZoneTouchState,
+    SmcZoneTouchTrigger,
+)
 
 __all__ = [
     "ALERT_TYPES",
@@ -57,6 +63,13 @@ __all__ = [
     "SMC_DEFAULT_PAUSE_ON_INSIDE_BARS",
     "SMC_DEFAULT_SWING_LENGTH",
     "SMC_EXTERNAL_BREAK_BIG_TRADE",
+    "SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD",
+    "SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD",
+    "SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK",
+    "SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER",
+    "SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION",
+    "SMC_ZONE_DEFAULT_MAX_ZONE_AGE",
+    "SMC_ZONE_TOUCH_BIG_TRADE",
     "Alert",
     "MarketContext",
     "AlertEngine",
@@ -70,11 +83,18 @@ VOLUME_DELTA_THRESHOLD = "volume_delta_threshold"
 BIG_TRADE_THRESHOLD = "big_trade_threshold"
 STACKED_IMBALANCE = "stacked_imbalance"
 SMC_EXTERNAL_BREAK_BIG_TRADE = "smc_external_break_big_trade"
+SMC_ZONE_TOUCH_BIG_TRADE = "smc_zone_touch_big_trade"
 
 SMC_DEFAULT_SWING_LENGTH = 50
 SMC_DEFAULT_LOOKAHEAD_BARS = 5
 SMC_DEFAULT_MAX_BARS = 20
 SMC_DEFAULT_PAUSE_ON_INSIDE_BARS = True
+SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD = 30
+SMC_ZONE_DEFAULT_MAX_ZONE_AGE = 220
+SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD = True
+SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK = 60
+SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER = 1.5
+SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION = False
 _SMC_WARMUP_MIN_BARS = 300
 
 ALERT_TYPES: frozenset[str] = frozenset(
@@ -86,6 +106,7 @@ ALERT_TYPES: frozenset[str] = frozenset(
         BIG_TRADE_THRESHOLD,
         STACKED_IMBALANCE,
         SMC_EXTERNAL_BREAK_BIG_TRADE,
+        SMC_ZONE_TOUCH_BIG_TRADE,
     }
 )
 
@@ -154,6 +175,7 @@ class MarketContext:
     bar_high: float | None = None
     bar_low: float | None = None
     bar_close: float | None = None
+    bar_volume: int | None = None
     bar_volume_delta: int | None = None
     bar_stacked_imbalance: bool | None = None
 
@@ -204,6 +226,7 @@ class AlertEngine:
         self._price_state: dict[str, _PriceCrossState] = {}
         self._bar_state: dict[str, _BarState] = {}
         self._smc_state: dict[str, SmcExternalBreakState] = {}
+        self._smc_zone_state: dict[str, SmcZoneTouchState] = {}
         if store is not None:
             for rec in store.read_alerts(profile_id=None):
                 alert = Alert.from_record(rec)
@@ -221,6 +244,7 @@ class AlertEngine:
         self._price_state.pop(alert.id, None)
         self._bar_state.pop(alert.id, None)
         self._smc_state.pop(alert.id, None)
+        self._smc_zone_state.pop(alert.id, None)
         if self._store is not None:
             from ..models.timestamp import now_ms
 
@@ -249,6 +273,7 @@ class AlertEngine:
         self._price_state.pop(alert_id, None)
         self._bar_state.pop(alert_id, None)
         self._smc_state.pop(alert_id, None)
+        self._smc_zone_state.pop(alert_id, None)
         if self._store is not None:
             self._store.delete_alert(alert_id)
 
@@ -260,6 +285,7 @@ class AlertEngine:
         alert.enabled = enabled
         if enabled:
             self._smc_state.pop(alert.id, None)
+            self._smc_zone_state.pop(alert.id, None)
             self._warm_smc_alert(alert)
         self._persist_enabled(alert)
 
@@ -322,6 +348,8 @@ class AlertEngine:
             return self._eval_stacked_imbalance(alert, ctx)
         if alert.type == SMC_EXTERNAL_BREAK_BIG_TRADE:
             return self._eval_smc_external_break_big_trade(alert, ctx)
+        if alert.type == SMC_ZONE_TOUCH_BIG_TRADE:
+            return self._eval_smc_zone_touch_big_trade(alert, ctx)
         return None
 
     # -- price_crosses_level (Req 16.6, 17.5, 17.7) ---------------------------
@@ -437,6 +465,35 @@ class AlertEngine:
             return None
         return self._make_smc_event(alert, ctx, trigger)
 
+    # -- smc_zone_touch_big_trade --------------------------------------------
+
+    def _eval_smc_zone_touch_big_trade(
+        self, alert: Alert, ctx: MarketContext
+    ) -> AlertEvent | None:
+        state = self._smc_zone_state_for(alert)
+
+        if ctx.bar_closed:
+            bar = self._smc_bar_from_context(ctx)
+            if bar is not None:
+                state.on_closed_bar(bar)
+
+        if ctx.big_trade_volume is None:
+            return None
+        price = (
+            float(ctx.big_trade_price)
+            if ctx.big_trade_price is not None
+            else 0.0
+        )
+        trigger = state.on_big_trade(
+            time=ctx.time,
+            price=price,
+            volume=int(ctx.big_trade_volume),
+            threshold=self._smc_zone_big_trade_threshold(alert),
+        )
+        if trigger is None:
+            return None
+        return self._make_smc_zone_event(alert, ctx, trigger)
+
     # -- per-closed-bar fire-once + re-arm gate (Req 17.6, 17.8) --------------
 
     def _bar_gate(
@@ -504,6 +561,24 @@ class AlertEngine:
             profile_id=alert.profile_id,
         )
 
+    def _make_smc_zone_event(
+        self,
+        alert: Alert,
+        ctx: MarketContext,
+        trigger: SmcZoneTouchTrigger,
+    ) -> AlertEvent:
+        return AlertEvent(
+            alert_id=alert.id,
+            alert_type=alert.type,
+            symbol=ctx.symbol,
+            contract=ctx.contract,
+            time=trigger.time,
+            price=trigger.price,
+            message=self._smc_zone_message(alert, trigger),
+            level=(trigger.zone.top + trigger.zone.bottom) / 2.0,
+            profile_id=alert.profile_id,
+        )
+
     def _smc_state_for(self, alert: Alert) -> SmcExternalBreakState:
         state = self._smc_state.get(alert.id)
         if state is None:
@@ -511,16 +586,31 @@ class AlertEngine:
             self._smc_state[alert.id] = state
         return state
 
+    def _smc_zone_state_for(self, alert: Alert) -> SmcZoneTouchState:
+        state = self._smc_zone_state.get(alert.id)
+        if state is None:
+            state = self._new_smc_zone_state(alert)
+            self._smc_zone_state[alert.id] = state
+        return state
+
     def _warm_smc_alert(self, alert: Alert) -> None:
-        if alert.type != SMC_EXTERNAL_BREAK_BIG_TRADE:
+        if alert.type not in (SMC_EXTERNAL_BREAK_BIG_TRADE, SMC_ZONE_TOUCH_BIG_TRADE):
             return
-        state = self._new_smc_state(alert)
+        break_state = (
+            self._new_smc_state(alert)
+            if alert.type == SMC_EXTERNAL_BREAK_BIG_TRADE
+            else None
+        )
+        zone_state = (
+            self._new_smc_zone_state(alert)
+            if alert.type == SMC_ZONE_TOUCH_BIG_TRADE
+            else None
+        )
         if self._store is not None:
             limit = max(
                 _SMC_WARMUP_MIN_BARS,
                 self._smc_swing_length(alert) * 4
-                + self._smc_lookahead_bars(alert)
-                + self._smc_max_bars(alert)
+                + self._smc_warmup_extra_bars(alert)
                 + 20,
             )
             for rec in self._store.read_bars(
@@ -531,17 +621,22 @@ class AlertEngine:
             ):
                 if not rec.closed:
                     continue
-                state.on_closed_bar(
-                    SmcBar(
-                        time=rec.time,
-                        open=rec.open,
-                        high=rec.high,
-                        low=rec.low,
-                        close=rec.close,
-                    ),
-                    emit=False,
+                bar = SmcBar(
+                    time=rec.time,
+                    open=rec.open,
+                    high=rec.high,
+                    low=rec.low,
+                    close=rec.close,
+                    volume=rec.volume,
                 )
-        self._smc_state[alert.id] = state
+                if break_state is not None:
+                    break_state.on_closed_bar(bar, emit=False)
+                if zone_state is not None:
+                    zone_state.on_closed_bar(bar)
+        if break_state is not None:
+            self._smc_state[alert.id] = break_state
+        if zone_state is not None:
+            self._smc_zone_state[alert.id] = zone_state
 
     def _new_smc_state(self, alert: Alert) -> SmcExternalBreakState:
         return SmcExternalBreakState(
@@ -549,6 +644,16 @@ class AlertEngine:
             lookahead_bars=self._smc_lookahead_bars(alert),
             max_bars=self._smc_max_bars(alert),
             pause_on_inside_bars=self._smc_pause_on_inside_bars(alert),
+        )
+
+    def _new_smc_zone_state(self, alert: Alert) -> SmcZoneTouchState:
+        return SmcZoneTouchState(
+            swing_length=self._smc_swing_length(alert),
+            max_zone_age=self._smc_zone_max_zone_age(alert),
+            fvg_auto_threshold=self._smc_zone_fvg_auto_threshold(alert),
+            fvg_threshold_lookback=self._smc_zone_fvg_threshold_lookback(alert),
+            fvg_threshold_multiplier=self._smc_zone_fvg_threshold_multiplier(alert),
+            fvg_volume_confirmation=self._smc_zone_fvg_volume_confirmation(alert),
         )
 
     @staticmethod
@@ -563,7 +668,13 @@ class AlertEngine:
             high=float(ctx.bar_high),
             low=float(ctx.bar_low),
             close=float(ctx.bar_close),
+            volume=0 if ctx.bar_volume is None else int(ctx.bar_volume),
         )
+
+    def _smc_warmup_extra_bars(self, alert: Alert) -> int:
+        if alert.type == SMC_ZONE_TOUCH_BIG_TRADE:
+            return self._smc_zone_max_zone_age(alert)
+        return self._smc_lookahead_bars(alert) + self._smc_max_bars(alert)
 
     @staticmethod
     def _smc_swing_length(alert: Alert) -> int:
@@ -607,6 +718,72 @@ class AlertEngine:
         except (TypeError, ValueError):
             return 50.0
         return threshold if threshold > 0 else 50.0
+
+    @staticmethod
+    def _smc_zone_big_trade_threshold(alert: Alert) -> float:
+        raw = alert.params.get(
+            "bigTradeThreshold",
+            SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD,
+        )
+        if isinstance(raw, bool):
+            return float(SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD)
+        try:
+            threshold = float(raw)
+        except (TypeError, ValueError):
+            return float(SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD)
+        return (
+            threshold
+            if threshold > 0
+            else float(SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD)
+        )
+
+    @staticmethod
+    def _smc_zone_max_zone_age(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get("maxZoneAge"),
+            SMC_ZONE_DEFAULT_MAX_ZONE_AGE,
+        )
+
+    @staticmethod
+    def _smc_zone_fvg_auto_threshold(alert: Alert) -> bool:
+        raw = alert.params.get(
+            "fvgAutoThreshold",
+            SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD,
+        )
+        return raw if isinstance(raw, bool) else SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD
+
+    @staticmethod
+    def _smc_zone_fvg_threshold_lookback(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get("fvgThresholdLookback"),
+            SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK,
+        )
+
+    @staticmethod
+    def _smc_zone_fvg_threshold_multiplier(alert: Alert) -> float:
+        raw = alert.params.get(
+            "fvgThresholdMultiplier",
+            SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER,
+        )
+        if isinstance(raw, bool):
+            return SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER
+        try:
+            multiplier = float(raw)
+        except (TypeError, ValueError):
+            return SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER
+        return max(0.0, min(10.0, multiplier))
+
+    @staticmethod
+    def _smc_zone_fvg_volume_confirmation(alert: Alert) -> bool:
+        raw = alert.params.get(
+            "fvgVolumeConfirmation",
+            SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION,
+        )
+        return (
+            raw
+            if isinstance(raw, bool)
+            else SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION
+        )
 
     def _persist_enabled(self, alert: Alert) -> None:
         if self._store is None:
@@ -652,6 +829,20 @@ class AlertEngine:
         return (
             f"{alert.symbol} external {direction} {trigger.setup.kind} "
             f"retest close {close} at level {level} (BT > {threshold})"
+        )
+
+    @staticmethod
+    def _smc_zone_message(alert: Alert, trigger: SmcZoneTouchTrigger) -> str:
+        direction = "bullish" if trigger.zone.direction == 1 else "bearish"
+        threshold = _fmt_num(AlertEngine._smc_zone_big_trade_threshold(alert))
+        volume = _fmt_num(trigger.big_trade_volume)
+        price = _fmt_num(trigger.price)
+        top = _fmt_num(trigger.zone.top)
+        bottom = _fmt_num(trigger.zone.bottom)
+        return (
+            f"{alert.symbol} M1 external {direction} {trigger.zone.label} "
+            f"touch {price} with big trade {volume} > {threshold} "
+            f"inside {bottom}-{top}"
         )
 
 
