@@ -381,7 +381,7 @@ def test_pipeline_smc_strategy_alert_fires_on_qualifying_big_trade(pipeline_env)
 
 
 @pytest.mark.integration
-def test_pipeline_smc_strategy_alert_fires_on_retest_close(pipeline_env):
+def test_pipeline_smc_strategy_alert_cancels_on_reclaim_without_alert(pipeline_env):
     pipeline, cache, tick_store, resolver, captured = pipeline_env
     pipeline.alert_engine.upsert(_smc_alert())
 
@@ -391,14 +391,22 @@ def test_pipeline_smc_strategy_alert_fires_on_retest_close(pipeline_env):
         await pipeline.on_trade(
             _trade(_BASE + 54 * 60_000 + 1_000, 100.5, 1, seq=seq, ask=100.5)
         )
+        await pipeline.on_trade(
+            _trade(_BASE + 54 * 60_000 + 2_000, 101.5, 80, seq=seq + 1, ask=101.5)
+        )
+        await pipeline.on_trade(
+            _trade(_BASE + 54 * 60_000 + 3_000, 101.6, 1, seq=seq + 2, ask=101.6)
+        )
 
     asyncio.run(run())
 
-    alerts = [e.payload for e in captured if e.event_type == EventType.ALERT_EVENT]
-    assert alerts
-    assert alerts[-1]["alertType"] == SMC_EXTERNAL_BREAK_BIG_TRADE
-    assert alerts[-1]["level"] == 100
-    assert "retest close 100" in alerts[-1]["message"]
+    alerts = [
+        e.payload
+        for e in captured
+        if e.event_type == EventType.ALERT_EVENT
+        and e.payload["alertType"] == SMC_EXTERNAL_BREAK_BIG_TRADE
+    ]
+    assert alerts == []
 
 
 @pytest.mark.integration

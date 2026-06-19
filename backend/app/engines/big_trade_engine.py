@@ -251,7 +251,20 @@ class BigTradeEngine:
 
     def _emit_group(self, g: _Group) -> list[BigTrade]:
         if self.dedupe_repeated_timestamp_runs:
-            volume, price = self._dedup_repeated_tick_run(g.ticks)
+            deduped_volume, deduped_price = self._dedup_repeated_tick_run(g.ticks)
+            raw_passes = self.passes_filter(g.volume)
+            deduped_passes = self.passes_filter(deduped_volume)
+            if raw_passes and not deduped_passes:
+                volume, price = g.volume, g.price
+                logger.debug(
+                    "BigTrade dedup candidate ignored: raw_volume=%d, "
+                    "deduped=%d would fail filter, ticks=%d, time=%d, "
+                    "side=%s, contract=%s",
+                    g.volume, deduped_volume, len(g.ticks), g.time,
+                    g.side.value, g.contract,
+                )
+            else:
+                volume, price = deduped_volume, deduped_price
             if volume != g.volume:
                 log_level = (
                     logging.WARNING

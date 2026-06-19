@@ -630,7 +630,7 @@ class AlertEngine:
                     volume=rec.volume,
                 )
                 if break_state is not None:
-                    break_state.on_closed_bar(bar, emit=False)
+                    break_state.on_closed_bar(bar)
                 if zone_state is not None:
                     zone_state.on_closed_bar(bar)
         if break_state is not None:
@@ -819,16 +819,10 @@ class AlertEngine:
         direction = "bullish" if trigger.setup.direction == 1 else "bearish"
         threshold = _fmt_num(AlertEngine._smc_big_trade_threshold(alert))
         level = _fmt_num(trigger.setup.level)
-        if trigger.trigger == "big_trade":
-            volume = _fmt_num(trigger.big_trade_volume)
-            return (
-                f"{alert.symbol} external {direction} {trigger.setup.kind} "
-                f"big trade {volume} > {threshold} at level {level}"
-            )
-        close = _fmt_num(trigger.price)
+        volume = _fmt_num(trigger.big_trade_volume)
         return (
             f"{alert.symbol} external {direction} {trigger.setup.kind} "
-            f"retest close {close} at level {level} (BT > {threshold})"
+            f"big trade {volume} > {threshold} at level {level}"
         )
 
     @staticmethod

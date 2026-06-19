@@ -205,17 +205,16 @@ def test_strategy_does_not_fire_when_big_trade_equals_threshold():
     assert engine.evaluate(_big_trade_ctx(52 * _STEP, volume=50)) == []
 
 
-def test_strategy_fires_on_retest_close_without_big_trade():
+def test_strategy_cancels_pending_setup_on_reclaim_without_alert():
     engine = _engine()
     bars = _bullish_bos_bars()
     assert _feed_bars(engine, bars) == []
 
     retest = _bar(len(bars), high=102, low=99, close=100)
-    event = engine.evaluate(_bar_ctx(retest))
+    assert engine.evaluate(_bar_ctx(retest)) == []
 
-    assert len(event) == 1
-    assert event[0].level == 100
-    assert "retest close 100" in event[0].message
+    event = engine.evaluate(_big_trade_ctx((len(bars) + 1) * _STEP, volume=80))
+    assert event == []
 
 
 def test_strategy_expires_after_fifth_progress_closed_bar():
@@ -230,7 +229,7 @@ def test_strategy_expires_after_fifth_progress_closed_bar():
     assert engine.evaluate(_big_trade_ctx((start + 5) * _STEP, volume=80)) == []
 
 
-def test_strategy_keeps_bearish_setup_alive_through_inside_bars_until_reclaim():
+def test_strategy_keeps_bearish_setup_alive_through_inside_bars_then_cancels_on_reclaim():
     engine = _engine()
     bars = _bearish_bos_bars()
     assert _feed_bars(engine, bars) == []
@@ -241,11 +240,10 @@ def test_strategy_keeps_bearish_setup_alive_through_inside_bars_until_reclaim():
         assert engine.evaluate(_bar_ctx(inside)) == []
 
     reclaim = _bar(start + 10, high=91, low=89, close=90.1)
-    event = engine.evaluate(_bar_ctx(reclaim))
+    assert engine.evaluate(_bar_ctx(reclaim)) == []
 
-    assert len(event) == 1
-    assert event[0].level == 90
-    assert "retest close 90.1" in event[0].message
+    event = engine.evaluate(_big_trade_ctx((start + 11) * _STEP, volume=80))
+    assert event == []
 
 
 def test_strategy_hard_cap_expires_sideways_setup():

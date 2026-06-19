@@ -243,14 +243,12 @@ class SmcExternalBreakState:
         self.calendar_bars_elapsed = 0
         self.last_bar_time: CanonicalTimestamp | None = None
 
-    def on_closed_bar(
-        self, bar: SmcBar, *, emit: bool = True
-    ) -> SmcStrategyTrigger | None:
+    def on_closed_bar(self, bar: SmcBar) -> SmcStrategyTrigger | None:
         if self.last_bar_time is not None and bar.time <= self.last_bar_time:
             return None
         self.last_bar_time = bar.time
 
-        trigger = self._process_pending_bar(bar, emit=emit)
+        trigger = self._process_pending_bar(bar)
         new_setup = self._detector.update(bar)
         if new_setup is not None:
             self.pending = new_setup
@@ -283,9 +281,7 @@ class SmcExternalBreakState:
             big_trade_volume=int(volume),
         )
 
-    def _process_pending_bar(
-        self, bar: SmcBar, *, emit: bool
-    ) -> SmcStrategyTrigger | None:
+    def _process_pending_bar(self, bar: SmcBar) -> SmcStrategyTrigger | None:
         setup = self.pending
         if setup is None or bar.time <= setup.break_time:
             return None
@@ -296,14 +292,7 @@ class SmcExternalBreakState:
         )
         if retested:
             self.pending = None
-            if not emit:
-                return None
-            return SmcStrategyTrigger(
-                setup=setup,
-                trigger="retest_close",
-                time=bar.time,
-                price=float(bar.close),
-            )
+            return None
 
         if self._counts_as_effective_bar(setup, bar):
             self.effective_bars_elapsed += 1

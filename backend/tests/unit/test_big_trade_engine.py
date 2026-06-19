@@ -96,7 +96,7 @@ def test_distinct_nt_time_ticks_inside_same_millisecond_do_not_merge():
 
 
 @pytest.mark.unit
-def test_duplicate_timestamp_run_guard_counts_one_transport_copy():
+def test_duplicate_timestamp_run_guard_does_not_hide_threshold_marker():
     eng = BigTradeEngine(dedupe_repeated_timestamp_runs=True)
     one_copy = [
         _t(1000, 100.0, 1, bid=100.0),
@@ -104,7 +104,11 @@ def test_duplicate_timestamp_run_guard_counts_one_transport_copy():
         _t(1000, 99.8, 6, bid=100.0),
     ]
 
-    assert eng.merge_stream([*one_copy, *one_copy]) == []
+    out = eng.merge_stream([*one_copy, *one_copy])
+
+    assert [(b.time, b.price, b.volume, b.side) for b in out] == [
+        (1000, 99.8, 34, Side.SELL)
+    ]
 
 
 @pytest.mark.unit
