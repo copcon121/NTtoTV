@@ -31,6 +31,7 @@ from ..engines.footprint_engine import (
     DEFAULT_VALUE_AREA_PERCENT,
     FOOTPRINT_TIMEFRAME,
 )
+from ..engines.fvg_signal_engine import FVG_SIGNAL_TIMEFRAME
 from ..engines.volume_delta_engine import VolumeDeltaEngine
 from ..models.timestamp import now_ms
 from ..storage.cache_store import CacheStore
@@ -38,6 +39,7 @@ from ..storage.records import (
     BigTradeRecord,
     FootprintBarRecord,
     FootprintLevelRecord,
+    FvgSignalRecord,
     VolumeDeltaRecord,
 )
 from ..storage.tick_store import TickStore
@@ -244,6 +246,19 @@ def _footprint_bar_to_dict(
         "sellPct": bar.sell_pct,
         "unfinishedAuction": {"high": bar.unfinished_high, "low": bar.unfinished_low},
         "rows": [_footprint_level_to_dict(l) for l in levels],
+    }
+
+
+def _fvg_signal_to_dict(rec: FvgSignalRecord) -> dict[str, Any]:
+    return {
+        "time": rec.time,
+        "direction": rec.direction,
+        "level": rec.level,
+        "pulse": rec.pulse,
+        "top": rec.top,
+        "bottom": rec.bottom,
+        "breakoutRatio": rec.breakout_ratio,
+        "phase": "confirmed",
     }
 
 
@@ -588,6 +603,47 @@ async def get_footprint(
         "contract": resolved,
         "tf": FOOTPRINT_TIMEFRAME,
         "bars": out_bars,
+    }
+
+
+@router.get("/orderflow/fvg-signals")
+async def get_fvg_signals(
+    symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
+    contract: str | None = Query(
+        None, description="GC contract; defaults to the Active_Contract"
+    ),
+    tf: str = Query(FVG_SIGNAL_TIMEFRAME, description="Timeframe; only 1m is supported"),
+    frm: int | None = Query(
+        None, alias="from", description="Inclusive start Canonical_Timestamp (ms)"
+    ),
+    to: int | None = Query(None, description="Inclusive end Canonical_Timestamp (ms)"),
+    limit: int | None = Query(
+        None, description=f"Max rows (defaults to and capped at {MAX_ROWS})"
+    ),
+    state: ContractStateStore = Depends(get_contract_state),
+    cache: CacheStore = Depends(get_cache),
+) -> dict[str, Any]:
+    """Return confirmed M1 FVG signal-grader candle colors."""
+    if not state.is_known_symbol(symbol):
+        raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
+    if tf != FVG_SIGNAL_TIMEFRAME:
+        raise not_found(
+            f"FVG signals only support tf={FVG_SIGNAL_TIMEFRAME!r}", field="tf"
+        )
+    resolved = _resolve_contract(state, symbol, contract)
+    if frm is not None and to is not None and frm > to:
+        raise bad_request("'from' must be less than or equal to 'to'", field="from")
+    if limit is not None and limit < 1:
+        raise bad_request("'limit' must be a positive integer", field="limit")
+    effective_limit = MAX_ROWS if limit is None else min(limit, MAX_ROWS)
+    rows = cache.read_fvg_signals(
+        symbol, resolved, FVG_SIGNAL_TIMEFRAME, frm, to, effective_limit
+    )
+    return {
+        "symbol": symbol,
+        "contract": resolved,
+        "tf": FVG_SIGNAL_TIMEFRAME,
+        "signals": [_fvg_signal_to_dict(row) for row in rows],
     }
 
 

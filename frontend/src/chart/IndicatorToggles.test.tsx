@@ -28,6 +28,7 @@ describe("IndicatorToggles", () => {
     const onVolumeDelta = vi.fn();
     const onCvd = vi.fn();
     const onFootprint = vi.fn();
+    const onFvgGrader = vi.fn();
     const onBigTrades = vi.fn();
     const onEma = vi.fn();
     const onSmc = vi.fn();
@@ -41,6 +42,7 @@ describe("IndicatorToggles", () => {
         onVolumeDeltaChange={onVolumeDelta}
         onCvdChange={onCvd}
         onFootprintChange={onFootprint}
+        onFvgGraderChange={onFvgGrader}
         onBigTradesChange={onBigTrades}
         onEmaChange={onEma}
         onSmcChange={onSmc}
@@ -58,6 +60,7 @@ describe("IndicatorToggles", () => {
     fireEvent.click(screen.getByLabelText("EMA 21"));
     fireEvent.click(screen.getByLabelText("SMC"));
     fireEvent.click(screen.getByLabelText("Footprint"));
+    fireEvent.click(screen.getByLabelText("FVG Grader"));
     fireEvent.click(screen.getByLabelText("BigTrade"));
 
     expect(onVolume).toHaveBeenCalledWith(true);
@@ -66,6 +69,7 @@ describe("IndicatorToggles", () => {
     expect(onEma).toHaveBeenCalledWith({ ...EMA, enabled: true });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, enabled: true });
     expect(onFootprint).toHaveBeenCalledWith(true);
+    expect(onFvgGrader).toHaveBeenCalledWith(true);
     expect(onBigTrades).toHaveBeenCalledWith(false);
   });
 
@@ -88,9 +92,34 @@ describe("IndicatorToggles", () => {
 
     open();
     expect(screen.getByLabelText("Footprint")).toBeDisabled();
+    expect(screen.getByLabelText("FVG Grader")).not.toBeDisabled();
     expect(screen.getByLabelText("BigTrade")).not.toBeDisabled();
     expect(screen.getByLabelText("EMA 21")).not.toBeDisabled();
     expect(screen.getByLabelText("SMC")).not.toBeDisabled();
+  });
+
+  it("can disable FVG Grader independently", () => {
+    render(
+      <IndicatorToggles
+        footprint={false}
+        fvgGrader={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        fvgGraderDisabled
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    expect(screen.getByLabelText("FVG Grader")).toBeDisabled();
+    expect(screen.getByLabelText("Footprint")).not.toBeDisabled();
+    expect(screen.getByLabelText("BigTrade")).not.toBeDisabled();
   });
 
   it("can disable BigTrade independently", () => {

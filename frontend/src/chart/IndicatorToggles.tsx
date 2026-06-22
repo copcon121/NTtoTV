@@ -92,6 +92,7 @@ export interface IndicatorTogglesProps {
   volumeDelta?: boolean;
   cvd?: boolean;
   footprint: boolean;
+  fvgGrader?: boolean;
   bigTrades: boolean;
   ema: EmaSettings;
   smc: SmcSettings;
@@ -99,11 +100,13 @@ export interface IndicatorTogglesProps {
   footprintSettings: FootprintSettings;
   bigTradeSettings?: BigTradeSettings;
   footprintDisabled?: boolean;
+  fvgGraderDisabled?: boolean;
   bigTradeDisabled?: boolean;
   onVolumeChange?: (enabled: boolean) => void;
   onVolumeDeltaChange?: (enabled: boolean) => void;
   onCvdChange?: (enabled: boolean) => void;
   onFootprintChange: (enabled: boolean) => void;
+  onFvgGraderChange?: (enabled: boolean) => void;
   onBigTradesChange: (enabled: boolean) => void;
   onEmaChange: (next: EmaSettings) => void;
   onSmcChange: (next: SmcSettings) => void;
@@ -153,6 +156,7 @@ export function IndicatorToggles({
   volumeDelta = false,
   cvd = false,
   footprint,
+  fvgGrader = false,
   bigTrades,
   ema,
   smc,
@@ -160,11 +164,13 @@ export function IndicatorToggles({
   footprintSettings,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
   footprintDisabled = false,
+  fvgGraderDisabled = false,
   bigTradeDisabled = false,
   onVolumeChange = () => {},
   onVolumeDeltaChange = () => {},
   onCvdChange = () => {},
   onFootprintChange,
+  onFvgGraderChange = () => {},
   onBigTradesChange,
   onEmaChange,
   onSmcChange,
@@ -324,6 +330,7 @@ export function IndicatorToggles({
     (volumeDelta ? 1 : 0) +
     (cvd ? 1 : 0) +
     (footprint ? 1 : 0) +
+    (fvgGrader ? 1 : 0) +
     (bigTrades ? 1 : 0) +
     (ema.enabled || ema.showEma200 ? 1 : 0) +
     (smc.enabled ? 1 : 0) +
@@ -910,6 +917,12 @@ export function IndicatorToggles({
                 ⚙
               </button>
             }
+          />
+          <IndicatorRow
+            label="FVG Grader"
+            checked={fvgGrader}
+            disabled={fvgGraderDisabled}
+            onChange={onFvgGraderChange}
           />
           {fpSettingsOpen && (
             <div className="ema-settings" aria-label="Footprint settings panel">

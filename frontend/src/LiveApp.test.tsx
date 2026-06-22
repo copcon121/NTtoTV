@@ -280,6 +280,7 @@ describe("live chart series identity", () => {
     expect(TIMEFRAME_SUBSCRIBED_EVENTS).toEqual([
       "bar_update",
       "volume_delta_update",
+      "fvg_signal_update",
     ]);
     expect(GLOBAL_SUBSCRIBED_EVENTS).toEqual([
       "quote_update",

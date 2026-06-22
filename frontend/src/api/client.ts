@@ -15,6 +15,7 @@ import { type ChartProfile, type ChartProfilePayload } from "../profiles/types";
 import type { DeltaProfileData } from "../orderflow/deltaProfile";
 import {
   type BigTradeMessage,
+  type FvgSignalUpdateMessage,
   type FootprintRow,
   type FootprintUpdateMessage,
   type Side,
@@ -59,6 +60,17 @@ export interface FootprintRestBar {
   sellPct: number;
   stackedImbalance?: StackedImbalance[];
   unfinishedAuction: { high: boolean; low: boolean };
+}
+
+export interface FvgSignalRestRow {
+  time: number;
+  direction: number;
+  level: number;
+  pulse: number;
+  top: number | null;
+  bottom: number | null;
+  breakoutRatio: number;
+  phase: "confirmed";
 }
 
 export interface BigTradeRestRow {
@@ -779,6 +791,42 @@ export class ApiClient {
         unfinishedAuction: bar.unfinishedAuction,
       };
     });
+  }
+
+  /** Confirmed M1 FVG Signal Grader candle colors. */
+  async fvgSignals(
+    symbol: string,
+    contract: string,
+    limit?: number,
+  ): Promise<FvgSignalUpdateMessage[]> {
+    const params = new URLSearchParams({
+      symbol,
+      contract,
+      tf: "1m",
+    });
+    if (limit !== undefined) {
+      params.set("limit", String(limit));
+    }
+    const body = await this.getJson<{
+      symbol: string;
+      contract: string;
+      tf: Timeframe;
+      signals: FvgSignalRestRow[];
+    }>(`/orderflow/fvg-signals?${params.toString()}`);
+    return body.signals.map((signal) => ({
+      type: "fvg_signal_update",
+      symbol: body.symbol,
+      contract: body.contract,
+      tf: body.tf,
+      time: signal.time,
+      direction: signal.direction,
+      level: signal.level,
+      pulse: signal.pulse,
+      top: signal.top,
+      bottom: signal.bottom,
+      breakoutRatio: signal.breakoutRatio,
+      phase: signal.phase,
+    }));
   }
 
   /** Fixed-range delta profile aggregated from cached M1 footprint ladders. */

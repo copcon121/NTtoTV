@@ -33,6 +33,7 @@ from app.models.messages import (
     EventType,
     FootprintRow,
     FootprintUpdate,
+    FvgSignalUpdate,
     ImbalanceSide,
     NTStatusEvent,
     OHLCVBar,
@@ -578,6 +579,61 @@ def test_footprint_row_imbalance_field_round_trips_each_side():
     for side in (ImbalanceSide.BID, ImbalanceSide.ASK, None):
         row = FootprintRow(price=10.0, bid=1, ask=2, imbalance=side)
         assert FootprintRow.from_dict(row.to_dict()) == row
+
+
+# ===========================================================================
+# /ws/chart backend -> client: fvg_signal_update
+# ===========================================================================
+
+
+@pytest.mark.unit
+def test_fvg_signal_update_round_trips():
+    update = FvgSignalUpdate(
+        symbol="GC",
+        contract="GC",
+        tf="1m",
+        time=1730313600000,
+        direction=1,
+        level=5,
+        pulse=5,
+        top=2346.0,
+        bottom=2345.5,
+        breakout_ratio=1.75,
+        phase="confirmed",
+    )
+    assert FvgSignalUpdate.from_dict(update.to_dict()) == update
+
+
+@pytest.mark.unit
+def test_fvg_signal_update_wire_shape_matches_design():
+    update = FvgSignalUpdate(
+        symbol="GC",
+        contract="GC",
+        tf="1m",
+        time=1730313600000,
+        direction=-1,
+        level=3,
+        pulse=-3,
+        top=2345.5,
+        bottom=2345.0,
+        breakout_ratio=1.65,
+        phase="preview",
+    )
+    assert update.to_dict() == {
+        "type": "fvg_signal_update",
+        "symbol": "GC",
+        "contract": "GC",
+        "tf": "1m",
+        "time": 1730313600000,
+        "direction": -1,
+        "level": 3,
+        "pulse": -3,
+        "top": 2345.5,
+        "bottom": 2345.0,
+        "breakoutRatio": 1.65,
+        "phase": "preview",
+    }
+    assert EventType.FVG_SIGNAL_UPDATE.value == "fvg_signal_update"
 
 
 # ===========================================================================

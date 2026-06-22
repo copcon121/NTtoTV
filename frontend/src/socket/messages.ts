@@ -21,6 +21,7 @@ export type ChartEventType =
   | "quote_update"
   | "volume_delta_update"
   | "footprint_update"
+  | "fvg_signal_update"
   | "big_trade"
   | "alert_event"
   | "order_update"
@@ -160,6 +161,23 @@ export interface FootprintUpdateMessage {
   sellPct: number;
   stackedImbalance: StackedImbalance[];
   unfinishedAuction: { high: boolean; low: boolean };
+}
+
+export type FvgSignalPhase = "preview" | "confirmed" | "clear";
+
+export interface FvgSignalUpdateMessage {
+  type: "fvg_signal_update";
+  symbol: string;
+  contract: string;
+  tf: Timeframe;
+  time: number;
+  direction: number;
+  level: number;
+  pulse: number;
+  top: number | null;
+  bottom: number | null;
+  breakoutRatio: number;
+  phase: FvgSignalPhase;
 }
 
 /** Big trade marker (Req 5.2, 15.4, 15.5). */
@@ -322,6 +340,7 @@ export type InboundMessage =
   | QuoteUpdateMessage
   | VolumeDeltaUpdateMessage
   | FootprintUpdateMessage
+  | FvgSignalUpdateMessage
   | BigTradeMessage
   | AlertEventMessage
   | OrderUpdateMessage

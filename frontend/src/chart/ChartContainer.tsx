@@ -64,7 +64,12 @@ import {
   type FootprintViewport,
 } from "../footprint/footprintModel";
 import type { ChartSocket } from "../socket/ChartSocket";
-import type { BarUpdateMessage, Timeframe, VolumeDeltaUpdateMessage } from "../socket/messages";
+import type {
+  BarUpdateMessage,
+  FvgSignalUpdateMessage,
+  Timeframe,
+  VolumeDeltaUpdateMessage,
+} from "../socket/messages";
 import { DrawingManager } from "./drawings/DrawingManager";
 import type {
   DrawingState,
@@ -92,6 +97,9 @@ export interface DisposableChartPort extends ChartSeriesPort {
   setCvdVisible?(visible: boolean): void;
   setVolumeDelta?(points: readonly VolumeDeltaDatum[]): void;
   updateVolumeDelta?(point: VolumeDeltaDatum): void;
+  setFvgSignals?(signals: ReadonlyMap<number, FvgSignalUpdateMessage>): void;
+  updateFvgSignal?(signal: FvgSignalUpdateMessage): void;
+  setFvgGraderVisible?(visible: boolean): void;
   setBigTrades?(markers: readonly BigTradeMarker[]): void;
   updateBigTrade?(marker: BigTradeMarker): void;
   setSmcAiSignals?(markers: readonly SmcAiSignalMarker[]): void;
@@ -213,6 +221,8 @@ export interface ChartContainerProps {
   volumeDelta?: readonly VolumeDeltaDatum[];
   /** Initial/live footprint bars keyed by M1 bar time. */
   footprintBars?: ReadonlyMap<number, FootprintBar>;
+  /** Initial/live FVG Signal Grader candle colors keyed by M1 source-bar time. */
+  fvgSignals?: ReadonlyMap<number, FvgSignalUpdateMessage>;
   /** Initial/live BigTrade markers. */
   bigTrades?: readonly BigTradeMarker[];
   /** Read-only Phase 0 SMC AI entry markers. */
@@ -239,6 +249,8 @@ export interface ChartContainerProps {
   showCvd?: boolean;
   /** Show BigTrade markers on the candle series. */
   showBigTrades?: boolean;
+  /** Show FVG Signal Grader candle recoloring. FVG grading is M1-only. */
+  showFvgGrader?: boolean;
   /** BigTrade display-only filters. */
   bigTradeSettings?: BigTradeSettings;
   /** SMC overlay config. Disabled clears all SMC markers/zones. */
@@ -370,6 +382,7 @@ export function ChartContainer({
   bars,
   volumeDelta,
   footprintBars,
+  fvgSignals,
   bigTrades,
   smcAiSignals,
   alertLines,
@@ -381,6 +394,7 @@ export function ChartContainer({
   showVolumeDelta = true,
   showCvd = false,
   showBigTrades = true,
+  showFvgGrader = true,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
   smc,
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -675,6 +689,10 @@ export function ChartContainer({
   }, [showCvd]);
 
   useEffect(() => {
+    portRef.current?.setFvgGraderVisible?.(showFvgGrader);
+  }, [showFvgGrader]);
+
+  useEffect(() => {
     const controller = controllerRef.current;
     if (!controller) {
       return;
@@ -689,6 +707,10 @@ export function ChartContainer({
     portRef.current?.setDisplayTimeOffset?.(displayOffsetForTimeframe(timeframe));
     portRef.current?.setVolumeDelta?.(volumeDelta ?? []);
   }, [symbol, contract, timeframe, volumeDelta]);
+
+  useEffect(() => {
+    portRef.current?.setFvgSignals?.(fvgSignals ?? new Map());
+  }, [symbol, contract, timeframe, fvgSignals]);
 
   useEffect(() => {
     portRef.current?.setChartBackgroundColor?.(chartBackgroundColor);

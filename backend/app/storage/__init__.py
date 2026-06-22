@@ -24,6 +24,7 @@ from .records import (
     BigTradeRecord,
     FootprintBarRecord,
     FootprintLevelRecord,
+    FvgSignalRecord,
     ProfileRecord,
     VolumeDeltaRecord,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "VolumeDeltaRecord",
     "FootprintBarRecord",
     "FootprintLevelRecord",
+    "FvgSignalRecord",
     "BigTradeRecord",
     "ProfileRecord",
     "AlertRecord",

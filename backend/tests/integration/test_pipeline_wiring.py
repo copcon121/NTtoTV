@@ -25,7 +25,7 @@ from app.engines.alert_engine import (
     SMC_ZONE_TOUCH_BIG_TRADE,
 )
 from app.ingest.control_plane import ControlPlaneCoordinator
-from app.models.canonical import NormalizedTrade
+from app.models.canonical import NormalizedTrade, Side
 from app.models.messages import (
     ControlAction,
     ControlCommand,
@@ -43,6 +43,7 @@ _SYMBOL = "GC"
 _CANDIDATES = ["GC 08-26", "GC 10-26", "GC 12-26"]
 _ACTIVE = "GC 08-26"
 _BASE = 1_730_419_200_000
+_MINUTE_MS = 60_000
 
 
 @pytest.fixture()
@@ -82,6 +83,12 @@ def _trade(time_ms, price, volume, seq, contract=_ACTIVE, bid=None, ask=None):
         best_ask=None,
         sequence=seq,
     )
+
+
+def _classified_trade(time_ms, price, volume, seq, side: Side):
+    bid = price if side is Side.SELL else price - 0.1
+    ask = price if side is Side.BUY else price + 0.1
+    return _trade(time_ms, price, volume, seq, bid=bid, ask=ask)
 
 
 @pytest.mark.integration
@@ -124,6 +131,70 @@ def test_accepted_trade_runs_engines_persists_and_streams(pipeline_env):
         e.event_type == EventType.BAR_UPDATE and e.payload["contract"] == _SYMBOL
         for e in captured
     )
+
+
+@pytest.mark.integration
+def test_pipeline_persists_and_streams_fvg_signals_as_chart_contract(pipeline_env):
+    pipeline, cache, _, _, captured = pipeline_env
+    seq = 0
+
+    async def send(minute: int, offset: int, price: float, volume: int, side: Side):
+        nonlocal seq
+        seq += 1
+        await pipeline.on_trade(
+            _classified_trade(
+                _BASE + minute * _MINUTE_MS + offset,
+                price,
+                volume,
+                seq,
+                side,
+            )
+        )
+
+    async def send_bar(minute: int, open_price: float, close_price: float, delta: int):
+        if delta > 0:
+            await send(minute, 0, open_price, 1, Side.BUY)
+            await send(minute, 100, close_price, max(1, delta - 1), Side.BUY)
+        elif delta < 0:
+            volume = abs(delta)
+            await send(minute, 0, open_price, 1, Side.SELL)
+            await send(minute, 100, close_price, max(1, volume - 1), Side.SELL)
+        else:
+            await send(minute, 0, open_price, 5, Side.SELL)
+            await send(minute, 100, close_price, 5, Side.BUY)
+
+    async def run():
+        for minute, delta in enumerate([0, 5, 0, 5, 0, 5, 0, 5, -30, -10]):
+            open_price = 99.0 + (minute % 2) * 0.1
+            close_price = open_price + (0.1 if delta >= 0 else -0.1)
+            await send_bar(minute, open_price, close_price, delta)
+        await send_bar(10, 100.0, 100.5, 10)
+        await send_bar(11, 100.6, 101.0, 100)
+        await send_bar(12, 100.7, 100.8, 5)
+        await send_bar(13, 100.8, 100.9, 5)
+
+    asyncio.run(run())
+
+    events = [
+        event
+        for event in captured
+        if event.event_type == EventType.FVG_SIGNAL_UPDATE
+    ]
+    assert any(
+        event.payload["contract"] == _SYMBOL
+        and event.payload["phase"] == "preview"
+        for event in events
+    )
+    assert any(
+        event.payload["contract"] == _SYMBOL
+        and event.payload["phase"] == "confirmed"
+        for event in events
+    )
+    rows = cache.read_fvg_signals(_SYMBOL, _SYMBOL, "1m", None, None, 10)
+    assert len(rows) == 1
+    assert rows[0].contract == _SYMBOL
+    assert rows[0].pulse == 5
+    assert cache.read_fvg_signals(_SYMBOL, _ACTIVE, "1m", None, None, 10) == []
 
 
 @pytest.mark.integration

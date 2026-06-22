@@ -50,6 +50,7 @@ from ..models.messages import (
     ChartStatusEvent,
     EventType,
     FootprintUpdate,
+    FvgSignalUpdate,
     Ping,
     QuoteUpdate,
     VolumeDeltaUpdate,
@@ -107,6 +108,7 @@ OutboundMessage = (
     | QuoteUpdate
     | VolumeDeltaUpdate
     | FootprintUpdate
+    | FvgSignalUpdate
     | BigTrade
     | AlertEvent
     | ChartStatusEvent
@@ -118,6 +120,7 @@ _TIMEFRAME_SCOPED_EVENT_TYPES = frozenset(
         EventType.BAR_UPDATE,
         EventType.VOLUME_DELTA_UPDATE,
         EventType.FOOTPRINT_UPDATE,
+        EventType.FVG_SIGNAL_UPDATE,
     }
 )
 
@@ -136,6 +139,7 @@ def coalescing_subkey(payload: Mapping[str, Any]) -> Hashable:
       timeframe bar (same bar open time) collapse to the latest OHLCV state.
     * ``volume_delta_update`` -> ``(tf, time)`` -- latest delta state per bar.
     * ``footprint_update`` -> ``(tf, time)`` -- latest ladder/metrics per bar.
+    * ``fvg_signal_update`` -> ``(tf, time, phase)`` -- latest signal state.
     * ``quote_update`` -> ``contract`` -- latest quote per contract (symbol is
       already in the outer key).
     * ``big_trade`` -> ``(tradeId, time, price, side)`` -- each distinct reconstructed
@@ -156,6 +160,13 @@ def coalescing_subkey(payload: Mapping[str, Any]) -> Hashable:
         return ("volume_delta_update", payload["tf"], payload["time"])
     if t == "footprint_update":
         return ("footprint_update", payload["tf"], payload["time"])
+    if t == "fvg_signal_update":
+        return (
+            "fvg_signal_update",
+            payload["tf"],
+            payload["time"],
+            payload["phase"],
+        )
     if t == "quote_update":
         return ("quote_update", payload["contract"])
     if t == "big_trade":

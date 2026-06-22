@@ -43,6 +43,7 @@ from .engines.basis_engine import BasisEngine
 from .engines.big_trade_engine import BigTradeEngine
 from .engines.contract_resolver import ContractResolver
 from .engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
+from .engines.fvg_signal_engine import FvgSignalEngine
 from .engines.session_calendar import is_gc_session_open
 from .engines.volume_delta_engine import VolumeDeltaEngine, VolumeDeltaMode
 from .engines.alert_engine import AlertEngine, MarketContext
@@ -57,6 +58,7 @@ from .models.messages import (
     BigTrade,
     ChartStatusEvent,
     FootprintUpdate,
+    FvgSignalUpdate,
     NTStatusEvent,
     QuoteUpdate,
     VolumeDeltaUpdate,
@@ -69,6 +71,7 @@ from .storage.records import (
     BigTradeRecord,
     FootprintBarRecord,
     FootprintLevelRecord,
+    FvgSignalRecord,
     VolumeDeltaRecord,
 )
 from .storage.tick_store import TickStore
@@ -190,6 +193,7 @@ class Pipeline:
         bar_aggregator: BarAggregator | None = None,
         volume_delta: VolumeDeltaEngine | None = None,
         footprint: FootprintEngine | None = None,
+        fvg_signal: FvgSignalEngine | None = None,
         big_trade: BigTradeEngine | None = None,
         alert_engine: AlertEngine | None = None,
         basis_engine: BasisEngine | None = None,
@@ -222,6 +226,7 @@ class Pipeline:
                     min_trade_size=seed.min_trade_size if seed is not None else 0,
                 )
         self._fp = footprint or FootprintEngine()
+        self._fvg = fvg_signal or FvgSignalEngine()
         self._bt = big_trade or BigTradeEngine(dedupe_repeated_timestamp_runs=True)
         self._alerts = alert_engine or AlertEngine(cache)
         self._basis = basis_engine
@@ -420,6 +425,7 @@ class Pipeline:
 
         # 3) Footprint (M1). (Req 14)
         fp_update = self._fp.on_trade(trade)
+        fvg_updates = self._fvg.on_trade(trade)
 
         # 4) BigTrade (merge + filter). (Req 15)
         big_trades = self._bt.on_trade(trade)
@@ -436,6 +442,7 @@ class Pipeline:
             bar_updates,
             vd_updates,
             footprint_updates,
+            fvg_updates,
             big_trades,
         )
         if self._analyst_event_sink is not None:
@@ -449,6 +456,8 @@ class Pipeline:
         for update in vd_updates:
             await self._enqueue(OutboundEvent.from_message(update))
         for update in footprint_updates:
+            await self._enqueue(OutboundEvent.from_message(update))
+        for update in fvg_updates:
             await self._enqueue(OutboundEvent.from_message(update))
         for bt in big_trades:
             await self._enqueue(OutboundEvent.from_message(bt))
@@ -520,6 +529,7 @@ class Pipeline:
         bar_updates: list[BarUpdate],
         volume_delta_updates: list[VolumeDeltaUpdate],
         footprint_updates: list[FootprintUpdate],
+        fvg_signal_updates: list[FvgSignalUpdate],
         big_trades: list[BigTrade],
     ) -> None:
         footprint_bars: list[FootprintBarRecord] = []
@@ -558,6 +568,23 @@ class Pipeline:
                 for row in footprint_update.rows
             )
 
+        fvg_signals = [
+            FvgSignalRecord(
+                symbol=update.symbol,
+                contract=update.contract,
+                timeframe=update.tf,
+                time=update.time,
+                direction=update.direction,
+                level=update.level,
+                pulse=update.pulse,
+                top=float(update.top if update.top is not None else 0.0),
+                bottom=float(update.bottom if update.bottom is not None else 0.0),
+                breakout_ratio=update.breakout_ratio,
+            )
+            for update in fvg_signal_updates
+            if update.phase == "confirmed" and update.pulse != 0
+        ]
+
         self._cache.upsert_derived_batch(
             bars=(
                 BarRecord(
@@ -593,6 +620,7 @@ class Pipeline:
             ),
             footprint_bars=footprint_bars,
             footprint_levels=footprint_levels,
+            fvg_signals=fvg_signals,
             big_trades=(
                 BigTradeRecord(
                     symbol=bt.symbol,
@@ -739,6 +767,7 @@ class Pipeline:
         for engine in self._vds.values():
             engine.reset_contract(chart_contract)
         self._fp.reset_contract(chart_contract)
+        self._fvg.reset_contract(chart_contract)
         self._bt.reset_contract(chart_contract)
         self._last_quote.pop(contract, None)
         validator = self._coordinator.validator

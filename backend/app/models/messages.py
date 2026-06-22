@@ -25,7 +25,7 @@ Channels:
   (``ControlCommand``).
 * ``/ws/chart`` client -> Backend: ``subscribe``, ``unsubscribe``, ``pong``.
 * ``/ws/chart`` Backend -> client: ``bar_update``, ``quote_update``,
-  ``volume_delta_update``, ``footprint_update``, ``big_trade``,
+  ``volume_delta_update``, ``footprint_update``, ``fvg_signal_update``, ``big_trade``,
   ``alert_event``, ``status`` (``ChartStatusEvent``), ``ping``.
 
 (Requirements 1.1, 1.2, 5.2)
@@ -67,6 +67,7 @@ __all__ = [
     "StackedImbalance",
     "UnfinishedAuction",
     "FootprintUpdate",
+    "FvgSignalUpdate",
     "BigTrade",
     "AlertEvent",
     "ChartStatusEvent",
@@ -120,6 +121,7 @@ class EventType(str, Enum):
     QUOTE_UPDATE = "quote_update"
     VOLUME_DELTA_UPDATE = "volume_delta_update"
     FOOTPRINT_UPDATE = "footprint_update"
+    FVG_SIGNAL_UPDATE = "fvg_signal_update"
     BIG_TRADE = "big_trade"
     ALERT_EVENT = "alert_event"
     ORDER_UPDATE = "order_update"
@@ -706,6 +708,58 @@ class FootprintUpdate:
             poc_volume=int(data.get("pocVolume", 0)),
             vah=float(data.get("vah", data.get("poc", 0.0))),
             val=float(data.get("val", data.get("poc", 0.0))),
+        )
+
+
+@dataclass(slots=True)
+class FvgSignalUpdate:
+    """`fvg_signal_update` event (Backend -> client)."""
+
+    type: ClassVar[str] = "fvg_signal_update"
+
+    symbol: str
+    contract: str
+    tf: str
+    time: CanonicalTimestamp
+    direction: int
+    level: int
+    pulse: int
+    top: float | None
+    bottom: float | None
+    breakout_ratio: float
+    phase: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.type,
+            "symbol": self.symbol,
+            "contract": self.contract,
+            "tf": self.tf,
+            "time": self.time,
+            "direction": self.direction,
+            "level": self.level,
+            "pulse": self.pulse,
+            "top": self.top,
+            "bottom": self.bottom,
+            "breakoutRatio": self.breakout_ratio,
+            "phase": self.phase,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "FvgSignalUpdate":
+        _expect_type(data, cls.type)
+        return cls(
+            symbol=data["symbol"],
+            contract=data["contract"],
+            tf=data["tf"],
+            time=int(data["time"]),
+            direction=int(data["direction"]),
+            level=int(data["level"]),
+            pulse=int(data["pulse"]),
+            top=None if data.get("top") is None else float(data["top"]),
+            bottom=None if data.get("bottom") is None else float(data["bottom"]),
+            breakout_ratio=float(data["breakoutRatio"]),
+            phase=str(data["phase"]),
         )
 
 

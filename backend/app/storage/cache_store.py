@@ -30,6 +30,7 @@ from .records import (
     BigTradeRecord,
     FootprintBarRecord,
     FootprintLevelRecord,
+    FvgSignalRecord,
     ProfileRecord,
     VolumeDeltaRecord,
 )
@@ -48,6 +49,7 @@ CACHE_TABLES: tuple[str, ...] = (
     "orderflow_volume_delta",
     "footprint_bars",
     "footprint_levels",
+    "fvg_signals",
     "big_trades",
     "alerts",
     "alert_events",
@@ -154,6 +156,21 @@ CREATE TABLE IF NOT EXISTS footprint_levels (
     ask_volume INTEGER NOT NULL,       -- volume traded at ask (buy-side)
     imbalance  TEXT,                   -- 'bid' | 'ask' | NULL
     PRIMARY KEY (symbol, contract, timeframe, time, price)
+);
+
+-- Confirmed FVG signal grader candle colors (M1).
+CREATE TABLE IF NOT EXISTS fvg_signals (
+    symbol         TEXT NOT NULL,
+    contract       TEXT NOT NULL,
+    timeframe      TEXT NOT NULL DEFAULT '1m',
+    time           INTEGER NOT NULL,
+    direction      INTEGER NOT NULL,
+    level          INTEGER NOT NULL,
+    pulse          INTEGER NOT NULL,
+    top            REAL NOT NULL,
+    bottom         REAL NOT NULL,
+    breakout_ratio REAL NOT NULL,
+    PRIMARY KEY (symbol, contract, timeframe, time)
 );
 
 -- Big trades (merged tape entries). (Req 8.2, 15)
@@ -512,6 +529,7 @@ class CacheStore:
         footprint_bar: FootprintBarRecord | None = None,
         footprint_bars: Iterable[FootprintBarRecord] = (),
         footprint_levels: Iterable[FootprintLevelRecord] = (),
+        fvg_signals: Iterable[FvgSignalRecord] = (),
         big_trades: Iterable[BigTradeRecord] = (),
     ) -> None:
         self._keyed.upsert_derived_batch(
@@ -520,6 +538,7 @@ class CacheStore:
             footprint_bar=footprint_bar,
             footprint_bars=footprint_bars,
             footprint_levels=footprint_levels,
+            fvg_signals=fvg_signals,
             big_trades=big_trades,
         )
 
@@ -597,6 +616,25 @@ class CacheStore:
     ) -> list[FootprintLevelRecord]:
         return self._keyed.read_footprint_levels_range(
             symbol, contract, timeframe, frm, to
+        )
+
+    def upsert_fvg_signal(self, rec: FvgSignalRecord) -> None:
+        self._keyed.upsert_fvg_signal(rec)
+
+    def upsert_fvg_signals(self, recs: Iterable[FvgSignalRecord]) -> None:
+        self._keyed.upsert_fvg_signals(recs)
+
+    def read_fvg_signals(
+        self,
+        symbol: str,
+        contract: str,
+        timeframe: str = "1m",
+        frm: int | None = None,
+        to: int | None = None,
+        limit: int | None = None,
+    ) -> list[FvgSignalRecord]:
+        return self._keyed.read_fvg_signals(
+            symbol, contract, timeframe, frm, to, limit
         )
 
     def upsert_big_trade(self, rec: BigTradeRecord) -> None:

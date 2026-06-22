@@ -25,6 +25,7 @@ from .footprint_engine import (
     FOOTPRINT_TIMEFRAME,
     FootprintEngine,
 )
+from .fvg_signal_engine import FVG_SIGNAL_TIMEFRAME, FvgSignalEngine
 from .big_trade_engine import BigTradeEngine
 from .contract_resolver import ContractResolver
 
@@ -36,6 +37,8 @@ __all__ = [
     "DEFAULT_TIMEFRAME",
     "FootprintEngine",
     "FOOTPRINT_TIMEFRAME",
+    "FvgSignalEngine",
+    "FVG_SIGNAL_TIMEFRAME",
     "BigTradeEngine",
     "ContractResolver",
     "AlertEngine",

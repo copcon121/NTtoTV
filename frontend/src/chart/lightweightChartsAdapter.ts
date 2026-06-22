@@ -62,6 +62,7 @@ import {
   type RenderableBigTradeBubble,
 } from "./BigTradeBubblePrimitive";
 import { type Bar } from "../cache/types";
+import type { FvgSignalUpdateMessage } from "../socket/messages";
 import { type FootprintViewport } from "../footprint/footprintModel";
 import {
   countdownBarStartMs,
@@ -88,6 +89,20 @@ export interface VolumeDeltaDatum {
   closeDelta: number;
   cumulativeDelta?: number;
 }
+
+const FVG_BULL_COLORS: Record<number, string> = {
+  1: "lightgreen",
+  2: "lime",
+  3: "forestgreen",
+  5: "cyan",
+};
+
+const FVG_BEAR_COLORS: Record<number, string> = {
+  1: "lightcoral",
+  2: "crimson",
+  3: "darkred",
+  5: "magenta",
+};
 
 /**
  * One horizontal alert level drawn on the candle price scale (Req 16.5).
@@ -375,12 +390,13 @@ function utcPlus7SessionHighlightHour(
   return matches ? (hour as 8 | 20) : undefined;
 }
 
-function toCandle(
+export function toCandle(
   bar: Bar,
   displayTimeOffsetMs: number,
   previousBar?: Bar,
   outsideBar: OutsideBarSettings = DEFAULT_OUTSIDE_BAR_SETTINGS,
   outsideBarContext: OutsideBarFilterContext = {},
+  fvgSignal?: FvgSignalUpdateMessage,
 ): CandlestickData {
   const highlight = isUtcPlus7SessionHighlightTime(
     bar.time,
@@ -399,6 +415,15 @@ function toCandle(
     low: bar.low,
     close: bar.close,
   };
+  const fvgColor = fvgSignalColor(fvgSignal);
+  if (fvgColor !== undefined) {
+    return {
+      ...candle,
+      color: fvgColor,
+      borderColor: fvgColor,
+      wickColor: fvgColor,
+    };
+  }
   if (highlight) {
     return {
       ...candle,
@@ -416,6 +441,24 @@ function toCandle(
     borderColor: obColor,
     wickColor: obColor,
   };
+}
+
+export function fvgSignalColor(
+  signal: FvgSignalUpdateMessage | undefined,
+): string | undefined {
+  if (signal === undefined || signal.phase === "clear" || signal.pulse === 0) {
+    return undefined;
+  }
+  const level = Math.abs(signal.pulse) === 5 ? 5 : Math.abs(signal.level);
+  const direction =
+    signal.pulse !== 0 ? Math.sign(signal.pulse) : Math.sign(signal.direction);
+  if (direction > 0) {
+    return FVG_BULL_COLORS[level] ?? FVG_BULL_COLORS[1];
+  }
+  if (direction < 0) {
+    return FVG_BEAR_COLORS[level] ?? FVG_BEAR_COLORS[1];
+  }
+  return undefined;
 }
 
 function toVolumeDelta(
@@ -526,6 +569,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private outsideBar: OutsideBarSettings;
   private readonly barsByTime = new Map<number, Bar>();
   private readonly volumeDeltaByTime = new Map<number, VolumeDeltaDatum>();
+  private readonly fvgSignalsByTime = new Map<number, FvgSignalUpdateMessage>();
+  private fvgGraderVisible = true;
   private cvdLastTime: number | undefined;
   private cvdLastValue = 0;
   private readonly bigTradesByKey = new Map<string, BigTradeMarker>();
@@ -880,6 +925,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
             index,
             deltaByTime: this.volumeDeltaByTime,
           },
+          this.fvgGraderVisible ? this.fvgSignalsByTime.get(bar.time) : undefined,
         ),
       ),
     );
@@ -995,6 +1041,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         index,
         deltaByTime: this.volumeDeltaByTime,
       },
+      this.fvgGraderVisible
+        ? this.fvgSignalsByTime.get(this.candleBars[index].time)
+        : undefined,
     );
     this.candleSeries.update(candle, index < this.candleBars.length - 1);
   }
@@ -1188,6 +1237,37 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const index = this.candleBars.findIndex((bar) => bar.time === point.time);
     this.updateCandleAt(index);
     this.updateCandleAt(index + 1);
+  }
+
+  /** Bulk-load FVG Signal Grader candle colors. */
+  setFvgSignals(signals: ReadonlyMap<number, FvgSignalUpdateMessage>): void {
+    this.fvgSignalsByTime.clear();
+    for (const [time, signal] of signals) {
+      if (signal.phase !== "clear" && signal.pulse !== 0) {
+        this.fvgSignalsByTime.set(time, { ...signal });
+      }
+    }
+    this.renderCandleSeries();
+  }
+
+  /** Show/hide FVG Signal Grader candle recoloring without dropping cached state. */
+  setFvgGraderVisible(visible: boolean): void {
+    if (this.fvgGraderVisible === visible) {
+      return;
+    }
+    this.fvgGraderVisible = visible;
+    this.renderCandleSeries();
+  }
+
+  /** Apply one realtime FVG Signal Grader update. */
+  updateFvgSignal(signal: FvgSignalUpdateMessage): void {
+    if (signal.phase === "clear" || signal.pulse === 0) {
+      this.fvgSignalsByTime.delete(signal.time);
+    } else {
+      this.fvgSignalsByTime.set(signal.time, { ...signal });
+    }
+    const index = this.candleBars.findIndex((bar) => bar.time === signal.time);
+    this.updateCandleAt(index);
   }
 
   /** Bulk-load BigTrade markers on the candle series. */

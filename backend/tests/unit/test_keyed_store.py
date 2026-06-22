@@ -20,6 +20,7 @@ from app.storage import (
     CacheStore,
     FootprintBarRecord,
     FootprintLevelRecord,
+    FvgSignalRecord,
     VolumeDeltaRecord,
 )
 
@@ -306,6 +307,9 @@ def test_upsert_derived_batch_persists_complete_trade_snapshot(store):
     footprint_level = FootprintLevelRecord(
         "GC", "GC 08-26", "1m", 1_000, 2345.6, 10, 20, ImbalanceSide.ASK
     )
+    fvg_signal = FvgSignalRecord(
+        "GC", "GC 08-26", "1m", 1_000, 1, 3, 3, 2346.0, 2345.5, 1.7
+    )
     big_trade = BigTradeRecord("GC", "GC 08-26", 1_000, 2345.6, 65, Side.BUY)
 
     store.upsert_derived_batch(
@@ -313,6 +317,7 @@ def test_upsert_derived_batch_persists_complete_trade_snapshot(store):
         volume_deltas=[_vd(1_000)],
         footprint_bar=footprint_bar,
         footprint_levels=[footprint_level],
+        fvg_signals=[fvg_signal],
         big_trades=[big_trade],
     )
 
@@ -322,6 +327,7 @@ def test_upsert_derived_batch_persists_complete_trade_snapshot(store):
     assert store.read_footprint_levels("GC", "GC 08-26", 1_000) == [
         footprint_level
     ]
+    assert store.read_fvg_signals("GC", "GC 08-26", "1m") == [fvg_signal]
     assert store.read_big_trades("GC", "GC 08-26") == [big_trade]
 
 
@@ -331,6 +337,7 @@ def test_empty_reads_return_empty_list(store):
     assert store.read_volume_delta("GC", "GC 08-26", "1m") == []
     assert store.read_footprint_bars("GC", "GC 08-26") == []
     assert store.read_footprint_levels("GC", "GC 08-26", 1_000) == []
+    assert store.read_fvg_signals("GC", "GC 08-26", "1m") == []
     assert store.read_big_trades("GC", "GC 08-26") == []
     # Upserting an empty batch is a no-op.
     store.upsert_bars([])

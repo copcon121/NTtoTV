@@ -22,7 +22,11 @@ import { DEFAULT_SMC_SETTINGS } from "./smc";
 import type { BarSeries } from "./index";
 import { type Bar } from "../cache/types";
 import { ChartSocket, SocketReadyState, type WebSocketLike } from "../socket";
-import type { BarUpdateMessage, VolumeDeltaUpdateMessage } from "../socket/messages";
+import type {
+  BarUpdateMessage,
+  FvgSignalUpdateMessage,
+  VolumeDeltaUpdateMessage,
+} from "../socket/messages";
 
 afterEach(() => {
   cleanup();
@@ -54,6 +58,8 @@ class FakePort implements DisposableChartPort {
   setCvdVisibleCalls: boolean[] = [];
   setVolumeDeltaCalls: VolumeDeltaDatum[][] = [];
   updateVolumeDeltaCalls: VolumeDeltaDatum[] = [];
+  setFvgSignalsCalls: FvgSignalUpdateMessage[][] = [];
+  setFvgGraderVisibleCalls: boolean[] = [];
   setEmaLinesCalls: EmaLineData[][] = [];
   updateEmaLineCalls: { id: string; point: { time: number; value: number } }[] = [];
   clearEmaLinesCalls = 0;
@@ -111,6 +117,14 @@ class FakePort implements DisposableChartPort {
   }
   updateVolumeDelta(point: VolumeDeltaDatum): void {
     this.updateVolumeDeltaCalls.push({ ...point });
+  }
+  setFvgSignals(signals: ReadonlyMap<number, FvgSignalUpdateMessage>): void {
+    this.setFvgSignalsCalls.push(
+      [...signals.values()].map((signal) => ({ ...signal })),
+    );
+  }
+  setFvgGraderVisible(visible: boolean): void {
+    this.setFvgGraderVisibleCalls.push(visible);
   }
   setEmaLines(lines: readonly EmaLineData[]): void {
     this.setEmaLinesCalls.push(
@@ -451,6 +465,54 @@ describe("ChartContainer", () => {
     );
 
     expect(port.setCvdVisibleCalls).toEqual([true, false]);
+  });
+
+  it("loads FVG Signal Grader colors and toggles their visibility", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const signal: FvgSignalUpdateMessage = {
+      type: "fvg_signal_update",
+      symbol: "GC",
+      contract: "GC",
+      tf: "1m",
+      time: 10,
+      direction: 1,
+      level: 5,
+      pulse: 5,
+      top: 101,
+      bottom: 100.5,
+      breakoutRatio: 1.8,
+      phase: "confirmed",
+    };
+
+    const { rerender } = render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC"
+        timeframe="1m"
+        bars={[bar(10)]}
+        fvgSignals={new Map([[signal.time, signal]])}
+        showFvgGrader
+        portFactory={factory}
+      />,
+    );
+
+    rerender(
+      <ChartContainer
+        symbol="GC"
+        contract="GC"
+        timeframe="1m"
+        bars={[bar(10)]}
+        fvgSignals={new Map([[signal.time, signal]])}
+        showFvgGrader={false}
+        portFactory={factory}
+      />,
+    );
+
+    expect(
+      port.setFvgSignalsCalls[port.setFvgSignalsCalls.length - 1],
+    ).toEqual([signal]);
+    expect(port.setFvgGraderVisibleCalls).toEqual([true, false]);
   });
 
   it("supplies a screenshot capture callback while mounted", () => {

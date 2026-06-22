@@ -229,6 +229,51 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
+  it("loads confirmed FVG Signal Grader candle colors", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        symbol: "GC",
+        contract: "GC",
+        tf: "1m",
+        signals: [
+          {
+            time: 1000,
+            direction: 1,
+            level: 5,
+            pulse: 5,
+            top: 2346.0,
+            bottom: 2345.5,
+            breakoutRatio: 1.8,
+            phase: "confirmed",
+          },
+        ],
+      }),
+    );
+    const api = new ApiClient({ fetchFn });
+
+    await expect(api.fvgSignals("GC", "GC", 500)).resolves.toEqual([
+      {
+        type: "fvg_signal_update",
+        symbol: "GC",
+        contract: "GC",
+        tf: "1m",
+        time: 1000,
+        direction: 1,
+        level: 5,
+        pulse: 5,
+        top: 2346.0,
+        bottom: 2345.5,
+        breakoutRatio: 1.8,
+        phase: "confirmed",
+      },
+    ]);
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orderflow/fvg-signals?symbol=GC&contract=GC&tf=1m&limit=500",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
   it("loads SMC AI baseline signals for a chart range", async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({

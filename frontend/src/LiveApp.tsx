@@ -72,6 +72,7 @@ import {
   type AccountPositionUpdate,
   type AlertEventMessage,
   type ChartEventType,
+  type FvgSignalUpdateMessage,
   type TradingAccount,
   type TradingOrder,
   type TradingPosition,
@@ -126,6 +127,7 @@ export const BIG_TRADE_SUBSCRIBED_EVENTS: ChartEventType[] = ["big_trade"];
 export const TIMEFRAME_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "bar_update",
   "volume_delta_update",
+  "fvg_signal_update",
 ];
 export const FOOTPRINT_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "footprint_update",
@@ -135,9 +137,11 @@ const EMPTY_VOLUME_DELTA: readonly VolumeDeltaDatum[] = [];
 const EMPTY_BIG_TRADES: readonly BigTradeMarker[] = [];
 const EMPTY_SMC_AI_SIGNALS: readonly SmcAiSignalMarker[] = [];
 const EMPTY_FOOTPRINT_BARS: ReadonlyMap<number, FootprintBar> = new Map();
+const EMPTY_FVG_SIGNALS: ReadonlyMap<number, FvgSignalUpdateMessage> = new Map();
 const DEFERRED_INDICATOR_LOAD_MS = 75;
 const DEFERRED_OVERLAY_LOAD_MS = 250;
 const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
+const INITIAL_FVG_SIGNAL_LIMIT = 2_000;
 const INITIAL_BIG_TRADE_LIMIT = DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
 const DELTA_PROFILE_ROW_TICKS = 1;
@@ -1233,6 +1237,12 @@ export function LiveApp() {
   const [footprintBars, setFootprintBars] = useState<ReadonlyMap<number, FootprintBar>>(
     () => new Map(),
   );
+  const [fvgSignals, setFvgSignals] = useState<
+    ReadonlyMap<number, FvgSignalUpdateMessage>
+  >(() => new Map());
+  const [fvgSignalSeriesKey, setFvgSignalSeriesKey] = useState<
+    string | undefined
+  >(undefined);
   const [loadedOverlayContract, setLoadedOverlayContract] = useState<
     string | undefined
   >(undefined);
@@ -1242,6 +1252,7 @@ export function LiveApp() {
   const [showVolumeDelta, setShowVolumeDelta] = useState(true);
   const [showCvd, setShowCvd] = useState(true);
   const [showFootprint, setShowFootprint] = useState(false);
+  const [showFvgGrader, setShowFvgGrader] = useState(true);
   const [showBigTrades, setShowBigTrades] = useState(true);
   const [ema, setEma] = useState<EmaSettings>(() => ({ ...DEFAULT_EMA_SETTINGS }));
   const [smc, setSmc] = useState<SmcSettings>(() => ({ ...DEFAULT_SMC_SETTINGS }));
@@ -1374,6 +1385,7 @@ export function LiveApp() {
       showVolumeDelta,
       showCvd,
       showFootprint,
+      showFvgGrader,
       showBigTrades,
       ema: { ...ema },
       smc: { ...smc },
@@ -1399,6 +1411,7 @@ export function LiveApp() {
       showVolume,
       showVolumeDelta,
       showCvd,
+      showFvgGrader,
       smc,
       timeframe,
       timezoneOffsetMinutes,
@@ -1923,6 +1936,8 @@ export function LiveApp() {
   useEffect(() => {
     setLoadedOverlayContract(undefined);
     setFootprintBars(new Map());
+    setFvgSignals(new Map());
+    setFvgSignalSeriesKey(undefined);
     setBigTrades([]);
     setSmcAiSignals([]);
   }, [contract]);
@@ -1958,6 +1973,47 @@ export function LiveApp() {
       window.clearTimeout(timer);
     };
   }, [api, contract, timeframe, hasLoadedCurrentSeries, loadedOverlayContract]);
+
+  useEffect(() => {
+    if (timeframe !== "1m") {
+      return;
+    }
+    if (!hasLoadedCurrentSeries || fvgSignalSeriesKey === currentSeriesKey) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const signals = await api.fvgSignals(
+            SYMBOL,
+            contract,
+            INITIAL_FVG_SIGNAL_LIMIT,
+          );
+          if (!cancelled) {
+            setFvgSignals(new Map(signals.map((signal) => [signal.time, signal])));
+            setFvgSignalSeriesKey(currentSeriesKey);
+          }
+        } catch {
+          if (!cancelled) {
+            setFvgSignals(new Map());
+            setFvgSignalSeriesKey(currentSeriesKey);
+          }
+        }
+      })();
+    }, DEFERRED_OVERLAY_LOAD_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    api,
+    contract,
+    timeframe,
+    hasLoadedCurrentSeries,
+    fvgSignalSeriesKey,
+    currentSeriesKey,
+  ]);
 
   useEffect(() => {
     const matchesChartContract = (messageContract: string) =>
@@ -2005,11 +2061,31 @@ export function LiveApp() {
       }
       setBigTrades((prev) => applyBigTrade(prev, msg).markers);
     });
+    const offFvgSignal = socket.on("fvg_signal_update", (msg) => {
+      if (
+        msg.symbol !== SYMBOL ||
+        !matchesChartContract(msg.contract) ||
+        msg.tf !== "1m"
+      ) {
+        return;
+      }
+      setFvgSignalSeriesKey(seriesDataKey(SYMBOL, contract, "1m"));
+      setFvgSignals((prev) => {
+        const next = new Map(prev);
+        if (msg.phase === "clear" || msg.pulse === 0) {
+          next.delete(msg.time);
+        } else {
+          next.set(msg.time, msg);
+        }
+        return next;
+      });
+    });
     return () => {
       offBarPrice();
       offQuotePrice();
       offFootprint();
       offBigTrade();
+      offFvgSignal();
       if (latestPriceThrottleRef.current !== undefined) {
         window.clearTimeout(latestPriceThrottleRef.current);
         latestPriceThrottleRef.current = undefined;
@@ -2791,6 +2867,7 @@ export function LiveApp() {
     setShowVolume(payload.showVolume !== false);
     setShowVolumeDelta(payload.showVolumeDelta !== false);
     setShowCvd(payload.showCvd !== false);
+    setShowFvgGrader(payload.showFvgGrader !== false);
     setShowBigTrades(payload.showBigTrades !== false);
     setEma(normalizeEmaSettings(payload.ema));
     setSmc({ ...DEFAULT_SMC_SETTINGS, ...(payload.smc ?? {}) });
@@ -3073,6 +3150,12 @@ export function LiveApp() {
   const chartFootprintBars = hasLoadedCurrentSeries
     ? footprintBars
     : EMPTY_FOOTPRINT_BARS;
+  const chartFvgSignals =
+    hasLoadedCurrentSeries &&
+    timeframe === "1m" &&
+    fvgSignalSeriesKey === currentSeriesKey
+      ? fvgSignals
+      : EMPTY_FVG_SIGNALS;
   const bigTradeOverlayEnabled = bigTradesEnabledForTimeframe(timeframe);
   const chartBigTrades = hasLoadedCurrentSeries && bigTradeOverlayEnabled
     ? bigTrades
@@ -3156,6 +3239,7 @@ export function LiveApp() {
           volumeDelta={showVolumeDelta}
           cvd={showCvd}
           footprint={showFootprint}
+          fvgGrader={showFvgGrader}
           bigTrades={showBigTrades && bigTradeOverlayEnabled}
           ema={ema}
           smc={smc}
@@ -3163,11 +3247,13 @@ export function LiveApp() {
           footprintSettings={footprintSettings}
           bigTradeSettings={bigTradeSettings}
           footprintDisabled={timeframe !== "1m"}
+          fvgGraderDisabled={timeframe !== "1m"}
           bigTradeDisabled={!bigTradeOverlayEnabled}
           onVolumeChange={setShowVolume}
           onVolumeDeltaChange={setShowVolumeDelta}
           onCvdChange={setShowCvd}
           onFootprintChange={setShowFootprint}
+          onFvgGraderChange={setShowFvgGrader}
           onBigTradesChange={setShowBigTrades}
           onEmaChange={setEma}
           onSmcChange={setSmc}
@@ -3277,6 +3363,7 @@ export function LiveApp() {
             bars={chartBars}
             volumeDelta={chartVolumeDelta}
             footprintBars={chartFootprintBars}
+            fvgSignals={chartFvgSignals}
             bigTrades={chartBigTrades}
             smcAiSignals={chartSmcAiSignals}
             alertLines={alertLines}
@@ -3288,6 +3375,7 @@ export function LiveApp() {
             showVolumeDelta={showVolumeDelta}
             showCvd={showCvd}
             showFootprint={showFootprint && timeframe === "1m"}
+            showFvgGrader={showFvgGrader && timeframe === "1m"}
             showBigTrades={showBigTrades && bigTradeOverlayEnabled}
             bigTradeSettings={bigTradeSettings}
             chartBackgroundColor={chartBackgroundColor}

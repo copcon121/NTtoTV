@@ -21,6 +21,7 @@ from app.storage.records import (
     BigTradeRecord,
     FootprintBarRecord,
     FootprintLevelRecord,
+    FvgSignalRecord,
     VolumeDeltaRecord,
 )
 from app.storage.tick_store import TickStore
@@ -134,6 +135,58 @@ def test_volume_delta_unknown_tf_is_404(env):
 
 
 # -- footprint (Req 18.6) -----------------------------------------------------
+
+
+@pytest.mark.integration
+def test_fvg_signals_returns_confirmed_chart_contract_rows(env):
+    client, cache = env
+    cache.upsert_fvg_signal(
+        FvgSignalRecord(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            timeframe="1m",
+            time=_BASE_MS,
+            direction=1,
+            level=5,
+            pulse=5,
+            top=2346.0,
+            bottom=2345.5,
+            breakout_ratio=1.8,
+        )
+    )
+
+    resp = client.get(
+        "/api/orderflow/fvg-signals",
+        params={"symbol": _SYMBOL, "contract": _SYMBOL, "tf": "1m"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["contract"] == _SYMBOL
+    assert body["tf"] == "1m"
+    assert body["signals"] == [
+        {
+            "time": _BASE_MS,
+            "direction": 1,
+            "level": 5,
+            "pulse": 5,
+            "top": 2346.0,
+            "bottom": 2345.5,
+            "breakoutRatio": 1.8,
+            "phase": "confirmed",
+        }
+    ]
+
+
+@pytest.mark.integration
+def test_fvg_signals_rejects_non_m1_timeframe(env):
+    client, _ = env
+    resp = client.get(
+        "/api/orderflow/fvg-signals",
+        params={"symbol": _SYMBOL, "contract": _SYMBOL, "tf": "5m"},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["field"] == "tf"
 
 
 def _seed_footprint_bar(cache: CacheStore, time_ms: int) -> None:

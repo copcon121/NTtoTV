@@ -31,6 +31,7 @@ from .records import (
     BigTradeRecord,
     FootprintBarRecord,
     FootprintLevelRecord,
+    FvgSignalRecord,
     VolumeDeltaRecord,
 )
 
@@ -104,6 +105,20 @@ ON CONFLICT(symbol, contract, timeframe, time, price) DO UPDATE SET
     imbalance=excluded.imbalance
 """
 
+_UPSERT_FVG_SIGNAL = """
+INSERT INTO fvg_signals
+    (symbol, contract, timeframe, time, direction, level, pulse, top, bottom,
+     breakout_ratio)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, contract, timeframe, time) DO UPDATE SET
+    direction=excluded.direction,
+    level=excluded.level,
+    pulse=excluded.pulse,
+    top=excluded.top,
+    bottom=excluded.bottom,
+    breakout_ratio=excluded.breakout_ratio
+"""
+
 _UPSERT_BIG_TRADE = """
 INSERT INTO big_trades
     (symbol, contract, time, price, volume, side, trade_id)
@@ -156,6 +171,7 @@ class KeyedStore:
         footprint_bar: FootprintBarRecord | None = None,
         footprint_bars: Iterable[FootprintBarRecord] = (),
         footprint_levels: Iterable[FootprintLevelRecord] = (),
+        fvg_signals: Iterable[FvgSignalRecord] = (),
         big_trades: Iterable[BigTradeRecord] = (),
     ) -> None:
         """Persist one trade's derived outputs in a single transaction.
@@ -170,6 +186,7 @@ class KeyedStore:
         delta_rows = [_volume_delta_params(rec) for rec in volume_deltas]
         footprint_rows = [_footprint_bar_params(rec) for rec in footprint_bars]
         level_rows = [_footprint_level_params(rec) for rec in footprint_levels]
+        fvg_rows = [_fvg_signal_params(rec) for rec in fvg_signals]
         big_trade_rows = [_big_trade_params(rec) for rec in big_trades]
         if footprint_bar is not None:
             footprint_rows.append(_footprint_bar_params(footprint_bar))
@@ -178,6 +195,7 @@ class KeyedStore:
             or delta_rows
             or footprint_rows
             or level_rows
+            or fvg_rows
             or big_trade_rows
         ):
             return
@@ -191,6 +209,8 @@ class KeyedStore:
                 conn.executemany(_UPSERT_FOOTPRINT_BAR, footprint_rows)
             if level_rows:
                 conn.executemany(_UPSERT_FOOTPRINT_LEVEL, level_rows)
+            if fvg_rows:
+                conn.executemany(_UPSERT_FVG_SIGNAL, fvg_rows)
             if big_trade_rows:
                 conn.executemany(_UPSERT_BIG_TRADE, big_trade_rows)
 
@@ -457,6 +477,57 @@ class KeyedStore:
             for r in rows
         ]
 
+    # -- FVG signals ----------------------------------------------------------
+
+    def upsert_fvg_signal(self, rec: FvgSignalRecord) -> None:
+        """Last-write-wins upsert of one confirmed FVG signal."""
+        self._writer.execute(_UPSERT_FVG_SIGNAL, _fvg_signal_params(rec))
+
+    def upsert_fvg_signals(self, recs: Iterable[FvgSignalRecord]) -> None:
+        """Last-write-wins upsert of many confirmed FVG signals."""
+        rows = [_fvg_signal_params(r) for r in recs]
+        if rows:
+            self._writer.executemany(_UPSERT_FVG_SIGNAL, rows)
+
+    def read_fvg_signals(
+        self,
+        symbol: str,
+        contract: str,
+        timeframe: str = "1m",
+        frm: int | None = None,
+        to: int | None = None,
+        limit: int | None = None,
+    ) -> list[FvgSignalRecord]:
+        """Read confirmed FVG signals over an optional time range."""
+        rows = self._read_keyed(
+            table="fvg_signals",
+            columns=(
+                "symbol, contract, timeframe, time, direction, level, pulse, "
+                "top, bottom, breakout_ratio"
+            ),
+            symbol=symbol,
+            contract=contract,
+            timeframe=timeframe,
+            frm=frm,
+            to=to,
+            limit=limit,
+        )
+        return [
+            FvgSignalRecord(
+                symbol=r["symbol"],
+                contract=r["contract"],
+                timeframe=r["timeframe"],
+                time=r["time"],
+                direction=r["direction"],
+                level=r["level"],
+                pulse=r["pulse"],
+                top=r["top"],
+                bottom=r["bottom"],
+                breakout_ratio=r["breakout_ratio"],
+            )
+            for r in rows
+        ]
+
     # -- big trades -----------------------------------------------------------
 
     def upsert_big_trade(self, rec: BigTradeRecord) -> None:
@@ -662,6 +733,21 @@ def _footprint_level_params(r: FootprintLevelRecord) -> tuple[object, ...]:
         r.bid_volume,
         r.ask_volume,
         None if r.imbalance is None else r.imbalance.value,
+    )
+
+
+def _fvg_signal_params(r: FvgSignalRecord) -> tuple[object, ...]:
+    return (
+        r.symbol,
+        r.contract,
+        r.timeframe,
+        int(r.time),
+        int(r.direction),
+        int(r.level),
+        int(r.pulse),
+        r.top,
+        r.bottom,
+        r.breakout_ratio,
     )
 
 

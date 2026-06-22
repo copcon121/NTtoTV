@@ -26,6 +26,8 @@ export interface ChartProfilePayload {
   /** Optional for backwards compatibility with profiles saved before this toggle existed. */
   showCvd?: boolean;
   showFootprint: boolean;
+  /** Optional for backwards compatibility with profiles saved before FVG Grader existed. */
+  showFvgGrader?: boolean;
   showBigTrades: boolean;
   ema: EmaSettings;
   smc: SmcSettings;

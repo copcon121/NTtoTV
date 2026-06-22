@@ -27,6 +27,7 @@ __all__ = [
     "VolumeDeltaRecord",
     "FootprintBarRecord",
     "FootprintLevelRecord",
+    "FvgSignalRecord",
     "BigTradeRecord",
     "ProfileRecord",
     "AlertRecord",
@@ -122,6 +123,22 @@ class FootprintLevelRecord:
     bid_volume: int
     ask_volume: int
     imbalance: ImbalanceSide | None = None
+
+
+@dataclass(slots=True)
+class FvgSignalRecord:
+    """One confirmed FVG signal row in ``fvg_signals``."""
+
+    symbol: str
+    contract: str
+    timeframe: str
+    time: CanonicalTimestamp
+    direction: int
+    level: int
+    pulse: int
+    top: float
+    bottom: float
+    breakout_ratio: float
 
 
 @dataclass(slots=True)
