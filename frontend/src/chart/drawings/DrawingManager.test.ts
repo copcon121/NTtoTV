@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DrawingManager } from "./DrawingManager";
 import { type RectanglePrimitive } from "./RectanglePrimitive";
 import { type TrendLinePrimitive } from "./TrendLinePrimitive";
+import type { DrawingToolType } from "./types";
 
 function makeHarness() {
   const clickHandlers: Array<(param: unknown) => void> = [];
@@ -80,6 +81,15 @@ function placeRectangle(clickHandlers: Array<(param: unknown) => void>) {
   clickHandlers[0]({ point: { x: 60, y: 80 }, paneIndex: 0 });
 }
 
+function placeAnchors(
+  clickHandlers: Array<(param: unknown) => void>,
+  anchors: Array<{ x: number; y: number }>,
+) {
+  for (const anchor of anchors) {
+    clickHandlers[0]({ point: anchor, paneIndex: 0 });
+  }
+}
+
 function pointerDown(container: HTMLElement, x: number, y: number) {
   container.dispatchEvent(
     new MouseEvent("pointerdown", {
@@ -138,10 +148,11 @@ describe("DrawingManager selection", () => {
     pointerDown(container, 30, 50);
     expect(rectangle.selected).toBe(true);
     expect(priceAxisView!.visible()).toBe(true);
-    expect(chart.applyOptions).not.toHaveBeenCalledWith({
+    expect(chart.applyOptions).toHaveBeenCalledWith({
       handleScroll: false,
       handleScale: false,
     });
+    pointerUp(container, 30, 50);
 
     pointerDown(container, 180, 150);
     expect(rectangle.selected).toBe(false);
@@ -157,6 +168,7 @@ describe("DrawingManager selection", () => {
     placeRectangle(clickHandlers);
 
     pointerDown(container, 30, 50);
+    pointerUp(container, 30, 50);
     pointerDown(container, 35, 20);
     pointerMove(container, 35, 10);
     pointerUp(container, 35, 10);
@@ -166,6 +178,118 @@ describe("DrawingManager selection", () => {
     expect(rectangle.anchors[0].price).toBe(10);
     expect(rectangle.anchors[1].logical).toBe(60);
     expect(rectangle.anchors[1].price).toBe(80);
+
+    manager.dispose();
+    container.remove();
+  });
+});
+
+describe("DrawingManager body dragging", () => {
+  it.each([
+    {
+      tool: "trendline",
+      anchors: [
+        { x: 10, y: 20 },
+        { x: 60, y: 80 },
+      ],
+      grab: { x: 35, y: 50 },
+      move: { x: 45, y: 65 },
+      expected: [
+        { logical: 20, price: 35 },
+        { logical: 70, price: 95 },
+      ],
+    },
+    {
+      tool: "horizontal_ray",
+      anchors: [{ x: 20, y: 40 }],
+      grab: { x: 100, y: 40 },
+      move: { x: 115, y: 55 },
+      expected: [{ logical: 35, price: 55 }],
+    },
+    {
+      tool: "rectangle",
+      anchors: [
+        { x: 10, y: 20 },
+        { x: 60, y: 80 },
+      ],
+      grab: { x: 30, y: 50 },
+      move: { x: 45, y: 65 },
+      expected: [
+        { logical: 25, price: 35 },
+        { logical: 75, price: 95 },
+      ],
+    },
+    {
+      tool: "fixed_range_delta_profile",
+      anchors: [
+        { x: 20, y: 40 },
+        { x: 80, y: 90 },
+      ],
+      grab: { x: 50, y: 160 },
+      move: { x: 70, y: 160 },
+      expected: [
+        { logical: 40, price: 40 },
+        { logical: 100, price: 90 },
+      ],
+    },
+    {
+      tool: "price_range",
+      anchors: [
+        { x: 10, y: 20 },
+        { x: 60, y: 80 },
+      ],
+      grab: { x: 35, y: 50 },
+      move: { x: 45, y: 65 },
+      expected: [
+        { logical: 20, price: 35 },
+        { logical: 70, price: 95 },
+      ],
+    },
+    {
+      tool: "order_bracket",
+      anchors: [
+        { x: 10, y: 50 },
+        { x: 80, y: 40 },
+        { x: 80, y: 70 },
+      ],
+      grab: { x: 40, y: 50 },
+      move: { x: 55, y: 65 },
+      expected: [
+        { logical: 25, price: 65 },
+        { logical: 95, price: 55 },
+        { logical: 95, price: 85 },
+      ],
+    },
+    {
+      tool: "vertical_line",
+      anchors: [{ x: 50, y: 30 }],
+      grab: { x: 50, y: 160 },
+      move: { x: 70, y: 160 },
+      expected: [{ logical: 70, price: 30 }],
+    },
+  ] satisfies Array<{
+    tool: DrawingToolType;
+    anchors: Array<{ x: number; y: number }>;
+    grab: { x: number; y: number };
+    move: { x: number; y: number };
+    expected: Array<{ logical: number; price: number }>;
+  }>)("moves $tool when dragging its body", ({ tool, anchors, grab, move, expected }) => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing(tool);
+    placeAnchors(clickHandlers, anchors);
+
+    pointerDown(container, grab.x, grab.y);
+    pointerMove(container, move.x, move.y);
+    pointerUp(container, move.x, move.y);
+
+    const [drawing] = manager.exportState();
+    expect(drawing.tool).toBe(tool);
+    expect(
+      drawing.anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual(expected);
 
     manager.dispose();
     container.remove();
@@ -246,6 +370,7 @@ describe("DrawingManager fixed range delta profile", () => {
     clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
 
     pointerDown(container, 50, 160);
+    pointerUp(container, 50, 160);
     pressDelete();
 
     expect(manager.exportState()).toEqual([]);
@@ -262,6 +387,7 @@ describe("DrawingManager fixed range delta profile", () => {
     clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
 
     pointerDown(container, 50, 160);
+    pointerUp(container, 50, 160);
     pointerDown(container, 80, 160);
     pointerMove(container, 110, 160);
     pointerUp(container, 110, 160);

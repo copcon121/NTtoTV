@@ -229,6 +229,46 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
+  it("loads SMC AI baseline signals for a chart range", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        signals: [
+          {
+            id: "sig-1",
+            time: 1000,
+            price: 4510.1,
+            side: "long",
+            zoneType: "fvg",
+            huntType: "sweep_low",
+            confirmation: "outside_bar",
+            outcome: "win",
+            netR: 1.9,
+            text: "AI L FVG",
+          },
+        ],
+      }),
+    );
+    const api = new ApiClient({ fetchFn });
+
+    await expect(
+      api.smcAiBaselineSignals({
+        symbol: "GC",
+        contract: "GC",
+        timeframe: "1m",
+        from: 1000,
+        to: 2000,
+        limit: 250,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "sig-1", side: "long", zoneType: "fvg" }),
+    ]);
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/smc-ai/baseline-signals?symbol=GC&contract=GC&tf=1m&from=1000&to=2000&limit=250",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
   it("loads latest analyst report and triggers a manual analyst run", async () => {
     const report = {
       reportId: "r-1",

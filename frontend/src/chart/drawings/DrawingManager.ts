@@ -59,6 +59,8 @@ type FixedRangeProfileSideIndices = {
   right: 0 | 1;
 };
 
+type ChartPoint = { x: number; y: number };
+
 type AnchorHit =
   | { drawingId: string; anchorIndex: number }
   | {
@@ -70,6 +72,16 @@ type AnchorHit =
       drawingId: string;
       fixedRangeProfileHandle: FixedRangeProfileResizeHandle;
       fixedRangeProfileSides: FixedRangeProfileSideIndices;
+    };
+
+type DrawingEdit =
+  | (AnchorHit & { pointerId: number })
+  | {
+      drawingId: string;
+      moveDrawing: true;
+      pointerId: number;
+      startPoint: ChartPoint;
+      anchors: AnchorPoint[];
     };
 
 let nextId = 1;
@@ -113,7 +125,7 @@ export class DrawingManager implements IDrawingManager {
   private _onPointerDown: ((e: PointerEvent) => void) | null = null;
   private _onPointerMove: ((e: PointerEvent) => void) | null = null;
   private _onPointerUp: ((e: PointerEvent) => void) | null = null;
-  private _edit: (AnchorHit & { pointerId: number }) | null = null;
+  private _edit: DrawingEdit | null = null;
   private _editCursorActive = false;
   private _selectedDrawingId: string | null = null;
 
@@ -388,12 +400,26 @@ export class DrawingManager implements IDrawingManager {
   }
 
   private _beginEdit(e: PointerEvent): void {
-    if (e.button !== 0 || this._placement !== null) return;
+    if (e.button !== 0 || this._placement !== null || this._edit !== null) return;
     const hit = this._hitAnchor(e.clientX, e.clientY);
     if (hit === null) {
       const drawingHit = this._hitDrawing(e.clientX, e.clientY);
       this._selectDrawing(drawingHit?.drawingId ?? null);
       if (drawingHit !== null) {
+        const point = this._localPoint(e.clientX, e.clientY);
+        const drawing = this._drawings.get(drawingHit.drawingId);
+        if (point !== null && drawing) {
+          this._edit = {
+            drawingId: drawingHit.drawingId,
+            moveDrawing: true,
+            pointerId: e.pointerId,
+            startPoint: point,
+            anchors: drawing.anchors.map((anchor) => ({ ...anchor })),
+          };
+          this._container?.setPointerCapture?.(e.pointerId);
+          this._setScroll(false);
+          if (this._container) this._container.style.cursor = "grabbing";
+        }
         e.preventDefault();
         e.stopPropagation();
       }
@@ -410,34 +436,49 @@ export class DrawingManager implements IDrawingManager {
 
   private _updateEdit(e: PointerEvent): void {
     if (this._edit !== null) {
-      const anchor = this._anchorFromPointerEvent(e);
       const drawing = this._drawings.get(this._edit.drawingId);
-      if (anchor !== null && drawing) {
-        if ("rectangleHandle" in this._edit && drawing.tool === "rectangle") {
+      if ("moveDrawing" in this._edit) {
+        const point = this._localPoint(e.clientX, e.clientY);
+        if (point !== null && drawing && this._chart && this._series) {
           drawing.setAnchors(
-            resizeRectangleAnchors(
-              drawing.anchors,
-              this._edit.rectangleHandle,
-              this._edit.rectangleSides,
-              anchor,
+            moveDrawingAnchors(
+              this._chart,
+              this._series,
+              this._edit.anchors,
+              this._edit.startPoint,
+              point,
             ),
           );
-        } else if (
-          "fixedRangeProfileHandle" in this._edit &&
-          drawing.tool === "fixed_range_delta_profile"
-        ) {
-          drawing.setAnchors(
-            resizeFixedRangeProfileAnchors(
-              drawing.anchors,
-              this._edit.fixedRangeProfileHandle,
-              this._edit.fixedRangeProfileSides,
-              anchor,
-            ),
-          );
-        } else if ("anchorIndex" in this._edit) {
-          const anchors = drawing.anchors.map((current) => ({ ...current }));
-          anchors[this._edit.anchorIndex] = anchor;
-          drawing.setAnchors(anchors);
+        }
+      } else {
+        const anchor = this._anchorFromPointerEvent(e);
+        if (anchor !== null && drawing) {
+          if ("rectangleHandle" in this._edit && drawing.tool === "rectangle") {
+            drawing.setAnchors(
+              resizeRectangleAnchors(
+                drawing.anchors,
+                this._edit.rectangleHandle,
+                this._edit.rectangleSides,
+                anchor,
+              ),
+            );
+          } else if (
+            "fixedRangeProfileHandle" in this._edit &&
+            drawing.tool === "fixed_range_delta_profile"
+          ) {
+            drawing.setAnchors(
+              resizeFixedRangeProfileAnchors(
+                drawing.anchors,
+                this._edit.fixedRangeProfileHandle,
+                this._edit.fixedRangeProfileSides,
+                anchor,
+              ),
+            );
+          } else if ("anchorIndex" in this._edit) {
+            const anchors = drawing.anchors.map((current) => ({ ...current }));
+            anchors[this._edit.anchorIndex] = anchor;
+            drawing.setAnchors(anchors);
+          }
         }
       }
       e.preventDefault();
@@ -452,7 +493,7 @@ export class DrawingManager implements IDrawingManager {
     }
     const drawingHit = this._hitDrawing(e.clientX, e.clientY);
     if (drawingHit !== null && this._container) {
-      this._container.style.cursor = "pointer";
+      this._container.style.cursor = "grab";
       this._editCursorActive = true;
     } else if (this._editCursorActive && this._container) {
       this._container.style.cursor = "";
@@ -739,6 +780,26 @@ function distanceToSegment(
     Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSq),
   );
   return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+}
+
+function moveDrawingAnchors(
+  chart: IChartApi,
+  series: ISeriesApi<"Candlestick">,
+  anchors: readonly AnchorPoint[],
+  startPoint: ChartPoint,
+  currentPoint: ChartPoint,
+): AnchorPoint[] {
+  const dx = currentPoint.x - startPoint.x;
+  const dy = currentPoint.y - startPoint.y;
+  return anchors.map((anchor) => {
+    const point = anchorToPoint(chart, series, anchor);
+    if (point === null) return { ...anchor };
+    const moved = anchorFromPoint(chart, series, {
+      x: point.x + dx,
+      y: point.y + dy,
+    });
+    return moved ?? { ...anchor };
+  });
 }
 
 function pointInBox(

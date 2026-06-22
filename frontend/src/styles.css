@@ -329,7 +329,7 @@ body {
   top: calc(100% + 4px);
   left: 0;
   z-index: 25;
-  min-width: 170px;
+  min-width: 210px;
   background: #1b1b1b;
   border: 1px solid #333;
   border-radius: 6px;

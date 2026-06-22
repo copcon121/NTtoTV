@@ -9,6 +9,7 @@ import {
   type EmaLineData,
   type OrderLine,
   type PriceLineSelection,
+  type SmcAiSignalMarker,
   type SmcOverlay,
   type OutsideBarSettings,
   DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -57,6 +58,7 @@ class FakePort implements DisposableChartPort {
   updateEmaLineCalls: { id: string; point: { time: number; value: number } }[] = [];
   clearEmaLinesCalls = 0;
   setBigTradesCalls: BigTradeMarker[][] = [];
+  setSmcAiSignalsCalls: SmcAiSignalMarker[][] = [];
   setAlertLinesCalls: AlertLine[][] = [];
   setOrderLinesCalls: OrderLine[][] = [];
   setSmcOverlayCalls: SmcOverlay[] = [];
@@ -126,6 +128,9 @@ class FakePort implements DisposableChartPort {
   }
   setBigTrades(markers: readonly BigTradeMarker[]): void {
     this.setBigTradesCalls.push(markers.map((marker) => ({ ...marker })));
+  }
+  setSmcAiSignals(markers: readonly SmcAiSignalMarker[]): void {
+    this.setSmcAiSignalsCalls.push(markers.map((marker) => ({ ...marker })));
   }
   setAlertLines(lines: readonly AlertLine[]): void {
     this.setAlertLinesCalls.push(lines.map((line) => ({ ...line })));
@@ -635,6 +640,38 @@ describe("ChartContainer", () => {
 
     expect(port.setBigTradesCalls[0]).toEqual(markers);
     expect(port.setBigTradesCalls[port.setBigTradesCalls.length - 1]).toEqual([]);
+  });
+
+  it("loads SMC AI signal markers through the port", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const signals: SmcAiSignalMarker[] = [
+      {
+        id: "sig-1",
+        time: 10,
+        price: 4500.1,
+        side: "long",
+        zoneType: "fvg",
+        huntType: "sweep_low",
+        confirmation: "outside_bar",
+        outcome: "win",
+        netR: 1.9,
+        text: "AI L FVG",
+      },
+    ];
+
+    render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC"
+        timeframe="1m"
+        bars={[bar(10)]}
+        smcAiSignals={signals}
+        portFactory={factory}
+      />,
+    );
+
+    expect(port.setSmcAiSignalsCalls[0]).toEqual(signals);
   });
 
   it("filters BigTrade markers by display min volume and max visible", () => {

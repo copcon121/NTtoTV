@@ -10,15 +10,11 @@ Bucketization (Requirements 9.1, 9.4, 9.5):
 
 * Bars are computed for the timeframes ``1m, 3m, 5m, 15m, 30m, 1h, 4h, 1D``.
 * Bucket boundaries are derived from the Canonical_Timestamp (integer ms since
-  the Unix epoch in UTC). Intraday timeframes floor to multiples of their
-  interval length; the ``1D`` timeframe floors to the **UTC calendar day**.
-* Because the Unix epoch (``ms == 0``) is itself midnight UTC, flooring an
-  intraday timeframe to a multiple of its millisecond length, and flooring
-  ``1D`` to a multiple of 86,400,000 ms, both land exactly on UTC calendar
-  boundaries. Integer floor division (``//``) floors toward negative infinity,
-  so pre-epoch timestamps bucket correctly too.
-* v1 uses the UTC calendar day for the daily boundary and applies **no**
-  configurable session/timezone template. (Req 9.5)
+  the Unix epoch in UTC). Intraday timeframes floor to UTC interval multiples;
+  ``4h`` and ``1D`` floor to the GC trading-session grid, Sunday 17:00 CT
+  through Friday 16:00 CT. Out-of-session trades are ignored for derived bars.
+* Integer floor division (``//``) floors intraday buckets toward negative
+  infinity, so pre-epoch timestamps bucket correctly too.
 
 Bar lifecycle (Requirements 9.2, 9.3):
 
@@ -41,6 +37,11 @@ corrupted.
 
 from __future__ import annotations
 
+from app.engines.session_calendar import (
+    TF_MS as _TF_MS,
+    is_gc_session_open,
+    timeframe_bucket_start,
+)
 from app.models.canonical import NormalizedTrade
 from app.models.messages import BarUpdate, OHLCVBar
 
@@ -48,20 +49,6 @@ __all__ = ["SUPPORTED_TFS", "BarAggregator"]
 
 # Supported timeframes, finest to coarsest. (Req 9.1)
 SUPPORTED_TFS: list[str] = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1D"]
-
-# Length of each timeframe bucket in milliseconds. ``1D`` is exactly one UTC
-# calendar day; because the epoch is midnight UTC, flooring to this multiple
-# yields the UTC calendar-day boundary. (Req 9.4, 9.5)
-_TF_MS: dict[str, int] = {
-    "1m": 60_000,
-    "3m": 3 * 60_000,
-    "5m": 5 * 60_000,
-    "15m": 15 * 60_000,
-    "30m": 30 * 60_000,
-    "1h": 60 * 60_000,
-    "4h": 4 * 60 * 60_000,
-    "1D": 24 * 60 * 60_000,
-}
 
 
 def _copy_bar(bar: OHLCVBar) -> OHLCVBar:
@@ -95,15 +82,11 @@ class BarAggregator:
         """Floor a Canonical_Timestamp to the start of its ``tf`` bucket.
 
         Intraday timeframes floor to multiples of their interval length; ``1D``
-        floors to the UTC calendar day. Uses integer floor division so the
-        result floors toward the epoch start for pre-epoch timestamps too.
-        (Req 9.4, 9.5)
+        floors to the GC trading-session open. Uses integer floor division for
+        intraday buckets so the result floors toward the epoch start for
+        pre-epoch timestamps too. (Req 9.4, 9.5)
         """
-        try:
-            interval = _TF_MS[tf]
-        except KeyError:
-            raise ValueError(f"unsupported timeframe: {tf!r}") from None
-        return (ts_ms // interval) * interval
+        return timeframe_bucket_start(ts_ms, tf)
 
     def current_bar(self, contract: str, tf: str) -> OHLCVBar | None:
         """Return a snapshot of the current in-progress bar, or ``None``.
@@ -112,6 +95,35 @@ class BarAggregator:
         """
         bar = self._bars.get((contract, tf))
         return None if bar is None else _copy_bar(bar)
+
+    def seed_bar(
+        self,
+        contract: str,
+        tf: str,
+        *,
+        time: int,
+        open: float,
+        high: float,
+        low: float,
+        close: float,
+        volume: int,
+    ) -> None:
+        """Seed the current in-progress bar for ``contract``/``tf``.
+
+        Used when the live pipeline starts with an already-open bar in cache,
+        so the first trade after a restart continues that bar instead of
+        replacing it with a partial restart-only bar.
+        """
+        if tf not in _TF_MS:
+            raise ValueError(f"unsupported timeframe: {tf!r}")
+        self._bars[(contract, tf)] = OHLCVBar(
+            time=time,
+            open=open,
+            high=high,
+            low=low,
+            close=close,
+            volume=volume,
+        )
 
     def reset_contract(self, contract: str) -> None:
         """Drop all in-progress bar state for ``contract`` (all timeframes).
@@ -131,6 +143,8 @@ class BarAggregator:
         followed by the freshly opened bar). (Req 9.2, 9.3)
         """
         updates: list[BarUpdate] = []
+        if not is_gc_session_open(t.time):
+            return updates
         for tf in SUPPORTED_TFS:
             bucket = self.bucket_start(t.time, tf)
             key = (t.contract, tf)

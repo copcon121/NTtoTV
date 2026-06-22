@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import {
   DEFAULT_OUTSIDE_BAR_SETTINGS,
+  normalizeOutsideBarSettings,
   type OutsideBarSettings,
 } from "./outsideBar";
 import { type SmcSettings } from "./smc";
@@ -171,6 +172,8 @@ export function IndicatorToggles({
   onFootprintSettingsChange,
   onBigTradeSettingsChange = () => {},
 }: IndicatorTogglesProps) {
+  const outsideBarConfig = normalizeOutsideBarSettings(outsideBar);
+  const outsideBarDeltaFilter = outsideBarConfig.deltaFilter;
   const [open, setOpen] = useState(false);
   const [emaSettingsOpen, setEmaSettingsOpen] = useState(false);
   const [smcSettingsOpen, setSmcSettingsOpen] = useState(false);
@@ -202,7 +205,33 @@ export function IndicatorToggles({
     };
   });
   const [btLimitDraft, setBtLimitDraft] = useState(String(bigTradeSettings.maxVisible));
+  const [obLookbackDraft, setObLookbackDraft] = useState(
+    String(outsideBarDeltaFilter.lookbackBars),
+  );
+  const [obDeltaMultiplierDraft, setObDeltaMultiplierDraft] = useState(
+    String(outsideBarDeltaFilter.deltaMultiplier),
+  );
   const rootRef = useRef<HTMLDivElement | null>(null);
+
+  const updateOutsideBar = (next: Partial<OutsideBarSettings>) => {
+    onOutsideBarChange(
+      normalizeOutsideBarSettings({
+        ...outsideBarConfig,
+        ...next,
+      }),
+    );
+  };
+
+  const updateOutsideBarDeltaFilter = (
+    next: Partial<OutsideBarSettings["deltaFilter"]>,
+  ) => {
+    updateOutsideBar({
+      deltaFilter: {
+        ...outsideBarDeltaFilter,
+        ...next,
+      },
+    });
+  };
 
   // Keep the draft in sync when the period changes from outside.
   useEffect(() => {
@@ -251,6 +280,14 @@ export function IndicatorToggles({
     setBtLimitDraft(String(bigTradeSettings.maxVisible));
   }, [bigTradeSettings.maxVisible]);
 
+  useEffect(() => {
+    setObLookbackDraft(String(outsideBarDeltaFilter.lookbackBars));
+  }, [outsideBarDeltaFilter.lookbackBars]);
+
+  useEffect(() => {
+    setObDeltaMultiplierDraft(String(outsideBarDeltaFilter.deltaMultiplier));
+  }, [outsideBarDeltaFilter.deltaMultiplier]);
+
   // Close the popover on an outside click or Escape.
   useEffect(() => {
     if (!open) return;
@@ -290,7 +327,7 @@ export function IndicatorToggles({
     (bigTrades ? 1 : 0) +
     (ema.enabled || ema.showEma200 ? 1 : 0) +
     (smc.enabled ? 1 : 0) +
-    (outsideBar.enabled ? 1 : 0);
+    (outsideBarConfig.enabled ? 1 : 0);
 
   const commitLength = () => {
     const parsed = Math.round(Number(lengthDraft));
@@ -401,6 +438,24 @@ export function IndicatorToggles({
       onBigTradeSettingsChange({ ...bigTradeSettings, maxVisible: parsed });
     } else {
       setBtLimitDraft(String(bigTradeSettings.maxVisible));
+    }
+  };
+
+  const commitOutsideBarLookback = () => {
+    const parsed = Math.round(Number(obLookbackDraft));
+    if (Number.isFinite(parsed) && parsed >= 5 && parsed <= 500) {
+      updateOutsideBarDeltaFilter({ lookbackBars: parsed });
+    } else {
+      setObLookbackDraft(String(outsideBarDeltaFilter.lookbackBars));
+    }
+  };
+
+  const commitOutsideBarDeltaMultiplier = () => {
+    const parsed = Number(obDeltaMultiplierDraft);
+    if (Number.isFinite(parsed) && parsed >= 0.1 && parsed <= 10) {
+      updateOutsideBarDeltaFilter({ deltaMultiplier: parsed });
+    } else {
+      setObDeltaMultiplierDraft(String(outsideBarDeltaFilter.deltaMultiplier));
     }
   };
 
@@ -726,8 +781,8 @@ export function IndicatorToggles({
           )}
           <IndicatorRow
             label="Outside Bar"
-            checked={outsideBar.enabled}
-            onChange={(enabled) => onOutsideBarChange({ ...outsideBar, enabled })}
+            checked={outsideBarConfig.enabled}
+            onChange={(enabled) => updateOutsideBar({ enabled })}
             trailing={
               <button
                 type="button"
@@ -748,10 +803,9 @@ export function IndicatorToggles({
                   type="color"
                   className="ema-color-picker"
                   aria-label="Outside Bar bullish color"
-                  value={outsideBar.bullColor}
+                  value={outsideBarConfig.bullColor}
                   onChange={(e) =>
-                    onOutsideBarChange({
-                      ...outsideBar,
+                    updateOutsideBar({
                       bullColor: e.currentTarget.value,
                     })
                   }
@@ -763,15 +817,81 @@ export function IndicatorToggles({
                   type="color"
                   className="ema-color-picker"
                   aria-label="Outside Bar bearish color"
-                  value={outsideBar.bearColor}
+                  value={outsideBarConfig.bearColor}
                   onChange={(e) =>
-                    onOutsideBarChange({
-                      ...outsideBar,
+                    updateOutsideBar({
                       bearColor: e.currentTarget.value,
                     })
                   }
                 />
               </div>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={outsideBarDeltaFilter.enabled}
+                  aria-label="Outside Bar delta filter"
+                  onChange={(event) =>
+                    updateOutsideBarDeltaFilter({
+                      enabled: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>M1 delta filter</span>
+              </label>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Lookback</span>
+                <input
+                  type="number"
+                  className="ema-length-input"
+                  aria-label="Outside Bar filter lookback"
+                  min={5}
+                  max={500}
+                  value={obLookbackDraft}
+                  onChange={(event) => setObLookbackDraft(event.currentTarget.value)}
+                  onBlur={commitOutsideBarLookback}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitOutsideBarLookback();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Delta x</span>
+                <input
+                  type="number"
+                  className="ema-length-input"
+                  aria-label="Outside Bar filter delta multiplier"
+                  min={0.1}
+                  max={10}
+                  step={0.05}
+                  value={obDeltaMultiplierDraft}
+                  onChange={(event) =>
+                    setObDeltaMultiplierDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitOutsideBarDeltaMultiplier}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitOutsideBarDeltaMultiplier();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={outsideBarDeltaFilter.requireRangeExpansion}
+                  aria-label="Outside Bar range expansion filter"
+                  onChange={(event) =>
+                    updateOutsideBarDeltaFilter({
+                      requireRangeExpansion: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>Range &gt; prev 2</span>
+              </label>
             </div>
           )}
           <IndicatorRow

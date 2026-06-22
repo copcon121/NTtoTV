@@ -69,6 +69,19 @@ export interface BigTradeRestRow {
   side: "buy" | "sell";
 }
 
+export interface SmcAiSignalRestRow {
+  id: string;
+  time: number;
+  price: number;
+  side: "long" | "short";
+  zoneType: string;
+  huntType: string;
+  confirmation: string;
+  outcome?: string;
+  netR?: number | null;
+  text?: string;
+}
+
 export interface ProfileListItem {
   id: string;
   name: string;
@@ -826,6 +839,34 @@ export class ApiClient {
       volume: trade.volume,
       side: trade.side,
     }));
+  }
+
+  async smcAiBaselineSignals(input: {
+    symbol: string;
+    contract: string;
+    timeframe: string;
+    from?: number;
+    to?: number;
+    limit?: number;
+  }): Promise<SmcAiSignalRestRow[]> {
+    const params = new URLSearchParams({
+      symbol: input.symbol,
+      contract: input.contract,
+      tf: input.timeframe,
+    });
+    if (input.from !== undefined) {
+      params.set("from", String(input.from));
+    }
+    if (input.to !== undefined) {
+      params.set("to", String(input.to));
+    }
+    if (input.limit !== undefined) {
+      params.set("limit", String(input.limit));
+    }
+    const body = await this.getJson<{ signals: SmcAiSignalRestRow[] }>(
+      `/smc-ai/baseline-signals?${params.toString()}`,
+    );
+    return body.signals;
   }
 
   /** Enable/disable an alert (Req 18.10). */

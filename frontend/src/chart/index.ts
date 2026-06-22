@@ -52,11 +52,18 @@ export {
 } from "./smc";
 
 export {
+  type OutsideBarDeltaFilterSettings,
+  type OutsideBarDeltaPoint,
+  type OutsideBarFilterContext,
+  type OutsideBarSignalSide,
   type OutsideBarSettings,
+  DEFAULT_OUTSIDE_BAR_DELTA_FILTER,
   DEFAULT_OUTSIDE_BAR_SETTINGS,
   isOutsideBar,
+  normalizeOutsideBarDeltaFilterSettings,
   normalizeOutsideBarSettings,
   outsideBarColor,
+  outsideBarSignal,
 } from "./outsideBar";
 
 export {
@@ -68,6 +75,7 @@ export {
   type OrderLine,
   type OrderLineField,
   type PriceLineSelection,
+  type SmcAiSignalMarker,
   LightweightChartsAdapter,
   CVD_OVERLAY_PRICE_SCALE_ID,
   CVD_OVERLAY_SCALE_MARGINS,

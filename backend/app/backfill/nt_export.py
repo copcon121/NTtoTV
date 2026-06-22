@@ -24,6 +24,7 @@ from typing import Iterator, Literal
 from app.engines.bar_aggregator import SUPPORTED_TFS, BarAggregator
 from app.engines.big_trade_engine import BigTradeEngine
 from app.engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
+from app.engines.session_calendar import TF_MS as _TF_MS, is_gc_session_open
 from app.engines.volume_delta_engine import VolumeDeltaEngine
 from app.models import NormalizedQuote, NormalizedTrade
 from app.models.timestamp import from_canonical_ms, to_canonical_ms
@@ -39,18 +40,6 @@ from app.storage.records import (
 from app.storage.tick_store import SYMBOL, TickStore
 
 ImportMode = Literal["missing-only", "replace-range"]
-
-_TF_MS: dict[str, int] = {
-    "1m": 60_000,
-    "3m": 3 * 60_000,
-    "5m": 5 * 60_000,
-    "15m": 15 * 60_000,
-    "30m": 30 * 60_000,
-    "1h": 60 * 60_000,
-    "4h": 4 * 60 * 60_000,
-    "1D": 24 * 60 * 60_000,
-}
-
 
 @dataclass(frozen=True)
 class NtExportPaths:
@@ -353,6 +342,8 @@ def import_nt_export_derived_cache(
         for trade in iter_last_trades(path, symbol, contract, export_tz, frm, to):
             summary.trades += 1
             _include_summary_time(summary, trade.time, frm, to)
+            if not is_gc_session_open(trade.time):
+                continue
 
             for update in bar_engine.on_trade(trade):
                 bars[(update.tf, update.bar.time)] = BarRecord(
@@ -713,6 +704,8 @@ def rebuild_derived_cache(
     big_trades: list[BigTradeRecord] = []
 
     for trade in _trades_with_prevailing_quote(tick_store, contract, read_from, read_to):
+        if not is_gc_session_open(trade.time):
+            continue
         for update in bar_engine.on_trade(trade):
             bars[(update.tf, update.bar.time)] = BarRecord(
                 symbol=update.symbol,

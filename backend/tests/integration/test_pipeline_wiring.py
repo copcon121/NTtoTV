@@ -36,6 +36,7 @@ from app.models.messages import (
 from app.pipeline import Pipeline
 from app.registry.registry import ChartClient, OutboundEvent, WebSocketRegistry
 from app.storage.cache_store import CacheStore
+from app.storage.records import BarRecord, VolumeDeltaRecord
 from app.storage.tick_store import TickStore
 
 _SYMBOL = "GC"
@@ -123,6 +124,76 @@ def test_accepted_trade_runs_engines_persists_and_streams(pipeline_env):
         e.event_type == EventType.BAR_UPDATE and e.payload["contract"] == _SYMBOL
         for e in captured
     )
+
+
+@pytest.mark.integration
+def test_pipeline_hydrates_open_cached_bar_on_start(tmp_path):
+    cache = CacheStore(tmp_path / "app.sqlite")
+    tick_store = TickStore(tmp_path / "ticks")
+    resolver = ContractResolver(_CANDIDATES)
+    resolver.set_manual_override(_ACTIVE)
+    registry = WebSocketRegistry()
+    captured: list[OutboundEvent] = []
+    registry.enqueue = captured.append  # type: ignore[assignment]
+    cache.upsert_bar(
+        BarRecord(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            timeframe="1m",
+            time=_BASE,
+            open=100.0,
+            high=102.0,
+            low=99.0,
+            close=101.0,
+            volume=10,
+            closed=False,
+        )
+    )
+    cache.upsert_volume_delta(
+        VolumeDeltaRecord(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            timeframe="1m",
+            time=_BASE,
+            volume=10,
+            buy_volume=10,
+            sell_volume=0,
+            delta=10,
+            delta_high=10,
+            delta_low=10,
+            open_delta=10,
+            close_delta=10,
+        )
+    )
+    pipeline = Pipeline(
+        registry=registry,
+        cache=cache,
+        tick_store=tick_store,
+        resolver=resolver,
+        symbol=_SYMBOL,
+    )
+    try:
+        async def run():
+            await pipeline.on_trade(_trade(_BASE + 1_000, 103.0, 5, seq=0, ask=103.0))
+
+        asyncio.run(run())
+
+        chart_bars = cache.read_bars(_SYMBOL, _SYMBOL, "1m", None, None, 10)
+        assert chart_bars[-1].time == _BASE
+        assert chart_bars[-1].open == 100.0
+        assert chart_bars[-1].high == 103.0
+        assert chart_bars[-1].low == 99.0
+        assert chart_bars[-1].close == 103.0
+        assert chart_bars[-1].volume == 15
+
+        chart_vd = cache.read_volume_delta(_SYMBOL, _SYMBOL, "1m", None, None, 10)
+        assert chart_vd[-1].time == _BASE
+        assert chart_vd[-1].volume == 15
+        assert chart_vd[-1].buy_volume == 15
+        assert chart_vd[-1].close_delta == 15
+    finally:
+        tick_store.close()
+        cache.close()
 
 
 def _smc_alert(repeat=True):

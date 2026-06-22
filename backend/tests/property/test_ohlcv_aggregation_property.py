@@ -4,16 +4,16 @@ Generates arbitrary trade tick streams (non-decreasing Canonical_Timestamps,
 as guaranteed upstream by the sequence validator) and feeds them through the
 :class:`~app.engines.bar_aggregator.BarAggregator`. For every supported
 timeframe and every produced bar it asserts the aggregation invariants and
-correct UTC bucketization:
+correct bucketization:
 
 * ``low <= min(open, close)`` and ``high >= max(open, close)`` and ``low <= high``;
 * ``low == min`` and ``high == max`` of the constituent trade prices;
 * ``volume == sum`` of constituent trade volumes;
 * ``open == first`` trade price in the bucket, ``close == last``;
 * each bar's ``time`` equals the timeframe-floored bucket start (intraday floored
-  to multiples of their interval; ``1D`` floored to the UTC calendar day);
-* every trade lands in exactly one bucket (the bucket partition is total and
-  disjoint per timeframe).
+  to multiples of their interval; ``1D`` floored to the GC session day);
+* every open-session trade lands in exactly one bucket (the bucket partition is
+  total and disjoint per timeframe; out-of-session ticks are ignored).
 
 **Validates: Requirements 9.1, 9.4, 9.5**
 """
@@ -25,6 +25,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from app.engines.bar_aggregator import SUPPORTED_TFS, BarAggregator, _TF_MS
+from app.engines.session_calendar import SESSION_ANCHORED_TFS, is_gc_session_open
 from app.models.canonical import NormalizedTrade
 from app.models.messages import BarUpdate, OHLCVBar
 
@@ -120,10 +121,13 @@ def test_property_14_ohlcv_aggregation_invariants(trades: list[NormalizedTrade])
     # Every trade lands in exactly one bucket per timeframe: bucket_start is a
     # total function placing the trade within [bucket, bucket + interval).
     for t in trades:
+        if not is_gc_session_open(t.time):
+            continue
         for tf in SUPPORTED_TFS:
             interval = _TF_MS[tf]
             bucket = agg.bucket_start(t.time, tf)
-            assert bucket % interval == 0  # aligned to UTC boundary
+            if tf not in SESSION_ANCHORED_TFS:
+                assert bucket % interval == 0  # aligned to UTC boundary
             assert bucket <= t.time < bucket + interval
 
     final = _final_bars_per_tf(trades)
@@ -134,6 +138,8 @@ def test_property_14_ohlcv_aggregation_invariants(trades: list[NormalizedTrade])
         # Independently reconstruct expected per-bucket bars from the trades.
         expected: dict[int, list[NormalizedTrade]] = {}
         for t in trades:
+            if not is_gc_session_open(t.time):
+                continue
             bucket = agg.bucket_start(t.time, tf)
             expected.setdefault(bucket, []).append(t)
 

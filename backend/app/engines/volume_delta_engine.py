@@ -54,8 +54,10 @@ Modes (Requirements 13.6, 13.7)
   plus the current bar's running delta -- so the cumulative delta across bars
   equals the running sum of per-bar deltas.
 
-Bucketization mirrors the Bar_Aggregator: trade times (Canonical_Timestamp, ms
-since epoch UTC) are floored to multiples of the configured timeframe interval.
+Bucketization mirrors the Bar_Aggregator: regular intraday trade times
+(Canonical_Timestamp, ms since epoch UTC) are floored to multiples of the
+configured timeframe interval, while ``4h`` and ``1D`` use the GC
+trading-session grid. Out-of-session trades are ignored.
 Classification state (``prev_price`` / ``last_side``) is continuous across bar
 boundaries, matching the reference indicator's tick-direction tracking. Trades
 are expected to arrive with non-decreasing timestamps (guaranteed upstream by
@@ -68,26 +70,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from app.engines.session_calendar import (
+    TF_MS as _TF_MS,
+    is_gc_session_open,
+    timeframe_bucket_start,
+)
 from app.models.canonical import NormalizedTrade, Side
 from app.models.messages import VolumeDeltaUpdate
 
 __all__ = ["VolumeDeltaMode", "VolumeDeltaEngine", "DEFAULT_TIMEFRAME"]
 
 DEFAULT_TIMEFRAME = "1m"
-
-# Length of each supported timeframe bucket in milliseconds. Mirrors the
-# Bar_Aggregator's mapping; because the Unix epoch is midnight UTC, flooring to
-# these multiples lands on UTC calendar boundaries. (Req 9.4)
-_TF_MS: dict[str, int] = {
-    "1m": 60_000,
-    "3m": 3 * 60_000,
-    "5m": 5 * 60_000,
-    "15m": 15 * 60_000,
-    "30m": 30 * 60_000,
-    "1h": 60 * 60_000,
-    "4h": 4 * 60 * 60_000,
-    "1D": 24 * 60 * 60_000,
-}
 
 
 class VolumeDeltaMode(str, Enum):
@@ -183,8 +176,7 @@ class VolumeDeltaEngine:
 
     def bucket_start(self, ts_ms: int) -> int:
         """Floor a Canonical_Timestamp to the start of its timeframe bucket."""
-        interval = _TF_MS[self.timeframe]
-        return (ts_ms // interval) * interval
+        return timeframe_bucket_start(ts_ms, self.timeframe)
 
     def on_trade(self, t: NormalizedTrade) -> VolumeDeltaUpdate | None:
         """Classify ``t`` and fold it into the current bar; return the snapshot.
@@ -193,6 +185,8 @@ class VolumeDeltaEngine:
         out of order (its bucket precedes the current bar). (Req 13.1, 13.6, 13.7)
         """
         if t.volume < self.min_trade_size:
+            return None
+        if not is_gc_session_open(t.time):
             return None
 
         bucket = self.bucket_start(t.time)
@@ -252,6 +246,39 @@ class VolumeDeltaEngine:
         if bar is None:
             return None
         return self._build_update_for(contract, "GC", bar)
+
+    def seed_bar(
+        self,
+        contract: str,
+        *,
+        time: int,
+        volume: int,
+        buy_volume: int,
+        sell_volume: int,
+        delta_high: int,
+        delta_low: int,
+        open_delta: int,
+        close_delta: int,
+        last_price: float | None = None,
+    ) -> None:
+        """Seed the current in-progress delta bar for ``contract``.
+
+        This is used on live pipeline startup to continue an already-open cache
+        row after a backend restart. ``last_price`` only seeds tick-rule
+        direction fallback; bid/ask classification remains preferred.
+        """
+        self._bar[contract] = _BarState(
+            time=time,
+            volume=volume,
+            buy_volume=buy_volume,
+            sell_volume=sell_volume,
+            running_delta=close_delta,
+            delta_high=delta_high,
+            delta_low=delta_low,
+            open_delta=open_delta,
+        )
+        if last_price is not None:
+            self._prev_price[contract] = last_price
 
     def reset_contract(self, contract: str) -> None:
         """Drop all per-bar + classification state for ``contract``.

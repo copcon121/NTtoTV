@@ -46,6 +46,7 @@ import {
   type EmaLineData,
   type OrderLine,
   type PriceLineSelection,
+  type SmcAiSignalMarker,
   LightweightChartsAdapter,
 } from "./lightweightChartsAdapter";
 import { type Bar } from "../cache/types";
@@ -93,6 +94,7 @@ export interface DisposableChartPort extends ChartSeriesPort {
   updateVolumeDelta?(point: VolumeDeltaDatum): void;
   setBigTrades?(markers: readonly BigTradeMarker[]): void;
   updateBigTrade?(marker: BigTradeMarker): void;
+  setSmcAiSignals?(markers: readonly SmcAiSignalMarker[]): void;
   setAlertLines?(lines: readonly AlertLine[]): void;
   setOrderLines?(lines: readonly OrderLine[]): void;
   getSelectedPriceLine?(): PriceLineSelection | undefined;
@@ -213,6 +215,8 @@ export interface ChartContainerProps {
   footprintBars?: ReadonlyMap<number, FootprintBar>;
   /** Initial/live BigTrade markers. */
   bigTrades?: readonly BigTradeMarker[];
+  /** Read-only Phase 0 SMC AI entry markers. */
+  smcAiSignals?: readonly SmcAiSignalMarker[];
   /** Alert level lines to draw on the candle price scale (Req 16.5). */
   alertLines?: readonly AlertLine[];
   /** Live order entry/SL/TP levels to draw on the candle price scale. */
@@ -367,6 +371,7 @@ export function ChartContainer({
   volumeDelta,
   footprintBars,
   bigTrades,
+  smcAiSignals,
   alertLines,
   orderLines,
   orderControls,
@@ -697,6 +702,10 @@ export function ChartContainer({
   useEffect(() => {
     portRef.current?.setBigTrades?.(showBigTrades ? displayedBigTrades : []);
   }, [symbol, contract, displayedBigTrades, showBigTrades]);
+
+  useEffect(() => {
+    portRef.current?.setSmcAiSignals?.(smcAiSignals ?? []);
+  }, [symbol, contract, timeframe, smcAiSignals]);
 
   // Draw alert level lines on the candle price scale (Req 16.5). Re-applied on
   // any change to the alert set; the adapter diffs by id so unchanged lines are

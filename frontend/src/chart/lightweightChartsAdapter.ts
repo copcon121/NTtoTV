@@ -46,6 +46,7 @@ import { type ChartSeriesPort } from "./chartSeriesController";
 import { type EmaPoint } from "./ema";
 import {
   DEFAULT_OUTSIDE_BAR_SETTINGS,
+  type OutsideBarFilterContext,
   type OutsideBarSettings,
   normalizeOutsideBarSettings,
   outsideBarColor,
@@ -124,6 +125,19 @@ export interface OrderLine {
   editable?: boolean;
 }
 
+export interface SmcAiSignalMarker {
+  id: string;
+  time: number;
+  price: number;
+  side: "long" | "short";
+  zoneType: "ob" | "fvg" | string;
+  huntType: string;
+  confirmation: string;
+  outcome?: "win" | "loss" | "incomplete" | string;
+  netR?: number | null;
+  text?: string;
+}
+
 /** Colors for positive/negative delta candles; kept here so the port stays self-contained. */
 export interface DeltaColors {
   positive: string;
@@ -179,6 +193,8 @@ const BIG_TRADE_BUY_FILL = "rgba(30, 144, 255, 0.18)";
 const BIG_TRADE_BUY_STROKE = "rgba(12, 95, 190, 0.30)";
 const BIG_TRADE_SELL_FILL = "rgba(220, 20, 60, 0.18)";
 const BIG_TRADE_SELL_STROKE = "rgba(170, 12, 42, 0.30)";
+const SMC_AI_LONG_COLOR = "#00c853";
+const SMC_AI_SHORT_COLOR = "#ff7043";
 
 interface ChartContrastPalette {
   text: string;
@@ -364,12 +380,18 @@ function toCandle(
   displayTimeOffsetMs: number,
   previousBar?: Bar,
   outsideBar: OutsideBarSettings = DEFAULT_OUTSIDE_BAR_SETTINGS,
+  outsideBarContext: OutsideBarFilterContext = {},
 ): CandlestickData {
   const highlight = isUtcPlus7SessionHighlightTime(
     bar.time,
     displayTimeOffsetMs,
   );
-  const obColor = outsideBarColor(bar, previousBar, outsideBar);
+  const obColor = outsideBarColor(
+    bar,
+    previousBar,
+    outsideBar,
+    outsideBarContext,
+  );
   const candle: CandlestickData = {
     time: toUtcTimestamp(bar.time, displayTimeOffsetMs),
     open: bar.open,
@@ -491,6 +513,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly deltaSeries: ISeriesApi<"Candlestick">;
   private readonly cvdSeries: ISeriesApi<"Line">;
   private readonly smcMarkers: ISeriesMarkersPluginApi<Time>;
+  private readonly smcAiSignalMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly sessionMarkers: ISeriesMarkersPluginApi<Time>;
   private bigTradePrimitive: BigTradeBubblePrimitive | undefined;
   private smcPrimitive: SmcOverlayPrimitive | undefined;
@@ -506,6 +529,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private cvdLastTime: number | undefined;
   private cvdLastValue = 0;
   private readonly bigTradesByKey = new Map<string, BigTradeMarker>();
+  private smcAiSignals: SmcAiSignalMarker[] = [];
   private readonly alertLinesById = new Map<string, IPriceLine>();
   // Live price/style per alert line, used for drag hit-testing + updates.
   private readonly alertLineMeta = new Map<
@@ -605,6 +629,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       priceLineStyle: LineStyle.Dashed,
     });
     this.smcMarkers = createSeriesMarkers(this.candleSeries, []);
+    this.smcAiSignalMarkers = createSeriesMarkers(this.candleSeries, []);
     this.sessionMarkers = createSeriesMarkers(this.candleSeries, []);
     this.bigTradePrimitive = new BigTradeBubblePrimitive([]);
     this.candleSeries.attachPrimitive(
@@ -710,6 +735,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderCvdSeries();
     this.renderBigTradeMarkers();
     this.renderSmcOverlay();
+    this.renderSmcAiSignals();
   }
 
   /** Change display timezone without changing source UTC timestamps. */
@@ -849,6 +875,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
           this.displayTimeOffsetMs,
           this.candleBars[index - 1],
           this.outsideBar,
+          {
+            bars: this.candleBars,
+            index,
+            deltaByTime: this.volumeDeltaByTime,
+          },
         ),
       ),
     );
@@ -959,6 +990,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.displayTimeOffsetMs,
       this.candleBars[index - 1],
       this.outsideBar,
+      {
+        bars: this.candleBars,
+        index,
+        deltaByTime: this.volumeDeltaByTime,
+      },
     );
     this.candleSeries.update(candle, index < this.candleBars.length - 1);
   }
@@ -1135,6 +1171,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     for (const point of points) {
       this.volumeDeltaByTime.set(point.time, { ...point });
     }
+    this.renderCandleSeries();
     this.renderVolumeDeltaSeries();
     this.renderCvdSeries();
   }
@@ -1148,6 +1185,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       toVolumeDelta(next, this.deltaColors, this.displayTimeOffsetMs),
     );
     this.updateCvdPoint(next, previous);
+    const index = this.candleBars.findIndex((bar) => bar.time === point.time);
+    this.updateCandleAt(index);
+    this.updateCandleAt(index + 1);
   }
 
   /** Bulk-load BigTrade markers on the candle series. */
@@ -1157,6 +1197,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.bigTradesByKey.set(bigTradeKey(marker), { ...marker });
     }
     this.renderBigTradeMarkers();
+  }
+
+  /** Draw read-only Phase 0 SMC AI entry signals on the candle series. */
+  setSmcAiSignals(markers: readonly SmcAiSignalMarker[]): void {
+    this.smcAiSignals = markers.map((marker) => ({ ...marker }));
+    this.renderSmcAiSignals();
   }
 
   /** Apply one incremental BigTrade marker. */
@@ -1821,6 +1867,31 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.bigTradePrimitive?.setMarkers(bubbleMarkers);
   }
 
+  private renderSmcAiSignals(): void {
+    const markers: SeriesMarker<Time>[] = this.smcAiSignals
+      .slice()
+      .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id))
+      .map((marker) => {
+        const isLong = marker.side === "long";
+        const outcome =
+          marker.outcome === "win"
+            ? " W"
+            : marker.outcome === "loss"
+              ? " L"
+              : "";
+        return {
+          time: toUtcTimestamp(marker.time, this.displayTimeOffsetMs),
+          position: isLong ? "belowBar" : "aboveBar",
+          shape: isLong ? "arrowUp" : "arrowDown",
+          color: isLong ? SMC_AI_LONG_COLOR : SMC_AI_SHORT_COLOR,
+          id: marker.id,
+          text: `${marker.text ?? (isLong ? "AI L" : "AI S")}${outcome}`,
+          size: 1.35,
+        };
+      });
+    this.smcAiSignalMarkers.setMarkers(markers);
+  }
+
   private renderSmcOverlay(): void {
     const markerTextColor = chartContrastPalette(this.chartBackgroundColor).text;
     const markers: SeriesMarker<Time>[] = this.smcOverlay.markers
@@ -2014,6 +2085,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.bigTradePrimitive = undefined;
     }
     this.smcMarkers.detach();
+    this.smcAiSignalMarkers.detach();
     this.sessionMarkers.detach();
     this.chart.remove();
   }

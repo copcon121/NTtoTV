@@ -171,6 +171,51 @@ describe("IndicatorToggles", () => {
     });
   });
 
+  it("allows decimal Outside Bar delta multiplier edits", () => {
+    const onOutsideBar = vi.fn();
+    const outsideBar = {
+      ...DEFAULT_OUTSIDE_BAR_SETTINGS,
+      enabled: true,
+      deltaFilter: {
+        ...DEFAULT_OUTSIDE_BAR_SETTINGS.deltaFilter,
+        enabled: true,
+      },
+    };
+    render(
+      <IndicatorToggles
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        outsideBar={outsideBar}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        onOutsideBarChange={onOutsideBar}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    fireEvent.click(screen.getByLabelText("Outside Bar settings"));
+    const input = screen.getByLabelText(
+      "Outside Bar filter delta multiplier",
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "0.6" } });
+    expect(input.value).toBe("0.6");
+    fireEvent.blur(input);
+
+    expect(onOutsideBar).toHaveBeenCalledWith({
+      ...outsideBar,
+      deltaFilter: {
+        ...outsideBar.deltaFilter,
+        deltaMultiplier: 0.6,
+      },
+    });
+  });
+
   it("edits the EMA length via the settings panel", () => {
     const onEma = vi.fn();
     render(

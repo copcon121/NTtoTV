@@ -1,12 +1,12 @@
 """Unit tests for the Bar_Aggregator (task 7.1).
 
 Example-based coverage of OHLCV bucketization and bar updates: bucket flooring
-for intraday timeframes and the 1D UTC-calendar-day boundary, opening/updating
-the current bar per timeframe, and producing ``bar_update`` outputs with the
-``closed`` flag set when a new bucket opens.
+for intraday timeframes and the 1D GC trading-session boundary,
+opening/updating the current bar per timeframe, and producing ``bar_update``
+outputs with the ``closed`` flag set when a new bucket opens.
 
 Covers Requirements 9.1 (timeframes), 9.2 (per-TF update), 9.3 (bar_update +
-closed flag), 9.4/9.5 (UTC bucketization, 1D = UTC calendar day).
+closed flag), 9.4/9.5 (UTC bucketization, 1D = GC session day).
 """
 
 from __future__ import annotations
@@ -78,23 +78,26 @@ def test_bucket_start_floors_intraday_to_interval_multiple():
 
 
 @pytest.mark.unit
-def test_bucket_start_4h_floors_to_four_hour_utc_multiple():
+def test_bucket_start_4h_floors_to_gc_session_multiple():
     agg = BarAggregator()
-    # 03:59 -> 00:00, 05:00 -> 04:00, 23:59 -> 20:00 (UTC, anchored at midnight).
-    assert agg.bucket_start(_ms(2025, 1, 2, 3, 59, 0), "4h") == _ms(2025, 1, 2, 0, 0, 0)
-    assert agg.bucket_start(_ms(2025, 1, 2, 5, 0, 0), "4h") == _ms(2025, 1, 2, 4, 0, 0)
-    assert agg.bucket_start(_ms(2025, 1, 2, 23, 59, 0), "4h") == _ms(2025, 1, 2, 20, 0, 0)
+    # June uses CDT, so the GC session opens at 22:00 UTC (05:00 UTC+7).
+    assert agg.bucket_start(_ms(2026, 6, 15, 22, 0, 0), "4h") == _ms(2026, 6, 15, 22, 0, 0)
+    assert agg.bucket_start(_ms(2026, 6, 16, 1, 59, 0), "4h") == _ms(2026, 6, 15, 22, 0, 0)
+    assert agg.bucket_start(_ms(2026, 6, 16, 2, 0, 0), "4h") == _ms(2026, 6, 16, 2, 0, 0)
+    # The final 240-minute bar of a GC session is naturally shorter because the
+    # session closes at 16:00 CT.
+    assert agg.bucket_start(_ms(2026, 6, 16, 20, 59, 0), "4h") == _ms(2026, 6, 16, 18, 0, 0)
 
 
 @pytest.mark.unit
-def test_bucket_start_1d_floors_to_utc_calendar_day():
+def test_bucket_start_1d_floors_to_gc_trading_session_day():
     agg = BarAggregator()
-    midnight = _ms(2025, 1, 2, 0, 0, 0)
-    assert agg.bucket_start(_ms(2025, 1, 2, 0, 0, 0), "1D") == midnight
-    assert agg.bucket_start(_ms(2025, 1, 2, 13, 37, 42) + 123, "1D") == midnight
-    assert agg.bucket_start(_ms(2025, 1, 2, 23, 59, 59) + 999, "1D") == midnight
-    # Next day rolls to the next midnight.
-    assert agg.bucket_start(_ms(2025, 1, 3, 0, 0, 0), "1D") == _ms(2025, 1, 3, 0, 0, 0)
+    session_open = _ms(2026, 6, 14, 22, 0, 0)  # Sunday 17:00 CDT.
+    assert agg.bucket_start(_ms(2026, 6, 14, 22, 0, 0), "1D") == session_open
+    assert agg.bucket_start(_ms(2026, 6, 15, 12, 37, 42) + 123, "1D") == session_open
+    assert agg.bucket_start(_ms(2026, 6, 15, 20, 59, 59) + 999, "1D") == session_open
+    # Next GC session rolls at 17:00 CDT, not UTC midnight.
+    assert agg.bucket_start(_ms(2026, 6, 15, 22, 0, 0), "1D") == _ms(2026, 6, 15, 22, 0, 0)
 
 
 @pytest.mark.unit
@@ -148,6 +151,34 @@ def test_updates_within_bucket_are_not_closed():
     assert one_m[0].bar.volume == 3
 
 
+@pytest.mark.unit
+def test_seed_bar_continues_current_bucket_after_restart():
+    agg = BarAggregator()
+    base = _ms(2025, 1, 2, 3, 4, 0)
+    agg.seed_bar(
+        CONTRACT,
+        "1m",
+        time=base,
+        open=100.0,
+        high=105.0,
+        low=99.0,
+        close=102.0,
+        volume=10,
+    )
+
+    updates = agg.on_trade(_trade(base + 30_000, 98.0, 4))
+
+    one_m = [u for u in updates if u.tf == "1m"]
+    assert len(one_m) == 1
+    assert one_m[0].closed is False
+    assert one_m[0].bar.time == base
+    assert one_m[0].bar.open == 100.0
+    assert one_m[0].bar.high == 105.0
+    assert one_m[0].bar.low == 98.0
+    assert one_m[0].bar.close == 98.0
+    assert one_m[0].bar.volume == 14
+
+
 # --- bucket roll closes the prior bar (Req 9.3) --------------------------------
 
 
@@ -199,8 +230,8 @@ def test_minute_roll_does_not_close_coarser_timeframes():
 @pytest.mark.unit
 def test_day_roll_closes_the_1d_bar():
     agg = BarAggregator()
-    day1 = _ms(2025, 1, 2, 23, 59, 0)
-    day2 = _ms(2025, 1, 3, 0, 0, 30)
+    day1 = _ms(2026, 6, 15, 20, 59, 0)  # Monday 15:59 CDT.
+    day2 = _ms(2026, 6, 15, 22, 0, 30)  # Monday 17:00:30 CDT.
     agg.on_trade(_trade(day1, 100.0, 2))
     updates = agg.on_trade(_trade(day2, 110.0, 3))
 
@@ -208,9 +239,19 @@ def test_day_roll_closes_the_1d_bar():
     assert len(one_d) == 2
     closed, opened = one_d
     assert closed.closed is True
-    assert closed.bar.time == _ms(2025, 1, 2, 0, 0, 0)
+    assert closed.bar.time == _ms(2026, 6, 14, 22, 0, 0)
     assert opened.closed is False
-    assert opened.bar.time == _ms(2025, 1, 3, 0, 0, 0)
+    assert opened.bar.time == _ms(2026, 6, 15, 22, 0, 0)
+
+
+@pytest.mark.unit
+def test_out_of_session_tick_does_not_open_1d_bar():
+    agg = BarAggregator()
+    sunday_before_open = _ms(2026, 6, 14, 13, 4, 0)  # Sunday 08:04 CDT.
+    updates = agg.on_trade(_trade(sunday_before_open, 4239.9, 10))
+
+    assert updates == []
+    assert agg.current_bar(CONTRACT, "1D") is None
 
 
 # --- emitted snapshots are independent of later mutation -----------------------

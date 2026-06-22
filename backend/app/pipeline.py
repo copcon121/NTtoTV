@@ -43,6 +43,7 @@ from .engines.basis_engine import BasisEngine
 from .engines.big_trade_engine import BigTradeEngine
 from .engines.contract_resolver import ContractResolver
 from .engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
+from .engines.session_calendar import is_gc_session_open
 from .engines.volume_delta_engine import VolumeDeltaEngine, VolumeDeltaMode
 from .engines.alert_engine import AlertEngine, MarketContext
 from .ingest.control_plane import ControlPlaneCoordinator
@@ -257,6 +258,7 @@ class Pipeline:
         # book like MyVolumeDelta (otherwise flat prints default to buy and the
         # delta sign drifts away from NinjaTrader). (Req 13.2, 13.3)
         self._last_quote: dict[str, tuple[float | None, float | None]] = {}
+        self._hydrate_engine_state_from_cache()
 
     # -- wiring seams ----------------------------------------------------------
 
@@ -393,6 +395,9 @@ class Pipeline:
     # -- engine fan-out --------------------------------------------------------
 
     async def _run_trade_engines(self, trade: NormalizedTrade) -> None:
+        if not is_gc_session_open(trade.time):
+            return
+
         # 1) OHLCV bars across all timeframes. (Req 9.3)
         alert_ctx_bar: BarUpdate | None = None
         bar_updates = self._bars.on_trade(trade)
@@ -610,6 +615,64 @@ class Pipeline:
     def _chart_contract(self) -> str:
         """Stable logical contract key used by the chart cache/stream."""
         return self._symbol
+
+    def _hydrate_engine_state_from_cache(self) -> None:
+        """Continue open cached chart bars after a backend restart.
+
+        Without this, the first live trade after restart opens a fresh current
+        bucket and the cache upsert replaces the already-open bar with only the
+        post-restart volume. Seed only rows marked open so closed historical
+        bars are not replayed through the live engines.
+        """
+        chart_contract = self._chart_contract()
+        seeded = 0
+        for tf in SUPPORTED_TFS:
+            bars = self._cache.read_bars(
+                self._symbol,
+                chart_contract,
+                tf,
+                limit=1,
+            )
+            if not bars:
+                continue
+            bar = bars[-1]
+            if bar.closed:
+                continue
+
+            self._bars.seed_bar(
+                chart_contract,
+                tf,
+                time=bar.time,
+                open=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                volume=bar.volume,
+            )
+
+            deltas = self._cache.read_volume_delta(
+                self._symbol,
+                chart_contract,
+                tf,
+                limit=1,
+            )
+            if deltas and deltas[-1].time == bar.time:
+                delta = deltas[-1]
+                self._vds[tf].seed_bar(
+                    chart_contract,
+                    time=delta.time,
+                    volume=delta.volume,
+                    buy_volume=delta.buy_volume,
+                    sell_volume=delta.sell_volume,
+                    delta_high=delta.delta_high,
+                    delta_low=delta.delta_low,
+                    open_delta=delta.open_delta,
+                    close_delta=delta.close_delta,
+                    last_price=bar.close,
+                )
+            seeded += 1
+        if seeded:
+            logger.info("pipeline: hydrated %s open chart bars from cache", seeded)
 
     def _initial_source_contract(self) -> str | None:
         manual = self._resolver.manual_override

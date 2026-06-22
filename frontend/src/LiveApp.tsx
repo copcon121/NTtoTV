@@ -59,6 +59,7 @@ import {
   type AlertLine,
   type OrderLine,
   type OrderLineField,
+  type SmcAiSignalMarker,
 } from "./chart/lightweightChartsAdapter";
 import {
   MarketOrderBar,
@@ -132,6 +133,7 @@ export const FOOTPRINT_SUBSCRIBED_EVENTS: ChartEventType[] = [
 const EMPTY_BARS: readonly Bar[] = [];
 const EMPTY_VOLUME_DELTA: readonly VolumeDeltaDatum[] = [];
 const EMPTY_BIG_TRADES: readonly BigTradeMarker[] = [];
+const EMPTY_SMC_AI_SIGNALS: readonly SmcAiSignalMarker[] = [];
 const EMPTY_FOOTPRINT_BARS: ReadonlyMap<number, FootprintBar> = new Map();
 const DEFERRED_INDICATOR_LOAD_MS = 75;
 const DEFERRED_OVERLAY_LOAD_MS = 250;
@@ -1235,6 +1237,7 @@ export function LiveApp() {
     string | undefined
   >(undefined);
   const [bigTrades, setBigTrades] = useState<readonly BigTradeMarker[]>([]);
+  const [smcAiSignals, setSmcAiSignals] = useState<readonly SmcAiSignalMarker[]>([]);
   const [showVolume, setShowVolume] = useState(true);
   const [showVolumeDelta, setShowVolumeDelta] = useState(true);
   const [showCvd, setShowCvd] = useState(true);
@@ -1816,6 +1819,7 @@ export function LiveApp() {
     socket.subscribe(SYMBOL, TIMEFRAME_SUBSCRIBED_EVENTS, timeframe);
     let cancelled = false;
     let deltaTimer: number | undefined;
+    let signalTimer: number | undefined;
     void (async () => {
       try {
         const history = await historyLoader.current!.load({
@@ -1827,6 +1831,33 @@ export function LiveApp() {
           setLoadedSeriesKey(requestedSeriesKey);
           setBars(history.bars);
           setLatestPrice(history.bars[history.bars.length - 1]?.close);
+          if (timeframe !== "1m" || history.bars.length === 0) {
+            setSmcAiSignals([]);
+          } else {
+            signalTimer = window.setTimeout(() => {
+              const first = history.bars[0];
+              const last = history.bars[history.bars.length - 1];
+              void (async () => {
+                try {
+                  const signals = await api.smcAiBaselineSignals({
+                    symbol: SYMBOL,
+                    contract,
+                    timeframe,
+                    from: first.time,
+                    to: last.time,
+                    limit: 500,
+                  });
+                  if (!cancelled) {
+                    setSmcAiSignals(signals);
+                  }
+                } catch {
+                  if (!cancelled) {
+                    setSmcAiSignals([]);
+                  }
+                }
+              })();
+            }, DEFERRED_OVERLAY_LOAD_MS);
+          }
           deltaTimer = window.setTimeout(() => {
             void (async () => {
               try {
@@ -1873,6 +1904,7 @@ export function LiveApp() {
           setLatestPrice(undefined);
           setVolumeDeltaSeriesKey(requestedSeriesKey);
           setVolumeDelta([]);
+          setSmcAiSignals([]);
         }
       }
     })();
@@ -1880,6 +1912,9 @@ export function LiveApp() {
       cancelled = true;
       if (deltaTimer !== undefined) {
         window.clearTimeout(deltaTimer);
+      }
+      if (signalTimer !== undefined) {
+        window.clearTimeout(signalTimer);
       }
       socket.unsubscribe(SYMBOL, TIMEFRAME_SUBSCRIBED_EVENTS, timeframe);
     };
@@ -1889,6 +1924,7 @@ export function LiveApp() {
     setLoadedOverlayContract(undefined);
     setFootprintBars(new Map());
     setBigTrades([]);
+    setSmcAiSignals([]);
   }, [contract]);
 
   useEffect(() => {
@@ -3041,6 +3077,9 @@ export function LiveApp() {
   const chartBigTrades = hasLoadedCurrentSeries && bigTradeOverlayEnabled
     ? bigTrades
     : EMPTY_BIG_TRADES;
+  const chartSmcAiSignals = hasLoadedCurrentSeries && timeframe === "1m"
+    ? smcAiSignals
+    : EMPTY_SMC_AI_SIGNALS;
   const chartMenuLimitDraft =
     chartMenu === undefined
       ? undefined
@@ -3239,6 +3278,7 @@ export function LiveApp() {
             volumeDelta={chartVolumeDelta}
             footprintBars={chartFootprintBars}
             bigTrades={chartBigTrades}
+            smcAiSignals={chartSmcAiSignals}
             alertLines={alertLines}
             orderLines={orderLines}
             ema={ema}

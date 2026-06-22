@@ -11,8 +11,10 @@ aggregation of the finer-timeframe bars spanning the same interval:
 
 This is checked for every (finer, coarser) supported-timeframe pair whose
 coarser interval is an exact integer multiple of the finer interval (so the
-finer buckets perfectly tile the coarser bucket given the shared UTC epoch
-anchor), e.g. five 1m bars roll up into one 5m bar.
+finer buckets tile the coarser bucket under the shared UTC intraday anchor,
+e.g. five 1m bars roll up into one 5m bar. Session-anchored frames such as
+``4h`` and ``1D`` are intentionally excluded because they follow the exchange
+session rather than the UTC intraday grid.
 
 **Validates: Requirements 9.2**
 """
@@ -24,6 +26,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from app.engines.bar_aggregator import SUPPORTED_TFS, BarAggregator, _TF_MS
+from app.engines.session_calendar import SESSION_ANCHORED_TFS
 from app.models.canonical import NormalizedTrade
 from app.models.messages import BarUpdate, OHLCVBar
 
@@ -38,7 +41,9 @@ _ROLLUP_PAIRS: list[tuple[str, str]] = [
     (finer, coarser)
     for finer in SUPPORTED_TFS
     for coarser in SUPPORTED_TFS
-    if _TF_MS[finer] < _TF_MS[coarser] and _TF_MS[coarser] % _TF_MS[finer] == 0
+    if coarser not in SESSION_ANCHORED_TFS
+    and _TF_MS[finer] < _TF_MS[coarser]
+    and _TF_MS[coarser] % _TF_MS[finer] == 0
 ]
 
 

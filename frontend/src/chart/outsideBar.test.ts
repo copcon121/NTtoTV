@@ -5,6 +5,7 @@ import {
   isOutsideBar,
   normalizeOutsideBarSettings,
   outsideBarColor,
+  outsideBarSignal,
 } from "./outsideBar";
 import { type Bar } from "../cache/types";
 
@@ -64,11 +65,120 @@ describe("outsideBar", () => {
         enabled: true,
         bullColor: "bad",
         bearColor: "#abc",
+        deltaFilter: {
+          enabled: true,
+          lookbackBars: 999,
+          minSamples: 1,
+          deltaMultiplier: 0,
+          requireRangeExpansion: false,
+        },
       }),
     ).toEqual({
       enabled: true,
       bullColor: DEFAULT_OUTSIDE_BAR_SETTINGS.bullColor,
       bearColor: "#abc",
+      deltaFilter: {
+        ...DEFAULT_OUTSIDE_BAR_SETTINGS.deltaFilter,
+        enabled: true,
+        lookbackBars: 500,
+        minSamples: 3,
+        deltaMultiplier: 0.1,
+        requireRangeExpansion: false,
+      },
     });
+  });
+
+  it("filters outside bars against recent M1 delta samples", () => {
+    const bars: Bar[] = Array.from({ length: 22 }, (_, index) =>
+      ({ ...ohlc(100, 101, 99, 100, index), volume: 100 }),
+    );
+    bars.push({ time: 22, open: 100, high: 102.5, low: 98.5, close: 99, volume: 130 });
+    const deltaByTime = new Map(
+      bars.map((bar, index) => [
+        bar.time,
+        { time: bar.time, closeDelta: index === 22 ? -80 : 50 },
+      ]),
+    );
+    const settings = {
+      ...DEFAULT_OUTSIDE_BAR_SETTINGS,
+      enabled: true,
+      deltaFilter: {
+        ...DEFAULT_OUTSIDE_BAR_SETTINGS.deltaFilter,
+        enabled: true,
+      },
+    };
+
+    expect(
+      outsideBarSignal(bars[22], bars[21], settings, {
+        bars,
+        index: 22,
+        deltaByTime,
+      }),
+    ).toBe("sell");
+    expect(
+      outsideBarColor(bars[22], bars[21], settings, {
+        bars,
+        index: 22,
+        deltaByTime,
+      }),
+    ).toBe(settings.bearColor);
+  });
+
+  it("ignores current volume when the delta filter passes", () => {
+    const bars: Bar[] = Array.from({ length: 22 }, (_, index) =>
+      ({ ...ohlc(100, 101, 99, 100, index), volume: 100 }),
+    );
+    bars.push({ time: 22, open: 100, high: 102.5, low: 98.5, close: 99, volume: 1 });
+    const deltaByTime = new Map(
+      bars.map((bar, index) => [
+        bar.time,
+        { time: bar.time, closeDelta: index === 22 ? -80 : 50 },
+      ]),
+    );
+    const settings = {
+      ...DEFAULT_OUTSIDE_BAR_SETTINGS,
+      enabled: true,
+      deltaFilter: {
+        ...DEFAULT_OUTSIDE_BAR_SETTINGS.deltaFilter,
+        enabled: true,
+      },
+    };
+
+    expect(
+      outsideBarColor(bars[22], bars[21], settings, {
+        bars,
+        index: 22,
+        deltaByTime,
+      }),
+    ).toBe(settings.bearColor);
+  });
+
+  it("does not pass the delta filter when current delta is not elevated", () => {
+    const bars: Bar[] = Array.from({ length: 22 }, (_, index) =>
+      ({ ...ohlc(100, 101, 99, 100, index), volume: 100 }),
+    );
+    bars.push({ time: 22, open: 100, high: 102.5, low: 98.5, close: 99, volume: 130 });
+    const deltaByTime = new Map(
+      bars.map((bar, index) => [
+        bar.time,
+        { time: bar.time, closeDelta: index === 22 ? -30 : 50 },
+      ]),
+    );
+    const settings = {
+      ...DEFAULT_OUTSIDE_BAR_SETTINGS,
+      enabled: true,
+      deltaFilter: {
+        ...DEFAULT_OUTSIDE_BAR_SETTINGS.deltaFilter,
+        enabled: true,
+      },
+    };
+
+    expect(
+      outsideBarColor(bars[22], bars[21], settings, {
+        bars,
+        index: 22,
+        deltaByTime,
+      }),
+    ).toBeUndefined();
   });
 });
