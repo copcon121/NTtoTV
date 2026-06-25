@@ -31,6 +31,7 @@ from .rest.orders import router as orders_router
 from .rest.orderflow import router as orderflow_router
 from .rest.profiles import router as profiles_router
 from .rest.routes import router as rest_router
+from .rest.signals import router as signals_router
 from .rest.smc_ai import router as smc_ai_router
 from .runtime import AppRuntime
 
@@ -89,6 +90,7 @@ def create_app(*, lifespan: bool = True) -> FastAPI:
     app.include_router(profiles_router)
     app.include_router(orderflow_router)
     app.include_router(smc_ai_router)
+    app.include_router(signals_router)
     app.include_router(analyst_router)
     app.include_router(nt_router)
     app.include_router(chart_router)

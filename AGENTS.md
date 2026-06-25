@@ -187,6 +187,94 @@ Backend health:
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/api/health
 ```
 
+Production runtime check/restart:
+
+```powershell
+$root = "C:\Users\Administrator\Desktop\NTtoTV"
+
+# Check backend and public frontend first. If both are OK, leave processes alone.
+Invoke-RestMethod -Uri http://127.0.0.1:8000/api/health -TimeoutSec 5
+$r = Invoke-WebRequest -UseBasicParsing -Uri https://gcflowpy.xyz/ -TimeoutSec 8
+[pscustomobject]@{
+    StatusCode = $r.StatusCode
+    Asset = ([regex]::Match($r.Content, '/assets/index-[^"'']+\.js').Value)
+}
+
+# Inspect listeners. 80/443 should be Caddy; 8000 should be uvicorn/backend.
+Get-NetTCPConnection -LocalPort 8000,80,443 -ErrorAction SilentlyContinue |
+    Select-Object LocalAddress,LocalPort,State,OwningProcess
+Get-CimInstance Win32_Process |
+    Where-Object {
+        $_.CommandLine -match 'caddy\.exe' -or
+        ($_.CommandLine -match 'uvicorn' -and $_.CommandLine -match 'app\.app:app')
+    } |
+    Select-Object ProcessId,Name,CommandLine
+```
+
+Backend detached restart, so closing IDE/terminal does not stop it:
+
+```powershell
+$root = "C:\Users\Administrator\Desktop\NTtoTV"
+$backendDir = Join-Path $root "backend"
+$logDir = Join-Path $root "_run_logs\backend"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+$oldBackend = Get-CimInstance Win32_Process |
+    Where-Object {
+        $_.CommandLine -match 'uvicorn' -and
+        $_.CommandLine -match 'app\.app:app' -and
+        $_.CommandLine -match '--port 8000'
+    }
+if ($oldBackend) {
+    $oldBackend | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+    Start-Sleep -Seconds 2
+}
+
+Start-Process `
+    -FilePath (Join-Path $backendDir ".venv\Scripts\python.exe") `
+    -WorkingDirectory $backendDir `
+    -ArgumentList "-m uvicorn app.app:app --host 0.0.0.0 --port 8000" `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput (Join-Path $logDir "backend.stdout.log") `
+    -RedirectStandardError (Join-Path $logDir "backend.stderr.log")
+
+Invoke-RestMethod -Uri http://127.0.0.1:8000/api/health -TimeoutSec 10
+```
+
+Public frontend/Caddy restart:
+
+```powershell
+$root = "C:\Users\Administrator\Desktop\NTtoTV"
+
+# Rebuild first only when frontend source changes need to appear on gcflowpy.xyz.
+Push-Location (Join-Path $root "frontend")
+try {
+    npm run build
+} finally {
+    Pop-Location
+}
+
+powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\Stop-HttpsProxy.ps1")
+powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\Start-HttpsProxy.ps1")
+
+$r = Invoke-WebRequest -UseBasicParsing -Uri https://gcflowpy.xyz/ -TimeoutSec 10
+[pscustomobject]@{
+    StatusCode = $r.StatusCode
+    Asset = ([regex]::Match($r.Content, '/assets/index-[^"'']+\.js').Value)
+}
+```
+
+Operational notes:
+
+- `frontend/dist` is what Caddy serves on `https://gcflowpy.xyz/`; `npm run dev`
+  is only for local development.
+- `backend\start_backend.cmd` is useful for a visible console session, but for
+  production-like runtime prefer the detached `Start-Process` flow above.
+- Backend detached logs go to `_run_logs\backend\backend.stdout.log` and
+  `_run_logs\backend\backend.stderr.log`; Caddy logs go to `_run_logs\caddy\`.
+- Do not restart Caddy when only backend is down; Caddy proxies to backend on
+  loopback and can keep serving the already-built frontend.
+
 Frontend run:
 
 ```powershell

@@ -366,10 +366,12 @@ export class ApiClient {
     return body.position;
   }
 
-  async closeMt5Position(brokerPositionTicket: number): Promise<void> {
+  async closeMt5Position(brokerPositionTicket: number, volumeLots?: number): Promise<void> {
+    const body = volumeLots !== undefined ? JSON.stringify({ volumeLots }) : undefined;
+    const headers = body ? { "Content-Type": "application/json" } : undefined;
     const res = await this.fetchFn(
       `${this.basePath}/mt5/positions/${encodeURIComponent(String(brokerPositionTicket))}/close`,
-      { method: "POST", credentials: "same-origin" },
+      { method: "POST", headers, credentials: "same-origin", body },
     );
     if (!res.ok) throw new Error(await this.errorMessage(res, "POST /mt5/positions/close"));
   }
@@ -448,14 +450,16 @@ export class ApiClient {
     return body.order;
   }
 
-  async closeOrder(orderId: string): Promise<TradingOrder> {
+  async closeOrder(orderId: string, volumeLots?: number): Promise<TradingOrder> {
+    const requestBody = volumeLots !== undefined ? JSON.stringify({ volumeLots }) : undefined;
+    const headers = requestBody ? { "Content-Type": "application/json" } : undefined;
     const res = await this.fetchFn(
       `${this.basePath}/orders/${encodeURIComponent(orderId)}/close`,
-      { method: "POST", credentials: "same-origin" },
+      { method: "POST", headers, credentials: "same-origin", body: requestBody },
     );
     if (!res.ok) throw new Error(await this.errorMessage(res, "POST /orders/close"));
-    const body = (await res.json()) as { order: TradingOrder };
-    return body.order;
+    const responseBody = (await res.json()) as { order: TradingOrder };
+    return responseBody.order;
   }
 
   async analystLatest(
@@ -913,6 +917,34 @@ export class ApiClient {
     }
     const body = await this.getJson<{ signals: SmcAiSignalRestRow[] }>(
       `/smc-ai/baseline-signals?${params.toString()}`,
+    );
+    return body.signals;
+  }
+
+  async breakoutFvgSignals(input: {
+    symbol: string;
+    contract: string;
+    timeframe: string;
+    from?: number;
+    to?: number;
+    limit?: number;
+  }): Promise<SmcAiSignalRestRow[]> {
+    const params = new URLSearchParams({
+      symbol: input.symbol,
+      contract: input.contract,
+      tf: input.timeframe,
+    });
+    if (input.from !== undefined) {
+      params.set("from", String(input.from));
+    }
+    if (input.to !== undefined) {
+      params.set("to", String(input.to));
+    }
+    if (input.limit !== undefined) {
+      params.set("limit", String(input.limit));
+    }
+    const body = await this.getJson<{ signals: SmcAiSignalRestRow[] }>(
+      `/signals/breakout-fvg?${params.toString()}`,
     );
     return body.signals;
   }

@@ -145,7 +145,7 @@ describe("DrawingManager selection", () => {
     expect(priceAxisView!.visible()).toBe(false);
 
     chart.applyOptions.mockClear();
-    pointerDown(container, 30, 50);
+    pointerDown(container, 10, 50);
     expect(rectangle.selected).toBe(true);
     expect(priceAxisView!.visible()).toBe(true);
     expect(chart.applyOptions).toHaveBeenCalledWith({
@@ -167,7 +167,7 @@ describe("DrawingManager selection", () => {
     manager.startDrawing("rectangle");
     placeRectangle(clickHandlers);
 
-    pointerDown(container, 30, 50);
+    pointerDown(container, 10, 50);
     pointerUp(container, 30, 50);
     pointerDown(container, 35, 20);
     pointerMove(container, 35, 10);
@@ -205,19 +205,6 @@ describe("DrawingManager body dragging", () => {
       grab: { x: 100, y: 40 },
       move: { x: 115, y: 55 },
       expected: [{ logical: 35, price: 55 }],
-    },
-    {
-      tool: "rectangle",
-      anchors: [
-        { x: 10, y: 20 },
-        { x: 60, y: 80 },
-      ],
-      grab: { x: 30, y: 50 },
-      move: { x: 45, y: 65 },
-      expected: [
-        { logical: 25, price: 35 },
-        { logical: 75, price: 95 },
-      ],
     },
     {
       tool: "fixed_range_delta_profile",
@@ -290,6 +277,61 @@ describe("DrawingManager body dragging", () => {
         price: anchor.price,
       })),
     ).toEqual(expected);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("moves rectangles only when dragging the frame", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("rectangle");
+    placeRectangle(clickHandlers);
+
+    pointerDown(container, 10, 50);
+    pointerMove(container, 25, 65);
+    pointerUp(container, 25, 65);
+
+    const [drawing] = manager.exportState();
+    expect(drawing.tool).toBe("rectangle");
+    expect(
+      drawing.anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 25, price: 35 },
+      { logical: 75, price: 95 },
+    ]);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("lets rectangle interiors pass through for chart dragging", () => {
+    const { chart, clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("rectangle");
+    placeRectangle(clickHandlers);
+    chart.applyOptions.mockClear();
+
+    pointerDown(container, 30, 50);
+    pointerMove(container, 45, 65);
+    pointerUp(container, 45, 65);
+
+    const [drawing] = manager.exportState();
+    expect(drawing.tool).toBe("rectangle");
+    expect(
+      drawing.anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 10, price: 20 },
+      { logical: 60, price: 80 },
+    ]);
+    expect(chart.applyOptions).not.toHaveBeenCalledWith({
+      handleScroll: false,
+      handleScale: false,
+    });
 
     manager.dispose();
     container.remove();

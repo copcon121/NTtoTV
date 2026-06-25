@@ -41,6 +41,7 @@ from typing import Awaitable, Callable
 from .engines.bar_aggregator import SUPPORTED_TFS, BarAggregator
 from .engines.basis_engine import BasisEngine
 from .engines.big_trade_engine import BigTradeEngine
+from .engines.breakout_box_engine import BreakoutBoxEngine, BreakoutBoxEvent
 from .engines.contract_resolver import ContractResolver
 from .engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
 from .engines.fvg_signal_engine import FvgSignalEngine
@@ -195,6 +196,7 @@ class Pipeline:
         footprint: FootprintEngine | None = None,
         fvg_signal: FvgSignalEngine | None = None,
         big_trade: BigTradeEngine | None = None,
+        breakout_box: BreakoutBoxEngine | None = None,
         alert_engine: AlertEngine | None = None,
         basis_engine: BasisEngine | None = None,
         send_alert_text: AlertTextSender | None = None,
@@ -228,6 +230,7 @@ class Pipeline:
         self._fp = footprint or FootprintEngine()
         self._fvg = fvg_signal or FvgSignalEngine()
         self._bt = big_trade or BigTradeEngine(dedupe_repeated_timestamp_runs=True)
+        self._breakout = breakout_box or BreakoutBoxEngine()
         self._alerts = alert_engine or AlertEngine(cache)
         self._basis = basis_engine
         self._send_alert_text = (
@@ -430,6 +433,31 @@ class Pipeline:
         # 4) BigTrade (merge + filter). (Req 15)
         big_trades = self._bt.on_trade(trade)
 
+        # 5) Breakout Box detection on closed 1m bars.
+        breakout_events: list[BreakoutBoxEvent] = []
+        if alert_ctx_bar is not None and alert_ctx_bar.closed:
+            b = alert_ctx_bar.bar
+            breakout_events = self._breakout.on_closed_bar(
+                symbol=trade.symbol,
+                contract=trade.contract,
+                time=b.time,
+                open=b.open,
+                high=b.high,
+                low=b.low,
+                close=b.close,
+                volume=b.volume,
+            )
+
+        # Track the most recent confirmed FVG signal for confluence matching.
+        # We only keep the latest confirmed signal; the confluence alert checks
+        # if a breakout happened on the same closed-bar cycle.
+        fvg_confirmed_level: int | None = None
+        fvg_confirmed_direction: int | None = None
+        for u in fvg_updates:
+            if u.phase == "confirmed" and u.pulse != 0:
+                fvg_confirmed_level = u.level
+                fvg_confirmed_direction = u.direction
+
         footprint_updates = [
             update for update in (fp_update,) if update is not None
         ]
@@ -462,10 +490,13 @@ class Pipeline:
         for bt in big_trades:
             await self._enqueue(OutboundEvent.from_message(bt))
 
-        # 5) Alerts: last-trade-price crossings + per-bar / big-trade conditions.
+        # 6) Alerts: last-trade-price crossings + per-bar / big-trade conditions.
         await self._evaluate_alerts(
             trade, closed_bar=alert_ctx_bar, vd_update=vd_update,
             fp_update=fp_update, big_trades=big_trades,
+            breakout_events=breakout_events,
+            fvg_level=fvg_confirmed_level,
+            fvg_direction=fvg_confirmed_direction,
         )
 
     async def _evaluate_alerts(
@@ -476,6 +507,9 @@ class Pipeline:
         vd_update: VolumeDeltaUpdate | None,
         fp_update: FootprintUpdate | None,
         big_trades: list[BigTrade],
+        breakout_events: list[BreakoutBoxEvent] | None = None,
+        fvg_level: int | None = None,
+        fvg_direction: int | None = None,
     ) -> None:
         """Evaluate alerts and stream any emitted ``alert_event``s. (Req 16, 17)"""
         # Last-trade-price crossing on every trade. (Req 16.6)
@@ -507,6 +541,9 @@ class Pipeline:
                 bar_volume=bar.volume,
                 bar_volume_delta=vd_update.delta if vd_update is not None else None,
                 bar_stacked_imbalance=stacked,
+                breakout_events=breakout_events or None,
+                fvg_level=fvg_level,
+                fvg_direction=fvg_direction,
             )
             await self._emit_alerts(self._alerts.evaluate(bar_ctx))
 
@@ -769,6 +806,7 @@ class Pipeline:
         self._fp.reset_contract(chart_contract)
         self._fvg.reset_contract(chart_contract)
         self._bt.reset_contract(chart_contract)
+        self._breakout.reset_contract(chart_contract)
         self._last_quote.pop(contract, None)
         validator = self._coordinator.validator
         for channel in (TRADE_CHANNEL, QUOTE_CHANNEL):

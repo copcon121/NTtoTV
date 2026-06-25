@@ -30,7 +30,6 @@ interface ViewBubble {
   y: Coordinate;
 }
 
-const POC_LINE_COLOR = "rgba(245, 170, 36, 0.95)";
 const TEXT_COLOR = "#ffffff";
 
 function scaled(value: number, ratio: number): number {
@@ -77,15 +76,6 @@ class BigTradeBubbleRenderer implements IPrimitivePaneRenderer {
         const x = scaled(view.x, scope.horizontalPixelRatio);
         const y = scaled(view.y, scope.verticalPixelRatio);
         const radius = Math.max(5, scaled(marker.radius, pixelRatio));
-        const lineHalf = Math.round(radius * 1.32);
-
-        ctx.setLineDash([]);
-        ctx.strokeStyle = POC_LINE_COLOR;
-        ctx.lineWidth = Math.max(2, Math.round(2 * pixelRatio));
-        ctx.beginPath();
-        ctx.moveTo(x - lineHalf, y);
-        ctx.lineTo(x + lineHalf, y);
-        ctx.stroke();
 
         ctx.beginPath();
         ctx.arc(x, y, radius, 0, Math.PI * 2);

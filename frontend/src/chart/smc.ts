@@ -36,10 +36,10 @@ export const DEFAULT_SMC_SETTINGS: SmcSettings = {
   fvgThresholdMultiplier: 1.5,
   fvgVolumeConfirmation: false,
   fvgExtendBars: 3,
-  maxZoneAge: 220,
+  maxZoneAge: 500,
   maxMarkers: 120,
   maxZones: 20,
-  maxSwingOrderBlocks: 5,
+  maxSwingOrderBlocks: 10,
   maxInternalOrderBlocks: 10,
   maxFairValueGaps: 10,
 };
@@ -720,7 +720,7 @@ function settingsWithDefaults(settings?: Partial<SmcSettings>): SmcSettings {
       Math.round(settings?.internalLength ?? DEFAULT_SMC_SETTINGS.internalLength),
     ),
     maxZoneAge: Math.max(
-      220,
+      500,
       Math.round(settings?.maxZoneAge ?? DEFAULT_SMC_SETTINGS.maxZoneAge),
     ),
     maxMarkers: Math.max(

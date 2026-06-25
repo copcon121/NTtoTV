@@ -57,13 +57,15 @@ export interface AlertPanelProps {
 const DEFAULT_TOAST_MS = 4000;
 const SMC_EXTERNAL_BREAK_TYPE: AlertType = "smc_external_break_big_trade";
 const SMC_ZONE_TOUCH_TYPE: AlertType = "smc_zone_touch_big_trade";
+const BREAKOUT_FVG_TYPE: AlertType = "breakout_fvg_confluence";
 const SMC_EXTERNAL_BIG_TRADE_DEFAULT = "50";
 const SMC_ZONE_BIG_TRADE_DEFAULT = "30";
+const BREAKOUT_FVG_DEFAULT_LEVEL = "3";
 const SMC_SWING_LENGTH = 50;
 const SMC_LOOKAHEAD_BARS = 5;
 const SMC_MAX_BARS = 20;
 const SMC_PAUSE_ON_INSIDE_BARS = true;
-const SMC_ZONE_MAX_AGE = 220;
+const SMC_ZONE_MAX_AGE = 500;
 const SMC_FVG_AUTO_THRESHOLD = true;
 const SMC_FVG_THRESHOLD_LOOKBACK = 60;
 const SMC_FVG_THRESHOLD_MULTIPLIER = 1.5;
@@ -105,15 +107,21 @@ function isSmcAlertType(type: AlertType): boolean {
   return type === SMC_EXTERNAL_BREAK_TYPE || type === SMC_ZONE_TOUCH_TYPE;
 }
 
+function isBreakoutFvgType(type: AlertType): boolean {
+  return type === BREAKOUT_FVG_TYPE;
+}
+
 function alertInputLabel(type: AlertType): string {
   if (isLevelAlertType(type)) return "Alert level";
   if (isSmcAlertType(type)) return "BigTrade threshold";
+  if (isBreakoutFvgType(type)) return "Min FVG level";
   return "Alert threshold";
 }
 
 function alertInputPlaceholder(type: AlertType): string {
   if (isLevelAlertType(type)) return "level";
   if (isSmcAlertType(type)) return "BT threshold";
+  if (isBreakoutFvgType(type)) return "3";
   return "threshold";
 }
 
@@ -127,6 +135,11 @@ function alertDescription(alert: Alert): string {
     const threshold = alert.params.bigTradeThreshold;
     const repeat = alert.params.repeat === true ? " (repeat)" : "";
     return `M1 external OB/FVG touch, BT > ${String(threshold)}${repeat}`;
+  }
+  if (alert.type === BREAKOUT_FVG_TYPE) {
+    const level = alert.params.minFvgLevel ?? 3;
+    const repeat = alert.params.repeat === true ? " (repeat)" : "";
+    return `Breakout + FVG \u2265${String(level)}${repeat}`;
   }
   return [
     alert.type,
@@ -187,7 +200,8 @@ export function AlertPanel({
   const isThresholdType = isThresholdAlertType(newType);
   const isExternalBreakType = newType === SMC_EXTERNAL_BREAK_TYPE;
   const isZoneTouchType = newType === SMC_ZONE_TOUCH_TYPE;
-  const showRepeat = isThresholdType || isSmcAlertType(newType);
+  const isBreakoutFvg = newType === BREAKOUT_FVG_TYPE;
+  const showRepeat = isThresholdType || isSmcAlertType(newType) || isBreakoutFvg;
   const paramKey = isLevelType ? "level" : "threshold";
 
   const changeType = (type: AlertType) => {
@@ -197,6 +211,9 @@ export function AlertPanel({
       setNewRepeat(true);
     } else if (type === SMC_ZONE_TOUCH_TYPE) {
       setNewValue((value) => value || SMC_ZONE_BIG_TRADE_DEFAULT);
+      setNewRepeat(true);
+    } else if (type === BREAKOUT_FVG_TYPE) {
+      setNewValue((value) => value || BREAKOUT_FVG_DEFAULT_LEVEL);
       setNewRepeat(true);
     }
   };
@@ -236,6 +253,17 @@ export function AlertPanel({
         },
       });
       setNewValue(SMC_ZONE_BIG_TRADE_DEFAULT);
+      return;
+    }
+    if (isBreakoutFvg) {
+      onCreate?.({
+        type: newType,
+        params: {
+          minFvgLevel: value,
+          repeat: newRepeat,
+        },
+      });
+      setNewValue(BREAKOUT_FVG_DEFAULT_LEVEL);
       return;
     }
     onCreate?.({
@@ -300,6 +328,9 @@ export function AlertPanel({
           </option>
           <option value="smc_zone_touch_big_trade">
             M1 OB/FVG touch + BigTrade
+          </option>
+          <option value="breakout_fvg_confluence">
+            Breakout + FVG ≥3
           </option>
         </select>
         <input

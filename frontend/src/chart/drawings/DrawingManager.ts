@@ -608,7 +608,7 @@ export class DrawingManager implements IDrawingManager {
           }
           break;
         case "rectangle":
-          if (points.length >= 2 && pointInBox(point, points[0], points[1], HIT_PX)) {
+          if (points.length >= 2 && rectangleFrameHit(point, points[0], points[1], HIT_PX)) {
             return { drawingId };
           }
           break;
@@ -813,6 +813,27 @@ function pointInBox(
   const top = Math.min(p1.y, p2.y) - tolerance;
   const bottom = Math.max(p1.y, p2.y) + tolerance;
   return point.x >= left && point.x <= right && point.y >= top && point.y <= bottom;
+}
+
+function rectangleFrameHit(
+  point: { x: number; y: number },
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+  tolerance: number,
+): boolean {
+  const left = Math.min(p1.x, p2.x);
+  const right = Math.max(p1.x, p2.x);
+  const top = Math.min(p1.y, p2.y);
+  const bottom = Math.max(p1.y, p2.y);
+  const insideHorizontal = point.x >= left - tolerance && point.x <= right + tolerance;
+  const insideVertical = point.y >= top - tolerance && point.y <= bottom + tolerance;
+  if (!insideHorizontal || !insideVertical) return false;
+  return (
+    Math.abs(point.x - left) <= tolerance ||
+    Math.abs(point.x - right) <= tolerance ||
+    Math.abs(point.y - top) <= tolerance ||
+    Math.abs(point.y - bottom) <= tolerance
+  );
 }
 
 function pointInVerticalRange(

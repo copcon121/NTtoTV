@@ -397,6 +397,10 @@ body {
   gap: 10px;
 }
 
+.indicator-settings-section {
+  padding-top: 8px;
+  border-top: 1px solid #2d2d2d;
+}
 
 .fp-toggle-label {
   display: flex;
@@ -778,7 +782,8 @@ body {
   cursor: pointer;
 }
 
-.market-order-row-actions .market-order-row-break-even {
+.market-order-row-actions .market-order-row-break-even,
+.market-order-row-actions .market-order-row-close-50 {
   min-width: 38px;
 }
 

@@ -443,17 +443,38 @@ async def close_order(
     user: AuthenticatedUser = Depends(get_current_user),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
+    body = await _optional_json_body(request)
+    close_volume = _optional_number(body, "volumeLots") if "volumeLots" in body else None
+    if close_volume is not None and close_volume <= 0:
+        raise bad_request("Close volume must be greater than zero", field="volumeLots")
     order = cache.orders.read(order_id, user.id)
     if order is None:
         raise not_found(f"Unknown order {order_id!r}", field="orderId")
+    if close_volume is not None and close_volume - order.volume_lots > 1e-9:
+        raise bad_request("Close volume exceeds open position volume", field="volumeLots")
     account = cache.users.read_mt5_account(user.id)
     if account is None:
         raise not_found("MT5 account is not connected", field="account")
+    close_order_record = order
+    is_partial_close = False
     with _mt5_session(request, cache, account) as mt5:
         if _broker_position_missing(mt5, user.id, account, order):
             return _mark_order_closed(request, cache, order, event_type="reconciled")
+        if close_volume is not None:
+            try:
+                symbol_info = mt5.symbol_info(user.id, account.id, account.symbol_broker)
+            except Exception as exc:
+                raise conflict(f"MT5 symbol lookup failed: {exc}", field="symbolBroker")
+            _guard_volume(
+                close_volume,
+                symbol_info.min_lot,
+                min(symbol_info.max_lot, order.volume_lots),
+                symbol_info.lot_step,
+            )
+            is_partial_close = close_volume < order.volume_lots - 1e-9
+            close_order_record = replace(order, volume_lots=close_volume)
         try:
-            result = mt5.close_position(order)
+            result = mt5.close_position(close_order_record)
         except Exception as exc:
             if _broker_position_missing(mt5, user.id, account, order):
                 return _mark_order_closed(request, cache, order, event_type="reconciled")
@@ -464,7 +485,41 @@ async def close_order(
                 return _mark_order_closed(request, cache, order, event_type="reconciled")
         raise conflict(result.error_message or "Broker rejected close")
     order.broker_deal_ticket = result.broker_deal_ticket or order.broker_deal_ticket
+    if is_partial_close and close_volume is not None:
+        return _mark_order_partially_closed(
+            request,
+            cache,
+            order,
+            closed_volume=close_volume,
+        )
     return _mark_order_closed(request, cache, order, event_type="closed")
+
+
+def _mark_order_partially_closed(
+    request: Request,
+    cache: CacheStore,
+    order: OrderRecord,
+    *,
+    closed_volume: float,
+) -> dict[str, Any]:
+    order.volume_lots = round(max(0.0, order.volume_lots - closed_volume), 10)
+    if order.volume_lots <= 1e-9:
+        return _mark_order_closed(request, cache, order, event_type="closed")
+    order.last_broker_error_code = None
+    order.last_broker_error_message = None
+    order.updated_at = now_ms()
+    cache.orders.update(order)
+    cache.orders.append_event(
+        OrderEventRecord(
+            order.id,
+            order.user_id,
+            "partially_closed",
+            order_to_dict(order),
+            now_ms(),
+        )
+    )
+    _enqueue_order_update(request, order)
+    return {"order": order_to_dict(order)}
 
 
 def _mark_order_closed(
@@ -553,6 +608,18 @@ async def _json_body(request: Request) -> dict[str, Any]:
         body = await request.json()
     except Exception:
         raise bad_request("Request body must be valid JSON")
+    if not isinstance(body, dict):
+        raise bad_request("Request body must be a JSON object")
+    return body
+
+
+async def _optional_json_body(request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:
+        return {}
+    if body is None:
+        return {}
     if not isinstance(body, dict):
         raise bad_request("Request body must be a JSON object")
     return body

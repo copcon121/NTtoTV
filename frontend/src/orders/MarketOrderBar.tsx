@@ -19,6 +19,7 @@ export interface MarketOrderRow {
   canBreakEven?: boolean;
   breakEvenPending?: boolean;
   pending?: boolean;
+  volumeLots?: number;
 }
 
 export interface MarketOrderBarProps {
@@ -35,6 +36,7 @@ export interface MarketOrderBarProps {
   onMarketOrder: (side: "buy" | "sell") => void;
   onOrderRowBreakEven?: (id: string) => void;
   onOrderRowClose?: (id: string) => void;
+  onOrderRowClose50Percent?: (id: string, volumeLots: number) => void;
   onOrderRowCancel?: (id: string) => void;
 }
 
@@ -60,6 +62,7 @@ export function MarketOrderBar({
   onMarketOrder,
   onOrderRowBreakEven,
   onOrderRowClose,
+  onOrderRowClose50Percent,
   onOrderRowCancel,
 }: MarketOrderBarProps) {
   const connected = account !== undefined;
@@ -175,6 +178,16 @@ export function MarketOrderBar({
                         onClick={() => onOrderRowBreakEven?.(row.id)}
                       >
                         {row.breakEvenPending ? "..." : "BE"}
+                      </button>
+                    )}
+                    {row.action === "close" && row.volumeLots !== undefined && row.volumeLots >= 0.02 && (
+                      <button
+                        type="button"
+                        className="market-order-row-close-50"
+                        disabled={row.pending || row.breakEvenPending}
+                        onClick={() => onOrderRowClose50Percent?.(row.id, row.volumeLots!)}
+                      >
+                        50%
                       </button>
                     )}
                     <button

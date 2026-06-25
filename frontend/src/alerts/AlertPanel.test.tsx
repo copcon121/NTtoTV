@@ -46,7 +46,7 @@ const alerts: Alert[] = [
     params: {
       bigTradeThreshold: 30,
       swingLength: 50,
-      maxZoneAge: 220,
+      maxZoneAge: 500,
       fvgAutoThreshold: true,
       fvgThresholdLookback: 60,
       fvgThresholdMultiplier: 1.5,
@@ -199,7 +199,7 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
       params: {
         bigTradeThreshold: 35,
         swingLength: 50,
-        maxZoneAge: 220,
+        maxZoneAge: 500,
         fvgAutoThreshold: true,
         fvgThresholdLookback: 60,
         fvgThresholdMultiplier: 1.5,

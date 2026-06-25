@@ -196,6 +196,7 @@ function emaLineConfigs(ema?: Partial<EmaSettings>): EmaLineConfig[] {
         typeof ema.color === "string"
           ? ema.color
           : DEFAULT_EMA_SETTINGS.color,
+      lineWidth: 1,
     });
   }
   if (ema?.showEma200) {
@@ -206,6 +207,7 @@ function emaLineConfigs(ema?: Partial<EmaSettings>): EmaLineConfig[] {
         typeof ema.ema200Color === "string"
           ? ema.ema200Color
           : DEFAULT_EMA_SETTINGS.ema200Color,
+      lineWidth: 1,
     });
   }
   return configs;

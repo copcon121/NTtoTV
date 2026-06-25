@@ -268,7 +268,7 @@ describe("SMC overlay", () => {
         enabled: true,
         swingLength: 1,
         internalLength: 1,
-        maxZoneAge: 220,
+        maxZoneAge: 500,
         showPremiumDiscount: false,
         showSwingOrderBlocks: false,
         showInternalOrderBlocks: false,

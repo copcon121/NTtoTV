@@ -27,6 +27,7 @@ from .footprint_engine import (
 )
 from .fvg_signal_engine import FVG_SIGNAL_TIMEFRAME, FvgSignalEngine
 from .big_trade_engine import BigTradeEngine
+from .breakout_box_engine import BREAKOUT_BOX_TIMEFRAME, BreakoutBoxEngine, BreakoutBoxEvent
 from .contract_resolver import ContractResolver
 
 __all__ = [
@@ -40,6 +41,9 @@ __all__ = [
     "FvgSignalEngine",
     "FVG_SIGNAL_TIMEFRAME",
     "BigTradeEngine",
+    "BreakoutBoxEngine",
+    "BreakoutBoxEvent",
+    "BREAKOUT_BOX_TIMEFRAME",
     "ContractResolver",
     "AlertEngine",
     "Alert",

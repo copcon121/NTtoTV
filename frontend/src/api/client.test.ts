@@ -144,6 +144,28 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
+  it("sends a partial app order close volume", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({ order: { id: "ord_1", status: "filled", volumeLots: 0.05 } }),
+    );
+    const api = new ApiClient({ fetchFn });
+
+    await expect(api.closeOrder("ord_1", 0.05)).resolves.toMatchObject({
+      id: "ord_1",
+      volumeLots: 0.05,
+    });
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orders/ord_1/close",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ volumeLots: 0.05 }),
+      }),
+    );
+  });
+
   it("saves the authenticated user's default profile", async () => {
     const profile = {
       version: 1,

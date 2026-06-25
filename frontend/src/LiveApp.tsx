@@ -45,6 +45,7 @@ import {
   type OutsideBarSettings,
   normalizeOutsideBarSettings,
 } from "./chart/outsideBar";
+import { bigTradeMinVolumeForTime } from "./chart/bigTradeSessions";
 import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./chart/smc";
 import { HistoryLoader } from "./cache/historyLoader";
 import { MemoryCache } from "./cache/memoryCache";
@@ -156,6 +157,28 @@ const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
   tpDistanceGc: 6,
 };
 const EMPTY_MT5_OPEN_TRADES: Mt5OpenTrades = { positions: [], orders: [] };
+
+/** Play a short beep via the Web Audio API when a big trade arrives. */
+function playBigTradeSound(): void {
+  try {
+    const Ctx =
+      (globalThis as { AudioContext?: typeof AudioContext }).AudioContext ??
+      (globalThis as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (Ctx === undefined) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = 660;
+    gain.gain.value = 0.3;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.15);
+  } catch {
+    // ignore — sound is a non-critical enhancement
+  }
+}
 
 export interface ChartLimitOrderDraft {
   source: "chart_bracket";
@@ -684,6 +707,7 @@ function toMarketOrderRows(
       detail: `${order.volumeLots.toFixed(2)} @ ${entry.toFixed(1)}`,
       pnlText: formatPnl(pnl),
       pnlValue: pnl,
+      volumeLots: order.volumeLots,
       action:
         hasBrokerPosition &&
         (order.status === "filled" || order.status === "sync_error")
@@ -708,6 +732,7 @@ function toMarketOrderRows(
       }`,
       pnlText: formatPnl(position.profit),
       pnlValue: position.profit,
+      volumeLots: position.volumeLots,
       action: "close",
       canBreakEven: isFinitePrice(entry) && position.basisStale !== true,
       breakEvenPending: breakingEvenIds.has(rowId),
@@ -727,6 +752,7 @@ function toMarketOrderRows(
           : pending.entryBroker.toFixed(3)
       }`,
       action: "cancel",
+      volumeLots: pending.volumeLots,
       pending: cancellingIds.has(mt5OrderKey(pending.brokerOrderTicket)),
     });
   }
@@ -1265,6 +1291,8 @@ export function LiveApp() {
   const [bigTradeSettings, setBigTradeSettings] = useState<BigTradeSettings>(
     () => ({ ...DEFAULT_BIG_TRADE_SETTINGS }),
   );
+  const bigTradeSettingsRef = useRef(bigTradeSettings);
+  bigTradeSettingsRef.current = bigTradeSettings;
   const [chartBackgroundColor, setChartBackgroundColor] = useState(
     DEFAULT_CHART_BACKGROUND,
   );
@@ -1719,6 +1747,23 @@ export function LiveApp() {
         );
         setLastAlert(msg);
       }
+      if (msg.alertType === "breakout_fvg_confluence") {
+        const isLong = msg.message.includes("Bullish") || msg.message.includes("long");
+        setSmcAiSignals((prev) => {
+          // Keep signals sorted and distinct by time
+          const next = [...prev, {
+            id: `breakout-fvg-${msg.alertId}-${msg.time}`,
+            time: msg.time,
+            price: msg.price,
+            side: isLong ? "long" : "short",
+            zoneType: "fvg",
+            huntType: "breakout",
+            confirmation: "breakout_fvg",
+            text: isLong ? "BRK L" : "BRK S",
+          } as const];
+          return next.sort((a, b) => a.time - b.time);
+        });
+      }
     });
     const offOrder = socket.on("order_update", (msg) => {
       setOrders((prev) => {
@@ -1847,12 +1892,13 @@ export function LiveApp() {
           if (timeframe !== "1m" || history.bars.length === 0) {
             setSmcAiSignals([]);
           } else {
+            // Fetch historical Breakout + FVG confluence signals
             signalTimer = window.setTimeout(() => {
               const first = history.bars[0];
               const last = history.bars[history.bars.length - 1];
               void (async () => {
                 try {
-                  const signals = await api.smcAiBaselineSignals({
+                  const signals = await api.breakoutFvgSignals({
                     symbol: SYMBOL,
                     contract,
                     timeframe,
@@ -2060,6 +2106,14 @@ export function LiveApp() {
         return;
       }
       setBigTrades((prev) => applyBigTrade(prev, msg).markers);
+      // Play sound if enabled and volume meets session threshold
+      const bts = bigTradeSettingsRef.current;
+      if (
+        bts.soundEnabled &&
+        msg.volume >= bigTradeMinVolumeForTime(msg.time, bts)
+      ) {
+        playBigTradeSound();
+      }
     });
     const offFvgSignal = socket.on("fvg_signal_update", (msg) => {
       if (
@@ -2772,6 +2826,66 @@ export function LiveApp() {
     })();
   };
 
+  const onOrderRowClose50Percent = (rowId: string, volumeLots: number) => {
+    const parsed = parseActionRowId(rowId);
+    if (!parsed) return;
+
+    const halfVolume = Math.max(0.01, Math.round(volumeLots * 50) / 100);
+
+    if (parsed.source === "app") {
+      if (closingOrderIds.has(parsed.orderId)) return;
+      setOrderError("");
+      setClosingOrderIds((prev) => new Set(prev).add(parsed.orderId));
+      void (async () => {
+        try {
+          const updated = await api.closeOrder(parsed.orderId, halfVolume);
+          setOrders((prev) => {
+            const without = prev.filter((item) => item.id !== updated.id);
+            return isOpenTradingOrder(updated) ? [updated, ...without] : without;
+          });
+          await refreshTradingState();
+        } catch (error) {
+          setOrderError(error instanceof Error ? error.message : "Close position failed");
+          try {
+            await refreshTradingState();
+          } catch {
+            /* Keep the current state if refresh also fails. */
+          }
+        } finally {
+          setClosingOrderIds((prev) => {
+            const next = new Set(prev);
+            next.delete(parsed.orderId);
+            return next;
+          });
+        }
+      })();
+      return;
+    }
+    if (parsed.source !== "mt5pos" || closingOrderIds.has(rowId)) return;
+
+    setOrderError("");
+    setClosingOrderIds((prev) => new Set(prev).add(rowId));
+    void (async () => {
+      try {
+        await api.closeMt5Position(parsed.ticket, halfVolume);
+        await refreshTradingState();
+      } catch (error) {
+        setOrderError(error instanceof Error ? error.message : "Close MT5 position failed");
+        try {
+          await refreshTradingState();
+        } catch {
+          /* Keep the current state if refresh also fails. */
+        }
+      } finally {
+        setClosingOrderIds((prev) => {
+          const next = new Set(prev);
+          next.delete(rowId);
+          return next;
+        });
+      }
+    })();
+  };
+
   const onOrderRowCancel = (rowId: string) => {
     const parsed = parseActionRowId(rowId);
     if (!parsed) return;
@@ -3438,6 +3552,7 @@ export function LiveApp() {
             onMarketOrder={onMarketOrder}
             onOrderRowBreakEven={onOrderRowBreakEven}
             onOrderRowClose={onOrderRowClose}
+            onOrderRowClose50Percent={onOrderRowClose50Percent}
             onOrderRowCancel={onOrderRowCancel}
           />
         </div>

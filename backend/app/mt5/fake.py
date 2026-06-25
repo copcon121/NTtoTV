@@ -138,7 +138,14 @@ class FakeMt5Backend:
 
     def close_position(self, order: OrderRecord) -> Mt5OrderResult:
         if order.broker_position_ticket is not None:
-            self._positions.pop(order.broker_position_ticket, None)
+            position = self._positions.get(order.broker_position_ticket)
+            if position is not None:
+                remaining = float(position.get("volumeLots") or 0.0) - order.volume_lots
+                if remaining > 1e-9:
+                    position["volumeLots"] = round(remaining, 10)
+                    position["time"] = now_ms()
+                else:
+                    self._positions.pop(order.broker_position_ticket, None)
         return Mt5OrderResult(
             accepted=True,
             status="closed",

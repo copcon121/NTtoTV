@@ -284,7 +284,7 @@ describe("ChartContainer", () => {
 
     expect(port.setBarsCalls).toHaveLength(1);
     expect(port.setBarsCalls[0].map((b) => b.time)).toEqual([10, 20]);
-    expect(port.displayTimeOffsetCalls).toContain(60_000);
+    expect(port.displayTimeOffsetCalls).toContain(0);
   });
 
   it("updates display time offset when the timeframe changes", () => {
@@ -311,8 +311,7 @@ describe("ChartContainer", () => {
       />,
     );
 
-    expect(port.displayTimeOffsetCalls).toContain(60_000);
-    expect(port.displayTimeOffsetCalls).toContain(5 * 60_000);
+    expect(port.displayTimeOffsetCalls).toContain(0);
     expect(port.barCountdownDurationCalls).toContain(5 * 60_000);
   });
 

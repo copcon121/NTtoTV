@@ -70,6 +70,7 @@ export interface FootprintSettings {
 export interface BigTradeSettings {
   minVolume: number;
   maxVisible: number;
+  soundEnabled?: boolean;
   sessionMinVolumes?: BigTradeSessionMinVolumes;
 }
 
@@ -84,6 +85,7 @@ export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
 export const DEFAULT_BIG_TRADE_SETTINGS: BigTradeSettings = {
   minVolume: DEFAULT_BIG_TRADE_SESSION_MIN_VOLUMES.asia,
   maxVisible: 500,
+  soundEnabled: false,
   sessionMinVolumes: DEFAULT_BIG_TRADE_SESSION_MIN_VOLUMES,
 };
 
@@ -181,9 +183,8 @@ export function IndicatorToggles({
   const outsideBarConfig = normalizeOutsideBarSettings(outsideBar);
   const outsideBarDeltaFilter = outsideBarConfig.deltaFilter;
   const [open, setOpen] = useState(false);
-  const [emaSettingsOpen, setEmaSettingsOpen] = useState(false);
+  const [combinedSettingsOpen, setCombinedSettingsOpen] = useState(false);
   const [smcSettingsOpen, setSmcSettingsOpen] = useState(false);
-  const [outsideBarSettingsOpen, setOutsideBarSettingsOpen] = useState(false);
   const [fpSettingsOpen, setFpSettingsOpen] = useState(false);
   const [btSettingsOpen, setBtSettingsOpen] = useState(false);
   // Local draft for the length input so typing is smooth; committed on blur/Enter.
@@ -192,6 +193,9 @@ export function IndicatorToggles({
   const [smcInternalDraft, setSmcInternalDraft] = useState(String(smc.internalLength));
   const [smcFvgExtendDraft, setSmcFvgExtendDraft] = useState(String(smc.fvgExtendBars));
   const [smcFvgLimitDraft, setSmcFvgLimitDraft] = useState(String(smc.maxFairValueGaps));
+  const [smcSwingObLimitDraft, setSmcSwingObLimitDraft] = useState(
+    String(smc.maxSwingOrderBlocks),
+  );
   const [smcFvgLookbackDraft, setSmcFvgLookbackDraft] = useState(
     String(smc.fvgThresholdLookback),
   );
@@ -261,6 +265,10 @@ export function IndicatorToggles({
   }, [smc.maxFairValueGaps]);
 
   useEffect(() => {
+    setSmcSwingObLimitDraft(String(smc.maxSwingOrderBlocks));
+  }, [smc.maxSwingOrderBlocks]);
+
+  useEffect(() => {
     setSmcFvgLookbackDraft(String(smc.fvgThresholdLookback));
   }, [smc.fvgThresholdLookback]);
 
@@ -300,9 +308,8 @@ export function IndicatorToggles({
     const onPointerDown = (e: PointerEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
         setOpen(false);
-        setEmaSettingsOpen(false);
+        setCombinedSettingsOpen(false);
         setSmcSettingsOpen(false);
-        setOutsideBarSettingsOpen(false);
         setFpSettingsOpen(false);
         setBtSettingsOpen(false);
       }
@@ -310,9 +317,8 @@ export function IndicatorToggles({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setOpen(false);
-        setEmaSettingsOpen(false);
+        setCombinedSettingsOpen(false);
         setSmcSettingsOpen(false);
-        setOutsideBarSettingsOpen(false);
         setFpSettingsOpen(false);
         setBtSettingsOpen(false);
       }
@@ -325,16 +331,27 @@ export function IndicatorToggles({
     };
   }, [open]);
 
+  const combinedIndicatorActive =
+    cvd || ema.enabled || ema.showEma200 || outsideBarConfig.enabled;
+
   const activeCount =
     (volume ? 1 : 0) +
     (volumeDelta ? 1 : 0) +
-    (cvd ? 1 : 0) +
+    (combinedIndicatorActive ? 1 : 0) +
     (footprint ? 1 : 0) +
     (fvgGrader ? 1 : 0) +
     (bigTrades ? 1 : 0) +
-    (ema.enabled || ema.showEma200 ? 1 : 0) +
-    (smc.enabled ? 1 : 0) +
-    (outsideBarConfig.enabled ? 1 : 0);
+    (smc.enabled ? 1 : 0);
+
+  const toggleCombinedIndicators = (enabled: boolean) => {
+    onCvdChange(enabled);
+    onEmaChange(
+      enabled
+        ? { ...ema, enabled: true }
+        : { ...ema, enabled: false, showEma200: false },
+    );
+    updateOutsideBar({ enabled });
+  };
 
   const commitLength = () => {
     const parsed = Math.round(Number(lengthDraft));
@@ -387,6 +404,15 @@ export function IndicatorToggles({
       onSmcChange({ ...smc, maxFairValueGaps: parsed });
     } else {
       setSmcFvgLimitDraft(String(smc.maxFairValueGaps));
+    }
+  };
+
+  const commitSmcSwingObLimit = () => {
+    const parsed = Math.round(Number(smcSwingObLimitDraft));
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 20) {
+      onSmcChange({ ...smc, maxSwingOrderBlocks: parsed });
+    } else {
+      setSmcSwingObLimitDraft(String(smc.maxSwingOrderBlocks));
     }
   };
 
@@ -495,10 +521,22 @@ export function IndicatorToggles({
             onChange={onVolumeDeltaChange}
           />
           <IndicatorRow
-            label="CVD"
-            checked={cvd}
-            onChange={onCvdChange}
+            label="EMA/CVD/OSB"
+            checked={combinedIndicatorActive}
+            onChange={toggleCombinedIndicators}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="EMA/CVD/OSB settings"
+                aria-expanded={combinedSettingsOpen}
+                onClick={() => setCombinedSettingsOpen((v) => !v)}
+              >
+                ...
+              </button>
+            }
           />
+          {false && (
           <IndicatorRow
             label={`EMA ${ema.period}`}
             checked={ema.enabled}
@@ -508,15 +546,38 @@ export function IndicatorToggles({
                 type="button"
                 className="indicator-gear"
                 aria-label="EMA settings"
-                aria-expanded={emaSettingsOpen}
-                onClick={() => setEmaSettingsOpen((v) => !v)}
+                aria-expanded={combinedSettingsOpen}
+                onClick={() => setCombinedSettingsOpen((v) => !v)}
               >
                 ⚙
               </button>
             }
           />
-          {emaSettingsOpen && (
-            <div className="ema-settings" aria-label="EMA settings panel">
+          )}
+          {combinedSettingsOpen && (
+            <div className="ema-settings" aria-label="EMA/CVD/OSB settings panel">
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={cvd}
+                  aria-label="CVD"
+                  onChange={(event) => onCvdChange(event.currentTarget.checked)}
+                />
+                <span>CVD</span>
+              </label>
+              <div className="indicator-settings-section">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={ema.enabled}
+                    aria-label={`EMA ${ema.period}`}
+                    onChange={(event) =>
+                      onEmaChange({ ...ema, enabled: event.currentTarget.checked })
+                    }
+                  />
+                  <span>EMA {ema.period}</span>
+                </label>
+              </div>
               <div className="ema-setting-line">
                 <span className="ema-setting-label">Length</span>
                 <input
@@ -580,6 +641,114 @@ export function IndicatorToggles({
                   <span>EMA 200</span>
                 </label>
               </div>
+              <div className="indicator-settings-section">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={outsideBarConfig.enabled}
+                    aria-label="Outside Bar"
+                    onChange={(event) =>
+                      updateOutsideBar({ enabled: event.currentTarget.checked })
+                    }
+                  />
+                  <span>Outside Bar</span>
+                </label>
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Bull</span>
+                <input
+                  type="color"
+                  className="ema-color-picker"
+                  aria-label="Outside Bar bullish color"
+                  value={outsideBarConfig.bullColor}
+                  onChange={(e) =>
+                    updateOutsideBar({
+                      bullColor: e.currentTarget.value,
+                    })
+                  }
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Bear</span>
+                <input
+                  type="color"
+                  className="ema-color-picker"
+                  aria-label="Outside Bar bearish color"
+                  value={outsideBarConfig.bearColor}
+                  onChange={(e) =>
+                    updateOutsideBar({
+                      bearColor: e.currentTarget.value,
+                    })
+                  }
+                />
+              </div>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={outsideBarDeltaFilter.enabled}
+                  aria-label="Outside Bar delta filter"
+                  onChange={(event) =>
+                    updateOutsideBarDeltaFilter({
+                      enabled: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>M1 delta filter</span>
+              </label>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Lookback</span>
+                <input
+                  type="number"
+                  className="ema-length-input"
+                  aria-label="Outside Bar filter lookback"
+                  min={5}
+                  max={500}
+                  value={obLookbackDraft}
+                  onChange={(event) => setObLookbackDraft(event.currentTarget.value)}
+                  onBlur={commitOutsideBarLookback}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitOutsideBarLookback();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Delta x</span>
+                <input
+                  type="number"
+                  className="ema-length-input"
+                  aria-label="Outside Bar filter delta multiplier"
+                  min={0.1}
+                  max={10}
+                  step={0.05}
+                  value={obDeltaMultiplierDraft}
+                  onChange={(event) =>
+                    setObDeltaMultiplierDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitOutsideBarDeltaMultiplier}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitOutsideBarDeltaMultiplier();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={outsideBarDeltaFilter.requireRangeExpansion}
+                  aria-label="Outside Bar range expansion filter"
+                  onChange={(event) =>
+                    updateOutsideBarDeltaFilter({
+                      requireRangeExpansion: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>Range &gt; prev 2</span>
+              </label>
             </div>
           )}
           <IndicatorRow
@@ -784,121 +953,25 @@ export function IndicatorToggles({
                   }}
                 />
               </div>
-            </div>
-          )}
-          <IndicatorRow
-            label="Outside Bar"
-            checked={outsideBarConfig.enabled}
-            onChange={(enabled) => updateOutsideBar({ enabled })}
-            trailing={
-              <button
-                type="button"
-                className="indicator-gear"
-                aria-label="Outside Bar settings"
-                aria-expanded={outsideBarSettingsOpen}
-                onClick={() => setOutsideBarSettingsOpen((v) => !v)}
-              >
-                ...
-              </button>
-            }
-          />
-          {outsideBarSettingsOpen && (
-            <div className="ema-settings" aria-label="Outside Bar settings panel">
               <div className="ema-setting-line">
-                <span className="ema-setting-label">Bull</span>
-                <input
-                  type="color"
-                  className="ema-color-picker"
-                  aria-label="Outside Bar bullish color"
-                  value={outsideBarConfig.bullColor}
-                  onChange={(e) =>
-                    updateOutsideBar({
-                      bullColor: e.currentTarget.value,
-                    })
-                  }
-                />
-              </div>
-              <div className="ema-setting-line">
-                <span className="ema-setting-label">Bear</span>
-                <input
-                  type="color"
-                  className="ema-color-picker"
-                  aria-label="Outside Bar bearish color"
-                  value={outsideBarConfig.bearColor}
-                  onChange={(e) =>
-                    updateOutsideBar({
-                      bearColor: e.currentTarget.value,
-                    })
-                  }
-                />
-              </div>
-              <label className="fp-toggle-label">
-                <input
-                  type="checkbox"
-                  checked={outsideBarDeltaFilter.enabled}
-                  aria-label="Outside Bar delta filter"
-                  onChange={(event) =>
-                    updateOutsideBarDeltaFilter({
-                      enabled: event.currentTarget.checked,
-                    })
-                  }
-                />
-                <span>M1 delta filter</span>
-              </label>
-              <div className="ema-setting-line">
-                <span className="ema-setting-label">Lookback</span>
+                <span className="ema-setting-label">Swing OB</span>
                 <input
                   type="number"
+                  min={1}
+                  max={20}
                   className="ema-length-input"
-                  aria-label="Outside Bar filter lookback"
-                  min={5}
-                  max={500}
-                  value={obLookbackDraft}
-                  onChange={(event) => setObLookbackDraft(event.currentTarget.value)}
-                  onBlur={commitOutsideBarLookback}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      commitOutsideBarLookback();
-                      event.currentTarget.blur();
+                  aria-label="SMC swing order block limit"
+                  value={smcSwingObLimitDraft}
+                  onChange={(e) => setSmcSwingObLimitDraft(e.currentTarget.value)}
+                  onBlur={commitSmcSwingObLimit}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitSmcSwingObLimit();
+                      e.currentTarget.blur();
                     }
                   }}
                 />
               </div>
-              <div className="ema-setting-line">
-                <span className="ema-setting-label">Delta x</span>
-                <input
-                  type="number"
-                  className="ema-length-input"
-                  aria-label="Outside Bar filter delta multiplier"
-                  min={0.1}
-                  max={10}
-                  step={0.05}
-                  value={obDeltaMultiplierDraft}
-                  onChange={(event) =>
-                    setObDeltaMultiplierDraft(event.currentTarget.value)
-                  }
-                  onBlur={commitOutsideBarDeltaMultiplier}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      commitOutsideBarDeltaMultiplier();
-                      event.currentTarget.blur();
-                    }
-                  }}
-                />
-              </div>
-              <label className="fp-toggle-label">
-                <input
-                  type="checkbox"
-                  checked={outsideBarDeltaFilter.requireRangeExpansion}
-                  aria-label="Outside Bar range expansion filter"
-                  onChange={(event) =>
-                    updateOutsideBarDeltaFilter({
-                      requireRangeExpansion: event.currentTarget.checked,
-                    })
-                  }
-                />
-                <span>Range &gt; prev 2</span>
-              </label>
             </div>
           )}
           <IndicatorRow
@@ -1075,6 +1148,22 @@ export function IndicatorToggles({
                     }
                   }}
                 />
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={bigTradeSettings.soundEnabled ?? false}
+                    aria-label="BigTrade sound"
+                    onChange={(e) =>
+                      onBigTradeSettingsChange({
+                        ...bigTradeSettings,
+                        soundEnabled: e.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>Sound</span>
+                </label>
               </div>
             </div>
           )}

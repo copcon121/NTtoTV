@@ -326,6 +326,15 @@ async def mt5_close_position(
     user: AuthenticatedUser = Depends(get_current_user),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+        
+    volume_to_close = None
+    if "volumeLots" in body:
+        volume_to_close = _number_or_bad_request(body, "volumeLots")
+
     account = cache.users.read_mt5_account(user.id)
     if account is None:
         raise not_found("MT5 account is not connected", field="account")
@@ -340,6 +349,8 @@ async def mt5_close_position(
                 field="brokerPositionTicket",
             )
             order = _order_from_position_row(row, user.id, account.id, account.symbol_broker)
+            if volume_to_close is not None and volume_to_close > 0:
+                order.volume_lots = min(order.volume_lots, volume_to_close)
             return backend.close_position(order)
 
     try:

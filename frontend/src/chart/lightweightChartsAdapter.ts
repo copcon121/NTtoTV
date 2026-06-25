@@ -100,7 +100,7 @@ const FVG_BULL_COLORS: Record<number, string> = {
 const FVG_BEAR_COLORS: Record<number, string> = {
   1: "lightcoral",
   2: "crimson",
-  3: "darkred",
+  3: "#ff4500",
   5: "magenta",
 };
 
@@ -198,7 +198,7 @@ const VOLUME_DOWN_COLOR = "rgba(239, 83, 80, 0.50)";
 const CVD_LINE_COLOR = "#e0b341";
 const SESSION_HIGHLIGHT_UTC_PLUS_7_MINUTES = 7 * 60;
 const SESSION_HIGHLIGHT_HOURS_UTC_PLUS_7 = new Set([8, 20]);
-const SESSION_HIGHLIGHT_MINUTE_UTC_PLUS_7 = 1;
+const SESSION_HIGHLIGHT_MINUTE_UTC_PLUS_7 = 0;
 const SESSION_HIGHLIGHT_BODY_COLOR = "rgba(255, 213, 79, 0.78)";
 const SESSION_HIGHLIGHT_LINE_COLOR = "#ffd54f";
 
@@ -1203,7 +1203,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         color,
         lineWidth,
         priceLineVisible: false,
-        lastValueVisible: true,
+        lastValueVisible: false,
         crosshairMarkerVisible: false,
       });
       this.emaSeriesById.set(id, series);

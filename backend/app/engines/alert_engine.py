@@ -14,6 +14,7 @@ Supported alert types (Req 16.1):
 * ``volume_delta_threshold`` — a closed bar's volume delta meets a threshold.
 * ``big_trade_threshold``    — a reconstructed big trade meets a volume threshold.
 * ``stacked_imbalance``      — a closed footprint bar exhibits a stacked imbalance.
+* ``breakout_fvg_confluence`` — a breakout box event coincides with an FVG signal.
 
 Price source and evaluation timing (Req 16.6, 16.7):
 
@@ -47,6 +48,7 @@ from ..models.messages import AlertEvent
 from ..models.timestamp import CanonicalTimestamp
 from ..storage.cache_store import CacheStore
 from ..storage.records import AlertEventRecord, AlertRecord
+from .breakout_box_engine import BreakoutBoxEvent
 from .smc_external import (
     SmcBar,
     SmcExternalBreakState,
@@ -84,6 +86,7 @@ BIG_TRADE_THRESHOLD = "big_trade_threshold"
 STACKED_IMBALANCE = "stacked_imbalance"
 SMC_EXTERNAL_BREAK_BIG_TRADE = "smc_external_break_big_trade"
 SMC_ZONE_TOUCH_BIG_TRADE = "smc_zone_touch_big_trade"
+BREAKOUT_FVG_CONFLUENCE = "breakout_fvg_confluence"
 
 SMC_DEFAULT_SWING_LENGTH = 50
 SMC_DEFAULT_LOOKAHEAD_BARS = 5
@@ -107,6 +110,7 @@ ALERT_TYPES: frozenset[str] = frozenset(
         STACKED_IMBALANCE,
         SMC_EXTERNAL_BREAK_BIG_TRADE,
         SMC_ZONE_TOUCH_BIG_TRADE,
+        BREAKOUT_FVG_CONFLUENCE,
     }
 )
 
@@ -183,6 +187,11 @@ class MarketContext:
     big_trade_volume: int | None = None
     big_trade_price: float | None = None
     big_trade_side: Side | None = None
+
+    # breakout_fvg_confluence
+    breakout_events: list[BreakoutBoxEvent] | None = None
+    fvg_level: int | None = None
+    fvg_direction: int | None = None
 
 
 @dataclass(slots=True)
@@ -350,6 +359,8 @@ class AlertEngine:
             return self._eval_smc_external_break_big_trade(alert, ctx)
         if alert.type == SMC_ZONE_TOUCH_BIG_TRADE:
             return self._eval_smc_zone_touch_big_trade(alert, ctx)
+        if alert.type == BREAKOUT_FVG_CONFLUENCE:
+            return self._eval_breakout_fvg_confluence(alert, ctx)
         return None
 
     # -- price_crosses_level (Req 16.6, 17.5, 17.7) ---------------------------
@@ -493,6 +504,62 @@ class AlertEngine:
         if trigger is None:
             return None
         return self._make_smc_zone_event(alert, ctx, trigger)
+
+    # -- breakout_fvg_confluence -----------------------------------------------
+
+    def _eval_breakout_fvg_confluence(
+        self, alert: Alert, ctx: MarketContext
+    ) -> AlertEvent | None:
+        if not ctx.bar_closed or ctx.bar_time is None or ctx.bar_close is None:
+            return None
+        breakout_events = ctx.breakout_events
+        if not breakout_events:
+            return None
+        fvg_level = ctx.fvg_level
+        fvg_direction = ctx.fvg_direction
+        if fvg_level is None or fvg_direction is None or fvg_level == 0:
+            return None
+
+        min_fvg_level = self._breakout_fvg_min_level(alert)
+
+        for event in breakout_events:
+            if event.direction != fvg_direction:
+                continue
+            if fvg_level < min_fvg_level:
+                continue
+            # Confluence match: breakout direction matches FVG direction
+            # and FVG level is high enough.
+            condition = True
+            if not self._bar_gate(alert, ctx.bar_time, condition):
+                return None
+            direction_str = "bullish" if event.direction == 1 else "bearish"
+            message = (
+                f"{alert.symbol} {direction_str} breakout + FVG L{fvg_level} "
+                f"@ {event.price:g}"
+            )
+            return AlertEvent(
+                alert_id=alert.id,
+                alert_type=alert.type,
+                symbol=ctx.symbol,
+                contract=ctx.contract,
+                time=ctx.time,
+                price=event.price,
+                message=message,
+                level=event.box_top if event.direction == 1 else event.box_bottom,
+                profile_id=alert.profile_id,
+            )
+        return None
+
+    @staticmethod
+    def _breakout_fvg_min_level(alert: Alert) -> int:
+        raw = alert.params.get("minFvgLevel", 3)
+        if isinstance(raw, bool):
+            return 3
+        try:
+            val = int(raw)
+        except (TypeError, ValueError):
+            return 3
+        return max(1, min(5, val))
 
     # -- per-closed-bar fire-once + re-arm gate (Req 17.6, 17.8) --------------
 
@@ -812,6 +879,8 @@ class AlertEngine:
             return f"{sym} big trade threshold met"
         if alert.type == STACKED_IMBALANCE:
             return f"{sym} stacked imbalance"
+        if alert.type == BREAKOUT_FVG_CONFLUENCE:
+            return f"{sym} breakout + FVG confluence"
         return f"{sym} alert"
 
     @staticmethod

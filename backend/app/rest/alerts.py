@@ -169,6 +169,20 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         params["effectiveLookaheadBars"] = SMC_DEFAULT_LOOKAHEAD_BARS
         params["maxBars"] = SMC_DEFAULT_MAX_BARS
         params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
+    elif alert_type == "breakout_fvg_confluence":
+        level = params.get("minFvgLevel")
+        if level is not None:
+            if isinstance(level, bool) or not isinstance(level, (int, float)):
+                raise validation_error(
+                    "'minFvgLevel' must be numeric", field="minFvgLevel"
+                )
+            level = int(level)
+            if level < 1 or level > 5:
+                raise validation_error(
+                    "'minFvgLevel' must be between 1 and 5",
+                    field="minFvgLevel",
+                )
+            params["minFvgLevel"] = level
     # stacked_imbalance has no required params.
     return _validate_repeat_param(params)
 

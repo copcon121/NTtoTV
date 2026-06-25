@@ -117,6 +117,40 @@ class _StrictSymbolBackend:
         return []
 
 
+class _PositionTrackingBackend(_StrictSymbolBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.positions_by_ticket: dict[int, dict] = {}
+
+    def place_order(self, order: OrderRecord) -> Mt5OrderResult:
+        result = super().place_order(order)
+        ticket = int(result.broker_position_ticket or self.active_login)
+        self.positions_by_ticket[ticket] = {
+            "ticket": ticket,
+            "symbol": order.symbol_broker,
+            "side": order.side.value,
+            "volumeLots": order.volume_lots,
+            "entryBroker": result.fill_price or order.entry_broker or 2350.1,
+            "time": now_ms(),
+        }
+        return result
+
+    def close_position(self, order: OrderRecord) -> Mt5OrderResult:
+        self.closed_orders.append(order)
+        if order.broker_position_ticket in self.positions_by_ticket:
+            row = self.positions_by_ticket[order.broker_position_ticket]
+            remaining = float(row["volumeLots"]) - order.volume_lots
+            if remaining > 1e-9:
+                row["volumeLots"] = round(remaining, 10)
+                row["time"] = now_ms()
+            else:
+                self.positions_by_ticket.pop(order.broker_position_ticket, None)
+        return Mt5OrderResult(accepted=True, status="closed")
+
+    def positions(self, user_id: str, account_id: str) -> list[dict]:
+        return list(self.positions_by_ticket.values())
+
+
 @pytest.fixture()
 def client(tmp_path):
     settings = Settings(data_dir=tmp_path)
@@ -500,6 +534,46 @@ def test_market_order_lifecycle_with_fake_mt5(client: TestClient):
     closed = client.post(f"/api/orders/{order['id']}/close")
     assert closed.status_code == 200
     assert closed.json()["order"]["status"] == "closed"
+
+
+@pytest.mark.integration
+def test_close_order_accepts_partial_volume(client: TestClient):
+    backend = _PositionTrackingBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    assert client.post(
+        "/api/auth/login", json={"username": "local", "password": "local"}
+    ).status_code == 200
+    assert client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 1,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+        },
+    ).status_code == 200
+
+    created = client.post(
+        "/api/orders",
+        json={
+            "source": "market_bar",
+            "side": "buy",
+            "kind": "market",
+            "volumeLots": 0.1,
+            "idempotencyKey": "partial-close",
+        },
+    )
+    assert created.status_code == 200
+    order = created.json()["order"]
+
+    closed = client.post(f"/api/orders/{order['id']}/close", json={"volumeLots": 0.05})
+
+    assert closed.status_code == 200
+    body = closed.json()["order"]
+    assert body["status"] == "filled"
+    assert body["volumeLots"] == 0.05
+    assert backend.closed_orders[-1].volume_lots == 0.05
+    assert backend.positions_by_ticket[1]["volumeLots"] == 0.05
 
 
 @pytest.mark.integration

@@ -114,6 +114,11 @@ describe("FVG Signal Grader candle colors", () => {
     expect(fvgSignalColor(signal(-5))).toBe("magenta");
   });
 
+  it("keeps bear level 3 distinct from the default down candle", () => {
+    expect(fvgSignalColor(signal(-3))).toBe("#ff4500");
+    expect(fvgSignalColor(signal(-3))).not.toBe("#8b0000");
+  });
+
   it("uses FVG color before session and Outside Bar recoloring", () => {
     const previous = bar(3_540_000, 100, 100.5, 99.5, 100);
     const current = bar(3_600_000, 99.8, 101, 99, 100.8);
