@@ -521,14 +521,14 @@ export function IndicatorToggles({
             onChange={onVolumeDeltaChange}
           />
           <IndicatorRow
-            label="EMA/CVD/OSB"
+            label="EMA/Wave/OSB"
             checked={combinedIndicatorActive}
             onChange={toggleCombinedIndicators}
             trailing={
               <button
                 type="button"
                 className="indicator-gear"
-                aria-label="EMA/CVD/OSB settings"
+                aria-label="EMA/Wave/OSB settings"
                 aria-expanded={combinedSettingsOpen}
                 onClick={() => setCombinedSettingsOpen((v) => !v)}
               >
@@ -555,15 +555,15 @@ export function IndicatorToggles({
           />
           )}
           {combinedSettingsOpen && (
-            <div className="ema-settings" aria-label="EMA/CVD/OSB settings panel">
+            <div className="ema-settings" aria-label="EMA/Wave/OSB settings panel">
               <label className="fp-toggle-label">
                 <input
                   type="checkbox"
                   checked={cvd}
-                  aria-label="CVD"
+                  aria-label="Wave Delta"
                   onChange={(event) => onCvdChange(event.currentTarget.checked)}
                 />
-                <span>CVD</span>
+                <span>Wave Delta</span>
               </label>
               <div className="indicator-settings-section">
                 <label className="fp-toggle-label">

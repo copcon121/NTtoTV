@@ -58,7 +58,7 @@ describe("IndicatorToggles", () => {
     open();
     fireEvent.click(screen.getByLabelText("Volume"));
     fireEvent.click(screen.getByLabelText("Volume Delta"));
-    fireEvent.click(screen.getByLabelText("EMA/CVD/OSB"));
+    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB"));
     fireEvent.click(screen.getByLabelText("SMC"));
     fireEvent.click(screen.getByLabelText("Footprint"));
     fireEvent.click(screen.getByLabelText("FVG Grader"));
@@ -99,7 +99,7 @@ describe("IndicatorToggles", () => {
     expect(screen.getByLabelText("Footprint")).toBeDisabled();
     expect(screen.getByLabelText("FVG Grader")).not.toBeDisabled();
     expect(screen.getByLabelText("BigTrade")).not.toBeDisabled();
-    expect(screen.getByLabelText("EMA/CVD/OSB")).not.toBeDisabled();
+    expect(screen.getByLabelText("EMA/Wave/OSB")).not.toBeDisabled();
     expect(screen.getByLabelText("SMC")).not.toBeDisabled();
   });
 
@@ -147,7 +147,7 @@ describe("IndicatorToggles", () => {
     open();
     expect(screen.getByLabelText("Footprint")).not.toBeDisabled();
     expect(screen.getByLabelText("BigTrade")).toBeDisabled();
-    expect(screen.getByLabelText("EMA/CVD/OSB")).not.toBeDisabled();
+    expect(screen.getByLabelText("EMA/Wave/OSB")).not.toBeDisabled();
     expect(screen.getByLabelText("SMC")).not.toBeDisabled();
   });
 
@@ -189,7 +189,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/CVD/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
     fireEvent.click(screen.getByLabelText("Outside Bar"));
     fireEvent.change(screen.getByLabelText("Outside Bar bullish color"), {
       target: { value: "#123456" },
@@ -233,7 +233,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/CVD/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
     const input = screen.getByLabelText(
       "Outside Bar filter delta multiplier",
     ) as HTMLInputElement;
@@ -268,7 +268,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/CVD/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
     const input = screen.getByLabelText("EMA length");
     fireEvent.change(input, { target: { value: "21" } });
     fireEvent.blur(input);
@@ -294,7 +294,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/CVD/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
     fireEvent.click(screen.getByLabelText("EMA 200"));
 
     expect(onEma).toHaveBeenCalledWith({ ...EMA, showEma200: true });
@@ -373,7 +373,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/CVD/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
     fireEvent.click(screen.getByLabelText("EMA color #e0b341"));
 
     expect(onEma).toHaveBeenCalledWith({ ...EMA, color: "#e0b341" });
@@ -397,7 +397,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/CVD/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
     const input = screen.getByLabelText("EMA length") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "0" } });
     fireEvent.blur(input);

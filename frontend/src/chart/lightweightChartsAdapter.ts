@@ -167,11 +167,15 @@ export const VOLUME_DELTA_OVERLAY_SCALE_MARGINS = {
   top: 0.8,
   bottom: 0.02,
 } as const;
-export const CVD_OVERLAY_PRICE_SCALE_ID = "cvd-overlay";
-export const CVD_OVERLAY_SCALE_MARGINS = {
+export const WAVE_DELTA_OVERLAY_PRICE_SCALE_ID = "wave-delta-overlay";
+export const WAVE_DELTA_OVERLAY_SCALE_MARGINS = {
   top: 0.72,
   bottom: 0.04,
 } as const;
+// Backwards-compatible export names for callers/tests that still use the old
+// CVD prop surface. The rendered line is now current wave delta, not CVD.
+export const CVD_OVERLAY_PRICE_SCALE_ID = WAVE_DELTA_OVERLAY_PRICE_SCALE_ID;
+export const CVD_OVERLAY_SCALE_MARGINS = WAVE_DELTA_OVERLAY_SCALE_MARGINS;
 export const VOLUME_OVERLAY_PRICE_SCALE_ID = "volume-overlay";
 export const VOLUME_OVERLAY_SCALE_MARGINS = {
   top: 0.76,
@@ -195,7 +199,8 @@ const MZ_FOOTPRINT_COLORS = {
 };
 const VOLUME_UP_COLOR = "rgba(38, 166, 154, 0.50)";
 const VOLUME_DOWN_COLOR = "rgba(239, 83, 80, 0.50)";
-const CVD_LINE_COLOR = "#e0b341";
+const WAVE_DELTA_LINE_COLOR = "#4cc9ff";
+const DEFAULT_WAVE_DELTA_SWING_SIZE = 2;
 const SESSION_HIGHLIGHT_UTC_PLUS_7_MINUTES = 7 * 60;
 const SESSION_HIGHLIGHT_HOURS_UTC_PLUS_7 = new Set([8, 20]);
 const SESSION_HIGHLIGHT_MINUTE_UTC_PLUS_7 = 0;
@@ -485,15 +490,145 @@ function toVolumeDelta(
   };
 }
 
-function toCvdLineData(
-  point: VolumeDeltaDatum,
+function toWaveDeltaLineData(
+  bar: Bar,
   value: number,
   displayTimeOffsetMs: number,
 ): LineData {
   return {
-    time: toUtcTimestamp(point.time, displayTimeOffsetMs),
+    time: toUtcTimestamp(bar.time, displayTimeOffsetMs),
     value,
   };
+}
+
+function volumeDeltaValue(point: VolumeDeltaDatum | undefined): number {
+  if (point === undefined) return 0;
+  if (Number.isFinite(point.closeDelta)) return point.closeDelta;
+  return Number.isFinite(point.delta) ? point.delta : 0;
+}
+
+function hasHigherHighs(
+  bars: readonly Bar[],
+  index: number,
+  swingSize: number,
+): boolean {
+  if (index < swingSize) return false;
+  for (let j = 0; j < swingSize; j += 1) {
+    if (!(bars[index - j].high > bars[index - j - 1].high)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function hasLowerLows(
+  bars: readonly Bar[],
+  index: number,
+  swingSize: number,
+): boolean {
+  if (index < swingSize) return false;
+  for (let j = 0; j < swingSize; j += 1) {
+    if (!(bars[index - j].low < bars[index - j - 1].low)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function buildWaveDeltaLineData(
+  bars: readonly Bar[],
+  deltaByTime: ReadonlyMap<number, VolumeDeltaDatum>,
+  displayTimeOffsetMs = 0,
+  swingSize = DEFAULT_WAVE_DELTA_SWING_SIZE,
+): LineData[] {
+  const size = Math.max(2, Math.round(swingSize));
+  const data: LineData[] = [];
+  let dir = 0;
+  let extHigh = Number.NaN;
+  let extHighIdx = -1;
+  let extLow = Number.NaN;
+  let extLowIdx = -1;
+  let lastPivotIdx: number | undefined;
+  let waveDelta = 0;
+
+  for (let index = 0; index < bars.length; index += 1) {
+    const bar = bars[index];
+    if (index === 0) {
+      extHigh = bar.high;
+      extHighIdx = index;
+      extLow = bar.low;
+      extLowIdx = index;
+    }
+
+    if (!Number.isFinite(extHigh) || bar.high >= extHigh) {
+      extHigh = bar.high;
+      extHighIdx = index;
+    }
+    if (!Number.isFinite(extLow) || bar.low <= extLow) {
+      extLow = bar.low;
+      extLowIdx = index;
+    }
+
+    waveDelta += volumeDeltaValue(deltaByTime.get(bar.time));
+
+    const previous = bars[index - 1];
+    const isInside =
+      previous !== undefined &&
+      bar.high <= previous.high &&
+      bar.low >= previous.low;
+    const revUp = !isInside && hasHigherHighs(bars, index, size);
+    const revDown = !isInside && hasLowerLows(bars, index, size);
+
+    if (dir === 0) {
+      if (revUp) {
+        dir = 1;
+        lastPivotIdx = extLowIdx;
+        waveDelta = 0;
+        extHigh = bar.high;
+        extHighIdx = index;
+        extLow = bar.low;
+        extLowIdx = index;
+      } else if (revDown) {
+        dir = -1;
+        lastPivotIdx = extHighIdx;
+        waveDelta = 0;
+        extHigh = bar.high;
+        extHighIdx = index;
+        extLow = bar.low;
+        extLowIdx = index;
+      }
+    }
+
+    let newPivot = false;
+    let newPivotIdx = -1;
+    let newDirAfter = dir;
+
+    if (dir === 1 && revDown) {
+      newPivot = true;
+      newPivotIdx = extHighIdx;
+      newDirAfter = -1;
+    }
+
+    if (dir === -1 && revUp) {
+      newPivot = true;
+      newPivotIdx = extLowIdx;
+      newDirAfter = 1;
+    }
+
+    if (newPivot && lastPivotIdx !== undefined) {
+      lastPivotIdx = newPivotIdx;
+      dir = newDirAfter;
+      waveDelta = 0;
+      extHigh = bar.high;
+      extHighIdx = index;
+      extLow = bar.low;
+      extLowIdx = index;
+    }
+
+    data.push(toWaveDeltaLineData(bar, waveDelta, displayTimeOffsetMs));
+  }
+
+  return data;
 }
 
 function toVolumeHistogram(
@@ -554,7 +689,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly candleSeries: ISeriesApi<"Candlestick">;
   private readonly volumeSeries: ISeriesApi<"Histogram">;
   private readonly deltaSeries: ISeriesApi<"Candlestick">;
-  private readonly cvdSeries: ISeriesApi<"Line">;
+  private readonly waveDeltaSeries: ISeriesApi<"Line">;
   private readonly smcMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly smcAiSignalMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly sessionMarkers: ISeriesMarkersPluginApi<Time>;
@@ -571,8 +706,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly volumeDeltaByTime = new Map<number, VolumeDeltaDatum>();
   private readonly fvgSignalsByTime = new Map<number, FvgSignalUpdateMessage>();
   private fvgGraderVisible = true;
-  private cvdLastTime: number | undefined;
-  private cvdLastValue = 0;
   private readonly bigTradesByKey = new Map<string, BigTradeMarker>();
   private smcAiSignals: SmcAiSignalMarker[] = [];
   private readonly alertLinesById = new Map<string, IPriceLine>();
@@ -726,20 +859,28 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       borderVisible: false,
     });
 
-    // CVD uses the same volume-delta feed but renders as its own cumulative
-    // line so its scale does not distort the per-bar delta candles.
-    this.cvdSeries = this.chart.addSeries(LineSeries, {
-      color: CVD_LINE_COLOR,
+    // Wave Delta uses the same volume-delta feed plus candle swings. It renders
+    // as the current wave's running delta, replacing the old CVD line.
+    this.waveDeltaSeries = this.chart.addSeries(LineSeries, {
+      color: WAVE_DELTA_LINE_COLOR,
       lineWidth: 2,
-      priceScaleId: CVD_OVERLAY_PRICE_SCALE_ID,
+      priceScaleId: WAVE_DELTA_OVERLAY_PRICE_SCALE_ID,
       priceFormat: { type: "volume" },
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: false,
     }, 0);
-    this.cvdSeries.priceScale().applyOptions({
-      scaleMargins: CVD_OVERLAY_SCALE_MARGINS,
+    this.waveDeltaSeries.priceScale().applyOptions({
+      scaleMargins: WAVE_DELTA_OVERLAY_SCALE_MARGINS,
       borderVisible: false,
+    });
+    this.waveDeltaSeries.createPriceLine({
+      price: 0,
+      color: "rgba(255, 255, 255, 0.52)",
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      axisLabelVisible: false,
+      title: "",
     });
 
     this.barCountdownElement = document.createElement("div");
@@ -777,7 +918,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderSessionMarkers();
     this.renderVolumeSeries();
     this.renderVolumeDeltaSeries();
-    this.renderCvdSeries();
+    this.renderWaveDeltaSeries();
     this.renderBigTradeMarkers();
     this.renderSmcOverlay();
     this.renderSmcAiSignals();
@@ -854,6 +995,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderCandleSeries();
     this.renderSessionMarkers();
     this.renderVolumeSeries();
+    this.renderWaveDeltaSeries();
     this.latestBar =
       this.candleBars.length > 0
         ? { ...this.candleBars[this.candleBars.length - 1] }
@@ -871,6 +1013,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.updateCandleAt(result.index + 1);
     this.renderSessionMarkers();
     this.updateVolumeAt(result.index);
+    this.renderWaveDeltaSeries();
     this.barsByTime.set(
       toUtcTimestamp(bar.time, this.displayTimeOffsetMs) as number,
       { ...bar },
@@ -907,9 +1050,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.deltaSeries.applyOptions({ visible });
   }
 
-  /** Show or hide the cumulative volume-delta line. */
+  /** Show or hide the current wave-delta line. */
   setCvdVisible(visible: boolean): void {
-    this.cvdSeries.applyOptions({ visible });
+    this.waveDeltaSeries.applyOptions({ visible });
   }
 
   private renderCandleSeries(): void {
@@ -949,72 +1092,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     );
   }
 
-  private renderCvdSeries(): void {
-    const data: LineData[] = [];
-    let running = 0;
-    this.cvdLastTime = undefined;
-    this.cvdLastValue = 0;
-    for (const point of [...this.volumeDeltaByTime.values()].sort(
-      (a, b) => a.time - b.time,
-    )) {
-      const explicit = point.cumulativeDelta;
-      const value =
-        explicit !== undefined && Number.isFinite(explicit)
-          ? explicit
-          : running + point.closeDelta;
-      running = value;
-      data.push(toCvdLineData(point, value, this.displayTimeOffsetMs));
-      this.cvdLastTime = point.time;
-      this.cvdLastValue = value;
-    }
-    this.cvdSeries.setData(data);
-  }
-
-  private updateCvdPoint(
-    point: VolumeDeltaDatum,
-    previous: VolumeDeltaDatum | undefined,
-  ): void {
-    const explicit = point.cumulativeDelta;
-    if (explicit !== undefined && Number.isFinite(explicit)) {
-      if (this.cvdLastTime === undefined || point.time >= this.cvdLastTime) {
-        this.cvdSeries.update(
-          toCvdLineData(point, explicit, this.displayTimeOffsetMs),
-        );
-        this.cvdLastTime = point.time;
-        this.cvdLastValue = explicit;
-      } else {
-        this.renderCvdSeries();
-      }
-      return;
-    }
-
-    if (this.cvdLastTime === undefined) {
-      this.cvdLastTime = point.time;
-      this.cvdLastValue = point.closeDelta;
-      this.cvdSeries.update(
-        toCvdLineData(point, this.cvdLastValue, this.displayTimeOffsetMs),
-      );
-      return;
-    }
-
-    if (point.time > this.cvdLastTime) {
-      this.cvdLastValue += point.closeDelta;
-      this.cvdLastTime = point.time;
-      this.cvdSeries.update(
-        toCvdLineData(point, this.cvdLastValue, this.displayTimeOffsetMs),
-      );
-      return;
-    }
-
-    if (point.time === this.cvdLastTime && previous !== undefined) {
-      this.cvdLastValue = this.cvdLastValue - previous.closeDelta + point.closeDelta;
-      this.cvdSeries.update(
-        toCvdLineData(point, this.cvdLastValue, this.displayTimeOffsetMs),
-      );
-      return;
-    }
-
-    this.renderCvdSeries();
+  private renderWaveDeltaSeries(): void {
+    this.waveDeltaSeries.setData(
+      buildWaveDeltaLineData(
+        this.candleBars,
+        this.volumeDeltaByTime,
+        this.displayTimeOffsetMs,
+      ),
+    );
   }
 
   private rebuildBarsByDisplayTime(): void {
@@ -1222,18 +1307,17 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
     this.renderCandleSeries();
     this.renderVolumeDeltaSeries();
-    this.renderCvdSeries();
+    this.renderWaveDeltaSeries();
   }
 
   /** Apply one incremental volume-delta update. */
   updateVolumeDelta(point: VolumeDeltaDatum): void {
-    const previous = this.volumeDeltaByTime.get(point.time);
     const next = { ...point };
     this.volumeDeltaByTime.set(point.time, next);
     this.deltaSeries.update(
       toVolumeDelta(next, this.deltaColors, this.displayTimeOffsetMs),
     );
-    this.updateCvdPoint(next, previous);
+    this.renderWaveDeltaSeries();
     const index = this.candleBars.findIndex((bar) => bar.time === point.time);
     this.updateCandleAt(index);
     this.updateCandleAt(index + 1);

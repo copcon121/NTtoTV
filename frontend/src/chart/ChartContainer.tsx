@@ -247,7 +247,7 @@ export interface ChartContainerProps {
   showVolume?: boolean;
   /** Show MyVolumeDelta-style candles at the bottom of the chart. */
   showVolumeDelta?: boolean;
-  /** Show cumulative volume delta as a line at the bottom of the chart. */
+  /** Show current wave delta as a line at the bottom of the chart. */
   showCvd?: boolean;
   /** Show BigTrade markers on the candle series. */
   showBigTrades?: boolean;

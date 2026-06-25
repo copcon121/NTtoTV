@@ -7,8 +7,9 @@ import {
   VOLUME_OVERLAY_SCALE_MARGINS,
   VOLUME_DELTA_OVERLAY_PRICE_SCALE_ID,
   VOLUME_DELTA_OVERLAY_SCALE_MARGINS,
-  CVD_OVERLAY_PRICE_SCALE_ID,
-  CVD_OVERLAY_SCALE_MARGINS,
+  WAVE_DELTA_OVERLAY_PRICE_SCALE_ID,
+  WAVE_DELTA_OVERLAY_SCALE_MARGINS,
+  buildWaveDeltaLineData,
   fvgSignalColor,
   isUtcPlus7SessionHighlightTime,
   toBarDisplayTimestamp,
@@ -98,13 +99,40 @@ describe("lightweightChartsAdapter volume overlay", () => {
   });
 });
 
-describe("lightweightChartsAdapter CVD overlay", () => {
+describe("lightweightChartsAdapter wave delta overlay", () => {
   it("uses a dedicated line price scale near the chart bottom", () => {
-    expect(CVD_OVERLAY_PRICE_SCALE_ID).toBe("cvd-overlay");
-    expect(CVD_OVERLAY_SCALE_MARGINS).toEqual({
+    expect(WAVE_DELTA_OVERLAY_PRICE_SCALE_ID).toBe("wave-delta-overlay");
+    expect(WAVE_DELTA_OVERLAY_SCALE_MARGINS).toEqual({
       top: 0.72,
       bottom: 0.04,
     });
+  });
+
+  it("resets the current wave delta line when the swing direction reverses", () => {
+    const bars = [
+      bar(1, 10, 10, 9, 9.5),
+      bar(2, 9.5, 11, 9.4, 10.8),
+      bar(3, 10.8, 12, 10, 11.7),
+      bar(4, 11.7, 11.8, 9, 9.2),
+      bar(5, 9.2, 11, 8, 8.4),
+    ];
+    const deltas = new Map(
+      [5, 6, 7, -8, -9].map((closeDelta, index) => [
+        bars[index].time,
+        {
+          time: bars[index].time,
+          delta: closeDelta,
+          deltaHigh: Math.max(0, closeDelta),
+          deltaLow: Math.min(0, closeDelta),
+          openDelta: closeDelta,
+          closeDelta,
+        },
+      ]),
+    );
+
+    const values = buildWaveDeltaLineData(bars, deltas).map((point) => point.value);
+
+    expect(values).toEqual([5, 11, 0, -8, 0]);
   });
 });
 
