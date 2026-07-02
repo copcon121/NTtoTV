@@ -203,6 +203,61 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
+  it("loads footprint details with latest count", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        symbol: "GC",
+        contract: "GC",
+        tf: "1m",
+        bars: [
+          {
+            time: 1000,
+            rows: [{ price: 2400.1, bid: 2, ask: 5, imbalance: "ask" }],
+            poc: 2400.1,
+            barDelta: 3,
+            buyPct: 0.7,
+            sellPct: 0.3,
+            unfinishedAuction: { high: false, low: false },
+          },
+        ],
+      }),
+    );
+    const api = new ApiClient({ fetchFn });
+
+    await expect(
+      api.footprintDetails("GC", "GC", { count: 100 }),
+    ).resolves.toMatchObject({ bars: [{ time: 1000, poc: 2400.1 }] });
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orderflow/footprint?symbol=GC&contract=GC&count=100",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("loads centered footprint history metadata", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        symbol: "GC",
+        contract: "GC",
+        tf: "1m",
+        at: 2000,
+        context: 3,
+        targetFound: false,
+        bars: [],
+      }),
+    );
+    const api = new ApiClient({ fetchFn });
+
+    await expect(
+      api.footprintDetails("GC", "GC", { at: 2000, context: 3 }),
+    ).resolves.toMatchObject({ at: 2000, context: 3, targetFound: false });
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orderflow/footprint?symbol=GC&contract=GC&at=2000&context=3",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
   it("loads a fixed-range delta profile through /orderflow/delta-profile", async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({
@@ -247,6 +302,53 @@ describe("ApiClient auth, MT5, and user profile", () => {
 
     expect(fetchFn).toHaveBeenCalledWith(
       "/api/orderflow/delta-profile?symbol=GC&contract=GC&from=1000&to=2000&rowTicks=1&valueAreaPct=70",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("requests a fixed-range profile from minute bars", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        symbol: "GC",
+        contract: "GC",
+        tf: "1m",
+        from: 1000,
+        to: 2000,
+        rowTicks: 1,
+        valueAreaPct: 68,
+        poc: 4514.1,
+        vah: 4514.2,
+        val: 4514.0,
+        totalVolume: 10,
+        totalDelta: 0,
+        maxAbsDelta: 0,
+        coveredBars: 2,
+        source: "minute_bars",
+        rows: [
+          {
+            price: 4514.1,
+            bidVolume: 0,
+            askVolume: 0,
+            totalVolume: 10,
+            delta: 0,
+          },
+        ],
+      }),
+    );
+    const api = new ApiClient({ fetchFn });
+
+    await api.deltaProfile({
+      symbol: "GC",
+      contract: "GC",
+      from: 1000,
+      to: 2000,
+      rowTicks: 1,
+      valueAreaPct: 68,
+      source: "minute_bars",
+    });
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orderflow/delta-profile?symbol=GC&contract=GC&from=1000&to=2000&rowTicks=1&valueAreaPct=68&source=minute_bars",
       expect.objectContaining({ credentials: "same-origin" }),
     );
   });

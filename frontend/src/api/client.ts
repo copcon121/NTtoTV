@@ -12,7 +12,10 @@ import {
 } from "../alerts/types";
 import type { AlertEventMessage } from "../socket/messages";
 import { type ChartProfile, type ChartProfilePayload } from "../profiles/types";
-import type { DeltaProfileData } from "../orderflow/deltaProfile";
+import type {
+  DeltaProfileData,
+  DeltaProfileSource,
+} from "../orderflow/deltaProfile";
 import {
   type BigTradeMessage,
   type FvgSignalUpdateMessage,
@@ -60,6 +63,32 @@ export interface FootprintRestBar {
   sellPct: number;
   stackedImbalance?: StackedImbalance[];
   unfinishedAuction: { high: boolean; low: boolean };
+}
+
+export interface FootprintQuery {
+  count?: number;
+  at?: number;
+  context?: number;
+}
+
+export interface FootprintResponse {
+  symbol: string;
+  contract: string;
+  tf: Timeframe;
+  bars: FootprintUpdateMessage[];
+  at?: number;
+  context?: number;
+  targetFound?: boolean;
+}
+
+interface FootprintRestResponse {
+  symbol: string;
+  contract: string;
+  tf: Timeframe;
+  bars: FootprintRestBar[];
+  at?: number;
+  context?: number;
+  targetFound?: boolean;
 }
 
 export interface FvgSignalRestRow {
@@ -248,6 +277,36 @@ export interface AnalystEventAiState {
   providerMode: "real";
   llmEnabled: boolean;
   reason?: string | null;
+}
+
+function footprintRestBarToMessage(
+  body: Pick<FootprintRestResponse, "symbol" | "contract" | "tf">,
+  bar: FootprintRestBar,
+): FootprintUpdateMessage {
+  const prices = bar.rows.map((row) => row.price);
+  const high = bar.high ?? (prices.length > 0 ? Math.max(...prices) : bar.poc);
+  const low = bar.low ?? (prices.length > 0 ? Math.min(...prices) : bar.poc);
+  return {
+    type: "footprint_update",
+    symbol: body.symbol,
+    contract: body.contract,
+    tf: body.tf,
+    time: bar.time,
+    rows: bar.rows,
+    open: bar.open ?? bar.poc,
+    high,
+    low,
+    close: bar.close ?? bar.poc,
+    poc: bar.poc,
+    pocVolume: bar.pocVolume ?? 0,
+    vah: bar.vah ?? bar.poc,
+    val: bar.val ?? bar.poc,
+    barDelta: bar.barDelta,
+    buyPct: bar.buyPct,
+    sellPct: bar.sellPct,
+    stackedImbalance: bar.stackedImbalance ?? [],
+    unfinishedAuction: bar.unfinishedAuction,
+  };
 }
 
 export class ApiClient {
@@ -758,43 +817,41 @@ export class ApiClient {
     contract: string,
     count = 5,
   ): Promise<FootprintUpdateMessage[]> {
+    const body = await this.footprintDetails(symbol, contract, { count });
+    return body.bars;
+  }
+
+  /** M1 footprint bars plus optional centered-history metadata. */
+  async footprintDetails(
+    symbol: string,
+    contract: string,
+    query: FootprintQuery = {},
+  ): Promise<FootprintResponse> {
     const params = new URLSearchParams({
       symbol,
       contract,
-      count: String(count),
     });
-    const body = await this.getJson<{
-      symbol: string;
-      contract: string;
-      tf: Timeframe;
-      bars: FootprintRestBar[];
-    }>(`/orderflow/footprint?${params.toString()}`);
-    return body.bars.map((bar) => {
-      const prices = bar.rows.map((row) => row.price);
-      const high = bar.high ?? (prices.length > 0 ? Math.max(...prices) : bar.poc);
-      const low = bar.low ?? (prices.length > 0 ? Math.min(...prices) : bar.poc);
-      return {
-        type: "footprint_update",
-        symbol: body.symbol,
-        contract: body.contract,
-        tf: body.tf,
-        time: bar.time,
-        rows: bar.rows,
-        open: bar.open ?? bar.poc,
-        high,
-        low,
-        close: bar.close ?? bar.poc,
-        poc: bar.poc,
-        pocVolume: bar.pocVolume ?? 0,
-        vah: bar.vah ?? bar.poc,
-        val: bar.val ?? bar.poc,
-        barDelta: bar.barDelta,
-        buyPct: bar.buyPct,
-        sellPct: bar.sellPct,
-        stackedImbalance: bar.stackedImbalance ?? [],
-        unfinishedAuction: bar.unfinishedAuction,
-      };
-    });
+    if (query.count !== undefined) {
+      params.set("count", String(query.count));
+    }
+    if (query.at !== undefined) {
+      params.set("at", String(query.at));
+    }
+    if (query.context !== undefined) {
+      params.set("context", String(query.context));
+    }
+    const body = await this.getJson<FootprintRestResponse>(
+      `/orderflow/footprint?${params.toString()}`,
+    );
+    return {
+      symbol: body.symbol,
+      contract: body.contract,
+      tf: body.tf,
+      at: body.at,
+      context: body.context,
+      targetFound: body.targetFound,
+      bars: body.bars.map((bar) => footprintRestBarToMessage(body, bar)),
+    };
   }
 
   /** Confirmed M1 FVG Signal Grader candle colors. */
@@ -841,6 +898,7 @@ export class ApiClient {
     to: number;
     rowTicks?: number;
     valueAreaPct?: number;
+    source?: DeltaProfileSource;
   }): Promise<DeltaProfileData> {
     const params = new URLSearchParams({
       symbol: input.symbol,
@@ -853,6 +911,9 @@ export class ApiClient {
     }
     if (input.valueAreaPct !== undefined) {
       params.set("valueAreaPct", String(input.valueAreaPct));
+    }
+    if (input.source !== undefined) {
+      params.set("source", input.source);
     }
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 10_000);

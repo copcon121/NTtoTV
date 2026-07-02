@@ -20,7 +20,6 @@ describe("DrawingToolbar", () => {
 
   it("renders all drawing tools and forwards delete all", () => {
     const onToolSelect = vi.fn();
-    const onFixedRangeProfileModeChange = vi.fn();
     const onDeleteAll = vi.fn();
 
     render(
@@ -28,9 +27,7 @@ describe("DrawingToolbar", () => {
         className="drawing-toolbar-mobile"
         activeTool={null}
         drawingCount={2}
-        fixedRangeProfileMode="volume"
         onToolSelect={onToolSelect}
-        onFixedRangeProfileModeChange={onFixedRangeProfileModeChange}
         onDeleteAll={onDeleteAll}
       />,
     );
@@ -39,11 +36,6 @@ describe("DrawingToolbar", () => {
       fireEvent.click(screen.getByRole("button", { name: tool.label }));
       expect(onToolSelect).toHaveBeenLastCalledWith(tool.type);
     }
-
-    expect(screen.getByRole("button", { name: "Volume fixed profile" }))
-      .toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", { name: "Bid/ask fixed profile" }));
-    expect(onFixedRangeProfileModeChange).toHaveBeenCalledWith("bidAsk");
 
     fireEvent.click(screen.getByRole("button", { name: "Delete all drawings (2)" }));
     expect(onDeleteAll).toHaveBeenCalledTimes(1);

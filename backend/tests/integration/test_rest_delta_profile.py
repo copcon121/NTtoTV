@@ -8,7 +8,7 @@ from app.config import Settings
 from app.rest.contract_state import ContractStateStore
 from app.rest.orderflow import MAX_ROWS
 from app.storage.cache_store import CacheStore
-from app.storage.records import FootprintBarRecord, FootprintLevelRecord
+from app.storage.records import BarRecord, FootprintBarRecord, FootprintLevelRecord
 
 
 _SYMBOL = "GC"
@@ -46,6 +46,27 @@ def _bar(time: int) -> FootprintBarRecord:
         bar_delta=0,
         buy_pct=0,
         sell_pct=0,
+    )
+
+
+def _ohlcv_bar(
+    time: int,
+    *,
+    low: float,
+    high: float,
+    volume: int,
+) -> BarRecord:
+    return BarRecord(
+        symbol=_SYMBOL,
+        contract=_CHART_CONTRACT,
+        timeframe="1m",
+        time=time,
+        open=low,
+        high=high,
+        low=low,
+        close=high,
+        volume=volume,
+        closed=True,
     )
 
 
@@ -95,6 +116,10 @@ def test_delta_profile_aggregates_m1_footprint_ladders(client):
     assert body["poc"] == 4514.0
     assert body["vah"] == 4514.1
     assert body["val"] == 4514.0
+    assert body["developingPoc"] == [
+        {"time": _T0, "price": 4514.0},
+        {"time": _T0 + 60_000, "price": 4514.0},
+    ]
     assert body["rows"] == [
         {
             "price": 4514.2,
@@ -116,6 +141,66 @@ def test_delta_profile_aggregates_m1_footprint_ladders(client):
             "askVolume": 7,
             "totalVolume": 17,
             "delta": -3,
+        },
+    ]
+
+
+@pytest.mark.integration
+def test_delta_profile_minute_bar_source_matches_standard_minute_profile(client):
+    c, cache = client
+    cache.upsert_bars(
+        [
+            _ohlcv_bar(_T0, low=4514.0, high=4514.2, volume=9),
+            _ohlcv_bar(_T0 + 60_000, low=4514.1, high=4514.2, volume=8),
+        ]
+    )
+
+    resp = c.get(
+        "/api/orderflow/delta-profile",
+        params={
+            "symbol": _SYMBOL,
+            "contract": _CHART_CONTRACT,
+            "from": _T0,
+            "to": _T0 + 60_000,
+            "source": "minute_bars",
+            "valueAreaPct": 68,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "minute_bars"
+    assert body["coveredBars"] == 2
+    assert body["totalVolume"] == 17
+    assert body["totalDelta"] == 0
+    assert body["poc"] == 4514.2
+    assert body["vah"] == 4514.2
+    assert body["val"] == 4514.1
+    assert body["developingPoc"] == [
+        {"time": _T0, "price": 4514.2},
+        {"time": _T0 + 60_000, "price": 4514.2},
+    ]
+    assert body["rows"] == [
+        {
+            "price": 4514.2,
+            "bidVolume": 0,
+            "askVolume": 0,
+            "totalVolume": 7,
+            "delta": 0,
+        },
+        {
+            "price": 4514.1,
+            "bidVolume": 0,
+            "askVolume": 0,
+            "totalVolume": 7,
+            "delta": 0,
+        },
+        {
+            "price": 4514.0,
+            "bidVolume": 0,
+            "askVolume": 0,
+            "totalVolume": 3,
+            "delta": 0,
         },
     ]
 

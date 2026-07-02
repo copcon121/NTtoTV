@@ -1,4 +1,4 @@
-// chart module — Lightweight Charts adapter (the real ChartSeriesPort).
+// chart module â€” Lightweight Charts adapter (the real ChartSeriesPort).
 //
 // This is the ONLY file that talks to the `lightweight-charts` library. It
 // hosts a chart instance with a candlestick series, TradingView-style volume
@@ -7,7 +7,7 @@
 // drive it (design.md "Frontend Modules": ChartContainer, Req 19.1, 19.2).
 //
 // `port.setBars()` maps to `series.setData()` (bulk initial load) and
-// `port.updateBar()` maps to `series.update()` (incremental update) — exactly
+// `port.updateBar()` maps to `series.update()` (incremental update) â€” exactly
 // the two Lightweight Charts APIs called out in the design research notes.
 //
 // Time conversion: backend bars carry a Canonical_Timestamp in **milliseconds**
@@ -61,6 +61,11 @@ import {
   BigTradeBubblePrimitive,
   type RenderableBigTradeBubble,
 } from "./BigTradeBubblePrimitive";
+import {
+  DivergenceLinePrimitive,
+  type RenderableDivergenceLine,
+} from "./DivergenceLinePrimitive";
+import { SessionVolumeProfilePrimitive } from "./SessionVolumeProfilePrimitive";
 import { type Bar } from "../cache/types";
 import type { FvgSignalUpdateMessage } from "../socket/messages";
 import { type FootprintViewport } from "../footprint/footprintModel";
@@ -78,6 +83,13 @@ import {
   normalizeTimezoneOffsetMinutes,
   type TimeAxisTickKind,
 } from "./timezone";
+import {
+  buildMgannSwingOverlay,
+  DEFAULT_MGANN_SWING_SETTINGS,
+  normalizeMgannSwingSettings,
+  type MgannSwingImpulseWave,
+  type MgannSwingSettings,
+} from "./mgannSwing";
 
 /** One volume-delta point, keyed by backend Canonical_Timestamp ms. */
 export interface VolumeDeltaDatum {
@@ -103,6 +115,15 @@ const FVG_BEAR_COLORS: Record<number, string> = {
   3: "#ff4500",
   5: "magenta",
 };
+
+const MGANN_SWING_LINE_COLOR = "#9e9e9e";
+const MGANN_SWING_BUY_COLOR = "#00c0c0";
+const MGANN_SWING_SELL_COLOR = "#c00000";
+const MGANN_SWING_DELTA_UP_COLOR = "#004080";
+const MGANN_SWING_DELTA_DOWN_COLOR = "#800000";
+const MGANN_SWING_DELTA_ZERO_COLOR = "#6d6d6d";
+const MGANN_IMPULSE_BULL_COLOR = "#00a6a6";
+const MGANN_IMPULSE_BEAR_COLOR = "#ff8c00";
 
 /**
  * One horizontal alert level drawn on the candle price scale (Req 16.5).
@@ -201,9 +222,18 @@ const VOLUME_UP_COLOR = "rgba(38, 166, 154, 0.50)";
 const VOLUME_DOWN_COLOR = "rgba(239, 83, 80, 0.50)";
 const WAVE_DELTA_LINE_COLOR = "#4cc9ff";
 const DEFAULT_WAVE_DELTA_SWING_SIZE = 2;
+const DIVERGENCE_PIVOT_LEFT = 2;
+const DIVERGENCE_PIVOT_RIGHT = 2;
+const DIVERGENCE_MIN_PIVOT_SPACING = 3;
+const DIVERGENCE_MAX_SPAN = 80;
+const DIVERGENCE_MATCH_WAVE_WINDOW = 3;
+const DIVERGENCE_MIN_PRICE_SLOPE_ATR = 0.45;
+const DIVERGENCE_MIN_WAVE_SLOPE_RANGE = 0.35;
+const DIVERGENCE_MAX_VISIBLE = 20;
+const DIVERGENCE_LOOKBACK_BARS = 260;
 const SESSION_HIGHLIGHT_UTC_PLUS_7_MINUTES = 7 * 60;
 const SESSION_HIGHLIGHT_HOURS_UTC_PLUS_7 = new Set([8, 20]);
-const SESSION_HIGHLIGHT_MINUTE_UTC_PLUS_7 = 0;
+const SESSION_HIGHLIGHT_MINUTE_UTC_PLUS_7 = 1;
 const SESSION_HIGHLIGHT_BODY_COLOR = "rgba(255, 213, 79, 0.78)";
 const SESSION_HIGHLIGHT_LINE_COLOR = "#ffd54f";
 
@@ -374,6 +404,10 @@ export function isUtcPlus7SessionHighlightTime(
   return utcPlus7SessionHighlightHour(timeMs, displayTimeOffsetMs) !== undefined;
 }
 
+export function isMgannImpulseTimeframeDuration(durationMs: number): boolean {
+  return durationMs === 60_000 || durationMs === 300_000;
+}
+
 function utcPlus7SessionHighlightHour(
   timeMs: number,
   displayTimeOffsetMs = 0,
@@ -402,6 +436,7 @@ export function toCandle(
   outsideBar: OutsideBarSettings = DEFAULT_OUTSIDE_BAR_SETTINGS,
   outsideBarContext: OutsideBarFilterContext = {},
   fvgSignal?: FvgSignalUpdateMessage,
+  impulseColor?: string,
 ): CandlestickData {
   const highlight = isUtcPlus7SessionHighlightTime(
     bar.time,
@@ -427,6 +462,14 @@ export function toCandle(
       color: fvgColor,
       borderColor: fvgColor,
       wickColor: fvgColor,
+    };
+  }
+  if (impulseColor !== undefined) {
+    return {
+      ...candle,
+      color: impulseColor,
+      borderColor: impulseColor,
+      wickColor: impulseColor,
     };
   }
   if (highlight) {
@@ -501,38 +544,12 @@ function toWaveDeltaLineData(
   };
 }
 
-function volumeDeltaValue(point: VolumeDeltaDatum | undefined): number {
-  if (point === undefined) return 0;
-  if (Number.isFinite(point.closeDelta)) return point.closeDelta;
-  return Number.isFinite(point.delta) ? point.delta : 0;
-}
-
-function hasHigherHighs(
+function buildWaveDeltaValues(
   bars: readonly Bar[],
-  index: number,
-  swingSize: number,
-): boolean {
-  if (index < swingSize) return false;
-  for (let j = 0; j < swingSize; j += 1) {
-    if (!(bars[index - j].high > bars[index - j - 1].high)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function hasLowerLows(
-  bars: readonly Bar[],
-  index: number,
-  swingSize: number,
-): boolean {
-  if (index < swingSize) return false;
-  for (let j = 0; j < swingSize; j += 1) {
-    if (!(bars[index - j].low < bars[index - j - 1].low)) {
-      return false;
-    }
-  }
-  return true;
+  deltaByTime: ReadonlyMap<number, VolumeDeltaDatum>,
+  _swingSize = DEFAULT_WAVE_DELTA_SWING_SIZE,
+): number[] {
+  return buildMgannSwingOverlay(bars, deltaByTime).waveDeltaValues;
 }
 
 export function buildWaveDeltaLineData(
@@ -541,94 +558,282 @@ export function buildWaveDeltaLineData(
   displayTimeOffsetMs = 0,
   swingSize = DEFAULT_WAVE_DELTA_SWING_SIZE,
 ): LineData[] {
-  const size = Math.max(2, Math.round(swingSize));
-  const data: LineData[] = [];
-  let dir = 0;
-  let extHigh = Number.NaN;
-  let extHighIdx = -1;
-  let extLow = Number.NaN;
-  let extLowIdx = -1;
-  let lastPivotIdx: number | undefined;
-  let waveDelta = 0;
+  const values = buildWaveDeltaValues(bars, deltaByTime, swingSize);
+  return bars.map((bar, index) =>
+    toWaveDeltaLineData(bar, values[index] ?? 0, displayTimeOffsetMs),
+  );
+}
 
-  for (let index = 0; index < bars.length; index += 1) {
+interface DivergencePivot {
+  index: number;
+  time: number;
+  price: number;
+  waveIndex: number;
+  waveTime: number;
+  waveValue: number;
+}
+
+interface WaveDeltaDivergence {
+  id: string;
+  direction: 1 | -1;
+  pricePivots: readonly DivergencePivot[];
+  score: number;
+}
+
+function isPivotHigh(bars: readonly Bar[], index: number, left: number, right: number): boolean {
+  const value = bars[index].high;
+  for (let offset = 1; offset <= left; offset += 1) {
+    if (value <= bars[index - offset].high) return false;
+  }
+  for (let offset = 1; offset <= right; offset += 1) {
+    if (value <= bars[index + offset].high) return false;
+  }
+  return true;
+}
+
+function isPivotLow(bars: readonly Bar[], index: number, left: number, right: number): boolean {
+  const value = bars[index].low;
+  for (let offset = 1; offset <= left; offset += 1) {
+    if (value >= bars[index - offset].low) return false;
+  }
+  for (let offset = 1; offset <= right; offset += 1) {
+    if (value >= bars[index + offset].low) return false;
+  }
+  return true;
+}
+
+function matchedWavePivot(
+  bars: readonly Bar[],
+  waveValues: readonly number[],
+  index: number,
+  kind: "high" | "low",
+  window: number,
+): {
+  index: number;
+  time: number;
+  value: number;
+} {
+  const from = Math.max(0, index - window);
+  const to = Math.min(waveValues.length - 1, index + window);
+  let bestIndex = index;
+  let bestValue = waveValues[index] ?? 0;
+  for (let candidate = from; candidate <= to; candidate += 1) {
+    const value = waveValues[candidate] ?? 0;
+    if (
+      (kind === "high" && value > bestValue) ||
+      (kind === "low" && value < bestValue)
+    ) {
+      bestValue = value;
+      bestIndex = candidate;
+    }
+  }
+  return {
+    index: bestIndex,
+    time: bars[bestIndex]?.time ?? bars[index].time,
+    value: bestValue,
+  };
+}
+
+function sessionVolumeProfileValueAreaLineColor(backgroundColor: string): string {
+  const bg = parseHexColor(backgroundColor) ?? parseHexColor(MZ_FOOTPRINT_COLORS.chartBg)!;
+  const isLight = relativeLuminance(bg) > 0.5;
+  return isLight
+    ? "rgba(31, 78, 121, 0.72)"
+    : "rgba(170, 205, 255, 0.58)";
+}
+
+function collectDivergencePivots(
+  bars: readonly Bar[],
+  waveValues: readonly number[],
+  kind: "high" | "low",
+): DivergencePivot[] {
+  const out: DivergencePivot[] = [];
+  for (
+    let index = DIVERGENCE_PIVOT_LEFT;
+    index < bars.length - DIVERGENCE_PIVOT_RIGHT;
+    index += 1
+  ) {
+    const isPivot =
+      kind === "high"
+        ? isPivotHigh(bars, index, DIVERGENCE_PIVOT_LEFT, DIVERGENCE_PIVOT_RIGHT)
+        : isPivotLow(bars, index, DIVERGENCE_PIVOT_LEFT, DIVERGENCE_PIVOT_RIGHT);
+    if (!isPivot) continue;
+    const wave = matchedWavePivot(
+      bars,
+      waveValues,
+      index,
+      kind,
+      DIVERGENCE_MATCH_WAVE_WINDOW,
+    );
+    out.push({
+      index,
+      time: bars[index].time,
+      price: kind === "high" ? bars[index].high : bars[index].low,
+      waveIndex: wave.index,
+      waveTime: wave.time,
+      waveValue: wave.value,
+    });
+  }
+  return out;
+}
+
+function averageTrueRange(bars: readonly Bar[], from: number, to: number): number {
+  let total = 0;
+  let count = 0;
+  for (let index = Math.max(0, from); index <= Math.min(to, bars.length - 1); index += 1) {
     const bar = bars[index];
-    if (index === 0) {
-      extHigh = bar.high;
-      extHighIdx = index;
-      extLow = bar.low;
-      extLowIdx = index;
-    }
-
-    if (!Number.isFinite(extHigh) || bar.high >= extHigh) {
-      extHigh = bar.high;
-      extHighIdx = index;
-    }
-    if (!Number.isFinite(extLow) || bar.low <= extLow) {
-      extLow = bar.low;
-      extLowIdx = index;
-    }
-
-    waveDelta += volumeDeltaValue(deltaByTime.get(bar.time));
-
     const previous = bars[index - 1];
-    const isInside =
-      previous !== undefined &&
-      bar.high <= previous.high &&
-      bar.low >= previous.low;
-    const revUp = !isInside && hasHigherHighs(bars, index, size);
-    const revDown = !isInside && hasLowerLows(bars, index, size);
-
-    if (dir === 0) {
-      if (revUp) {
-        dir = 1;
-        lastPivotIdx = extLowIdx;
-        waveDelta = 0;
-        extHigh = bar.high;
-        extHighIdx = index;
-        extLow = bar.low;
-        extLowIdx = index;
-      } else if (revDown) {
-        dir = -1;
-        lastPivotIdx = extHighIdx;
-        waveDelta = 0;
-        extHigh = bar.high;
-        extHighIdx = index;
-        extLow = bar.low;
-        extLowIdx = index;
-      }
+    const prevClose = previous?.close ?? bar.close;
+    const tr = Math.max(
+      bar.high - bar.low,
+      Math.abs(bar.high - prevClose),
+      Math.abs(bar.low - prevClose),
+    );
+    if (Number.isFinite(tr) && tr > 0) {
+      total += tr;
+      count += 1;
     }
+  }
+  return count > 0 ? total / count : 1;
+}
 
-    let newPivot = false;
-    let newPivotIdx = -1;
-    let newDirAfter = dir;
+function waveRange(waveValues: readonly number[], from: number, to: number): number {
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (
+    let index = Math.max(0, from);
+    index <= Math.min(to, waveValues.length - 1);
+    index += 1
+  ) {
+    const value = waveValues[index] ?? 0;
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  }
+  const range = max - min;
+  return Number.isFinite(range) && range > 0 ? range : 1;
+}
 
-    if (dir === 1 && revDown) {
-      newPivot = true;
-      newPivotIdx = extHighIdx;
-      newDirAfter = -1;
-    }
-
-    if (dir === -1 && revUp) {
-      newPivot = true;
-      newPivotIdx = extLowIdx;
-      newDirAfter = 1;
-    }
-
-    if (newPivot && lastPivotIdx !== undefined) {
-      lastPivotIdx = newPivotIdx;
-      dir = newDirAfter;
-      waveDelta = 0;
-      extHigh = bar.high;
-      extHighIdx = index;
-      extLow = bar.low;
-      extLowIdx = index;
-    }
-
-    data.push(toWaveDeltaLineData(bar, waveDelta, displayTimeOffsetMs));
+function divergenceTripleScore(
+  bars: readonly Bar[],
+  waveValues: readonly number[],
+  pivots: readonly DivergencePivot[],
+  direction: 1 | -1,
+): number | undefined {
+  const [a, b, c] = pivots;
+  if (!a || !b || !c) return undefined;
+  if (
+    b.index - a.index < DIVERGENCE_MIN_PIVOT_SPACING ||
+    c.index - b.index < DIVERGENCE_MIN_PIVOT_SPACING ||
+    c.index - a.index > DIVERGENCE_MAX_SPAN
+  ) {
+    return undefined;
   }
 
-  return data;
+  if (!(a.waveIndex <= b.waveIndex && b.waveIndex <= c.waveIndex)) {
+    return undefined;
+  }
+
+  const priceDiverges =
+    direction === -1
+      ? a.price < b.price && b.price < c.price
+      : a.price > b.price && b.price > c.price;
+  const waveDiverges =
+    direction === -1
+      ? a.waveValue > b.waveValue && b.waveValue > c.waveValue
+      : a.waveValue < b.waveValue && b.waveValue < c.waveValue;
+  if (!priceDiverges || !waveDiverges) return undefined;
+
+  const priceSlope =
+    Math.abs(c.price - a.price) / averageTrueRange(bars, a.index, c.index);
+  const localWaveRange = waveRange(waveValues, a.waveIndex, c.waveIndex);
+  const waveSlope =
+    Math.abs(c.waveValue - a.waveValue) / localWaveRange;
+
+  if (
+    priceSlope < DIVERGENCE_MIN_PRICE_SLOPE_ATR ||
+    waveSlope < DIVERGENCE_MIN_WAVE_SLOPE_RANGE
+  ) {
+    return undefined;
+  }
+  return priceSlope + waveSlope;
+}
+
+export function buildWaveDeltaDivergences(
+  bars: readonly Bar[],
+  deltaByTime: ReadonlyMap<number, VolumeDeltaDatum>,
+): WaveDeltaDivergence[] {
+  const scopedBars =
+    bars.length > DIVERGENCE_LOOKBACK_BARS
+      ? bars.slice(-DIVERGENCE_LOOKBACK_BARS)
+      : bars;
+  if (scopedBars.length < DIVERGENCE_PIVOT_LEFT + DIVERGENCE_PIVOT_RIGHT + 3) {
+    return [];
+  }
+  const waveValues = buildWaveDeltaValues(scopedBars, deltaByTime);
+  const signals: WaveDeltaDivergence[] = [];
+  for (const [kind, direction] of [
+    ["high", -1],
+    ["low", 1],
+  ] as const) {
+    const pivots = collectDivergencePivots(scopedBars, waveValues, kind).slice(
+      -3,
+    );
+    if (pivots.length < 3) {
+      continue;
+    }
+    const triple = [pivots[0], pivots[1], pivots[2]] as const;
+    const score = divergenceTripleScore(scopedBars, waveValues, triple, direction);
+    if (score !== undefined) {
+      signals.push({
+        id: `wave-div:${direction}:${triple[0].time}:${triple[1].time}:${triple[2].time}`,
+        direction,
+        pricePivots: triple,
+        score,
+      });
+    }
+  }
+  return signals
+    .sort((a, b) => a.pricePivots[2].index - b.pricePivots[2].index)
+    .slice(-DIVERGENCE_MAX_VISIBLE);
+}
+
+function toDivergencePriceLines(
+  divergences: readonly WaveDeltaDivergence[],
+  displayTimeOffsetMs: number,
+): RenderableDivergenceLine[] {
+  return divergences.map((signal) => {
+    const [a, b, c] = signal.pricePivots;
+    return {
+      id: `${signal.id}:price`,
+      startTime: toUtcTimestamp(a.time, displayTimeOffsetMs),
+      startValue: a.price,
+      midTime: toUtcTimestamp(b.time, displayTimeOffsetMs),
+      midValue: b.price,
+      endTime: toUtcTimestamp(c.time, displayTimeOffsetMs),
+      endValue: c.price,
+      direction: signal.direction,
+      label: signal.direction === 1 ? "Bull Div 3" : "Bear Div 3",
+    };
+  });
+}
+
+function toDivergenceWaveLines(
+  divergences: readonly WaveDeltaDivergence[],
+  displayTimeOffsetMs: number,
+): RenderableDivergenceLine[] {
+  return divergences.map((signal) => {
+    const [a, b, c] = signal.pricePivots;
+    return {
+      id: `${signal.id}:wave`,
+      startTime: toUtcTimestamp(a.waveTime, displayTimeOffsetMs),
+      startValue: a.waveValue,
+      midTime: toUtcTimestamp(b.waveTime, displayTimeOffsetMs),
+      midValue: b.waveValue,
+      endTime: toUtcTimestamp(c.waveTime, displayTimeOffsetMs),
+      endValue: c.waveValue,
+      direction: signal.direction,
+    };
+  });
 }
 
 function toVolumeHistogram(
@@ -679,6 +884,12 @@ function smcMarkerColor(marker: SmcMarker, swingLabelColor: string): string {
   return swingLabelColor;
 }
 
+function mgannImpulseColor(impulse: MgannSwingImpulseWave): string {
+  return impulse.direction === 1
+    ? MGANN_IMPULSE_BULL_COLOR
+    : MGANN_IMPULSE_BEAR_COLOR;
+}
+
 /**
  * Hosts a Lightweight Charts instance (candles + volume overlays) and implements the
  * incremental {@link ChartSeriesPort}. Construct it with a container element;
@@ -690,11 +901,16 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly volumeSeries: ISeriesApi<"Histogram">;
   private readonly deltaSeries: ISeriesApi<"Candlestick">;
   private readonly waveDeltaSeries: ISeriesApi<"Line">;
+  private readonly mgannSwingSeries: ISeriesApi<"Line">;
   private readonly smcMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly smcAiSignalMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly sessionMarkers: ISeriesMarkersPluginApi<Time>;
+  private readonly mgannSwingMarkers: ISeriesMarkersPluginApi<Time>;
   private bigTradePrimitive: BigTradeBubblePrimitive | undefined;
   private smcPrimitive: SmcOverlayPrimitive | undefined;
+  private priceDivergencePrimitive: DivergenceLinePrimitive | undefined;
+  private sessionVolumeProfilePrimitive: SessionVolumeProfilePrimitive | undefined;
+  private waveDivergencePrimitive: DivergenceLinePrimitive | undefined;
   private smcOverlay: SmcOverlay = emptySmcOverlay();
   private readonly emaSeriesById = new Map<string, ISeriesApi<"Line">>();
   private readonly emaLastTimeById = new Map<string, number>();
@@ -704,6 +920,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private outsideBar: OutsideBarSettings;
   private readonly barsByTime = new Map<number, Bar>();
   private readonly volumeDeltaByTime = new Map<number, VolumeDeltaDatum>();
+  private mgannSwingVisible = false;
+  private mgannSwingSettings: MgannSwingSettings = DEFAULT_MGANN_SWING_SETTINGS;
   private readonly fvgSignalsByTime = new Map<number, FvgSignalUpdateMessage>();
   private fvgGraderVisible = true;
   private readonly bigTradesByKey = new Map<string, BigTradeMarker>();
@@ -809,12 +1027,40 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.smcMarkers = createSeriesMarkers(this.candleSeries, []);
     this.smcAiSignalMarkers = createSeriesMarkers(this.candleSeries, []);
     this.sessionMarkers = createSeriesMarkers(this.candleSeries, []);
+    this.mgannSwingMarkers = createSeriesMarkers(this.candleSeries, []);
     this.bigTradePrimitive = new BigTradeBubblePrimitive([]);
     this.candleSeries.attachPrimitive(
       this.bigTradePrimitive as unknown as Parameters<
         typeof this.candleSeries.attachPrimitive
       >[0],
     );
+    this.priceDivergencePrimitive = new DivergenceLinePrimitive([]);
+    this.candleSeries.attachPrimitive(
+      this.priceDivergencePrimitive as unknown as Parameters<
+        typeof this.candleSeries.attachPrimitive
+      >[0],
+    );
+
+    this.sessionVolumeProfilePrimitive = new SessionVolumeProfilePrimitive();
+    this.sessionVolumeProfilePrimitive.setDisplayTimeOffset(
+      this.displayTimeOffsetMs,
+    );
+    this.sessionVolumeProfilePrimitive.setValueAreaLineColor(
+      sessionVolumeProfileValueAreaLineColor(this.chartBackgroundColor),
+    );
+    this.candleSeries.attachPrimitive(
+      this.sessionVolumeProfilePrimitive as unknown as Parameters<
+        typeof this.candleSeries.attachPrimitive
+      >[0],
+    );
+
+    this.mgannSwingSeries = this.chart.addSeries(LineSeries, {
+      color: MGANN_SWING_LINE_COLOR,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      visible: false,
+    });
 
     // TradingView-style Volume indicator: a histogram overlaid at the bottom
     // of the main pane, on its own autoscaled price scale.
@@ -882,6 +1128,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       axisLabelVisible: false,
       title: "",
     });
+    this.waveDivergencePrimitive = new DivergenceLinePrimitive([]);
+    this.waveDeltaSeries.attachPrimitive(
+      this.waveDivergencePrimitive as unknown as Parameters<
+        typeof this.waveDeltaSeries.attachPrimitive
+      >[0],
+    );
 
     this.barCountdownElement = document.createElement("div");
     this.barCountdownElement.className = "bar-countdown";
@@ -913,12 +1165,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   /** Set the display-only bucket-start -> chart-time offsets. */
   setDisplayTimeOffset(offsetMs: number): void {
     this.displayTimeOffsetMs = offsetMs;
+    this.sessionVolumeProfilePrimitive?.setDisplayTimeOffset(offsetMs);
     this.rebuildBarsByDisplayTime();
     this.renderCandleSeries();
     this.renderSessionMarkers();
     this.renderVolumeSeries();
     this.renderVolumeDeltaSeries();
     this.renderWaveDeltaSeries();
+    this.renderMgannSwing();
     this.renderBigTradeMarkers();
     this.renderSmcOverlay();
     this.renderSmcAiSignals();
@@ -958,6 +1212,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   /** Change the active timeframe used by the right-axis current-bar countdown. */
   setBarCountdownDuration(durationMs: number): void {
     this.barCountdownDurationMs = durationMs;
+    this.renderCandleSeries();
     this.renderBigTradeMarkers();
     this.updateBarCountdown();
   }
@@ -966,6 +1221,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   setChartBackgroundColor(color: string): void {
     this.chartBackgroundColor = color;
     const palette = chartContrastPalette(color);
+    this.sessionVolumeProfilePrimitive?.setValueAreaLineColor(
+      sessionVolumeProfileValueAreaLineColor(color),
+    );
     this.chart.applyOptions({
       layout: {
         attributionLogo: false,
@@ -996,6 +1254,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderSessionMarkers();
     this.renderVolumeSeries();
     this.renderWaveDeltaSeries();
+    this.renderMgannSwing();
     this.latestBar =
       this.candleBars.length > 0
         ? { ...this.candleBars[this.candleBars.length - 1] }
@@ -1009,11 +1268,16 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   updateBar(bar: Bar): void {
     const result = applyBarUpdate(this.candleBars, bar);
     this.candleBars = result.bars;
-    this.updateCandleAt(result.index);
-    this.updateCandleAt(result.index + 1);
+    if (this.shouldRenderMgannImpulseWaves()) {
+      this.renderCandleSeries();
+    } else {
+      this.updateCandleAt(result.index);
+      this.updateCandleAt(result.index + 1);
+    }
     this.renderSessionMarkers();
     this.updateVolumeAt(result.index);
     this.renderWaveDeltaSeries();
+    this.renderMgannSwing();
     this.barsByTime.set(
       toUtcTimestamp(bar.time, this.displayTimeOffsetMs) as number,
       { ...bar },
@@ -1055,7 +1319,68 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.waveDeltaSeries.applyOptions({ visible });
   }
 
+  /** Set the session volume profile data (right-edge histogram). */
+  setSessionVolumeProfile(data: import("../orderflow/deltaProfile").DeltaProfileData | null): void {
+    this.sessionVolumeProfilePrimitive?.setProfile(data);
+  }
+
+  /** Set the session volume profile histogram width in CSS pixels. */
+  setSessionVolumeProfileWidth(widthPx: number): void {
+    this.sessionVolumeProfilePrimitive?.setProfileWidth(widthPx);
+  }
+
+  /** Show or hide the session developing POC path. */
+  setSessionVolumeProfileDevelopingPoc(visible: boolean): void {
+    this.sessionVolumeProfilePrimitive?.setDevelopingPocVisible(visible);
+  }
+
+  /** Show or hide the MGannSwing indicator. */
+  setMgannSwingVisible(visible: boolean): void {
+    this.mgannSwingVisible = visible;
+    this.renderCandleSeries();
+    this.renderMgannSwing();
+  }
+
+  /** Apply MGannSwing sub-settings. */
+  setMgannSwingSettings(settings: Partial<MgannSwingSettings>): void {
+    this.mgannSwingSettings = normalizeMgannSwingSettings(settings);
+    this.renderCandleSeries();
+    this.renderMgannSwing();
+  }
+
+  private shouldRenderMgannImpulseWaves(): boolean {
+    return (
+      this.mgannSwingVisible &&
+      this.mgannSwingSettings.showImpulseWaves &&
+      isMgannImpulseTimeframeDuration(this.barCountdownDurationMs)
+    );
+  }
+
+  private mgannImpulseColorsByIndex(): Map<number, string> {
+    if (!this.shouldRenderMgannImpulseWaves()) {
+      return new Map();
+    }
+    const overlay = buildMgannSwingOverlay(
+      this.candleBars,
+      this.volumeDeltaByTime,
+      this.mgannSwingSettings,
+    );
+    const colors = new Map<number, string>();
+    for (const impulse of overlay.impulseWaves) {
+      const color = mgannImpulseColor(impulse);
+      for (
+        let index = Math.max(0, impulse.startIndex);
+        index <= Math.min(this.candleBars.length - 1, impulse.endIndex);
+        index += 1
+      ) {
+        colors.set(index, color);
+      }
+    }
+    return colors;
+  }
+
   private renderCandleSeries(): void {
+    const impulseColors = this.mgannImpulseColorsByIndex();
     this.candleSeries.setData(
       this.candleBars.map((bar, index) =>
         toCandle(
@@ -1069,6 +1394,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
             deltaByTime: this.volumeDeltaByTime,
           },
           this.fvgGraderVisible ? this.fvgSignalsByTime.get(bar.time) : undefined,
+          impulseColors.get(index),
         ),
       ),
     );
@@ -1100,6 +1426,91 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         this.displayTimeOffsetMs,
       ),
     );
+    this.renderWaveDeltaDivergences();
+  }
+
+  private renderWaveDeltaDivergences(): void {
+    const divergences = buildWaveDeltaDivergences(
+      this.candleBars,
+      this.volumeDeltaByTime,
+    );
+    this.priceDivergencePrimitive?.setLines(
+      toDivergencePriceLines(divergences, this.displayTimeOffsetMs),
+    );
+    this.waveDivergencePrimitive?.setLines(
+      toDivergenceWaveLines(divergences, this.displayTimeOffsetMs),
+    );
+  }
+
+  private renderMgannSwing(): void {
+    const showLine =
+      this.mgannSwingVisible && this.mgannSwingSettings.showSwingLine;
+    const showSignals =
+      this.mgannSwingVisible && this.mgannSwingSettings.showSignals;
+    const showWaveDeltaNumbers =
+      this.mgannSwingVisible && this.mgannSwingSettings.showWaveDeltaNumbers;
+    this.mgannSwingSeries.applyOptions({ visible: showLine });
+
+    if (!showLine && !showSignals && !showWaveDeltaNumbers) {
+      this.mgannSwingSeries.setData([]);
+      this.mgannSwingMarkers.setMarkers([]);
+      return;
+    }
+
+    const overlay = buildMgannSwingOverlay(
+      this.candleBars,
+      this.volumeDeltaByTime,
+      this.mgannSwingSettings,
+    );
+
+    this.mgannSwingSeries.setData(
+      showLine
+        ? overlay.line.map((point) => ({
+            time: toUtcTimestamp(point.time, this.displayTimeOffsetMs),
+            value: point.value,
+          }))
+        : [],
+    );
+
+    const waveDeltaMarkers: SeriesMarker<Time>[] = showWaveDeltaNumbers
+      ? overlay.waveDeltaLabels.map((label) => {
+          const isBuy = label.kind === "low";
+          const rounded = Math.round(label.value);
+          return {
+            time: toUtcTimestamp(label.time, this.displayTimeOffsetMs),
+            position: isBuy ? "belowBar" : "aboveBar",
+            shape: "circle",
+            color:
+              rounded > 0
+                ? MGANN_SWING_DELTA_UP_COLOR
+                : rounded < 0
+                  ? MGANN_SWING_DELTA_DOWN_COLOR
+                  : MGANN_SWING_DELTA_ZERO_COLOR,
+            id: label.id,
+            text: String(rounded),
+            size: 0,
+          } satisfies SeriesMarker<Time>;
+        })
+      : [];
+    const signalMarkers: SeriesMarker<Time>[] = showSignals
+      ? overlay.signals.map((signal) => {
+            const isBuy = signal.kind === "low";
+            return {
+              time: toUtcTimestamp(signal.time, this.displayTimeOffsetMs),
+              position: isBuy ? "belowBar" : "aboveBar",
+              shape: "circle",
+              color: isBuy ? MGANN_SWING_BUY_COLOR : MGANN_SWING_SELL_COLOR,
+              id: signal.id,
+              text: signal.labels.join(" "),
+              size: 0,
+            } satisfies SeriesMarker<Time>;
+          })
+      : [];
+    this.mgannSwingMarkers.setMarkers(
+      [...waveDeltaMarkers, ...signalMarkers].sort(
+        (left, right) => Number(left.time) - Number(right.time),
+      ),
+    );
   }
 
   private rebuildBarsByDisplayTime(): void {
@@ -1116,6 +1527,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     if (index < 0 || index >= this.candleBars.length) {
       return;
     }
+    const impulseColors = this.mgannImpulseColorsByIndex();
     const candle = toCandle(
       this.candleBars[index],
       this.displayTimeOffsetMs,
@@ -1129,6 +1541,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.fvgGraderVisible
         ? this.fvgSignalsByTime.get(this.candleBars[index].time)
         : undefined,
+      impulseColors.get(index),
     );
     this.candleSeries.update(candle, index < this.candleBars.length - 1);
   }
@@ -1308,6 +1721,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderCandleSeries();
     this.renderVolumeDeltaSeries();
     this.renderWaveDeltaSeries();
+    this.renderMgannSwing();
   }
 
   /** Apply one incremental volume-delta update. */
@@ -1318,6 +1732,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       toVolumeDelta(next, this.deltaColors, this.displayTimeOffsetMs),
     );
     this.renderWaveDeltaSeries();
+    this.renderMgannSwing();
     const index = this.candleBars.findIndex((bar) => bar.time === point.time);
     this.updateCandleAt(index);
     this.updateCandleAt(index + 1);
@@ -2247,6 +2662,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         >[0],
       );
       this.bigTradePrimitive = undefined;
+    }
+    if (this.sessionVolumeProfilePrimitive !== undefined) {
+      this.candleSeries.detachPrimitive(
+        this.sessionVolumeProfilePrimitive as unknown as Parameters<
+          typeof this.candleSeries.detachPrimitive
+        >[0],
+      );
+      this.sessionVolumeProfilePrimitive = undefined;
     }
     this.smcMarkers.detach();
     this.smcAiSignalMarkers.detach();

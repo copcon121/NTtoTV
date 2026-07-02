@@ -20,6 +20,27 @@ import type { CanvasRenderingTarget2D } from "fancy-canvas";
 import { anchorToCoordinate } from "./coordinates";
 import type { AnchorPoint, DrawingOptions, DrawingState, IDrawing } from "./types";
 
+interface HorizontalRayRenderOptions {
+  lineColor: string;
+  width: number;
+  lineStyle: "solid" | "dashed";
+}
+
+const DEFAULT_OPTIONS: HorizontalRayRenderOptions = {
+  lineColor: "#FF6D00",
+  width: 1,
+  lineStyle: "solid",
+};
+
+function toRenderOptions(options?: DrawingOptions): HorizontalRayRenderOptions {
+  return {
+    ...DEFAULT_OPTIONS,
+    lineColor: options?.lineColor ?? DEFAULT_OPTIONS.lineColor,
+    width: options?.lineWidth ?? DEFAULT_OPTIONS.width,
+    lineStyle: options?.lineStyle ?? DEFAULT_OPTIONS.lineStyle,
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* Pane renderer                                                       */
 /* ------------------------------------------------------------------ */
@@ -29,8 +50,7 @@ class HorizontalRayRenderer implements IPrimitivePaneRenderer {
     private readonly _x: number,
     private readonly _y: number,
     private readonly _rightEdge: number,
-    private readonly _color: string,
-    private readonly _width: number,
+    private readonly _options: HorizontalRayRenderOptions,
     private readonly _price: number,
     private readonly _selected: boolean,
   ) {}
@@ -38,9 +58,9 @@ class HorizontalRayRenderer implements IPrimitivePaneRenderer {
   draw(target: CanvasRenderingTarget2D): void {
     target.useMediaCoordinateSpace(({ context: ctx }) => {
       ctx.save();
-      ctx.lineWidth = this._width;
-      ctx.strokeStyle = this._color;
-      ctx.setLineDash([]);
+      ctx.lineWidth = this._options.width;
+      ctx.strokeStyle = this._options.lineColor;
+      ctx.setLineDash(this._options.lineStyle === "dashed" ? [8, 6] : []);
       ctx.beginPath();
       ctx.moveTo(this._x, this._y);
       ctx.lineTo(this._rightEdge, this._y);
@@ -49,7 +69,7 @@ class HorizontalRayRenderer implements IPrimitivePaneRenderer {
       if (this._selected) {
         // Anchor dot
         const r = 4;
-        ctx.fillStyle = this._color;
+        ctx.fillStyle = this._options.lineColor;
         ctx.setLineDash([]);
         ctx.beginPath();
         ctx.arc(this._x, this._y, r, 0, Math.PI * 2);
@@ -57,7 +77,7 @@ class HorizontalRayRenderer implements IPrimitivePaneRenderer {
 
         // Price label on right
         ctx.font = "11px sans-serif";
-        ctx.fillStyle = this._color;
+        ctx.fillStyle = this._options.lineColor;
         ctx.textAlign = "right";
         ctx.textBaseline = "bottom";
         ctx.fillText(this._price.toFixed(1), this._rightEdge - 4, this._y - 3);
@@ -76,17 +96,9 @@ class HorizontalRayPaneView implements IPrimitivePaneView {
   private _x = 0;
   private _y = 0;
   private _rightEdge = 0;
-  private _color: string;
-  private _width: number;
   private _price = 0;
 
-  constructor(
-    private readonly _source: HorizontalRayPrimitive,
-    opts?: DrawingOptions,
-  ) {
-    this._color = opts?.lineColor ?? "#FF6D00";
-    this._width = opts?.lineWidth ?? 1;
-  }
+  constructor(private readonly _source: HorizontalRayPrimitive) {}
 
   zOrder(): PrimitivePaneViewZOrder {
     return "top";
@@ -111,8 +123,7 @@ class HorizontalRayPaneView implements IPrimitivePaneView {
       this._x,
       this._y,
       this._rightEdge,
-      this._color,
-      this._width,
+      this._source.renderOptions,
       this._price,
       this._source.selected,
     );
@@ -125,10 +136,12 @@ class HorizontalRayPaneView implements IPrimitivePaneView {
 
 export class HorizontalRayPrimitive implements ISeriesPrimitive<Time>, IDrawing {
   readonly tool = "horizontal_ray" as const;
+  renderOptions: HorizontalRayRenderOptions;
   private _anchors: AnchorPoint[];
   private _paneView: HorizontalRayPaneView;
   private _requestUpdate?: () => void;
   private _selected = false;
+  private _options: DrawingOptions;
 
   chart: IChartApiBase<Time> | undefined;
   series: ISeriesApi<"Candlestick", Time> | undefined;
@@ -136,10 +149,12 @@ export class HorizontalRayPrimitive implements ISeriesPrimitive<Time>, IDrawing 
   constructor(
     readonly id: string,
     anchors: AnchorPoint[],
-    private readonly _options?: DrawingOptions,
+    options?: DrawingOptions,
   ) {
     this._anchors = [...anchors];
-    this._paneView = new HorizontalRayPaneView(this, _options);
+    this._options = { ...options };
+    this.renderOptions = toRenderOptions(this._options);
+    this._paneView = new HorizontalRayPaneView(this);
   }
 
   get anchors(): AnchorPoint[] {
@@ -158,6 +173,12 @@ export class HorizontalRayPrimitive implements ISeriesPrimitive<Time>, IDrawing 
   setSelected(selected: boolean): void {
     if (this._selected === selected) return;
     this._selected = selected;
+    this.requestUpdate();
+  }
+
+  setOptions(options: DrawingOptions): void {
+    this._options = { ...this._options, ...options };
+    this.renderOptions = toRenderOptions(this._options);
     this.requestUpdate();
   }
 

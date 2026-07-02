@@ -48,6 +48,8 @@ type Direction = 1 | -1;
 type Scope = "swing" | "internal";
 
 const FVG_VOLUME_LOOKBACK = 20;
+const ORDER_BLOCK_WIDE_RANGE_LOOKBACK = 20;
+const ORDER_BLOCK_WIDE_RANGE_MULTIPLIER = 2;
 
 export type SmcMarkerKind =
   | "bos"
@@ -479,9 +481,12 @@ class LuxSmc {
       obCandlePos = rangeHighs.indexOf(maxHigh);
     }
 
+    const obBufferPos = bufferStartPos + obCandlePos;
+    const bounds = this.orderBlockBounds(obBufferPos, direction);
+
     const ob: OrderBlock = {
-      top: rangeHighs[obCandlePos],
-      bottom: rangeLows[obCandlePos],
+      top: bounds.top,
+      bottom: bounds.bottom,
       barIndex: rangeIndices[obCandlePos],
       createdBarIndex: this.indices[this.indices.length - 1],
       timestamp: rangeTimestamps[obCandlePos],
@@ -493,6 +498,52 @@ class LuxSmc {
     const target = isInternal ? this.internalObs : this.swingObs;
     target.unshift(ob);
     if (target.length > 20) target.pop();
+  }
+
+  private orderBlockBounds(
+    candlePos: number,
+    direction: Direction,
+  ): { top: number; bottom: number } {
+    const high = this.highs[candlePos];
+    const low = this.lows[candlePos];
+    const open = this.opens[candlePos];
+    const close = this.closes[candlePos];
+    const range = high - low;
+    const averageRange = this.averageRangeBefore(candlePos);
+    const isWideRange =
+      averageRange > 0 &&
+      range > averageRange * ORDER_BLOCK_WIDE_RANGE_MULTIPLIER;
+
+    if (isWideRange) {
+      if (direction === 1) {
+        const bodyLow = Math.min(open, close);
+        if (bodyLow > low) {
+          return { top: bodyLow, bottom: low };
+        }
+      } else {
+        const bodyHigh = Math.max(open, close);
+        if (high > bodyHigh) {
+          return { top: high, bottom: bodyHigh };
+        }
+      }
+    }
+
+    return { top: high, bottom: low };
+  }
+
+  private averageRangeBefore(candlePos: number): number {
+    const start = Math.max(0, candlePos - ORDER_BLOCK_WIDE_RANGE_LOOKBACK);
+    let sum = 0;
+    let count = 0;
+
+    for (let i = start; i < candlePos; i += 1) {
+      const range = this.highs[i] - this.lows[i];
+      if (!Number.isFinite(range) || range <= 0) continue;
+      sum += range;
+      count += 1;
+    }
+
+    return count > 0 ? sum / count : 0;
   }
 
   private detectFvgs(barIndex: number): void {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isPriceInsideValueArea,
   normalizeFixedRangeProfileMode,
+  profileHistogramWidth,
 } from "./FixedRangeDeltaProfilePrimitive";
 
 describe("FixedRangeDeltaProfilePrimitive value area rows", () => {
@@ -22,9 +23,17 @@ describe("FixedRangeDeltaProfilePrimitive value area rows", () => {
 });
 
 describe("FixedRangeDeltaProfilePrimitive mode", () => {
-  it("defaults legacy or invalid profile mode to bid/ask split", () => {
-    expect(normalizeFixedRangeProfileMode(undefined)).toBe("bidAsk");
-    expect(normalizeFixedRangeProfileMode("delta")).toBe("bidAsk");
+  it("defaults legacy or invalid profile mode to volume", () => {
+    expect(normalizeFixedRangeProfileMode(undefined)).toBe("volume");
+    expect(normalizeFixedRangeProfileMode("delta")).toBe("delta");
+    expect(normalizeFixedRangeProfileMode("bidAsk")).toBe("delta");
     expect(normalizeFixedRangeProfileMode("volume")).toBe("volume");
+  });
+});
+
+describe("FixedRangeDeltaProfilePrimitive histogram lane", () => {
+  it("keeps the profile lane anchored left instead of filling a wide box", () => {
+    expect(profileHistogramWidth(200)).toBe(144);
+    expect(profileHistogramWidth(1000)).toBe(560);
   });
 });

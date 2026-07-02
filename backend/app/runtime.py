@@ -29,6 +29,7 @@ from .analyst.store import AnalystStore
 from .engines.anchored_sync import AnchoredSyncEngine
 from .engines.basis_engine import BasisEngine
 from .engines.contract_resolver import ContractResolver
+from .engines.fvg_signal_engine import FvgSignalEngine
 from .engines.reconciliation import ReconciliationEngine
 from .ingest.control_plane import ControlPlaneCoordinator
 from .pipeline import Pipeline
@@ -100,6 +101,8 @@ class AppRuntime:
                 queue_size=s.analyst_scanner_queue_size,
                 m1_internal_enabled=s.analyst_m1_internal_enabled,
             )
+        self._native_fvg = FvgSignalEngine()
+        self._native_fvg_seeded: set[tuple[str, str]] = set()
         # The pipeline; control plane is bound per /ws/nt connection so its
         # send_control targets the live socket.
         self._pipeline = Pipeline(
@@ -108,10 +111,12 @@ class AppRuntime:
             tick_store=self._tick_store,
             resolver=self._resolver,
             symbol=self._symbol,
+            native_fvg_signal=self._native_fvg,
             basis_engine=self._basis_engine,
             analyst_event_sink=(
                 None if self._poi_scanner is None else self._poi_scanner.enqueue_latest
             ),
+            enable_tick_fvg_signal=False,
         )
         self._flush_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -134,6 +139,14 @@ class AppRuntime:
     @property
     def pipeline(self) -> Pipeline:
         return self._pipeline
+
+    @property
+    def native_fvg(self) -> FvgSignalEngine:
+        return self._native_fvg
+
+    @property
+    def native_fvg_seeded(self) -> set[tuple[str, str]]:
+        return self._native_fvg_seeded
 
     @property
     def contract_state(self) -> ContractStateStore:

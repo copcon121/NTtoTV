@@ -28,17 +28,19 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from ..engines.alert_engine import (
     ALERT_TYPES,
     LEVEL_ALERT_TYPES,
+    MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
+    MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
+    MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
+    MGANN_FVG_DEFAULT_SWING_SIZE,
+    MGANN_FVG_RETEST,
+    MGANN_FVG_RETEST_TIMEFRAME,
+    MGANN_FVG_RETEST_TIMEFRAMES,
     SMC_DEFAULT_LOOKAHEAD_BARS,
     SMC_DEFAULT_MAX_BARS,
     SMC_DEFAULT_PAUSE_ON_INSIDE_BARS,
+    SMC_DEFAULT_RETEST_TOLERANCE_TICKS,
     SMC_DEFAULT_SWING_LENGTH,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
-    SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD,
-    SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK,
-    SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER,
-    SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION,
-    SMC_ZONE_DEFAULT_MAX_ZONE_AGE,
-    SMC_ZONE_TOUCH_BIG_TRADE,
     Alert,
     AlertEngine,
 )
@@ -118,7 +120,7 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 f"alert type {alert_type!r} requires a numeric 'threshold'",
                 field="threshold",
             )
-    elif alert_type in (SMC_EXTERNAL_BREAK_BIG_TRADE, SMC_ZONE_TOUCH_BIG_TRADE):
+    elif alert_type == SMC_EXTERNAL_BREAK_BIG_TRADE:
         threshold = params.get("bigTradeThreshold")
         if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
             raise validation_error(
@@ -130,31 +132,12 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 "'bigTradeThreshold' must be greater than zero",
                 field="bigTradeThreshold",
             )
-        if alert_type == SMC_ZONE_TOUCH_BIG_TRADE:
-            for key in (
-                "swingLength",
-                "maxZoneAge",
-                "fvgThresholdLookback",
-                "fvgThresholdMultiplier",
-            ):
-                _validate_optional_positive_number(params, key)
-            for key in ("fvgAutoThreshold", "fvgVolumeConfirmation"):
-                value = params.get(key)
-                if value is not None and not isinstance(value, bool):
-                    raise validation_error(f"'{key}' must be a boolean", field=key)
-            params["bigTradeThreshold"] = threshold
-            params["swingLength"] = SMC_DEFAULT_SWING_LENGTH
-            params["maxZoneAge"] = SMC_ZONE_DEFAULT_MAX_ZONE_AGE
-            params["fvgAutoThreshold"] = SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD
-            params["fvgThresholdLookback"] = SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK
-            params["fvgThresholdMultiplier"] = SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER
-            params["fvgVolumeConfirmation"] = SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION
-            return _validate_repeat_param(params)
         for key in (
             "swingLength",
             "lookaheadBars",
             "effectiveLookaheadBars",
             "maxBars",
+            "retestToleranceTicks",
         ):
             _validate_optional_positive_number(params, key)
         pause = params.get("pauseOnInsideBars")
@@ -169,6 +152,7 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         params["effectiveLookaheadBars"] = SMC_DEFAULT_LOOKAHEAD_BARS
         params["maxBars"] = SMC_DEFAULT_MAX_BARS
         params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
+        params["retestToleranceTicks"] = SMC_DEFAULT_RETEST_TOLERANCE_TICKS
     elif alert_type == "breakout_fvg_confluence":
         level = params.get("minFvgLevel")
         if level is not None:
@@ -183,6 +167,26 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                     field="minFvgLevel",
                 )
             params["minFvgLevel"] = level
+    elif alert_type == MGANN_FVG_RETEST:
+        timeframe = params.get("timeframe", MGANN_FVG_RETEST_TIMEFRAME)
+        if not isinstance(timeframe, str) or timeframe not in MGANN_FVG_RETEST_TIMEFRAMES:
+            allowed = ", ".join(MGANN_FVG_RETEST_TIMEFRAMES)
+            raise validation_error(
+                f"'timeframe' must be one of: {allowed}",
+                field="timeframe",
+            )
+        for key in (
+            "swingSize",
+            "maxZoneAge",
+            "minGapTicks",
+            "retestToleranceTicks",
+        ):
+            _validate_optional_nonnegative_number(params, key)
+        params["timeframe"] = timeframe
+        params["swingSize"] = MGANN_FVG_DEFAULT_SWING_SIZE
+        params["maxZoneAge"] = MGANN_FVG_DEFAULT_MAX_ZONE_AGE
+        params["minGapTicks"] = MGANN_FVG_DEFAULT_MIN_GAP_TICKS
+        params["retestToleranceTicks"] = MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS
     # stacked_imbalance has no required params.
     return _validate_repeat_param(params)
 
@@ -202,6 +206,18 @@ def _validate_optional_positive_number(params: dict[str, Any], key: str) -> None
         raise validation_error(f"'{key}' must be numeric", field=key)
     if float(value) <= 0:
         raise validation_error(f"'{key}' must be greater than zero", field=key)
+
+def _validate_optional_nonnegative_number(params: dict[str, Any], key: str) -> None:
+    if key not in params:
+        return
+    value = params[key]
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise validation_error(f"'{key}' must be numeric", field=key)
+    if float(value) < 0:
+        raise validation_error(
+            f"'{key}' must be greater than or equal to zero",
+            field=key,
+        )
 
 
 @router.get("/alerts")

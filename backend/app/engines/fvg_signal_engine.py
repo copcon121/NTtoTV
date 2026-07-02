@@ -9,6 +9,7 @@ settings without changing FVG grading.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from app.models.canonical import NormalizedTrade, Side
@@ -99,7 +100,9 @@ class _ContractState:
     current: _FvgBar | None = None
     bars: dict[int, _FvgBar] = field(default_factory=dict)
     order: list[int] = field(default_factory=list)
+    provisional_times: set[int] = field(default_factory=set)
     confirmed_source_times: set[int] = field(default_factory=set)
+    finalized_source_times: set[int] = field(default_factory=set)
     preview_by_source: dict[int, tuple[int, int, float, float, float]] = field(
         default_factory=dict
     )
@@ -147,6 +150,105 @@ class FvgSignalEngine:
         events.extend(self._preview_events(state, t.symbol, t.contract))
         return events
 
+    def on_preview_trade(self, t: NormalizedTrade) -> list[FvgSignalUpdate]:
+        """Use a live trade only to preview the right bar of a native FVG.
+
+        Closed/native bars remain authoritative for footprints and confirmed
+        signals. This path only maintains a provisional current bar's OHLC so a
+        three-bar FVG can color the source bar while the right bar is forming.
+        """
+        state = self._state.get(t.contract)
+        if state is None or not state.order:
+            return []
+
+        bucket = self.bucket_start(t.time)
+        current = state.current
+        if current is not None and bucket < current.time:
+            return []
+
+        if (
+            current is not None
+            and bucket > current.time
+            and current.time in state.provisional_times
+        ):
+            return []
+
+        if current is None or bucket > current.time:
+            current = _FvgBar(
+                time=bucket,
+                open=t.price,
+                high=t.price,
+                low=t.price,
+                close=t.price,
+                grouped_close=self._level_price(t.price),
+            )
+            state.current = current
+            state.bars[bucket] = current
+            state.order.append(bucket)
+            state.provisional_times.add(bucket)
+            self._trim_state(state)
+        elif bucket == current.time:
+            if bucket not in state.provisional_times:
+                return []
+            self._fold_preview_price(current, t.price)
+
+        return self._preview_events(state, t.symbol, t.contract)
+
+    def on_closed_bar(
+        self,
+        *,
+        symbol: str,
+        contract: str,
+        time: int,
+        open: float,
+        high: float,
+        low: float,
+        close: float,
+        rows: Iterable[tuple[float, int, int]],
+        emit_clear: bool = True,
+    ) -> list[FvgSignalUpdate]:
+        """Fold one finalized native footprint bar and grade the prior bar.
+
+        The native chart bridge posts complete M1 bars after NinjaTrader closes
+        them. Once a right bar arrives, the source bar is final, so this path
+        emits only confirmed/clear updates; provisional source-bar colors are
+        handled separately by :meth:`on_preview_trade`.
+        """
+        state = self._state.setdefault(contract, _ContractState())
+        bucket = self.bucket_start(time)
+        if state.order and bucket < state.order[-1]:
+            return []
+        if state.order and bucket == state.order[-1]:
+            was_provisional = bucket in state.provisional_times
+            state.bars[bucket] = self._bar_from_native(
+                bucket, open, high, low, close, rows
+            )
+            state.current = state.bars[bucket]
+            state.provisional_times.discard(bucket)
+            state.finalized_source_times.discard(bucket)
+            state.confirmed_source_times.discard(bucket)
+            if not was_provisional:
+                return []
+            return self._confirmed_events(
+                state,
+                symbol,
+                contract,
+                emit_clear_without_preview=emit_clear,
+            )
+
+        bar = self._bar_from_native(bucket, open, high, low, close, rows)
+        state.current = bar
+        state.bars[bucket] = bar
+        state.order.append(bucket)
+        state.provisional_times.discard(bucket)
+        self._trim_state(state)
+        return self._confirmed_events(
+            state,
+            symbol,
+            contract,
+            emit_clear_without_preview=emit_clear,
+        )
+
     def reset_contract(self, contract: str) -> None:
         self._state.pop(contract, None)
 
@@ -170,21 +272,68 @@ class FvgSignalEngine:
             bar.total_sell_volume += t.volume
         bar.profile_ready = False
 
+    def _fold_preview_price(self, bar: _FvgBar, price: float) -> None:
+        bar.high = max(bar.high, price)
+        bar.low = min(bar.low, price)
+        bar.close = price
+        bar.grouped_close = self._level_price(price)
+
     def _confirmed_events(
-        self, state: _ContractState, symbol: str, contract: str
+        self,
+        state: _ContractState,
+        symbol: str,
+        contract: str,
+        *,
+        emit_clear_without_preview: bool = False,
     ) -> list[FvgSignalUpdate]:
         if len(state.order) < 3:
             return []
         source_idx = len(state.order) - 2
-        signal = self._classify_source(state, source_idx)
         source_time = state.order[source_idx]
+        if source_time in state.finalized_source_times:
+            return []
+        signal = self._classify_source(state, source_idx)
         preview_was_active = state.preview_by_source.pop(source_time, None) is not None
-        if signal is not None and source_time not in state.confirmed_source_times:
+        state.finalized_source_times.add(source_time)
+        if signal is not None:
             state.confirmed_source_times.add(source_time)
             return [self._to_update(signal, symbol, contract, phase="confirmed")]
-        if preview_was_active:
+        if preview_was_active or emit_clear_without_preview:
             return [self._clear_update(symbol, contract, source_time)]
         return []
+
+    def _bar_from_native(
+        self,
+        time: int,
+        open: float,
+        high: float,
+        low: float,
+        close: float,
+        rows: Iterable[tuple[float, int, int]],
+    ) -> _FvgBar:
+        bar = _FvgBar(
+            time=time,
+            open=open,
+            high=high,
+            low=low,
+            close=close,
+            grouped_close=self._level_price(close),
+        )
+        for price, bid, ask in rows:
+            bid_volume = max(0, int(bid))
+            ask_volume = max(0, int(ask))
+            if bid_volume <= 0 and ask_volume <= 0:
+                continue
+            level_price = self._level_price(float(price))
+            level = bar.levels.get(level_price)
+            if level is None:
+                level = _Level()
+                bar.levels[level_price] = level
+            level.bid_volume += bid_volume
+            level.ask_volume += ask_volume
+            bar.total_sell_volume += bid_volume
+            bar.total_buy_volume += ask_volume
+        return bar
 
     def _preview_events(
         self, state: _ContractState, symbol: str, contract: str
@@ -193,6 +342,8 @@ class FvgSignalEngine:
             return []
         source_idx = len(state.order) - 2
         source_time = state.order[source_idx]
+        if source_time in state.provisional_times:
+            return []
         if source_time in state.confirmed_source_times:
             return []
         signal = self._classify_source(state, source_idx)
@@ -511,5 +662,7 @@ class FvgSignalEngine:
         while len(state.order) > 200:
             old = state.order.pop(0)
             state.bars.pop(old, None)
+            state.provisional_times.discard(old)
             state.confirmed_source_times.discard(old)
+            state.finalized_source_times.discard(old)
             state.preview_by_source.pop(old, None)

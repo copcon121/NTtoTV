@@ -11,6 +11,8 @@ import {
   appShellClassName,
   bigTradesEnabledForTimeframe,
   buildChartLimitOrderDraft,
+  drawingVisibleOnTimeframe,
+  mergeVisibleDrawingState,
   mergeMt5AccountUpdate,
   mergeMt5OpenTradeProfitUpdates,
   persistActiveProfileId,
@@ -19,11 +21,13 @@ import {
   readProfileHotSnapshot,
   resolveEndpoints,
   seriesDataKey,
+  visibleDrawingsForTimeframe,
 } from "./LiveApp";
 import {
   DEFAULT_EMA_SETTINGS,
   DEFAULT_FOOTPRINT_SETTINGS,
 } from "./chart/IndicatorToggles";
+import type { DrawingState } from "./chart/drawings/types";
 import { DEFAULT_SMC_SETTINGS } from "./chart/smc";
 import type { ChartProfilePayload } from "./profiles/types";
 
@@ -294,6 +298,77 @@ describe("live chart series identity", () => {
     ]);
     expect(BIG_TRADE_SUBSCRIBED_EVENTS).toEqual(["big_trade"]);
     expect(FOOTPRINT_SUBSCRIBED_EVENTS).toEqual(["footprint_update"]);
+  });
+
+  it("shows drawings on their source timeframe and lower timeframes only", () => {
+    const m5Drawing: DrawingState = {
+      id: "m5",
+      tool: "trendline",
+      sourceTimeframe: "5m",
+      anchors: [],
+    };
+    const m15Drawing: DrawingState = {
+      id: "m15",
+      tool: "trendline",
+      sourceTimeframe: "15m",
+      anchors: [],
+    };
+    const legacyDrawing: DrawingState = {
+      id: "legacy",
+      tool: "trendline",
+      anchors: [],
+    };
+
+    expect(drawingVisibleOnTimeframe(m5Drawing, "5m")).toBe(true);
+    expect(drawingVisibleOnTimeframe(m5Drawing, "15m")).toBe(false);
+    expect(drawingVisibleOnTimeframe(m15Drawing, "5m")).toBe(true);
+    expect(drawingVisibleOnTimeframe(m15Drawing, "15m")).toBe(true);
+    expect(drawingVisibleOnTimeframe(legacyDrawing, "15m")).toBe(true);
+    expect(
+      visibleDrawingsForTimeframe([m5Drawing, m15Drawing, legacyDrawing], "15m")
+        .map((drawing) => drawing.id),
+    ).toEqual(["m15", "legacy"]);
+  });
+
+  it("merges visible drawing edits without dropping hidden timeframe drawings", () => {
+    const previous: DrawingState[] = [
+      {
+        id: "m5",
+        tool: "trendline",
+        sourceTimeframe: "5m",
+        anchors: [{ time: 100 as never, price: 10 }],
+      },
+      {
+        id: "m15",
+        tool: "horizontal_ray",
+          sourceTimeframe: "15m",
+          anchors: [{ time: 200 as never, price: 20 }],
+      },
+    ];
+
+    const merged = mergeVisibleDrawingState(
+      previous,
+      [
+        {
+          id: "m15",
+          tool: "horizontal_ray",
+          anchors: [{ time: 200 as never, price: 25 }],
+          options: { lineStyle: "dashed" },
+        },
+        {
+          id: "new",
+          tool: "rectangle",
+          anchors: [{ time: 300 as never, price: 30 }],
+        },
+      ],
+      "15m",
+    );
+
+    expect(merged.map((drawing) => drawing.id)).toEqual(["m5", "m15", "new"]);
+    expect(merged[0].sourceTimeframe).toBe("5m");
+    expect(merged[1].sourceTimeframe).toBe("15m");
+    expect(merged[1].anchors[0].price).toBe(25);
+    expect(merged[2].sourceTimeframe).toBe("15m");
   });
 });
 

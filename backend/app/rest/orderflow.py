@@ -6,6 +6,7 @@ trades:
 * ``GET /api/orderflow/volume-delta`` — per-bar volume-delta summaries (Req 18.5)
 * ``GET /api/orderflow/footprint``    — last ``count`` M1 footprint bars + ladders (Req 18.6)
 * ``GET /api/orderflow/delta-profile`` — fixed-range profile from M1 footprint ladders
+  or NT-style minute bars
 * ``GET /api/big-trades``             — merged big trades over a range (Req 18.7)
 
 These read endpoints accept an optional ``contract`` that defaults to the Active_Contract
@@ -20,6 +21,7 @@ the same database the ingest pipeline writes to.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -36,6 +38,7 @@ from ..engines.volume_delta_engine import VolumeDeltaEngine
 from ..models.timestamp import now_ms
 from ..storage.cache_store import CacheStore
 from ..storage.records import (
+    BarRecord,
     BigTradeRecord,
     FootprintBarRecord,
     FootprintLevelRecord,
@@ -56,8 +59,16 @@ _SUPPORTED_TFS = frozenset(_SUPPORTED_TFS_LIST)
 
 # Default footprint bar count returned by the footprint endpoint. (Req 18.6)
 DEFAULT_FOOTPRINT_COUNT = 5
+MAX_FOOTPRINT_COUNT = 100
+DEFAULT_FOOTPRINT_CONTEXT = 3
+MAX_FOOTPRINT_CONTEXT = 20
 # Read cap shared with the history cache cap, bounding range scans.
 MAX_ROWS = 5000
+DELTA_PROFILE_SOURCE_FOOTPRINT = "footprint_cache"
+DELTA_PROFILE_SOURCE_MINUTE_BARS = "minute_bars"
+DELTA_PROFILE_SOURCES = frozenset(
+    (DELTA_PROFILE_SOURCE_FOOTPRINT, DELTA_PROFILE_SOURCE_MINUTE_BARS)
+)
 
 
 def get_cache(
@@ -249,6 +260,15 @@ def _footprint_bar_to_dict(
     }
 
 
+def _footprint_levels_by_time(
+    levels: list[FootprintLevelRecord],
+) -> dict[int, list[FootprintLevelRecord]]:
+    grouped: dict[int, list[FootprintLevelRecord]] = {}
+    for level in levels:
+        grouped.setdefault(level.time, []).append(level)
+    return grouped
+
+
 def _fvg_signal_to_dict(rec: FvgSignalRecord) -> dict[str, Any]:
     return {
         "time": rec.time,
@@ -360,12 +380,12 @@ def _delta_profile_price(price: float, row_ticks: int) -> float:
 
 
 def _compute_profile_value_area(
-    volumes_by_price: dict[float, int],
+    volumes_by_price: dict[float, float],
     poc: float,
     *,
     row_ticks: int,
     value_area_pct: float,
-    total_volume: int,
+    total_volume: float,
 ) -> tuple[float, float]:
     if total_volume <= 0:
         return poc, poc
@@ -411,6 +431,7 @@ def _empty_delta_profile(
     row_ticks: int,
     value_area_pct: float,
     covered_bars: int,
+    source: str = DELTA_PROFILE_SOURCE_FOOTPRINT,
 ) -> dict[str, Any]:
     return {
         "symbol": symbol,
@@ -427,9 +448,76 @@ def _empty_delta_profile(
         "totalDelta": 0,
         "maxAbsDelta": 0,
         "coveredBars": covered_bars,
-        "source": "footprint_cache",
+        "source": source,
+        "developingPoc": [],
         "rows": [],
     }
+
+
+def _poc_from_volumes(volumes_by_price: dict[float, float]) -> float | None:
+    if not volumes_by_price:
+        return None
+    return max(volumes_by_price, key=lambda price: (volumes_by_price[price], price))
+
+
+def _developing_poc_from_minute_bars(
+    bars: list[BarRecord],
+    *,
+    row_ticks: int,
+) -> list[dict[str, float | int]]:
+    grouped: dict[float, float] = {}
+    points: list[dict[str, float | int]] = []
+    for bar in sorted(bars, key=lambda item: item.time):
+        if bar.volume <= 0:
+            continue
+        low_price = min(bar.low, bar.high)
+        high_price = max(bar.low, bar.high)
+        if not (math.isfinite(low_price) and math.isfinite(high_price)):
+            continue
+        low_tick = int(round(low_price / DEFAULT_TICK_SIZE))
+        high_tick = int(round(high_price / DEFAULT_TICK_SIZE))
+        if high_tick < low_tick:
+            continue
+        level_count = high_tick - low_tick + 1
+        if level_count <= 0:
+            continue
+        volume_per_tick = float(bar.volume) / float(level_count)
+        for tick in range(low_tick, high_tick + 1):
+            price = _delta_profile_price(tick * DEFAULT_TICK_SIZE, row_ticks)
+            grouped[price] = grouped.get(price, 0.0) + volume_per_tick
+        poc = _poc_from_volumes(grouped)
+        if poc is not None:
+            points.append({"time": int(bar.time), "price": poc})
+    return points
+
+
+def _developing_poc_from_footprint_levels(
+    levels: list[FootprintLevelRecord],
+    *,
+    row_ticks: int,
+) -> list[dict[str, float | int]]:
+    grouped: dict[float, float] = {}
+    points: list[dict[str, float | int]] = []
+    current_time: int | None = None
+    for level in levels:
+        if current_time is not None and level.time != current_time:
+            poc = _poc_from_volumes(grouped)
+            if poc is not None:
+                points.append({"time": int(current_time), "price": poc})
+        current_time = int(level.time)
+        if level.bid_volume <= 0 and level.ask_volume <= 0:
+            continue
+        price = _delta_profile_price(level.price, row_ticks)
+        grouped[price] = (
+            grouped.get(price, 0.0)
+            + float(level.bid_volume)
+            + float(level.ask_volume)
+        )
+    if current_time is not None:
+        poc = _poc_from_volumes(grouped)
+        if poc is not None:
+            points.append({"time": int(current_time), "price": poc})
+    return points
 
 
 def _delta_profile_to_dict(
@@ -459,9 +547,10 @@ def _delta_profile_to_dict(
             frm=frm,
             to=to,
             row_ticks=row_ticks,
-            value_area_pct=value_area_pct,
-            covered_bars=covered_bars,
-        )
+        value_area_pct=value_area_pct,
+        covered_bars=covered_bars,
+        source=DELTA_PROFILE_SOURCE_FOOTPRINT,
+    )
 
     volumes_by_price = {
         price: values["bid"] + values["ask"] for price, values in grouped.items()
@@ -506,7 +595,100 @@ def _delta_profile_to_dict(
         "totalDelta": total_delta,
         "maxAbsDelta": max_abs_delta,
         "coveredBars": covered_bars,
-        "source": "footprint_cache",
+        "source": DELTA_PROFILE_SOURCE_FOOTPRINT,
+        "developingPoc": _developing_poc_from_footprint_levels(
+            levels, row_ticks=row_ticks
+        ),
+        "rows": rows,
+    }
+
+def _minute_bar_profile_to_dict(
+    *,
+    symbol: str,
+    contract: str,
+    frm: int,
+    to: int,
+    row_ticks: int,
+    value_area_pct: float,
+    bars: list[BarRecord],
+) -> dict[str, Any]:
+    """Approximate NT Order Flow Volume Profile with Resolution=Minute.
+
+    NinjaTrader's minute resolution is bar-based rather than trade-ladder based:
+    each 1-minute OHLCV bar contributes its volume across every tick row touched
+    by that bar's low/high range. This intentionally differs from the footprint
+    source, which uses actual bid/ask volume at price.
+    """
+    grouped: dict[float, float] = {}
+    for bar in bars:
+        if bar.volume <= 0:
+            continue
+        low_price = min(bar.low, bar.high)
+        high_price = max(bar.low, bar.high)
+        if not (math.isfinite(low_price) and math.isfinite(high_price)):
+            continue
+        low_tick = int(round(low_price / DEFAULT_TICK_SIZE))
+        high_tick = int(round(high_price / DEFAULT_TICK_SIZE))
+        if high_tick < low_tick:
+            continue
+        level_count = high_tick - low_tick + 1
+        if level_count <= 0:
+            continue
+        volume_per_tick = float(bar.volume) / float(level_count)
+        for tick in range(low_tick, high_tick + 1):
+            price = _delta_profile_price(tick * DEFAULT_TICK_SIZE, row_ticks)
+            grouped[price] = grouped.get(price, 0.0) + volume_per_tick
+
+    if not grouped:
+        return _empty_delta_profile(
+            symbol=symbol,
+            contract=contract,
+            frm=frm,
+            to=to,
+            row_ticks=row_ticks,
+            value_area_pct=value_area_pct,
+            covered_bars=len(bars),
+            source=DELTA_PROFILE_SOURCE_MINUTE_BARS,
+        )
+
+    total_volume = sum(grouped.values())
+    poc = max(grouped, key=lambda price: (grouped[price], price))
+    vah, val = _compute_profile_value_area(
+        grouped,
+        poc,
+        row_ticks=row_ticks,
+        value_area_pct=value_area_pct,
+        total_volume=total_volume,
+    )
+    rows = [
+        {
+            "price": price,
+            "bidVolume": 0,
+            "askVolume": 0,
+            "totalVolume": volume,
+            "delta": 0,
+        }
+        for price, volume in sorted(grouped.items(), reverse=True)
+    ]
+    return {
+        "symbol": symbol,
+        "contract": contract,
+        "tf": FOOTPRINT_TIMEFRAME,
+        "from": frm,
+        "to": to,
+        "rowTicks": row_ticks,
+        "valueAreaPct": value_area_pct,
+        "poc": poc,
+        "vah": vah,
+        "val": val,
+        "totalVolume": total_volume,
+        "totalDelta": 0,
+        "maxAbsDelta": 0,
+        "coveredBars": len(bars),
+        "source": DELTA_PROFILE_SOURCE_MINUTE_BARS,
+        "developingPoc": _developing_poc_from_minute_bars(
+            bars, row_ticks=row_ticks
+        ),
         "rows": rows,
     }
 
@@ -578,32 +760,65 @@ async def get_footprint(
     count: int = Query(
         DEFAULT_FOOTPRINT_COUNT,
         ge=1,
-        le=MAX_ROWS,
+        le=MAX_FOOTPRINT_COUNT,
         description="Number of most-recent M1 footprint bars to return",
+    ),
+    at: int | None = Query(
+        None,
+        description="M1 bar open Canonical_Timestamp (ms) to center history on",
+    ),
+    context: int = Query(
+        DEFAULT_FOOTPRINT_CONTEXT,
+        ge=1,
+        le=MAX_FOOTPRINT_CONTEXT,
+        description="Bars before/after 'at' in centered history mode",
     ),
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
-    """Return the last ``count`` M1 footprint bars with ladders. (Req 18.6)"""
+    """Return latest or centered M1 footprint bars with ladders. (Req 18.6)"""
     if not state.is_known_symbol(symbol):
         raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
     resolved = _resolve_contract(state, symbol, contract)
 
-    bars = cache.read_footprint_bars(
-        symbol, resolved, FOOTPRINT_TIMEFRAME, None, None, count
-    )
-    out_bars: list[dict[str, Any]] = []
-    for bar in bars:
-        levels = cache.read_footprint_levels(
-            symbol, resolved, bar.time, FOOTPRINT_TIMEFRAME
+    target_found: bool | None = None
+    if at is None:
+        bars = cache.read_footprint_bars(
+            symbol, resolved, FOOTPRINT_TIMEFRAME, None, None, count
         )
-        out_bars.append(_footprint_bar_to_dict(bar, levels))
-    return {
+    else:
+        before = cache.read_footprint_bars_before(
+            symbol, resolved, FOOTPRINT_TIMEFRAME, at, context
+        )
+        target = cache.read_footprint_bars(
+            symbol, resolved, FOOTPRINT_TIMEFRAME, at, at, 1
+        )
+        after = cache.read_footprint_bars_after(
+            symbol, resolved, FOOTPRINT_TIMEFRAME, at, context
+        )
+        target_found = len(target) > 0
+        bars = [*before, *target, *after]
+
+    levels_by_time: dict[int, list[FootprintLevelRecord]] = {}
+    if bars:
+        levels_by_time = _footprint_levels_by_time(
+            cache.read_footprint_levels_range(
+                symbol, resolved, FOOTPRINT_TIMEFRAME, bars[0].time, bars[-1].time
+            )
+        )
+
+    body: dict[str, Any] = {
         "symbol": symbol,
         "contract": resolved,
         "tf": FOOTPRINT_TIMEFRAME,
-        "bars": out_bars,
+        "bars": [
+            _footprint_bar_to_dict(bar, levels_by_time.get(bar.time, []))
+            for bar in bars
+        ],
     }
+    if at is not None:
+        body.update({"at": at, "context": context, "targetFound": target_found})
+    return body
 
 
 @router.get("/orderflow/fvg-signals")
@@ -670,6 +885,10 @@ async def get_delta_profile(
         le=100.0,
         description="Value-area percentage computed from total volume",
     ),
+    source: str = Query(
+        DELTA_PROFILE_SOURCE_FOOTPRINT,
+        description="Profile source: footprint_cache or minute_bars",
+    ),
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
@@ -679,6 +898,32 @@ async def get_delta_profile(
     resolved = _resolve_contract(state, symbol, contract)
     if frm > to:
         raise bad_request("'from' must be less than or equal to 'to'", field="from")
+    if source not in DELTA_PROFILE_SOURCES:
+        raise bad_request("Unknown delta profile source", field="source")
+
+    if source == DELTA_PROFILE_SOURCE_MINUTE_BARS:
+        bars = cache.read_bars(
+            symbol,
+            resolved,
+            FOOTPRINT_TIMEFRAME,
+            frm,
+            to,
+            MAX_ROWS + 1,
+        )
+        if len(bars) > MAX_ROWS:
+            raise bad_request(
+                f"Delta profile range exceeds {MAX_ROWS} M1 bars",
+                field="to",
+            )
+        return _minute_bar_profile_to_dict(
+            symbol=symbol,
+            contract=resolved,
+            frm=frm,
+            to=to,
+            row_ticks=row_ticks,
+            value_area_pct=value_area_pct,
+            bars=bars,
+        )
 
     bars = cache.read_footprint_bars(
         symbol,
@@ -702,6 +947,7 @@ async def get_delta_profile(
             row_ticks=row_ticks,
             value_area_pct=value_area_pct,
             covered_bars=0,
+            source=DELTA_PROFILE_SOURCE_FOOTPRINT,
         )
 
     levels = cache.read_footprint_levels_range(

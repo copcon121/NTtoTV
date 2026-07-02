@@ -4,9 +4,9 @@ Covers the ingest -> engines -> registry -> frontend pipeline assembled by
 :class:`~app.pipeline.Pipeline` and the live `/ws/nt` + `/ws/chart` transport:
 
 * `/ws/nt` accept + receive of trade frames (Req 4.1);
-* an accepted NT trade drives the Bar_Aggregator, VolumeDelta,
-  Footprint, and BigTrade engines, persists their outputs to the Cache_Store,
-  and enqueues `/ws/chart` events on the registry (Req 9.3, 20.1);
+* an accepted NT trade drives the Bar_Aggregator, VolumeDelta, and BigTrade
+  engines, persists their outputs to the Cache_Store, and enqueues `/ws/chart`
+  events on the registry (Req 9.3, 20.1);
 * raw ticks are recorded to the Tick_Store on ingestion (Req 4.5);
 * NT startup subscribes to the active source contract via Control_Commands (Req 1.5);
 * an NT status frame is forwarded to subscribed clients (Req 20.1, 20.3).
@@ -21,9 +21,10 @@ import pytest
 from app.engines.contract_resolver import ContractResolver
 from app.engines.alert_engine import (
     Alert,
+    MGANN_FVG_RETEST,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
-    SMC_ZONE_TOUCH_BIG_TRADE,
 )
+from app.engines.fvg_signal_engine import FvgSignalEngine
 from app.ingest.control_plane import ControlPlaneCoordinator
 from app.models.canonical import NormalizedTrade, Side
 from app.models.messages import (
@@ -90,6 +91,31 @@ def _classified_trade(time_ms, price, volume, seq, side: Side):
     ask = price if side is Side.BUY else price + 0.1
     return _trade(time_ms, price, volume, seq, bid=bid, ask=ask)
 
+def _native_fvg_bar(
+    engine: FvgSignalEngine,
+    minute: int,
+    open_price: float,
+    close_price: float,
+    delta: int,
+) -> None:
+    volume = max(1, abs(delta))
+    if delta > 0:
+        rows = [(open_price, 0, 1), (close_price, 0, max(1, volume - 1))]
+    elif delta < 0:
+        rows = [(open_price, 1, 0), (close_price, max(1, volume - 1), 0)]
+    else:
+        rows = [(open_price, 5, 0), (close_price, 0, 5)]
+    engine.on_closed_bar(
+        symbol=_SYMBOL,
+        contract=_SYMBOL,
+        time=_BASE + minute * _MINUTE_MS,
+        open=open_price,
+        high=max(open_price, close_price),
+        low=min(open_price, close_price),
+        close=close_price,
+        rows=rows,
+    )
+
 
 @pytest.mark.integration
 def test_accepted_trade_runs_engines_persists_and_streams(pipeline_env):
@@ -112,7 +138,7 @@ def test_accepted_trade_runs_engines_persists_and_streams(pipeline_env):
     chart_bars = cache.read_bars(_SYMBOL, _SYMBOL, "1m", None, None, 10)
     assert chart_bars and chart_bars[-1].volume == 45
 
-    # VolumeDelta + footprint persisted.
+    # VolumeDelta persists from the tick path; footprint is native-bar only.
     vd = cache.read_volume_delta(_SYMBOL, _ACTIVE, "1m", None, None, 10)
     assert vd == []
     chart_vd = cache.read_volume_delta(_SYMBOL, _SYMBOL, "1m", None, None, 10)
@@ -120,13 +146,13 @@ def test_accepted_trade_runs_engines_persists_and_streams(pipeline_env):
     fp = cache.read_footprint_bars(_SYMBOL, _ACTIVE, "1m", None, None, 10)
     assert fp == []
     chart_fp = cache.read_footprint_bars(_SYMBOL, _SYMBOL, "1m", None, None, 10)
-    assert chart_fp
+    assert chart_fp == []
 
-    # Outbound events enqueued for /ws/chart, including bar + order-flow types.
+    # Outbound events enqueued for /ws/chart, excluding tick-derived footprint.
     types = {e.event_type for e in captured}
     assert EventType.BAR_UPDATE in types
     assert EventType.VOLUME_DELTA_UPDATE in types
-    assert EventType.FOOTPRINT_UPDATE in types
+    assert EventType.FOOTPRINT_UPDATE not in types
     assert any(
         e.event_type == EventType.BAR_UPDATE and e.payload["contract"] == _SYMBOL
         for e in captured
@@ -195,6 +221,63 @@ def test_pipeline_persists_and_streams_fvg_signals_as_chart_contract(pipeline_en
     assert rows[0].contract == _SYMBOL
     assert rows[0].pulse == 5
     assert cache.read_fvg_signals(_SYMBOL, _ACTIVE, "1m", None, None, 10) == []
+
+
+@pytest.mark.integration
+def test_pipeline_streams_native_fvg_preview_without_persisting(tmp_path):
+    cache = CacheStore(tmp_path / "app.sqlite")
+    tick_store = TickStore(tmp_path / "ticks")
+    resolver = ContractResolver(_CANDIDATES)
+    resolver.set_manual_override(_ACTIVE)
+    registry = WebSocketRegistry()
+    captured: list[OutboundEvent] = []
+    registry.enqueue = captured.append  # type: ignore[assignment]
+    native_fvg = FvgSignalEngine()
+    for minute, delta in enumerate([0, 5, 0, 5, 0, 5, 0, 5, -30, -10]):
+        open_price = 99.0 + (minute % 2) * 0.1
+        close_price = open_price + (0.1 if delta >= 0 else -0.1)
+        _native_fvg_bar(native_fvg, minute, open_price, close_price, delta)
+    _native_fvg_bar(native_fvg, 10, 100.0, 100.5, 10)
+    _native_fvg_bar(native_fvg, 11, 100.6, 101.0, 100)
+
+    pipeline = Pipeline(
+        registry=registry,
+        cache=cache,
+        tick_store=tick_store,
+        resolver=resolver,
+        symbol=_SYMBOL,
+        native_fvg_signal=native_fvg,
+        enable_tick_fvg_signal=False,
+    )
+
+    try:
+        async def run():
+            await pipeline.on_trade(
+                _classified_trade(
+                    _BASE + 12 * _MINUTE_MS,
+                    100.7,
+                    1,
+                    1,
+                    Side.BUY,
+                )
+            )
+
+        asyncio.run(run())
+
+        events = [
+            event.payload
+            for event in captured
+            if event.event_type == EventType.FVG_SIGNAL_UPDATE
+        ]
+        assert events
+        assert events[-1]["contract"] == _SYMBOL
+        assert events[-1]["phase"] == "preview"
+        assert events[-1]["time"] == _BASE + 11 * _MINUTE_MS
+        assert events[-1]["pulse"] == 5
+        assert cache.read_fvg_signals(_SYMBOL, _SYMBOL, "1m", None, None, 10) == []
+    finally:
+        tick_store.close()
+        cache.close()
 
 
 @pytest.mark.integration
@@ -286,26 +369,6 @@ def _smc_alert(repeat=True):
     )
 
 
-def _smc_zone_alert(repeat=True):
-    params = {
-        "bigTradeThreshold": 30,
-        "swingLength": 50,
-        "maxZoneAge": 220,
-        "fvgAutoThreshold": True,
-        "fvgThresholdLookback": 60,
-        "fvgThresholdMultiplier": 1.5,
-        "fvgVolumeConfirmation": False,
-    }
-    if repeat:
-        params["repeat"] = True
-    return Alert(
-        id="zone",
-        symbol=_SYMBOL,
-        type=SMC_ZONE_TOUCH_BIG_TRADE,
-        params=params,
-    )
-
-
 async def _feed_ohlc_bar(pipeline, index, open_, high, low, close, seq):
     base = _BASE + index * 60_000
     for offset, price in (
@@ -313,6 +376,20 @@ async def _feed_ohlc_bar(pipeline, index, open_, high, low, close, seq):
         (2_000, high),
         (3_000, low),
         (4_000, close),
+    ):
+        await pipeline.on_trade(
+            _trade(base + offset, price, 1, seq=seq, ask=price)
+        )
+        seq += 1
+    return seq
+
+async def _feed_m5_ohlc_bar(pipeline, index, open_, high, low, close, seq):
+    base = _BASE + index * 5 * 60_000
+    for offset, price in (
+        (1_000, open_),
+        (60_000, high),
+        (120_000, low),
+        (240_000, close),
     ):
         await pipeline.on_trade(
             _trade(base + offset, price, 1, seq=seq, ask=price)
@@ -552,27 +629,46 @@ def test_pipeline_smc_strategy_alert_cancels_on_reclaim_without_alert(pipeline_e
 
 
 @pytest.mark.integration
-def test_pipeline_smc_zone_touch_alert_fires_on_order_block_big_trade(pipeline_env):
+def test_pipeline_mgann_fvg_retest_alert_fires_on_m5_closed_bar(pipeline_env):
     pipeline, cache, tick_store, resolver, captured = pipeline_env
-    pipeline.alert_engine.upsert(_smc_zone_alert())
+    pipeline.alert_engine.upsert(
+        Alert(
+            id="mgann",
+            symbol=_SYMBOL,
+            type=MGANN_FVG_RETEST,
+            params={"repeat": True},
+        )
+    )
 
     async def run():
-        seq = await _feed_bullish_external_break_setup(pipeline)
-        await pipeline.on_trade(
-            _trade(_BASE + 53 * 60_000 + 1_000, 95.0, 31, seq=seq, ask=95.0)
-        )
-        await pipeline.on_trade(
-            _trade(_BASE + 53 * 60_000 + 2_000, 101.6, 1, seq=seq + 1, ask=101.6)
-        )
+        seq = 0
+        bars = [
+            (100.0, 101.0, 100.0, 100.5),
+            (100.5, 102.0, 100.5, 101.8),
+            (101.8, 103.0, 101.5, 102.8),
+            (102.8, 104.0, 102.0, 103.0),
+            (103.0, 105.0, 103.0, 104.5),
+            (104.5, 104.0, 102.5, 103.0),
+            (103.0, 103.0, 101.8, 102.0),
+            (101.3, 102.0, 101.1, 101.4),
+            (101.4, 102.2, 101.1, 101.8),
+            (101.8, 103.0, 101.4, 102.8),
+            (102.8, 104.0, 102.5, 103.8),
+        ]
+        for index, bar in enumerate(bars):
+            seq = await _feed_m5_ohlc_bar(pipeline, index, *bar, seq)
 
     asyncio.run(run())
 
-    alerts = [e.payload for e in captured if e.event_type == EventType.ALERT_EVENT]
+    alerts = [
+        e.payload
+        for e in captured
+        if e.event_type == EventType.ALERT_EVENT
+        and e.payload["alertType"] == MGANN_FVG_RETEST
+    ]
     assert alerts
-    assert alerts[-1]["alertType"] == SMC_ZONE_TOUCH_BIG_TRADE
-    assert alerts[-1]["level"] == 95
-    assert "Bull OB" in alerts[-1]["message"]
-    assert "big trade 31 > 30" in alerts[-1]["message"]
+    assert alerts[-1]["level"] == 101.25
+    assert "M5 bullish FVG retest by mGann wave" in alerts[-1]["message"]
 
 
 @pytest.mark.integration

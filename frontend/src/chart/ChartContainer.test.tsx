@@ -12,7 +12,9 @@ import {
   type SmcAiSignalMarker,
   type SmcOverlay,
   type OutsideBarSettings,
+  type MgannSwingSettings,
   DEFAULT_OUTSIDE_BAR_SETTINGS,
+  DEFAULT_MGANN_SWING_SETTINGS,
   DEFAULT_BIG_TRADE_SETTINGS,
   ChartContainer,
   filterBigTradeMarkers,
@@ -56,6 +58,8 @@ class FakePort implements DisposableChartPort {
   setVolumeVisibleCalls: boolean[] = [];
   setVolumeDeltaVisibleCalls: boolean[] = [];
   setCvdVisibleCalls: boolean[] = [];
+  setMgannSwingVisibleCalls: boolean[] = [];
+  setMgannSwingSettingsCalls: MgannSwingSettings[] = [];
   setVolumeDeltaCalls: VolumeDeltaDatum[][] = [];
   updateVolumeDeltaCalls: VolumeDeltaDatum[] = [];
   setFvgSignalsCalls: FvgSignalUpdateMessage[][] = [];
@@ -111,6 +115,12 @@ class FakePort implements DisposableChartPort {
   }
   setCvdVisible(visible: boolean): void {
     this.setCvdVisibleCalls.push(visible);
+  }
+  setMgannSwingVisible(visible: boolean): void {
+    this.setMgannSwingVisibleCalls.push(visible);
+  }
+  setMgannSwingSettings(settings: MgannSwingSettings): void {
+    this.setMgannSwingSettingsCalls.push({ ...settings });
   }
   setVolumeDelta(points: readonly VolumeDeltaDatum[]): void {
     this.setVolumeDeltaCalls.push(points.map((point) => ({ ...point })));
@@ -464,6 +474,54 @@ describe("ChartContainer", () => {
     );
 
     expect(port.setCvdVisibleCalls).toEqual([true, false]);
+  });
+
+  it("toggles MGannSwing independently through the port", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const settings: MgannSwingSettings = {
+      showWaveDelta: false,
+      showWaveDeltaNumbers: false,
+      waveDeltaNumbersImpulseOnly: true,
+      showSwingLine: true,
+      showSignals: false,
+      showImpulseWaves: true,
+      impulseLengthMultiplier: 1.1,
+      impulseVolumeMultiplier: 1.2,
+      impulseBreakTicks: 1,
+      smartFilter: true,
+    };
+
+    const { rerender } = render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        showMgannSwing
+        mgannSwing={settings}
+        portFactory={factory}
+      />,
+    );
+
+    rerender(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        showMgannSwing={false}
+        mgannSwing={DEFAULT_MGANN_SWING_SETTINGS}
+        portFactory={factory}
+      />,
+    );
+
+    expect(port.setMgannSwingVisibleCalls).toEqual([true, false]);
+    expect(port.setMgannSwingSettingsCalls).toEqual([
+      settings,
+      DEFAULT_MGANN_SWING_SETTINGS,
+    ]);
+    expect(port.setCvdVisibleCalls).toEqual([false]);
   });
 
   it("loads FVG Signal Grader colors and toggles their visibility", () => {

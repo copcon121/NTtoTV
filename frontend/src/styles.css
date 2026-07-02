@@ -423,6 +423,26 @@ body {
   font-size: 12px;
 }
 
+.profile-width-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 126px;
+}
+
+.profile-width-control input[type="range"] {
+  width: 92px;
+  accent-color: #2962ff;
+}
+
+.profile-width-value {
+  width: 40px;
+  color: var(--text, #d8d8d8);
+  font-size: 12px;
+  text-align: right;
+}
+
 .ema-length-input {
   width: 64px;
   background: #1b1b1b;
@@ -525,6 +545,50 @@ body {
 
 .chart-host * {
   touch-action: none;
+}
+
+.drawing-selection-actions {
+  position: absolute;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid rgba(70, 82, 92, 0.9);
+  border-radius: 6px;
+  background: rgba(18, 22, 26, 0.94);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32);
+  pointer-events: auto;
+}
+
+.drawing-selection-actions[hidden] {
+  display: none;
+}
+
+.drawing-selection-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #d7e0e6;
+  cursor: pointer;
+}
+
+.drawing-selection-action:hover {
+  border-color: #526675;
+  background: #24313a;
+  color: #ffffff;
+}
+
+.drawing-selection-action.is-active {
+  border-color: rgba(38, 166, 154, 0.72);
+  background: rgba(38, 166, 154, 0.24);
+  color: #ffffff;
 }
 
 .chart-focus-toggle {
@@ -1149,46 +1213,70 @@ body {
   border-color: transparent;
 }
 
-.drawing-profile-mode {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid #34424a;
-  border-radius: 7px;
-}
-
-.drawing-profile-mode-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  color: #b8c4cc;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  cursor: pointer;
-}
-
-.drawing-profile-mode-btn:hover {
-  color: #ffffff;
-  background: #24313a;
-}
-
-.drawing-profile-mode-btn.active {
-  color: #ffffff;
-  background: rgba(38, 166, 154, 0.30);
-  border-color: rgba(38, 166, 154, 0.72);
-}
-
 .drawing-toolbar-separator {
   width: 24px;
   height: 1px;
   background: #38464f;
   margin: 6px 0;
   flex-shrink: 0;
+}
+
+.drawing-profile-context-menu {
+  position: absolute;
+  z-index: 42;
+  min-width: 178px;
+  padding: 6px;
+  overflow-y: auto;
+  background: rgba(18, 24, 29, 0.96);
+  border: 1px solid #3c4c56;
+  border-radius: 6px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+}
+
+.drawing-profile-context-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 10px;
+  color: #d7e0e6;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.drawing-profile-context-item:hover,
+.drawing-profile-context-item[aria-checked="true"] {
+  color: #ffffff;
+  background: rgba(38, 166, 154, 0.28);
+}
+
+.drawing-profile-context-slider {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 8px;
+  align-items: center;
+  padding: 7px 8px 6px;
+  color: #d7e0e6;
+  font-size: 12px;
+}
+
+.drawing-profile-context-slider-label {
+  min-width: 0;
+}
+
+.drawing-profile-context-slider-value {
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+
+.drawing-profile-context-slider input {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0;
+  accent-color: #64a6ff;
 }
 
 .drawing-tool-delete {
@@ -1238,6 +1326,140 @@ body {
   left: 0;
   z-index: 4;
   pointer-events: none;
+}
+
+.footprint-canvas-standalone {
+  position: relative;
+  z-index: 1;
+  display: block;
+  background: #ffffff;
+}
+
+.footprint-page {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: #ffffff;
+  color: #111111;
+}
+
+.footprint-page-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 12px;
+  background: #f5f5f5;
+  border-bottom: 1px solid #d6d6d6;
+}
+
+.footprint-page-back {
+  color: #111111;
+  text-decoration: none;
+  border: 1px solid #c9c9c9;
+  border-radius: 4px;
+  padding: 4px 8px;
+  background: #ffffff;
+}
+
+.footprint-page-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 132px;
+  font-weight: 600;
+}
+
+.footprint-page-title span + span {
+  color: #666666;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.footprint-page-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.footprint-page-form label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #555555;
+}
+
+.footprint-page-form input {
+  height: 28px;
+  min-width: 72px;
+  max-width: 126px;
+  background: #ffffff;
+  color: #111111;
+  border: 1px solid #c9c9c9;
+  border-radius: 4px;
+  padding: 0 7px;
+  font: inherit;
+}
+
+.footprint-page-search input[type="text"] {
+  width: 132px;
+  max-width: 160px;
+}
+
+.footprint-page-form button {
+  height: 28px;
+  background: #ffffff;
+  color: #111111;
+  border: 1px solid #c9c9c9;
+  border-radius: 4px;
+  padding: 0 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.footprint-page-status {
+  margin-left: auto;
+  min-width: 150px;
+  color: #555555;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.footprint-page-canvas-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: #ffffff;
+}
+
+@media (max-width: 760px) {
+  .footprint-page-toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .footprint-page-title {
+    flex: 1 1 auto;
+  }
+
+  .footprint-page-form {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+
+  .footprint-page-status {
+    flex: 1 1 100%;
+    margin-left: 0;
+    text-align: left;
+  }
 }
 
 /* Alerts */
@@ -1999,16 +2221,9 @@ body {
   }
 
   .drawing-toolbar-mobile.is-collapsed .drawing-toolbar-tools,
-  .drawing-toolbar-mobile.is-collapsed .drawing-profile-mode,
   .drawing-toolbar-mobile.is-collapsed .drawing-toolbar-separator,
   .drawing-toolbar-mobile.is-collapsed .drawing-tool-delete {
     display: none;
-  }
-
-  .drawing-toolbar-mobile .drawing-profile-mode {
-    flex: 0 0 auto;
-    flex-direction: row;
-    padding: 2px;
   }
 
   .drawing-toolbar-mobile .drawing-toolbar-separator {

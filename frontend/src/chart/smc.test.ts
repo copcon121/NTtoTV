@@ -47,8 +47,38 @@ describe("SMC overlay", () => {
         expect.objectContaining({
           kind: "ob",
           direction: 1,
-          top: 11,
+          top: 10,
           bottom: 8,
+        }),
+      ]),
+    );
+  });
+
+  it("keeps the full candle for normal-range bullish order blocks", () => {
+    const overlay = computeSmcOverlay(
+      [
+        bar(0, 9.5, 10, 9, 9.5),
+        bar(1, 11.5, 12, 11, 11.5),
+        bar(2, 10.5, 11, 10, 10.5),
+        bar(3, 9.5, 10, 9, 9.5),
+        bar(4, 9.8, 10.5, 8.9, 10.1),
+        bar(5, 12.5, 13, 9, 12.5),
+      ],
+      {
+        ...DEFAULT_SMC_SETTINGS,
+        enabled: true,
+        swingLength: 2,
+        internalLength: 1,
+      },
+    );
+
+    expect(overlay.zones).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ob",
+          direction: 1,
+          top: 10.5,
+          bottom: 8.9,
         }),
       ]),
     );

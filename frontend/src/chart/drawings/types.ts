@@ -8,6 +8,7 @@
 
 import type { ISeriesApi, IChartApi, UTCTimestamp } from "lightweight-charts";
 import type { DeltaProfileLoadState } from "../../orderflow/deltaProfile";
+import type { Timeframe } from "../../socket/messages";
 
 /* ------------------------------------------------------------------ */
 /* Tool catalogue                                                      */
@@ -15,6 +16,7 @@ import type { DeltaProfileLoadState } from "../../orderflow/deltaProfile";
 
 export type DrawingToolType =
   | "trendline"
+  | "brush"
   | "price_range"
   | "order_bracket"
   | "rectangle"
@@ -22,7 +24,8 @@ export type DrawingToolType =
   | "horizontal_ray"
   | "vertical_line";
 
-export type FixedRangeProfileMode = "bidAsk" | "volume";
+export type FixedRangeProfileMode = "delta" | "volume";
+export type DrawingLineStyle = "solid" | "dashed";
 
 export interface DrawingToolDef {
   type: DrawingToolType;
@@ -46,6 +49,12 @@ export const DRAWING_TOOLS: readonly DrawingToolDef[] = [
     label: "Trend Line",
     anchors: 2,
     icon: "M4 20 L20 4",
+  },
+  {
+    type: "brush",
+    label: "Brush",
+    anchors: 0,
+    icon: "M4 20 C7 12 10 14 12 8 C14 3 18 4 20 6 M5 19 L3 21 M16 6 L20 10",
   },
   {
     type: "horizontal_ray",
@@ -99,14 +108,27 @@ export interface DrawingState {
   tool: DrawingToolType;
   anchors: AnchorPoint[];
   options?: DrawingOptions;
+  sourceTimeframe?: Timeframe;
+  locked?: boolean;
 }
 
 export interface DrawingOptions {
   lineColor?: string;
   lineWidth?: number;
+  lineStyle?: DrawingLineStyle;
   fillColor?: string;
   /** For fixed range profile: bid/ask split or total volume rows. */
   fixedRangeProfileMode?: FixedRangeProfileMode;
+  /** For fixed range profile: keep the right edge pinned to the latest bar. */
+  fixedRangeProfileExtendRight?: boolean;
+  /** For fixed range profile: fit the vertical frame to the loaded price ladder. */
+  fixedRangeProfileAutoFitVertical?: boolean;
+  /** For fixed range profile: opacity for rows inside the value area, 0..1. */
+  fixedRangeProfileValueAreaOpacity?: number;
+  /** For fixed range profile: opacity for rows outside the value area, 0..1. */
+  fixedRangeProfileOutsideValueAreaOpacity?: number;
+  /** For fixed range profile: draw the running POC through the selected range. */
+  fixedRangeProfileDevelopingPoc?: boolean;
   /** For price range: show percentage and absolute diff labels. */
   showLabels?: boolean;
 }
@@ -165,6 +187,9 @@ export interface IDrawingManager {
 
   /** Update computed data for one fixed-range delta profile drawing. */
   setFixedRangeDeltaProfile(id: string, state: DeltaProfileLoadState): void;
+
+  /** Request a visual refresh for every attached drawing. */
+  requestUpdateAll(): void;
 
   /** Export all completed drawings to serializable state. */
   exportState(): DrawingState[];

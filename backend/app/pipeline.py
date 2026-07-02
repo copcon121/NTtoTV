@@ -8,10 +8,10 @@ all derived outputs through the WebSocket_Registry to `/ws/chart`:
   the :class:`~app.storage.tick_store.TickStore` **before any throttling**
   (Req 4.4, 4.5) — both handled by the :class:`~app.ingest.coordinator.IngestionCoordinator`;
 * accepted Active_Contract trades feed the :class:`~app.engines.bar_aggregator.BarAggregator`,
-  :class:`~app.engines.volume_delta_engine.VolumeDeltaEngine`,
-  :class:`~app.engines.footprint_engine.FootprintEngine`, and
+  :class:`~app.engines.volume_delta_engine.VolumeDeltaEngine`, and
   :class:`~app.engines.big_trade_engine.BigTradeEngine`; their outputs are
-  persisted to the Cache_Store and enqueued on the registry (Req 9.3, 20.1);
+  persisted to the Cache_Store and enqueued on the registry (Req 9.3, 20.1).
+  Footprint cache/websocket updates are native-only via ``/api/nt/native-bar``;
 * every accepted trade/quote is observed by the
   :class:`~app.engines.contract_resolver.ContractResolver`, whose needed-set /
   Active_Contract changes drive Control_Commands and Active_Contract status
@@ -19,8 +19,7 @@ all derived outputs through the WebSocket_Registry to `/ws/chart`:
   (Req 4.6, 20.1);
 * the :class:`~app.engines.alert_engine.AlertEngine` is evaluated server-side
   against last-trade-price crossings, closed-bar closes, per-bar volume delta,
-  footprint stacked-imbalance, and reconstructed big trades, emitting
-  ``alert_event``s (Req 16, 17);
+  and reconstructed big trades, emitting ``alert_event``s (Req 16, 17);
 * NT status events (and the gap-degraded / NT-timeout statuses) are forwarded to
   subscribed clients (Req 20.1, 20.2, 20.3).
 
@@ -43,7 +42,7 @@ from .engines.basis_engine import BasisEngine
 from .engines.big_trade_engine import BigTradeEngine
 from .engines.breakout_box_engine import BreakoutBoxEngine, BreakoutBoxEvent
 from .engines.contract_resolver import ContractResolver
-from .engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
+from .engines.footprint_engine import FOOTPRINT_TIMEFRAME
 from .engines.fvg_signal_engine import FvgSignalEngine
 from .engines.session_calendar import is_gc_session_open
 from .engines.volume_delta_engine import VolumeDeltaEngine, VolumeDeltaMode
@@ -58,7 +57,6 @@ from .models.messages import (
     AlertEvent,
     BigTrade,
     ChartStatusEvent,
-    FootprintUpdate,
     FvgSignalUpdate,
     NTStatusEvent,
     QuoteUpdate,
@@ -70,8 +68,6 @@ from .storage.cache_store import CacheStore
 from .storage.records import (
     BarRecord,
     BigTradeRecord,
-    FootprintBarRecord,
-    FootprintLevelRecord,
     FvgSignalRecord,
     VolumeDeltaRecord,
 )
@@ -82,8 +78,8 @@ logger = logging.getLogger(__name__)
 __all__ = ["Pipeline"]
 
 # The bar timeframe whose closed bars drive the close-based alerts and whose
-# OHLCV the footprint/volume-delta alerts pair against. v1 uses 1m (the
-# footprint timeframe) so all per-bar order-flow alerts share a clock.
+# OHLCV the volume-delta alerts pair against. v1 uses 1m so per-bar order-flow
+# alerts share a clock.
 _ALERT_BAR_TF = FOOTPRINT_TIMEFRAME
 _SOURCE_SWITCH_QUIET_MS = 15_000
 
@@ -138,32 +134,6 @@ def _volume_delta_update_for_contract(
         cumulative_delta=update.cumulative_delta,
     )
 
-
-def _footprint_update_for_contract(
-    update: FootprintUpdate, contract: str
-) -> FootprintUpdate:
-    return FootprintUpdate(
-        symbol=update.symbol,
-        contract=contract,
-        tf=update.tf,
-        time=update.time,
-        rows=update.rows,
-        poc=update.poc,
-        bar_delta=update.bar_delta,
-        buy_pct=update.buy_pct,
-        sell_pct=update.sell_pct,
-        stacked_imbalance=update.stacked_imbalance,
-        unfinished_auction=update.unfinished_auction,
-        open=update.open,
-        high=update.high,
-        low=update.low,
-        close=update.close,
-        poc_volume=update.poc_volume,
-        vah=update.vah,
-        val=update.val,
-    )
-
-
 def _big_trade_for_contract(bt: BigTrade, contract: str) -> BigTrade:
     return BigTrade(
         symbol=bt.symbol,
@@ -193,8 +163,8 @@ class Pipeline:
         symbol: str = "GC",
         bar_aggregator: BarAggregator | None = None,
         volume_delta: VolumeDeltaEngine | None = None,
-        footprint: FootprintEngine | None = None,
         fvg_signal: FvgSignalEngine | None = None,
+        native_fvg_signal: FvgSignalEngine | None = None,
         big_trade: BigTradeEngine | None = None,
         breakout_box: BreakoutBoxEngine | None = None,
         alert_engine: AlertEngine | None = None,
@@ -203,6 +173,7 @@ class Pipeline:
         analyst_event_sink: AnalystEventSink | None = None,
         control_plane: ControlPlaneCoordinator | None = None,
         validator: SequenceValidator | None = None,
+        enable_tick_fvg_signal: bool = True,
     ) -> None:
         self._registry = registry
         self._cache = cache
@@ -227,8 +198,9 @@ class Pipeline:
                     mode=seed.mode if seed is not None else VolumeDeltaMode.DELTA,
                     min_trade_size=seed.min_trade_size if seed is not None else 0,
                 )
-        self._fp = footprint or FootprintEngine()
         self._fvg = fvg_signal or FvgSignalEngine()
+        self._native_fvg_signal = native_fvg_signal
+        self._enable_tick_fvg_signal = enable_tick_fvg_signal
         self._bt = big_trade or BigTradeEngine(dedupe_repeated_timestamp_runs=True)
         self._breakout = breakout_box or BreakoutBoxEngine()
         self._alerts = alert_engine or AlertEngine(cache)
@@ -311,10 +283,8 @@ class Pipeline:
         """
         # Backfill the trade's bid/ask from the prevailing quote when NT did not
         # attach a same-print snapshot. VolumeDelta can then classify against
-        # the book before its tick-rule fallback, while Footprint mirrors
-        # MzFootprintClone's BidAsk mode against the same book snapshot.
-        # Recorded ticks then also carry bid/ask for future rebuilds. (Req 13.2,
-        # 13.3)
+        # the book before its tick-rule fallback. Recorded ticks then also carry
+        # bid/ask for future rebuilds. (Req 13.2, 13.3)
         if trade.bid is None and trade.ask is None:
             book = self._last_quote.get(trade.contract)
             if book is not None:
@@ -408,10 +378,13 @@ class Pipeline:
 
         # 1) OHLCV bars across all timeframes. (Req 9.3)
         alert_ctx_bar: BarUpdate | None = None
+        closed_bars: dict[str, BarUpdate] = {}
         bar_updates = self._bars.on_trade(trade)
         for update in bar_updates:
-            if update.closed and update.tf == _ALERT_BAR_TF:
-                alert_ctx_bar = update
+            if update.closed:
+                closed_bars[update.tf] = update
+                if update.tf == _ALERT_BAR_TF:
+                    alert_ctx_bar = update
 
         # 2) VolumeDelta across all timeframes so the lower delta-candle series
         # follows the charted timeframe (Req 13). The alert context pairs with
@@ -426,9 +399,15 @@ class Pipeline:
             if tf == _ALERT_BAR_TF:
                 vd_update = update
 
-        # 3) Footprint (M1). (Req 14)
-        fp_update = self._fp.on_trade(trade)
-        fvg_updates = self._fvg.on_trade(trade)
+        # 3) Tick FVG remains internal for breakout/FVG confluence. Confirmed
+        # FVG cache rows come only from finalized NT native bars; the shared
+        # native engine can stream provisional source-bar colors while the
+        # right bar is forming.
+        raw_fvg_updates = self._fvg.on_trade(trade)
+        fvg_updates = raw_fvg_updates if self._enable_tick_fvg_signal else []
+        native_fvg_preview_updates: list[FvgSignalUpdate] = []
+        if self._native_fvg_signal is not None and not self._enable_tick_fvg_signal:
+            native_fvg_preview_updates = self._native_fvg_signal.on_preview_trade(trade)
 
         # 4) BigTrade (merge + filter). (Req 15)
         big_trades = self._bt.on_trade(trade)
@@ -453,23 +432,18 @@ class Pipeline:
         # if a breakout happened on the same closed-bar cycle.
         fvg_confirmed_level: int | None = None
         fvg_confirmed_direction: int | None = None
-        for u in fvg_updates:
+        for u in raw_fvg_updates:
             if u.phase == "confirmed" and u.pulse != 0:
                 fvg_confirmed_level = u.level
                 fvg_confirmed_direction = u.direction
 
-        footprint_updates = [
-            update for update in (fp_update,) if update is not None
-        ]
-
         # Persist the full derived snapshot in one transaction. A busy trade
-        # updates every timeframe plus the M1 footprint ladder; committing each
-        # row separately starves the asyncio loop that flushes UI WebSockets.
+        # updates multiple timeframe rows; committing each row separately
+        # starves the asyncio loop that flushes UI WebSockets.
         await asyncio.to_thread(
             self._persist_derived_batch,
             bar_updates,
             vd_updates,
-            footprint_updates,
             fvg_updates,
             big_trades,
         )
@@ -483,9 +457,9 @@ class Pipeline:
             await self._enqueue(OutboundEvent.from_message(update))
         for update in vd_updates:
             await self._enqueue(OutboundEvent.from_message(update))
-        for update in footprint_updates:
-            await self._enqueue(OutboundEvent.from_message(update))
         for update in fvg_updates:
+            await self._enqueue(OutboundEvent.from_message(update))
+        for update in native_fvg_preview_updates:
             await self._enqueue(OutboundEvent.from_message(update))
         for bt in big_trades:
             await self._enqueue(OutboundEvent.from_message(bt))
@@ -493,7 +467,8 @@ class Pipeline:
         # 6) Alerts: last-trade-price crossings + per-bar / big-trade conditions.
         await self._evaluate_alerts(
             trade, closed_bar=alert_ctx_bar, vd_update=vd_update,
-            fp_update=fp_update, big_trades=big_trades,
+            big_trades=big_trades,
+            closed_bars=closed_bars,
             breakout_events=breakout_events,
             fvg_level=fvg_confirmed_level,
             fvg_direction=fvg_confirmed_direction,
@@ -505,8 +480,8 @@ class Pipeline:
         *,
         closed_bar: BarUpdate | None,
         vd_update: VolumeDeltaUpdate | None,
-        fp_update: FootprintUpdate | None,
         big_trades: list[BigTrade],
+        closed_bars: dict[str, BarUpdate] | None = None,
         breakout_events: list[BreakoutBoxEvent] | None = None,
         fvg_level: int | None = None,
         fvg_direction: int | None = None,
@@ -521,18 +496,16 @@ class Pipeline:
         )
         await self._emit_alerts(self._alerts.evaluate(ctx))
 
-        # Closed-bar conditions (bar_closes_*, volume_delta_threshold,
-        # stacked_imbalance) keyed to the 1m bar close. (Req 16.7)
+        # Closed-bar conditions (bar_closes_*, volume_delta_threshold) keyed to
+        # the 1m bar close. (Req 16.7)
         if closed_bar is not None:
             bar = closed_bar.bar
-            stacked = (
-                len(fp_update.stacked_imbalance) > 0 if fp_update is not None else None
-            )
             bar_ctx = MarketContext(
                 symbol=trade.symbol,
                 contract=trade.contract,
                 time=trade.time,
                 bar_closed=True,
+                bar_tf=closed_bar.tf,
                 bar_time=bar.time,
                 bar_open=bar.open,
                 bar_high=bar.high,
@@ -540,12 +513,30 @@ class Pipeline:
                 bar_close=bar.close,
                 bar_volume=bar.volume,
                 bar_volume_delta=vd_update.delta if vd_update is not None else None,
-                bar_stacked_imbalance=stacked,
+                bar_stacked_imbalance=None,
                 breakout_events=breakout_events or None,
                 fvg_level=fvg_level,
                 fvg_direction=fvg_direction,
             )
             await self._emit_alerts(self._alerts.evaluate(bar_ctx))
+
+        m5_bar = (closed_bars or {}).get("5m")
+        if m5_bar is not None:
+            bar = m5_bar.bar
+            m5_ctx = MarketContext(
+                symbol=trade.symbol,
+                contract=trade.contract,
+                time=trade.time,
+                bar_closed=True,
+                bar_tf=m5_bar.tf,
+                bar_time=bar.time,
+                bar_open=bar.open,
+                bar_high=bar.high,
+                bar_low=bar.low,
+                bar_close=bar.close,
+                bar_volume=bar.volume,
+            )
+            await self._emit_alerts(self._alerts.evaluate(m5_ctx))
 
         # Big-trade threshold alerts: one context per reconstructed big trade.
         for bt in big_trades:
@@ -565,46 +556,9 @@ class Pipeline:
         self,
         bar_updates: list[BarUpdate],
         volume_delta_updates: list[VolumeDeltaUpdate],
-        footprint_updates: list[FootprintUpdate],
         fvg_signal_updates: list[FvgSignalUpdate],
         big_trades: list[BigTrade],
     ) -> None:
-        footprint_bars: list[FootprintBarRecord] = []
-        footprint_levels: list[FootprintLevelRecord] = []
-        for footprint_update in footprint_updates:
-            footprint_bars.append(FootprintBarRecord(
-                symbol=footprint_update.symbol,
-                contract=footprint_update.contract,
-                timeframe=footprint_update.tf,
-                time=footprint_update.time,
-                poc=footprint_update.poc,
-                open_price=footprint_update.open,
-                high_price=footprint_update.high,
-                low_price=footprint_update.low,
-                close_price=footprint_update.close,
-                poc_volume=footprint_update.poc_volume,
-                vah=footprint_update.vah,
-                val=footprint_update.val,
-                bar_delta=footprint_update.bar_delta,
-                buy_pct=footprint_update.buy_pct,
-                sell_pct=footprint_update.sell_pct,
-                unfinished_high=footprint_update.unfinished_auction.high,
-                unfinished_low=footprint_update.unfinished_auction.low,
-            ))
-            footprint_levels.extend(
-                FootprintLevelRecord(
-                    symbol=footprint_update.symbol,
-                    contract=footprint_update.contract,
-                    timeframe=footprint_update.tf,
-                    time=footprint_update.time,
-                    price=row.price,
-                    bid_volume=row.bid,
-                    ask_volume=row.ask,
-                    imbalance=row.imbalance,
-                )
-                for row in footprint_update.rows
-            )
-
         fvg_signals = [
             FvgSignalRecord(
                 symbol=update.symbol,
@@ -655,8 +609,6 @@ class Pipeline:
                 )
                 for u in volume_delta_updates
             ),
-            footprint_bars=footprint_bars,
-            footprint_levels=footprint_levels,
             fvg_signals=fvg_signals,
             big_trades=(
                 BigTradeRecord(
@@ -803,7 +755,6 @@ class Pipeline:
         self._bars.reset_contract(chart_contract)
         for engine in self._vds.values():
             engine.reset_contract(chart_contract)
-        self._fp.reset_contract(chart_contract)
         self._fvg.reset_contract(chart_contract)
         self._bt.reset_contract(chart_contract)
         self._breakout.reset_contract(chart_contract)

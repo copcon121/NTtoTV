@@ -89,24 +89,7 @@ function Format-Bytes {
 function Get-BlockingProcesses {
     param([string]$Root)
 
-    $rootPattern = [regex]::Escape($Root)
-    $backendPattern = "uvicorn|backend[\\/]|backend\.app|app\.main|app\.app"
-
-    $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $cmd = $_.CommandLine
-        if ([string]::IsNullOrWhiteSpace($cmd)) {
-            return $false
-        }
-        if ($cmd -notmatch $rootPattern) {
-            return $false
-        }
-        if ($cmd -match "Reset-MarketData\.ps1") {
-            return $false
-        }
-        return $cmd -match $backendPattern
-    })
-
-    return $processes
+    return @(Get-BackendRuntimeProcesses -Port 8000)
 }
 
 function Stop-BackendProcesses {
@@ -116,41 +99,7 @@ function Stop-BackendProcesses {
         return
     }
 
-    foreach ($process in $Processes) {
-        Write-Info ("Stopping backend process PID {0}: {1}" -f $process.ProcessId, $process.Name)
-        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
-    }
-
-    $ids = @($Processes | ForEach-Object { [int]$_.ProcessId })
-    $deadline = (Get-Date).AddSeconds(10)
-    do {
-        $remaining = @(Get-Process -Id $ids -ErrorAction SilentlyContinue)
-        if ($remaining.Count -eq 0) {
-            return
-        }
-        Start-Sleep -Milliseconds 250
-    } while ((Get-Date) -lt $deadline)
-
-    $left = ($remaining | ForEach-Object { $_.Id }) -join ", "
-    throw "Backend process(es) did not stop in time: $left"
-}
-
-function Wait-BackendHealth {
-    param([int]$TimeoutSeconds = 20)
-
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    do {
-        try {
-            $health = Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/health" -TimeoutSec 2
-            Write-Info ("Backend health OK: status={0}, version={1}" -f $health.status, $health.version)
-            return $true
-        } catch {
-            Start-Sleep -Seconds 1
-        }
-    } while ((Get-Date) -lt $deadline)
-
-    Write-Warn "Backend was started, but /api/health did not respond before timeout."
-    return $false
+    Stop-BackendRuntime -Port 8000
 }
 
 function Start-BackendIfRequested {
@@ -168,31 +117,7 @@ function Start-BackendIfRequested {
         return
     }
 
-    $existing = @(Get-BlockingProcesses -Root $Root)
-    if ($existing.Count -gt 0) {
-        Write-Info "Backend already appears to be running; not starting another instance."
-        return
-    }
-
-    $backendDir = Join-Path $Root "backend"
-    $exe = Join-Path $backendDir ".venv\Scripts\uvicorn.exe"
-    if (-not (Test-Path -LiteralPath $exe)) {
-        throw "Cannot restart backend because uvicorn was not found: $exe"
-    }
-
-    $outLog = Join-Path $backendDir "reset-backend.out.log"
-    $errLog = Join-Path $backendDir "reset-backend.err.log"
-    $process = Start-Process `
-        -FilePath $exe `
-        -ArgumentList @("app.app:app", "--host", "0.0.0.0", "--port", "8000") `
-        -WorkingDirectory $backendDir `
-        -RedirectStandardOutput $outLog `
-        -RedirectStandardError $errLog `
-        -WindowStyle Hidden `
-        -PassThru
-
-    Write-Info ("Started backend launcher PID {0}. Logs: {1}, {2}" -f $process.Id, $outLog, $errLog)
-    Wait-BackendHealth | Out-Null
+    Start-BackendRuntime -Port 8000 -TimeoutSec 30
 }
 
 function New-UniqueBackupPath {
@@ -215,6 +140,7 @@ function New-UniqueBackupPath {
 
 $repoRoot = Resolve-RepoRoot
 Assert-RepoRoot -Root $repoRoot
+. (Join-Path $repoRoot "scripts\Backend-Runtime.ps1")
 
 $dataDir = Join-Path $repoRoot "backend\data"
 $backupRoot = Join-Path $repoRoot "_data_backups"

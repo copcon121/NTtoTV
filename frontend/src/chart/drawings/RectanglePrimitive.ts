@@ -107,14 +107,22 @@ class RectangleRenderer implements IPrimitivePaneRenderer {
         horizontal.length,
         vertical.length,
       );
+      const left = horizontal.position;
+      const right = horizontal.position + horizontal.length;
+      const top = vertical.position;
+      const bottom = vertical.position + vertical.length;
+      const midY = (top + bottom) / 2;
+      ctx.save();
+      ctx.setLineDash([6 * scope.horizontalPixelRatio, 5 * scope.horizontalPixelRatio]);
+      ctx.globalAlpha = 0.92;
+      ctx.beginPath();
+      ctx.moveTo(left, midY);
+      ctx.lineTo(right, midY);
+      ctx.stroke();
+      ctx.restore();
       if (this.selected) {
         const ratio = Math.max(scope.horizontalPixelRatio, scope.verticalPixelRatio);
-        const left = horizontal.position;
-        const right = horizontal.position + horizontal.length;
-        const top = vertical.position;
-        const bottom = vertical.position + vertical.length;
         const midX = (left + right) / 2;
-        const midY = (top + bottom) / 2;
         const cornerRadius = 6 * ratio;
         const edgeSize = 12 * ratio;
         ctx.fillStyle = "#ffffff";

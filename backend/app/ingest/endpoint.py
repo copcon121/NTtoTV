@@ -170,6 +170,7 @@ class IngestEndpoint:
         # status is emitted on timeout. (Req 4.8, 20.2)
         self._released = False
         self._disconnect_emitted = False
+        self._active = True
 
     @property
     def last_seen(self) -> CanonicalTimestamp | None:
@@ -199,7 +200,19 @@ class IngestEndpoint:
         Used by the contract control plane (task 9.3) to subscribe/unsubscribe
         Candidate_Contracts.
         """
+        if not self._active:
+            return
         await self._websocket.send_json(cmd.to_dict())
+
+    async def deactivate_and_close(self) -> None:
+        """Stop dispatching frames and close the socket.
+
+        Used by the `/ws/nt` single-connection lease when a newer NT bridge
+        connects. Deactivation happens before close so any already-buffered
+        frames from the old socket cannot continue feeding the pipeline.
+        """
+        self._active = False
+        await self._release()
 
     async def run(self, on_connected: Callable[[], Awaitable[None] | None] | None = None) -> None:
         """Accept the connection and run the receive loop until disconnect.
@@ -348,6 +361,8 @@ class IngestEndpoint:
 
     async def _dispatch(self, data: dict[str, Any]) -> None:
         """Route a decoded frame to the appropriate injected handler."""
+        if not self._active:
+            return
         if data.get("type") == HEARTBEAT_TYPE:
             await _maybe_await(self._call_heartbeat(data))
             return
@@ -407,7 +422,16 @@ async def ws_nt(websocket: WebSocket) -> None:
     # The sync runs via on_connected (AFTER accept) so the subscribe frames are
     # not sent before the WebSocket handshake completes.
     control_plane = runtime.make_control_plane(endpoint.send_control)
-    pipeline.set_control_plane(control_plane)
+    lock = getattr(websocket.app.state, "nt_ingest_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        websocket.app.state.nt_ingest_lock = lock
+    async with lock:
+        previous = getattr(websocket.app.state, "active_nt_endpoint", None)
+        if previous is not None and previous is not endpoint:
+            await previous.deactivate_and_close()
+        websocket.app.state.active_nt_endpoint = endpoint
+        pipeline.set_control_plane(control_plane)
 
     async def _announce() -> None:
         resolver = runtime.pipeline._resolver
@@ -429,7 +453,10 @@ async def ws_nt(websocket: WebSocket) -> None:
     try:
         await endpoint.run(on_connected=_announce)
     finally:
-        pipeline.set_control_plane(None)
+        async with lock:
+            if getattr(websocket.app.state, "active_nt_endpoint", None) is endpoint:
+                websocket.app.state.active_nt_endpoint = None
+                pipeline.set_control_plane(None)
 
 
 @router.websocket("/ws/nt-capture")

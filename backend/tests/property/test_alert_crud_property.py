@@ -33,17 +33,18 @@ from app.config import Settings
 from app.engines.alert_engine import (
     ALERT_TYPES,
     LEVEL_ALERT_TYPES,
+    MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
+    MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
+    MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
+    MGANN_FVG_DEFAULT_SWING_SIZE,
+    MGANN_FVG_RETEST,
+    MGANN_FVG_RETEST_TIMEFRAME,
     SMC_DEFAULT_LOOKAHEAD_BARS,
     SMC_DEFAULT_MAX_BARS,
     SMC_DEFAULT_PAUSE_ON_INSIDE_BARS,
+    SMC_DEFAULT_RETEST_TOLERANCE_TICKS,
     SMC_DEFAULT_SWING_LENGTH,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
-    SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD,
-    SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK,
-    SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER,
-    SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION,
-    SMC_ZONE_DEFAULT_MAX_ZONE_AGE,
-    SMC_ZONE_TOUCH_BIG_TRADE,
 )
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
@@ -108,14 +109,13 @@ def _params_for(alert_type: str):
             params["effectiveLookaheadBars"] = SMC_DEFAULT_LOOKAHEAD_BARS
             params["maxBars"] = SMC_DEFAULT_MAX_BARS
             params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
-        elif alert_type == SMC_ZONE_TOUCH_BIG_TRADE:
-            params["bigTradeThreshold"] = draw(_positive_numbers)
-            params["swingLength"] = SMC_DEFAULT_SWING_LENGTH
-            params["maxZoneAge"] = SMC_ZONE_DEFAULT_MAX_ZONE_AGE
-            params["fvgAutoThreshold"] = SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD
-            params["fvgThresholdLookback"] = SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK
-            params["fvgThresholdMultiplier"] = SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER
-            params["fvgVolumeConfirmation"] = SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION
+            params["retestToleranceTicks"] = SMC_DEFAULT_RETEST_TOLERANCE_TICKS
+        elif alert_type == MGANN_FVG_RETEST:
+            params["timeframe"] = MGANN_FVG_RETEST_TIMEFRAME
+            params["swingSize"] = MGANN_FVG_DEFAULT_SWING_SIZE
+            params["maxZoneAge"] = MGANN_FVG_DEFAULT_MAX_ZONE_AGE
+            params["minGapTicks"] = MGANN_FVG_DEFAULT_MIN_GAP_TICKS
+            params["retestToleranceTicks"] = MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS
         # stacked_imbalance: no required field.
         return params
 

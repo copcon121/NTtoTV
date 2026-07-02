@@ -34,6 +34,10 @@ export interface FootprintCanvasProps {
   now?: () => number;
   /** Footprint display settings (VA, imbalance, unfinished auction). */
   settings?: FootprintSettings;
+  /** Number of most-recent bars selected and used for stable columns. */
+  displayCount?: number;
+  /** Compact chart overlay or full standalone page canvas. */
+  layout?: "overlay" | "standalone";
 }
 
 const MIN_THROTTLE_MS = 100;
@@ -50,6 +54,8 @@ const MZ_THEME = {
   unfinishedAuction: "#ffd700",
   candleUp: "#00aa20",
   candleDown: "#8b0000",
+  axis: "#737373",
+  grid: "rgba(0, 0, 0, 0.08)",
 };
 
 function clampThrottle(ms: number): number {
@@ -71,7 +77,16 @@ export function drawFootprint(
     Math.round(settings?.imbalanceMinVolume ?? 10),
   );
   const { bars, viewport } = inputs;
+  const displayCount = Math.max(
+    1,
+    Math.round(inputs.displayCount ?? FOOTPRINT_DISPLAY_COUNT),
+  );
+  const standalone = inputs.layout === "standalone";
   ctx.clearRect(0, 0, viewport.width, viewport.height);
+  if (standalone) {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, viewport.width, viewport.height);
+  }
   if (bars.length === 0) return;
 
   const priceStep = inferPriceStep(bars);
@@ -85,13 +100,17 @@ export function drawFootprint(
     return;
   }
 
-  const panelW = Math.min(400, Math.max(40, viewport.width - 20));
+  const rightAxisW = standalone ? 58 : 0;
+  const bottomAxisH = standalone ? 34 : 15;
+  const panelW = standalone
+    ? Math.max(40, viewport.width - 20)
+    : Math.min(400, Math.max(40, viewport.width - 20));
   const panelH = Math.max(40, viewport.height - 40);
-  const panelX = Math.max(10, viewport.width - panelW - 10);
+  const panelX = standalone ? 10 : Math.max(10, viewport.width - panelW - 10);
   const panelY = 20;
   const panelBottom = panelY + panelH;
   const contentTop = panelY + 25;
-  const contentBottom = panelBottom - 15;
+  const contentBottom = panelBottom - bottomAxisH;
   const contentHeight = contentBottom - contentTop;
   if (contentHeight <= 0) return;
 
@@ -123,10 +142,16 @@ export function drawFootprint(
   const yForPrice = (price: number) =>
     contentTop + ((viewportTopPrice - price) / priceStep) * rowH;
 
-  const barW = (panelW - 20) / Math.max(1, FOOTPRINT_DISPLAY_COUNT);
+  const plotLeft = panelX + 10;
+  const plotRight = panelX + panelW - rightAxisW - 10;
+  const plotW = Math.max(20, plotRight - plotLeft);
+  const barW = plotW / displayCount;
   const cellW = Math.max(24, barW - 20);
   const sideW = Math.max(5, (cellW - 4) / 2);
   const fontSize = Math.max(7, Math.min(10, rowH * 0.7));
+  const cellFontSize = standalone
+    ? Math.max(10, Math.min(13, rowH * 0.72))
+    : 10;
   const textColor = viewport.textColor ?? MZ_THEME.text;
 
   ctx.save();
@@ -135,8 +160,25 @@ export function drawFootprint(
   ctx.clip();
   ctx.textBaseline = "middle";
 
+  if (standalone) {
+    drawStandaloneFrame(ctx, {
+      panelX,
+      panelY,
+      panelW,
+      panelH,
+      contentTop,
+      contentBottom,
+      plotRight,
+      dataMinPrice,
+      dataMaxPrice,
+      priceStep,
+      rowH,
+      yForPrice,
+    });
+  }
+
   panelBars.forEach(({ bar, profile, imbalances, rowsWithVolume }, col) => {
-    const xCenter = panelX + 10 + barW * col + barW / 2;
+    const xCenter = plotLeft + barW * col + barW / 2;
     const bidRight = xCenter - 8;
     const bidLeft = bidRight - sideW;
     const askLeft = xCenter + 8;
@@ -170,7 +212,10 @@ export function drawFootprint(
           drawImbalanceCircle(ctx, textX, y, fontSize, MZ_THEME.bidCellStrong);
         }
         ctx.fillStyle = textColor;
-        ctx.font = imbalance === "bid" ? "bold 10px Arial" : "10px Arial";
+        ctx.font =
+          imbalance === "bid"
+            ? `bold ${cellFontSize}px Arial`
+            : `${cellFontSize}px Arial`;
         ctx.textAlign = "center";
         ctx.fillText(formatCellVolume(row.bid), textX, y);
       }
@@ -181,7 +226,10 @@ export function drawFootprint(
           drawImbalanceCircle(ctx, textX, y, fontSize, MZ_THEME.askCellStrong);
         }
         ctx.fillStyle = textColor;
-        ctx.font = imbalance === "ask" ? "bold 10px Arial" : "10px Arial";
+        ctx.font =
+          imbalance === "ask"
+            ? `bold ${cellFontSize}px Arial`
+            : `${cellFontSize}px Arial`;
         ctx.textAlign = "center";
         ctx.fillText(formatCellVolume(row.ask), textX, y);
       }
@@ -214,7 +262,99 @@ export function drawFootprint(
       ctx.setLineDash([]);
     }
   });
+
+  if (standalone) {
+    drawTimeAxis(ctx, panelBars.map(({ bar }) => bar), {
+      plotLeft,
+      plotRight,
+      barW,
+      panelBottom,
+    });
+  }
   ctx.restore();
+}
+
+function drawStandaloneFrame(
+  ctx: CanvasRenderingContext2D,
+  input: {
+    panelX: number;
+    panelY: number;
+    panelW: number;
+    panelH: number;
+    contentTop: number;
+    contentBottom: number;
+    plotRight: number;
+    dataMinPrice: number;
+    dataMaxPrice: number;
+    priceStep: number;
+    rowH: number;
+    yForPrice: (price: number) => number;
+  },
+): void {
+  ctx.strokeStyle = "#d4d4d4";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(input.panelX, input.panelY, input.panelW, input.panelH);
+
+  ctx.strokeStyle = MZ_THEME.axis;
+  ctx.beginPath();
+  ctx.moveTo(input.plotRight, input.contentTop);
+  ctx.lineTo(input.plotRight, input.contentBottom);
+  ctx.stroke();
+
+  const labelEvery = Math.max(1, Math.ceil(24 / Math.max(1, input.rowH)));
+  const minTick = Math.floor(input.dataMinPrice / input.priceStep);
+  const maxTick = Math.ceil(input.dataMaxPrice / input.priceStep);
+  ctx.font = "11px Arial";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  for (let tick = minTick; tick <= maxTick; tick++) {
+    if ((tick - minTick) % labelEvery !== 0 && tick !== maxTick) continue;
+    const price = roundPrice(tick * input.priceStep);
+    const y = input.yForPrice(price);
+    if (y < input.contentTop || y > input.contentBottom) continue;
+    ctx.strokeStyle = MZ_THEME.grid;
+    ctx.beginPath();
+    ctx.moveTo(input.panelX + 10, y);
+    ctx.lineTo(input.plotRight, y);
+    ctx.stroke();
+    ctx.fillStyle = MZ_THEME.axis;
+    ctx.fillText(formatPrice(price, input.priceStep), input.plotRight + 6, y);
+  }
+}
+
+function drawTimeAxis(
+  ctx: CanvasRenderingContext2D,
+  bars: readonly FootprintBar[],
+  input: {
+    plotLeft: number;
+    plotRight: number;
+    barW: number;
+    panelBottom: number;
+  },
+): void {
+  ctx.strokeStyle = MZ_THEME.axis;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(input.plotLeft, input.panelBottom - 28);
+  ctx.lineTo(input.plotRight, input.panelBottom - 28);
+  ctx.stroke();
+
+  const every = Math.max(1, Math.ceil(58 / Math.max(1, input.barW)));
+  ctx.fillStyle = MZ_THEME.axis;
+  ctx.font = "11px Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  bars.forEach((bar, index) => {
+    if (
+      index !== 0 &&
+      index !== bars.length - 1 &&
+      index % every !== 0
+    ) {
+      return;
+    }
+    const x = input.plotLeft + input.barW * index + input.barW / 2;
+    ctx.fillText(formatBarTime(bar.time), x, input.panelBottom - 22);
+  });
 }
 
 function inferPriceStep(bars: readonly FootprintBar[]): number {
@@ -276,6 +416,21 @@ function formatCellVolume(volume: number): string {
     return `${formatScaledVolume(volume / 1_000)}K`;
   }
   return String(volume);
+}
+
+function formatPrice(price: number, priceStep: number): string {
+  const decimals = priceStep < 1
+    ? Math.min(4, Math.max(1, Math.ceil(Math.abs(Math.log10(priceStep)))))
+    : 0;
+  return price.toFixed(decimals);
+}
+
+function formatBarTime(time: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(time));
 }
 
 function formatScaledVolume(value: number): string {
@@ -442,6 +597,8 @@ export function FootprintCanvas({
   throttleMs = MIN_THROTTLE_MS,
   now = () => Date.now(),
   settings,
+  displayCount = FOOTPRINT_DISPLAY_COUNT,
+  layout = "overlay",
 }: FootprintCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const prevInputsRef = useRef<FootprintRenderInputs | null>(null);
@@ -449,6 +606,7 @@ export function FootprintCanvas({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const interval = clampThrottle(throttleMs);
+  const effectiveDisplayCount = Math.max(1, Math.round(displayCount));
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -457,8 +615,10 @@ export function FootprintCanvas({
     if (ctx === null) return;
 
     const next: FootprintRenderInputs = {
-      bars: selectDisplayBars(bars),
+      bars: selectDisplayBars(bars, effectiveDisplayCount),
       viewport,
+      displayCount: effectiveDisplayCount,
+      layout,
     };
 
     if (!shouldRedraw(prevInputsRef.current, next)) {
@@ -486,12 +646,14 @@ export function FootprintCanvas({
         timerRef.current = null;
       }
     };
-  }, [bars, viewport, interval, now, settings]);
+  }, [bars, viewport, interval, now, settings, effectiveDisplayCount, layout]);
 
   return (
     <canvas
       ref={canvasRef}
-      className="footprint-canvas"
+      className={`footprint-canvas${
+        layout === "standalone" ? " footprint-canvas-standalone" : ""
+      }`}
       width={viewport.width}
       height={viewport.height}
       style={{ width: viewport.width, height: viewport.height }}

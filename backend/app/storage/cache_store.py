@@ -597,6 +597,30 @@ class CacheStore:
             symbol, contract, timeframe, frm, to, limit
         )
 
+    def read_footprint_bars_before(
+        self,
+        symbol: str,
+        contract: str,
+        timeframe: str,
+        before: int,
+        limit: int,
+    ) -> list[FootprintBarRecord]:
+        return self._keyed.read_footprint_bars_before(
+            symbol, contract, timeframe, before, limit
+        )
+
+    def read_footprint_bars_after(
+        self,
+        symbol: str,
+        contract: str,
+        timeframe: str,
+        after: int,
+        limit: int,
+    ) -> list[FootprintBarRecord]:
+        return self._keyed.read_footprint_bars_after(
+            symbol, contract, timeframe, after, limit
+        )
+
     def read_footprint_levels(
         self,
         symbol: str,

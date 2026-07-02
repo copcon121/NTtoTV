@@ -1,6 +1,5 @@
 from app.engines.alert_engine import (
     SMC_EXTERNAL_BREAK_BIG_TRADE,
-    SMC_ZONE_TOUCH_BIG_TRADE,
     Alert,
     AlertEngine,
     MarketContext,
@@ -85,6 +84,7 @@ def _engine(repeat: bool = True) -> AlertEngine:
         "effectiveLookaheadBars": 5,
         "maxBars": 20,
         "pauseOnInsideBars": True,
+        "retestToleranceTicks": 50,
     }
     if repeat:
         params["repeat"] = True
@@ -93,35 +93,6 @@ def _engine(repeat: bool = True) -> AlertEngine:
             id="smc",
             symbol=_SYMBOL,
             type=SMC_EXTERNAL_BREAK_BIG_TRADE,
-            params=params,
-        )
-    )
-    return engine
-
-
-def _zone_engine(
-    repeat: bool = True,
-    *,
-    swing_length: int = 50,
-    fvg_auto_threshold: bool = True,
-) -> AlertEngine:
-    engine = AlertEngine()
-    params = {
-        "bigTradeThreshold": 30,
-        "swingLength": swing_length,
-        "maxZoneAge": 220,
-        "fvgAutoThreshold": fvg_auto_threshold,
-        "fvgThresholdLookback": 60,
-        "fvgThresholdMultiplier": 1.5,
-        "fvgVolumeConfirmation": False,
-    }
-    if repeat:
-        params["repeat"] = True
-    engine.upsert(
-        Alert(
-            id="zone",
-            symbol=_SYMBOL,
-            type=SMC_ZONE_TOUCH_BIG_TRADE,
             params=params,
         )
     )
@@ -205,13 +176,25 @@ def test_strategy_does_not_fire_when_big_trade_equals_threshold():
     assert engine.evaluate(_big_trade_ctx(52 * _STEP, volume=50)) == []
 
 
-def test_strategy_cancels_pending_setup_on_reclaim_without_alert():
+def test_strategy_keeps_pending_setup_on_near_retest():
     engine = _engine()
     bars = _bullish_bos_bars()
     assert _feed_bars(engine, bars) == []
 
     retest = _bar(len(bars), high=102, low=99, close=100)
     assert engine.evaluate(_bar_ctx(retest)) == []
+
+    event = engine.evaluate(_big_trade_ctx((len(bars) + 1) * _STEP, volume=80))
+    assert len(event) == 1
+    assert "big trade 80 > 50" in event[0].message
+
+def test_strategy_cancels_pending_setup_on_deep_reclaim_without_alert():
+    engine = _engine()
+    bars = _bullish_bos_bars()
+    assert _feed_bars(engine, bars) == []
+
+    deep_reclaim = _bar(len(bars), high=102, low=94, close=94.8)
+    assert engine.evaluate(_bar_ctx(deep_reclaim)) == []
 
     event = engine.evaluate(_big_trade_ctx((len(bars) + 1) * _STEP, volume=80))
     assert event == []
@@ -229,7 +212,7 @@ def test_strategy_expires_after_fifth_progress_closed_bar():
     assert engine.evaluate(_big_trade_ctx((start + 5) * _STEP, volume=80)) == []
 
 
-def test_strategy_keeps_bearish_setup_alive_through_inside_bars_then_cancels_on_reclaim():
+def test_strategy_keeps_bearish_setup_alive_through_inside_bars_then_cancels_on_deep_reclaim():
     engine = _engine()
     bars = _bearish_bos_bars()
     assert _feed_bars(engine, bars) == []
@@ -239,7 +222,7 @@ def test_strategy_keeps_bearish_setup_alive_through_inside_bars_then_cancels_on_
         inside = _bar(i, high=95, low=88.5, close=89.5)
         assert engine.evaluate(_bar_ctx(inside)) == []
 
-    reclaim = _bar(start + 10, high=91, low=89, close=90.1)
+    reclaim = _bar(start + 10, high=95.2, low=89, close=95.2)
     assert engine.evaluate(_bar_ctx(reclaim)) == []
 
     event = engine.evaluate(_big_trade_ctx((start + 11) * _STEP, volume=80))
@@ -316,88 +299,3 @@ def test_strategy_warms_pending_setup_from_cached_bars(tmp_path):
         cache.close()
 
 
-def test_zone_touch_strategy_fires_on_external_order_block_big_trade():
-    engine = _zone_engine()
-    assert _feed_bars(engine, _bullish_bos_bars()) == []
-
-    event = engine.evaluate(_big_trade_ctx(53 * _STEP, volume=31, price=95))
-
-    assert len(event) == 1
-    assert event[0].alert_id == "zone"
-    assert event[0].alert_type == SMC_ZONE_TOUCH_BIG_TRADE
-    assert event[0].level == 95
-    assert "Bull OB" in event[0].message
-    assert "big trade 31 > 30" in event[0].message
-    assert engine.alerts()[0].enabled is True
-
-
-def test_zone_touch_strategy_requires_big_trade_greater_than_threshold():
-    engine = _zone_engine()
-    assert _feed_bars(engine, _bullish_bos_bars()) == []
-
-    assert engine.evaluate(_big_trade_ctx(53 * _STEP, volume=30, price=95)) == []
-
-
-def test_zone_touch_strategy_fires_on_fvg_big_trade_touch():
-    engine = _zone_engine(swing_length=1, fvg_auto_threshold=False)
-    bars = [
-        _bar(0, high=10, low=9, close=9.5, open_=9.5),
-        _bar(1, high=12, low=11, close=11.5, open_=11.2),
-        _bar(2, high=14, low=13, close=13.5, open_=13.2),
-    ]
-    assert _feed_bars(engine, bars) == []
-
-    event = engine.evaluate(_big_trade_ctx(4 * _STEP, volume=31, price=11))
-
-    assert len(event) == 1
-    assert event[0].alert_type == SMC_ZONE_TOUCH_BIG_TRADE
-    assert event[0].level == 11.5
-    assert "Bull FVG" in event[0].message
-    assert "inside 10-13" in event[0].message
-
-
-def test_zone_touch_strategy_warms_active_zones_from_cached_bars(tmp_path):
-    cache = CacheStore(tmp_path / "app.sqlite")
-    try:
-        cache.upsert_alert(
-            AlertRecord(
-                id="zone",
-                profile_id="default",
-                symbol=_SYMBOL,
-                type=SMC_ZONE_TOUCH_BIG_TRADE,
-                params={
-                    "bigTradeThreshold": 30,
-                    "swingLength": 50,
-                    "maxZoneAge": 220,
-                    "fvgAutoThreshold": True,
-                    "fvgThresholdLookback": 60,
-                    "fvgThresholdMultiplier": 1.5,
-                    "fvgVolumeConfirmation": False,
-                    "repeat": True,
-                },
-                enabled=True,
-            )
-        )
-        cache.upsert_bars(
-            BarRecord(
-                symbol=_SYMBOL,
-                contract=_CONTRACT,
-                timeframe="1m",
-                time=bar.time,
-                open=bar.open,
-                high=bar.high,
-                low=bar.low,
-                close=bar.close,
-                volume=1,
-                closed=True,
-            )
-            for bar in _bullish_bos_bars()
-        )
-
-        engine = AlertEngine(cache)
-        event = engine.evaluate(_big_trade_ctx(53 * _STEP, volume=31, price=95))
-
-        assert [ev.alert_id for ev in event] == ["zone"]
-        assert "Bull OB" in event[0].message
-    finally:
-        cache.close()

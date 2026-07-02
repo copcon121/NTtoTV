@@ -204,6 +204,23 @@ describe("FootprintCanvas component (Req 14.6, 14.7, 14.8)", () => {
     expect(ctx.clearRectCalls).toBe(1);
   });
 
+  it("renders standalone mode with a custom display count", () => {
+    const bars = new Map(Array.from({ length: 50 }, (_, i) => [i * 60000, fp(i)]));
+    const { container } = render(
+      <FootprintCanvas
+        bars={bars}
+        viewport={{ ...viewport, width: 2200, height: 500 }}
+        now={() => 0}
+        displayCount={50}
+        layout="standalone"
+      />,
+    );
+    expect(ctx.clearRectCalls).toBe(1);
+    expect(container.querySelector("canvas")).toHaveClass(
+      "footprint-canvas-standalone",
+    );
+  });
+
   it("retains the rendering when bars/viewport are unchanged (Req 14.6, 14.7)", () => {
     const bars = new Map([[0, fp(0)]]);
     const { rerender } = render(

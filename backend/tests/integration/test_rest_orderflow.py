@@ -263,6 +263,63 @@ def test_footprint_count_param_limits_bars(env):
 
 
 @pytest.mark.integration
+def test_footprint_count_allows_page_max_100(env):
+    client, cache = env
+    for i in range(105):
+        _seed_footprint_bar(cache, _BASE_MS + i * _MINUTE_MS)
+
+    resp = client.get("/api/orderflow/footprint", params={"symbol": "GC", "count": 100})
+
+    assert resp.status_code == 200
+    times = [bar["time"] for bar in resp.json()["bars"]]
+    assert len(times) == 100
+    assert times[0] == _BASE_MS + 5 * _MINUTE_MS
+    assert times[-1] == _BASE_MS + 104 * _MINUTE_MS
+
+
+@pytest.mark.integration
+def test_footprint_at_context_returns_centered_history(env):
+    client, cache = env
+    for i in range(10):
+        _seed_footprint_bar(cache, _BASE_MS + i * _MINUTE_MS)
+    at = _BASE_MS + 5 * _MINUTE_MS
+
+    resp = client.get(
+        "/api/orderflow/footprint",
+        params={"symbol": "GC", "at": at, "context": 3},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["at"] == at
+    assert body["context"] == 3
+    assert body["targetFound"] is True
+    assert [bar["time"] for bar in body["bars"]] == [
+        _BASE_MS + i * _MINUTE_MS for i in range(2, 9)
+    ]
+
+
+@pytest.mark.integration
+def test_footprint_at_context_reports_missing_target_with_nearby_bars(env):
+    client, cache = env
+    for i in (0, 1, 2, 4, 5, 6):
+        _seed_footprint_bar(cache, _BASE_MS + i * _MINUTE_MS)
+    at = _BASE_MS + 3 * _MINUTE_MS
+
+    resp = client.get(
+        "/api/orderflow/footprint",
+        params={"symbol": "GC", "at": at, "context": 3},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["targetFound"] is False
+    assert [bar["time"] for bar in body["bars"]] == [
+        _BASE_MS + i * _MINUTE_MS for i in (0, 1, 2, 4, 5, 6)
+    ]
+
+
+@pytest.mark.integration
 def test_footprint_unknown_contract_is_404(env):
     client, _ = env
     resp = client.get(

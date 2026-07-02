@@ -24,6 +24,7 @@ from typing import Iterator, Literal
 from app.engines.bar_aggregator import SUPPORTED_TFS, BarAggregator
 from app.engines.big_trade_engine import BigTradeEngine
 from app.engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
+from app.engines.fvg_signal_engine import FVG_SIGNAL_TIMEFRAME, FvgSignalEngine
 from app.engines.session_calendar import TF_MS as _TF_MS, is_gc_session_open
 from app.engines.volume_delta_engine import VolumeDeltaEngine
 from app.models import NormalizedQuote, NormalizedTrade
@@ -35,6 +36,7 @@ from app.storage.records import (
     BigTradeRecord,
     FootprintBarRecord,
     FootprintLevelRecord,
+    FvgSignalRecord,
     VolumeDeltaRecord,
 )
 from app.storage.tick_store import SYMBOL, TickStore
@@ -73,6 +75,7 @@ class ImportSummary:
     rebuilt_footprint_bars: int = 0
     rebuilt_footprint_levels: int = 0
     rebuilt_big_trades: int = 0
+    rebuilt_fvg_signals: int = 0
 
 
 @dataclass(slots=True)
@@ -289,6 +292,7 @@ def import_nt_export_gap(
                 summary.rebuilt_footprint_bars = rebuilt.rebuilt_footprint_bars
                 summary.rebuilt_footprint_levels = rebuilt.rebuilt_footprint_levels
                 summary.rebuilt_big_trades = rebuilt.rebuilt_big_trades
+                summary.rebuilt_fvg_signals = rebuilt.rebuilt_fvg_signals
 
         return summary
     finally:
@@ -777,6 +781,41 @@ def rebuild_derived_cache(
     for bt in big_trade_engine.flush(contract):
         big_trades.append(_big_trade_record(bt))
 
+    # FVG Signal grading pass: feed finalized footprint bars chronologically
+    fvg_engine = FvgSignalEngine()
+    fvg_signals: list[FvgSignalRecord] = []
+    for fp_time in sorted(footprint_bars):
+        fp_bar = footprint_bars[fp_time]
+        fp_levels = footprint_levels.get(fp_time, [])
+        rows = [
+            (lvl.price, lvl.bid_volume, lvl.ask_volume) for lvl in fp_levels
+        ]
+        updates = fvg_engine.on_closed_bar(
+            symbol=symbol,
+            contract=contract,
+            time=fp_bar.time,
+            open=fp_bar.open_price,
+            high=fp_bar.high_price,
+            low=fp_bar.low_price,
+            close=fp_bar.close_price,
+            rows=rows,
+            emit_clear=False,
+        )
+        for upd in updates:
+            if upd.phase == "confirmed" and upd.pulse != 0:
+                fvg_signals.append(FvgSignalRecord(
+                    symbol=upd.symbol,
+                    contract=upd.contract,
+                    timeframe=upd.tf,
+                    time=upd.time,
+                    direction=upd.direction,
+                    level=upd.level,
+                    pulse=upd.pulse,
+                    top=float(upd.top if upd.top is not None else 0.0),
+                    bottom=float(upd.bottom if upd.bottom is not None else 0.0),
+                    breakout_ratio=upd.breakout_ratio,
+                ))
+
     cache.upsert_bars(_sorted_records(bars.values()))
     cache.upsert_volume_deltas(_sorted_records(volume_deltas.values()))
     for fp_bar in _sorted_records(footprint_bars.values()):
@@ -788,6 +827,8 @@ def rebuild_derived_cache(
     ]
     cache.upsert_footprint_levels(all_levels)
     cache.upsert_big_trades(big_trades)
+    if fvg_signals:
+        cache.upsert_derived_batch(fvg_signals=fvg_signals)
 
     return ImportSummary(
         symbol=symbol,
@@ -801,6 +842,7 @@ def rebuild_derived_cache(
         rebuilt_footprint_bars=len(footprint_bars),
         rebuilt_footprint_levels=len(all_levels),
         rebuilt_big_trades=len(big_trades),
+        rebuilt_fvg_signals=len(fvg_signals),
     )
 
 
@@ -820,6 +862,7 @@ def clear_derived_cache(
             "footprint_bars",
             "footprint_levels",
             "big_trades",
+            "fvg_signals",
         ):
             conn.execute(
                 f"DELETE FROM {table} "
@@ -977,7 +1020,8 @@ def _print_summary(summary: ImportSummary) -> None:
             f"{summary.rebuilt_volume_deltas} volume_delta, "
             f"{summary.rebuilt_footprint_bars} footprint_bars, "
             f"{summary.rebuilt_footprint_levels} footprint_levels, "
-            f"{summary.rebuilt_big_trades} big_trades"
+            f"{summary.rebuilt_big_trades} big_trades, "
+            f"{summary.rebuilt_fvg_signals} fvg_signals"
         )
 
 

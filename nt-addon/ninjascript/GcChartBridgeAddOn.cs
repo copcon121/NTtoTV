@@ -25,7 +25,9 @@
 //     "backendPath": "/ws/nt",
 //     "outboundQueueCapacity": 200000,
 //     "dropOnOverflow": false,
-//     "manualContractOverride": null
+//     "manualContractOverride": null,
+//     "debugMinuteCounts": true,
+//     "debugExportDirectory": "Documents\\NinjaTrader 8\\debug-exports"
 //   }
 // When absent, the defaults below are used. EDIT the contract months to match
 // the GC contracts your data feed actually provides.
@@ -52,6 +54,8 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
     // -------------------------------------------------------------------------
     public class GcChartBridgeAddOn : AddOnBase
     {
+        private static readonly object RuntimeGate = new object();
+        private static GcBridgeRuntime ActiveRuntime;
         private GcBridgeRuntime runtime;
 
         protected override void OnStateChange()
@@ -68,8 +72,21 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                     try
                     {
                         GcBridgeConfig config = GcBridgeConfig.LoadOrDefault();
-                        runtime = new GcBridgeRuntime(config, Log);
-                        runtime.Start();
+                        GcBridgeRuntime next = new GcBridgeRuntime(config, Log);
+                        GcBridgeRuntime previous = null;
+                        lock (RuntimeGate)
+                        {
+                            if (ActiveRuntime != null)
+                            {
+                                Log("replacing existing runtime instance");
+                                previous = ActiveRuntime;
+                            }
+                            ActiveRuntime = next;
+                            runtime = next;
+                        }
+                        if (previous != null)
+                            previous.Dispose();
+                        next.Start();
                     }
                     catch (Exception ex)
                     {
@@ -81,14 +98,20 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             {
                 try
                 {
-                    if (runtime != null)
-                        runtime.Dispose();
+                    GcBridgeRuntime toDispose = runtime;
+                    lock (RuntimeGate)
+                    {
+                        if (object.ReferenceEquals(ActiveRuntime, runtime))
+                            ActiveRuntime = null;
+                        runtime = null;
+                    }
+                    if (toDispose != null)
+                        toDispose.Dispose();
                 }
                 catch (Exception ex)
                 {
                     Log("shutdown error: " + ex.Message);
                 }
-                runtime = null;
             }
         }
 
@@ -117,6 +140,8 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
         public int OutboundQueueCapacity = 20000;
         public bool DropOnOverflow = true;
         public string ManualContractOverride = null;
+        public bool DebugMinuteCounts = true;
+        public string DebugExportDirectory = null;
 
         public Uri BuildUri()
         {
@@ -174,6 +199,14 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             string manual = ExtractString(json, "manualContractOverride");
             if (!string.IsNullOrEmpty(manual))
                 ManualContractOverride = manual;
+
+            bool debugMinuteCounts;
+            if (ExtractBool(json, "debugMinuteCounts", out debugMinuteCounts))
+                DebugMinuteCounts = debugMinuteCounts;
+
+            string debugDir = ExtractString(json, "debugExportDirectory");
+            if (!string.IsNullOrEmpty(debugDir))
+                DebugExportDirectory = debugDir;
         }
 
         private static string ExtractString(string json, string key)
@@ -279,19 +312,16 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
         private readonly Dictionary<string, Snapshot> snapshots = new Dictionary<string, Snapshot>(StringComparer.Ordinal);
         private readonly object snapGate = new object();
 
-        // Guard against duplicate MarketData callbacks from a leaked handler.
-        // A reconnect can briefly race the NT dispatcher; if an old handler was
-        // not detached, the same exchange event is delivered twice with a new
-        // bridge sequence. Dropping the exact immediate replay keeps bars,
-        // volume delta, footprint, and big trades aligned with NT charts.
-        private readonly Dictionary<string, LastMarketEvent> lastMarketEvents = new Dictionary<string, LastMarketEvent>(StringComparer.Ordinal);
-        private readonly object eventGate = new object();
-        private long duplicateMarketDataEvents;
-        private DateTime lastDuplicateMarketDataLogUtc = DateTime.MinValue;
-
-        // Active subscriptions: contract -> Instrument + handler.
+        // Active subscriptions: contract -> MarketData object + handler.
         private readonly Dictionary<string, Sub> subs = new Dictionary<string, Sub>(StringComparer.Ordinal);
+        private readonly Dictionary<string, long> subscriptionGenerations = new Dictionary<string, long>(StringComparer.Ordinal);
         private readonly object subGate = new object();
+        private long nextSubscriptionGeneration;
+
+        // AddOn-side minute counters used to verify whether NT delivers the same
+        // Last volume here as the chart-side MyVolumeDelta indicator sees.
+        private readonly Dictionary<string, MinuteCounter> debugMinuteCounters = new Dictionary<string, MinuteCounter>(StringComparer.Ordinal);
+        private readonly object debugMinuteGate = new object();
 
         private ClientWebSocket socket;
         private CancellationTokenSource cts;
@@ -339,7 +369,11 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
         }
 
         // Re-subscribe the active source when a data connection (re)connects,
-        // so pause/resume of Playback (or a feed reconnect) keeps ticks flowing.
+        // so pause/resume of Playback (or a feed reconnect) keeps ticks flowing
+        // when no subscription exists. Do not detach/re-attach an existing
+        // Instrument.MarketData handler here: NT can leave old handlers alive
+        // during reconnect/compile churn, which duplicates the same tape into
+        // one websocket stream and inflates backend volume.
         private void OnConnectionStatus(ConnectionStatusEventArgs e)
         {
             try
@@ -355,8 +389,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                     e.PreviousStatus == ConnectionStatus.Connected;
                 if (nowConnected && !wasConnected)
                 {
-                    log("data connection (re)connected -> re-subscribing active source");
-                    ResubscribeActive();
+                    EnsureActiveSubscribed();
                 }
             }
             catch (Exception ex)
@@ -365,43 +398,24 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             }
         }
 
-        private void ResubscribeActive()
+        private void EnsureActiveSubscribed()
         {
-            List<string> contracts = new List<string>();
+            bool hasSubscription = false;
             lock (subGate)
             {
-                foreach (string key in subs.Keys)
-                    contracts.Add(key);
+                hasSubscription = subs.Count > 0;
             }
-            if (contracts.Count == 0)
+            if (hasSubscription)
             {
-                string sourceContract = InitialContract();
-                if (!string.IsNullOrEmpty(sourceContract))
-                    contracts.Add(sourceContract);
+                log("data connection (re)connected -> keeping existing Level 1 subscription");
+                return;
             }
-            for (int i = 0; i < contracts.Count; i++)
+
+            string sourceContract = InitialContract();
+            if (!string.IsNullOrEmpty(sourceContract))
             {
-                string contract = contracts[i];
-                bool shouldSubscribe = true;
-                lock (subGate)
-                {
-                    Sub sub;
-                    if (subs.TryGetValue(contract, out sub))
-                    {
-                        if (Detach(sub))
-                        {
-                            subs.Remove(contract);
-                        }
-                        else
-                        {
-                            shouldSubscribe = false;
-                            log("kept existing market data handler for " + contract +
-                                " because detach failed; duplicate guard remains active");
-                        }
-                    }
-                }
-                if (shouldSubscribe)
-                    Subscribe(contract);
+                log("data connection (re)connected -> subscribing active source");
+                Subscribe(sourceContract);
             }
         }
 
@@ -441,10 +455,14 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
 
         // -- NinjaTrader direct Level 1 market-data subscription ---------------
         //
-        // Use the same Instrument.MarketData stream that drives live charts.
-        // BarsRequest can remain allocated while its private tick stream has
-        // stopped delivering, which leaves the backend socket healthy but
-        // silently freezes the chart platform.
+        // Keep a dedicated MarketData object per instrument, matching the
+        // documented AddOn subscription pattern. Do not rely on BarsRequest here:
+        // it can remain allocated while its private tick stream has stopped.
+        //
+        // Older/current NT docs show both equivalent-looking patterns:
+        // instrument.MarketData.Update += handler and new MarketData(instrument).
+        // Update += handler. This bridge uses the explicit object so subscribe
+        // and unsubscribe are tied to one held instance.
 
         private void Subscribe(string contract)
         {
@@ -470,9 +488,12 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 }
 
                 Sub sub = new Sub(instrument);
+                nextSubscriptionGeneration = nextSubscriptionGeneration + 1;
+                long generation = nextSubscriptionGeneration;
+                subscriptionGenerations[key] = generation;
                 EventHandler<MarketDataEventArgs> handler = delegate (object s, MarketDataEventArgs e)
                 {
-                    OnMarketData(key, e);
+                    OnMarketData(key, generation, e);
                 };
                 sub.Handler = handler;
                 try
@@ -482,19 +503,26 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                         log("market data dispatcher is shutting down for " + key);
                         return;
                     }
-                    if (instrument.Dispatcher.CheckAccess())
+                    Action attach = delegate
                     {
-                        instrument.MarketData.Update += handler;
-                    }
-                    else
-                    {
-                        instrument.Dispatcher.Invoke(delegate
+                        try
                         {
-                            instrument.MarketData.Update += handler;
-                        });
-                    }
+                            if (sub.Handler == null) return;
+                            NinjaTrader.Data.MarketData marketData = new NinjaTrader.Data.MarketData(instrument);
+                            marketData.Update += handler;
+                            sub.MarketData = marketData;
+                        }
+                        catch (Exception ex)
+                        {
+                            log("market data attach error for " + key + ": " + ex.Message);
+                        }
+                    };
+                    if (instrument.Dispatcher.CheckAccess())
+                        attach();
+                    else
+                        instrument.Dispatcher.BeginInvoke(attach);
                     subs[key] = sub;
-                    log("subscribed " + key + " (Level 1 stream)");
+                    log("subscribed " + key + " (dedicated MarketData stream)");
                 }
                 catch (Exception ex)
                 {
@@ -515,6 +543,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 if (Detach(sub))
                 {
                     subs.Remove(key);
+                    subscriptionGenerations.Remove(key);
                     log("unsubscribed " + key);
                 }
                 else
@@ -541,17 +570,20 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 if (sub.Handler != null)
                 {
                     EventHandler<MarketDataEventArgs> handler = sub.Handler;
-                    if (sub.Instrument.Dispatcher.CheckAccess())
+                    Action detach = delegate
                     {
-                        sub.Instrument.MarketData.Update -= handler;
-                    }
-                    else
-                    {
-                        sub.Instrument.Dispatcher.Invoke(delegate
+                        try
                         {
-                            sub.Instrument.MarketData.Update -= handler;
-                        });
-                    }
+                            if (sub.MarketData != null)
+                                sub.MarketData.Update -= handler;
+                            sub.MarketData = null;
+                        }
+                        catch { }
+                    };
+                    if (sub.Instrument.Dispatcher.CheckAccess())
+                        detach();
+                    else
+                        sub.Instrument.Dispatcher.BeginInvoke(detach);
                     sub.Handler = null;
                 }
                 return true;
@@ -564,16 +596,15 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
 
         // -- normalization (runs on NinjaTrader data thread) ------------------
 
-        private void OnMarketData(string contract, MarketDataEventArgs e)
+        private void OnMarketData(string contract, long generation, MarketDataEventArgs e)
         {
             try
             {
                 if (e == null) return;
+                if (!IsActiveSubscription(contract, generation)) return;
                 DateTime utcTime = e.Time.ToUniversalTime();
                 long timeMs = ToUnixMs(utcTime);
                 long timeTicks = utcTime.Ticks;
-                if (IsDuplicateMarketData(contract, e, timeTicks))
-                    return;
                 Snapshot snap;
                 lock (snapGate)
                 {
@@ -585,6 +616,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
 
                     if (e.MarketDataType == MarketDataType.Last)
                     {
+                        RecordDebugTrade(contract, timeMs, e.Price, e.Volume, snap.Bid, snap.Ask);
                         EnqueueTrade(contract, timeMs, timeTicks, e.Price, e.Volume, snap.Bid, snap.Ask);
                     }
                     else if (e.MarketDataType == MarketDataType.Bid)
@@ -607,34 +639,14 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             }
         }
 
-        private bool IsDuplicateMarketData(string contract, MarketDataEventArgs e, long timeTicks)
+        private bool IsActiveSubscription(string contract, long generation)
         {
-            string key = contract + "|" + e.MarketDataType.ToString();
-            DateTime nowUtc = DateTime.UtcNow;
-            lock (eventGate)
+            lock (subGate)
             {
-                LastMarketEvent last;
-                if (lastMarketEvents.TryGetValue(key, out last) &&
-                    last.TimeTicks == timeTicks &&
-                    last.Price == e.Price &&
-                    last.Volume == e.Volume &&
-                    (nowUtc - last.SeenUtc).TotalMilliseconds <= 250.0)
-                {
-                    duplicateMarketDataEvents = duplicateMarketDataEvents + 1;
-                    if ((nowUtc - lastDuplicateMarketDataLogUtc).TotalSeconds >= 10.0)
-                    {
-                        lastDuplicateMarketDataLogUtc = nowUtc;
-                        log("dropped duplicate " + e.MarketDataType.ToString() +
-                            " event for " + contract +
-                            " timeTicks=" + timeTicks.ToString(CultureInfo.InvariantCulture) +
-                            " price=" + e.Price.ToString("R", CultureInfo.InvariantCulture) +
-                            " volume=" + e.Volume.ToString(CultureInfo.InvariantCulture) +
-                            " totalDropped=" + duplicateMarketDataEvents.ToString(CultureInfo.InvariantCulture));
-                    }
-                    return true;
-                }
-                lastMarketEvents[key] = new LastMarketEvent(timeTicks, e.Price, e.Volume, nowUtc);
-                return false;
+                long activeGeneration;
+                if (!subscriptionGenerations.TryGetValue(contract, out activeGeneration))
+                    return false;
+                return activeGeneration == generation;
             }
         }
 
@@ -682,6 +694,106 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 Num(sb, "sequence", seq);
                 sb.Append('}');
                 TryEnqueue(sb.ToString());
+            }
+        }
+
+        private void RecordDebugTrade(string contract, long timeMs, double price, long volume, double? bid, double? ask)
+        {
+            if (!config.DebugMinuteCounts) return;
+            try
+            {
+                long bucketStartMs = (timeMs / 60000L) * 60000L;
+                lock (debugMinuteGate)
+                {
+                    MinuteCounter counter;
+                    if (!debugMinuteCounters.TryGetValue(contract, out counter))
+                    {
+                        counter = new MinuteCounter();
+                        counter.BucketStartMs = bucketStartMs;
+                        debugMinuteCounters[contract] = counter;
+                    }
+
+                    if (counter.BucketStartMs != bucketStartMs)
+                    {
+                        FlushDebugMinute(contract, counter);
+                        counter.Reset(bucketStartMs);
+                    }
+
+                    counter.TradeEvents = counter.TradeEvents + 1;
+                    counter.Volume = counter.Volume + volume;
+                    if (ask != null && price >= ask.Value)
+                        counter.BuyVolume = counter.BuyVolume + volume;
+                    else if (bid != null && price <= bid.Value)
+                        counter.SellVolume = counter.SellVolume + volume;
+                    else
+                        counter.UnknownVolume = counter.UnknownVolume + volume;
+                }
+            }
+            catch (Exception ex)
+            {
+                log("debug minute counter error for " + contract + ": " + ex.Message);
+            }
+        }
+
+        private void FlushAllDebugMinutes()
+        {
+            if (!config.DebugMinuteCounts) return;
+            try
+            {
+                lock (debugMinuteGate)
+                {
+                    foreach (KeyValuePair<string, MinuteCounter> pair in debugMinuteCounters)
+                        FlushDebugMinute(pair.Key, pair.Value);
+                    debugMinuteCounters.Clear();
+                }
+            }
+            catch { }
+        }
+
+        private void FlushDebugMinute(string contract, MinuteCounter counter)
+        {
+            if (counter == null || counter.TradeEvents <= 0) return;
+            try
+            {
+                string dir = config.DebugExportDirectory;
+                if (string.IsNullOrEmpty(dir))
+                    dir = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "debug-exports");
+                if (!Path.IsPathRooted(dir))
+                    dir = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, dir);
+                Directory.CreateDirectory(dir);
+
+                string file = Path.Combine(dir, "GcChartBridgeMarketData_" + SafeFileName(contract) + "_1_Minute.csv");
+                bool writeHeader = !File.Exists(file) || new FileInfo(file).Length == 0;
+                using (StreamWriter writer = new StreamWriter(file, true, Encoding.UTF8))
+                {
+                    if (writeHeader)
+                    {
+                        writer.WriteLine("contract,bucketStartUtc,bucketStartUtcMs,bucketCloseUtc,bucketCloseUtcMs,tradeEvents,volume,buyVolume,sellVolume,unknownVolume");
+                    }
+                    long bucketCloseMs = counter.BucketStartMs + 60000L;
+                    writer.Write(EscapeCsv(contract)); writer.Write(',');
+                    writer.Write(UnixMsToIsoUtc(counter.BucketStartMs)); writer.Write(',');
+                    writer.Write(counter.BucketStartMs.ToString(CultureInfo.InvariantCulture)); writer.Write(',');
+                    writer.Write(UnixMsToIsoUtc(bucketCloseMs)); writer.Write(',');
+                    writer.Write(bucketCloseMs.ToString(CultureInfo.InvariantCulture)); writer.Write(',');
+                    writer.Write(counter.TradeEvents.ToString(CultureInfo.InvariantCulture)); writer.Write(',');
+                    writer.Write(counter.Volume.ToString(CultureInfo.InvariantCulture)); writer.Write(',');
+                    writer.Write(counter.BuyVolume.ToString(CultureInfo.InvariantCulture)); writer.Write(',');
+                    writer.Write(counter.SellVolume.ToString(CultureInfo.InvariantCulture)); writer.Write(',');
+                    writer.Write(counter.UnknownVolume.ToString(CultureInfo.InvariantCulture));
+                    writer.WriteLine();
+                }
+                log("debug minute " + contract +
+                    " start=" + UnixMsToIsoUtc(counter.BucketStartMs) +
+                    " trades=" + counter.TradeEvents.ToString(CultureInfo.InvariantCulture) +
+                    " volume=" + counter.Volume.ToString(CultureInfo.InvariantCulture) +
+                    " buy=" + counter.BuyVolume.ToString(CultureInfo.InvariantCulture) +
+                    " sell=" + counter.SellVolume.ToString(CultureInfo.InvariantCulture) +
+                    " unknown=" + counter.UnknownVolume.ToString(CultureInfo.InvariantCulture));
+            }
+            catch (Exception ex)
+            {
+                log("debug minute export error for " + contract + ": " + ex.Message);
             }
         }
 
@@ -947,6 +1059,8 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 subs.Clear();
             }
 
+            FlushAllDebugMinutes();
+
             try { outbound.CompleteAdding(); } catch { }
             CloseQuietly();
             try
@@ -964,6 +1078,16 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
         private static long ToUnixMs(DateTime utc)
         {
             return (long)(utc - Epoch).TotalMilliseconds;
+        }
+
+        private static DateTime UnixMsToUtc(long ms)
+        {
+            return Epoch.AddMilliseconds(ms);
+        }
+
+        private static string UnixMsToIsoUtc(long ms)
+        {
+            return UnixMsToUtc(ms).ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
         }
 
         private static readonly int[] Fib = new int[] { 1, 1, 2, 3, 5, 8, 13, 21, 34, 55 };
@@ -1006,6 +1130,39 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
 
+        private static string EscapeCsv(string s)
+        {
+            if (s == null) return string.Empty;
+            if (s.IndexOf(',') < 0 && s.IndexOf('"') < 0 && s.IndexOf('\r') < 0 && s.IndexOf('\n') < 0)
+                return s;
+            return "\"" + s.Replace("\"", "\"\"") + "\"";
+        }
+
+        private static string SafeFileName(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "unknown";
+            char[] invalid = Path.GetInvalidFileNameChars();
+            StringBuilder sb = new StringBuilder(value.Length);
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                bool bad = false;
+                for (int j = 0; j < invalid.Length; j++)
+                {
+                    if (c == invalid[j])
+                    {
+                        bad = true;
+                        break;
+                    }
+                }
+                if (bad || char.IsWhiteSpace(c))
+                    sb.Append('_');
+                else
+                    sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
         private sealed class Snapshot
         {
             public double? Bid;
@@ -1014,25 +1171,30 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             public long AskSize;
         }
 
-        private sealed class LastMarketEvent
+        private sealed class MinuteCounter
         {
-            public readonly long TimeTicks;
-            public readonly double Price;
-            public readonly long Volume;
-            public readonly DateTime SeenUtc;
+            public long BucketStartMs;
+            public long TradeEvents;
+            public long Volume;
+            public long BuyVolume;
+            public long SellVolume;
+            public long UnknownVolume;
 
-            public LastMarketEvent(long timeTicks, double price, long volume, DateTime seenUtc)
+            public void Reset(long bucketStartMs)
             {
-                TimeTicks = timeTicks;
-                Price = price;
-                Volume = volume;
-                SeenUtc = seenUtc;
+                BucketStartMs = bucketStartMs;
+                TradeEvents = 0;
+                Volume = 0;
+                BuyVolume = 0;
+                SellVolume = 0;
+                UnknownVolume = 0;
             }
         }
 
         private sealed class Sub
         {
             public readonly Instrument Instrument;
+            public NinjaTrader.Data.MarketData MarketData;
             public EventHandler<MarketDataEventArgs> Handler;
 
             public Sub(Instrument instrument)

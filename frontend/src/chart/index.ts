@@ -67,6 +67,15 @@ export {
 } from "./outsideBar";
 
 export {
+  type MgannSwingSettings,
+  type MgannSwingSignal,
+  DEFAULT_MGANN_SWING_SETTINGS,
+  MGANN_SWING_SIZE,
+  buildMgannSwingOverlay,
+  normalizeMgannSwingSettings,
+} from "./mgannSwing";
+
+export {
   type DeltaColors,
   type EmaLineData,
   type LightweightChartsAdapterOptions,

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { UTCTimestamp } from "lightweight-charts";
 
 import {
   ApiClient,
@@ -45,8 +46,17 @@ import {
   type OutsideBarSettings,
   normalizeOutsideBarSettings,
 } from "./chart/outsideBar";
+import {
+  DEFAULT_MGANN_SWING_SETTINGS,
+  normalizeMgannSwingSettings,
+  type MgannSwingSettings,
+} from "./chart/mgannSwing";
 import { bigTradeMinVolumeForTime } from "./chart/bigTradeSessions";
 import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./chart/smc";
+import {
+  DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  normalizeSessionVolumeProfileWidth,
+} from "./chart/sessionVolumeProfileSettings";
 import { HistoryLoader } from "./cache/historyLoader";
 import { MemoryCache } from "./cache/memoryCache";
 import { type Bar } from "./cache/types";
@@ -80,20 +90,30 @@ import {
   type Timeframe,
 } from "./socket/messages";
 import type { ChartProfilePayload } from "./profiles/types";
-import type { DeltaProfileLoadState } from "./orderflow/deltaProfile";
+import type {
+  DeltaProfileData,
+  DeltaProfileLoadState,
+  DeltaProfileSource,
+} from "./orderflow/deltaProfile";
 import { StatusIndicator, type ConnectionState } from "./status/StatusIndicator";
 import type {
   DrawingState,
   DrawingToolType,
   FixedRangeProfileMode,
 } from "./chart/drawings/types";
-import { fixedRangeMsFromAnchors } from "./chart/timeframeRange";
+import {
+  displayOffsetForTimeframe,
+  fixedRangeMsFromAnchors,
+} from "./chart/timeframeRange";
 import {
   DEFAULT_TIMEZONE_OFFSET_MINUTES,
   TIMEZONE_OFFSET_OPTIONS,
   formatUtcOffset,
   normalizeTimezoneOffsetMinutes,
 } from "./chart/timezone";
+import { resolveEndpoints } from "./endpoints";
+
+export { resolveEndpoints } from "./endpoints";
 
 const SYMBOL = "GC";
 export const CHART_CONTRACT = SYMBOL;
@@ -114,6 +134,16 @@ const PROFILE_TIMEFRAMES = new Set<Timeframe>([
   "4h",
   "1D",
 ]);
+const TIMEFRAME_RANK: Record<Timeframe, number> = {
+  "1m": 1,
+  "3m": 3,
+  "5m": 5,
+  "15m": 15,
+  "30m": 30,
+  "1h": 60,
+  "4h": 240,
+  "1D": 1440,
+};
 export const GLOBAL_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "quote_update",
   "alert_event",
@@ -141,15 +171,19 @@ const EMPTY_FOOTPRINT_BARS: ReadonlyMap<number, FootprintBar> = new Map();
 const EMPTY_FVG_SIGNALS: ReadonlyMap<number, FvgSignalUpdateMessage> = new Map();
 const DEFERRED_INDICATOR_LOAD_MS = 75;
 const DEFERRED_OVERLAY_LOAD_MS = 250;
+const REALTIME_OVERLAY_CATCH_UP_MS = 10_000;
+const RESUME_REFRESH_THROTTLE_MS = 2_000;
 const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
 const INITIAL_FVG_SIGNAL_LIMIT = 2_000;
 const INITIAL_BIG_TRADE_LIMIT = DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
-const DELTA_PROFILE_ROW_TICKS = 1;
-const DELTA_PROFILE_VALUE_AREA_PCT = 70;
+const VOLUME_PROFILE_ROW_TICKS = 1;
+const DELTA_PROFILE_ROW_TICKS = 2;
+const SESSION_VP_START_UTC_HOUR = 22;
+const DELTA_PROFILE_VALUE_AREA_PCT = 68;
 const DELTA_PROFILE_REFRESH_DELAY_MS = 1_000;
 const ORDER_REFRESH_INTERVAL_MS = 5_000;
-const ENABLE_REALTIME_FOOTPRINT_UPDATES = false;
+const ENABLE_REALTIME_FOOTPRINT_UPDATES = true;
 const MARKET_ORDER_SETTINGS_STORAGE_KEY = "gc-chart-platform.market-order-settings";
 const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
   volumeLots: 0.1,
@@ -176,7 +210,7 @@ function playBigTradeSound(): void {
     osc.start();
     osc.stop(ctx.currentTime + 0.15);
   } catch {
-    // ignore — sound is a non-critical enhancement
+    // ignore â€” sound is a non-critical enhancement
   }
 }
 
@@ -957,17 +991,17 @@ function AlertToolbarButton({
 }
 
 const ANALYST_LABELS: Record<string, string> = {
-  no_trade: "Không giao dịch",
-  wait_for_buy: "Chờ mua",
-  wait_for_sell: "Chờ bán",
-  buy_candidate: "Ứng viên mua",
-  sell_candidate: "Ứng viên bán",
-  bullish: "Thiên mua",
-  bearish: "Thiên bán",
-  range: "Đi ngang",
-  unknown: "Chưa rõ",
-  wait: "Chờ",
-  candidate: "Có setup",
+  no_trade: "KhÃ´ng giao dá»‹ch",
+  wait_for_buy: "Chá» mua",
+  wait_for_sell: "Chá» bÃ¡n",
+  buy_candidate: "á»¨ng viÃªn mua",
+  sell_candidate: "á»¨ng viÃªn bÃ¡n",
+  bullish: "ThiÃªn mua",
+  bearish: "ThiÃªn bÃ¡n",
+  range: "Äi ngang",
+  unknown: "ChÆ°a rÃµ",
+  wait: "Chá»",
+  candidate: "CÃ³ setup",
 };
 
 function analystLabel(value: string): string {
@@ -1022,10 +1056,10 @@ function AnalystPanel({
 }) {
   if (!open) return null;
   return (
-    <div className="analyst-panel" role="dialog" aria-label="Báo cáo AI nhận định">
+    <div className="analyst-panel" role="dialog" aria-label="BÃ¡o cÃ¡o AI nháº­n Ä‘á»‹nh">
       <div className="analyst-panel-header">
         <div>
-          <div className="analyst-panel-title">AI nhận định</div>
+          <div className="analyst-panel-title">AI nháº­n Ä‘á»‹nh</div>
           {report && (
             <div className="analyst-panel-time">
               {formatAnalystTimestamp(report.createdAt)}
@@ -1034,9 +1068,9 @@ function AnalystPanel({
         </div>
         <div className="analyst-panel-actions">
           <button type="button" onClick={onRun} disabled={pending || !authenticated}>
-            {pending ? "Đang chạy" : "Kiểm tra"}
+            {pending ? "Äang cháº¡y" : "Kiá»ƒm tra"}
           </button>
-          <button type="button" aria-label="Đóng AI nhận định" onClick={onClose}>
+          <button type="button" aria-label="ÄÃ³ng AI nháº­n Ä‘á»‹nh" onClick={onClose}>
             x
           </button>
         </div>
@@ -1057,27 +1091,27 @@ function AnalystPanel({
         </button>
       </div>
       )}
-      {pending && <div className="analyst-panel-muted">Đang đọc trạng thái thị trường...</div>}
+      {pending && <div className="analyst-panel-muted">Äang Ä‘á»c tráº¡ng thÃ¡i thá»‹ trÆ°á»ng...</div>}
       {!report && !pending ? (
-        <div className="analyst-panel-muted">Chưa có nhận định AI.</div>
+        <div className="analyst-panel-muted">ChÆ°a cÃ³ nháº­n Ä‘á»‹nh AI.</div>
       ) : null}
       {report && (
         <div className="analyst-report">
           <div className="analyst-report-grid">
             <div>
-              <span>Quyết định</span>
+              <span>Quyáº¿t Ä‘á»‹nh</span>
               <strong>{analystLabel(report.decision)}</strong>
             </div>
             <div>
-              <span>Xu hướng</span>
+              <span>Xu hÆ°á»›ng</span>
               <strong>{analystLabel(report.bias)}</strong>
             </div>
             <div>
-              <span>Độ tin cậy</span>
+              <span>Äá»™ tin cáº­y</span>
               <strong>{formatAnalystConfidence(report.confidence)}</strong>
             </div>
             <div>
-              <span>Rủi ro</span>
+              <span>Rá»§i ro</span>
               <strong>{analystLabel(report.riskState)}</strong>
             </div>
           </div>
@@ -1087,14 +1121,14 @@ function AnalystPanel({
             ))}
           </ul>
           <div className="analyst-condition">
-            <span>Vô hiệu nếu</span>
+            <span>VÃ´ hiá»‡u náº¿u</span>
             <p>{report.invalidIf}</p>
           </div>
           <div className="analyst-condition">
-            <span>Xác nhận tiếp theo</span>
+            <span>XÃ¡c nháº­n tiáº¿p theo</span>
             <p>{report.nextConfirmation}</p>
           </div>
-          <div className="analyst-auto-trade">Auto-trade đang tắt</div>
+          <div className="analyst-auto-trade">Auto-trade Ä‘ang táº¯t</div>
         </div>
       )}
     </div>
@@ -1180,6 +1214,72 @@ function profileDrawings(drawings: readonly DrawingState[]): DrawingState[] {
   return cloneDrawings(drawings.filter((drawing) => drawing.tool !== "order_bracket"));
 }
 
+export function drawingVisibleOnTimeframe(
+  drawing: DrawingState,
+  timeframe: Timeframe,
+): boolean {
+  const sourceTimeframe = drawing.sourceTimeframe;
+  if (sourceTimeframe === undefined) return true;
+  return TIMEFRAME_RANK[timeframe] <= TIMEFRAME_RANK[sourceTimeframe];
+}
+
+export function visibleDrawingsForTimeframe(
+  drawings: readonly DrawingState[],
+  timeframe: Timeframe,
+): DrawingState[] {
+  return cloneDrawings(
+    drawings.filter((drawing) => drawingVisibleOnTimeframe(drawing, timeframe)),
+  );
+}
+
+export function mergeVisibleDrawingState(
+  previous: readonly DrawingState[],
+  visibleState: readonly DrawingState[],
+  timeframe: Timeframe,
+): DrawingState[] {
+  const visibleById = new Map(
+    visibleState.map((drawing) => [
+      drawing.id,
+      {
+        ...drawing,
+        anchors: drawing.anchors.map((anchor) => ({ ...anchor })),
+        options: drawing.options ? { ...drawing.options } : undefined,
+      },
+    ]),
+  );
+  const seen = new Set<string>();
+  const next: DrawingState[] = [];
+
+  for (const existing of previous) {
+    const incoming = visibleById.get(existing.id);
+    if (incoming !== undefined) {
+      seen.add(existing.id);
+      next.push({
+        ...incoming,
+        sourceTimeframe: existing.sourceTimeframe ?? incoming.sourceTimeframe ?? timeframe,
+      });
+      continue;
+    }
+    if (!drawingVisibleOnTimeframe(existing, timeframe)) {
+      next.push({
+        ...existing,
+        anchors: existing.anchors.map((anchor) => ({ ...anchor })),
+        options: existing.options ? { ...existing.options } : undefined,
+      });
+    }
+  }
+
+  for (const incoming of visibleById.values()) {
+    if (seen.has(incoming.id)) continue;
+    next.push({
+      ...incoming,
+      sourceTimeframe: incoming.sourceTimeframe ?? timeframe,
+    });
+  }
+
+  return next;
+}
+
 function fixedRangeDeltaProfileDrawings(
   drawings: readonly DrawingState[],
 ): DrawingState[] {
@@ -1187,6 +1287,51 @@ function fixedRangeDeltaProfileDrawings(
     (drawing) =>
       drawing.tool === "fixed_range_delta_profile" && drawing.anchors.length >= 2,
   );
+}
+
+function extendRightFixedRangeProfiles(
+  drawings: readonly DrawingState[],
+  latestBarTimeMs: number | undefined,
+  timeframe: Timeframe,
+): { drawings: DrawingState[]; changed: boolean } {
+  if (!Number.isFinite(latestBarTimeMs)) {
+    return { drawings: [...drawings], changed: false };
+  }
+  const latestAnchorTime = Math.floor(
+    ((latestBarTimeMs as number) + displayOffsetForTimeframe(timeframe)) / 1000,
+  ) as UTCTimestamp;
+  let changed = false;
+  const next = drawings.map((drawing) => {
+    if (
+      drawing.tool !== "fixed_range_delta_profile" ||
+      drawing.anchors.length < 2 ||
+      drawing.options?.fixedRangeProfileExtendRight !== true
+    ) {
+      return drawing;
+    }
+    const firstTime = Number(drawing.anchors[0].time);
+    const secondTime = Number(drawing.anchors[1].time);
+    const rightIndex = firstTime >= secondTime ? 0 : 1;
+    if (Number(drawing.anchors[rightIndex].time) >= latestAnchorTime) {
+      return drawing;
+    }
+    changed = true;
+    const anchors = drawing.anchors.map((anchor, index) =>
+      index === rightIndex
+        ? {
+            ...anchor,
+            time: latestAnchorTime,
+            logical: undefined,
+          }
+        : { ...anchor },
+    );
+    return {
+      ...drawing,
+      anchors,
+      options: drawing.options ? { ...drawing.options } : undefined,
+    };
+  });
+  return { drawings: next, changed };
 }
 
 function footprintTouchesFixedRange(
@@ -1200,21 +1345,6 @@ function footprintTouchesFixedRange(
   return footprintTime <= range.to && footprintEnd >= range.from;
 }
 
-/** Resolve the backend base URLs.
- *
- * REST and WebSocket intentionally stay same-origin. In dev, Vite proxies
- * `/api` and `/ws` to the same backend process; connecting the browser directly
- * to `:8000` can hit a different backend when multiple local/public servers are
- * running, which makes refresh-loaded history work while live updates stall.
- */
-export function resolveEndpoints(
-  location: Pick<Location, "protocol" | "host"> = window.location,
-): { api: string; ws: string } {
-  const wsProto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = `${wsProto}://${location.host}/ws/chart`;
-  return { api: "/api", ws };
-}
-
 export function appShellClassName(chartFocusMode: boolean): string {
   return chartFocusMode ? "app-shell chart-focus" : "app-shell";
 }
@@ -1223,14 +1353,34 @@ export function bigTradesEnabledForTimeframe(timeframe: Timeframe): boolean {
   return timeframe === "1m";
 }
 
+export function outsideBarSettingsForTimeframe(
+  settings: OutsideBarSettings,
+  timeframe: Timeframe,
+): OutsideBarSettings {
+  return {
+    ...settings,
+    enabled: settings.enabled && timeframe === "5m",
+  };
+}
+
 function normalizeFixedRangeProfileMode(
   mode: unknown,
 ): FixedRangeProfileMode {
-  return mode === "volume" ? "volume" : "bidAsk";
+  return mode === "delta" || mode === "bidAsk" ? "delta" : "volume";
+}
+
+function fixedRangeDeltaProfileSource(
+  mode: FixedRangeProfileMode,
+): DeltaProfileSource {
+  return mode === "volume" ? "minute_bars" : "footprint_cache";
+}
+
+function fixedRangeDeltaProfileRowTicks(mode: FixedRangeProfileMode): number {
+  return mode === "delta" ? DELTA_PROFILE_ROW_TICKS : VOLUME_PROFILE_ROW_TICKS;
 }
 
 /**
- * LiveApp — the composed, runnable application.
+ * LiveApp â€” the composed, runnable application.
  *
  * Wires the tested modules into a working app against a live backend:
  *   - ApiClient loads profile/alert state while chart data uses `contract=GC`;
@@ -1252,6 +1402,7 @@ export function LiveApp() {
   const contract = CHART_CONTRACT;
   const [connection, setConnection] = useState<ConnectionState>("disconnected");
   const [socketGeneration, setSocketGeneration] = useState(0);
+  const [overlayRefreshNonce, setOverlayRefreshNonce] = useState(0);
   const [bars, setBars] = useState<readonly Bar[]>([]);
   const [loadedSeriesKey, setLoadedSeriesKey] = useState<string | undefined>(
     undefined,
@@ -1275,8 +1426,22 @@ export function LiveApp() {
   const [bigTrades, setBigTrades] = useState<readonly BigTradeMarker[]>([]);
   const [smcAiSignals, setSmcAiSignals] = useState<readonly SmcAiSignalMarker[]>([]);
   const [showVolume, setShowVolume] = useState(true);
+  const [showDailyVolumeProfile, setShowDailyVolumeProfile] = useState(false);
+  const [dailyVolumeProfileWidth, setDailyVolumeProfileWidth] = useState(
+    DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  );
+  const [
+    showDailyVolumeProfileDevelopingPoc,
+    setShowDailyVolumeProfileDevelopingPoc,
+  ] = useState(true);
+  const [sessionVolumeProfile, setSessionVolumeProfile] =
+    useState<DeltaProfileData | null>(null);
   const [showVolumeDelta, setShowVolumeDelta] = useState(true);
-  const [showCvd, setShowCvd] = useState(true);
+  const [showMgannSwing, setShowMgannSwing] = useState(false);
+  const [mgannSwing, setMgannSwing] = useState<MgannSwingSettings>(() => ({
+    ...DEFAULT_MGANN_SWING_SETTINGS,
+  }));
+  const showMgannWaveDelta = showMgannSwing && mgannSwing.showWaveDelta;
   const [showFootprint, setShowFootprint] = useState(false);
   const [showFvgGrader, setShowFvgGrader] = useState(true);
   const [showBigTrades, setShowBigTrades] = useState(true);
@@ -1284,6 +1449,7 @@ export function LiveApp() {
   const [smc, setSmc] = useState<SmcSettings>(() => ({ ...DEFAULT_SMC_SETTINGS }));
   const [outsideBar, setOutsideBar] = useState<OutsideBarSettings>(() => ({
     ...DEFAULT_OUTSIDE_BAR_SETTINGS,
+    enabled: true,
   }));
   const [footprintSettings, setFootprintSettings] = useState<FootprintSettings>(
     () => ({ ...DEFAULT_FOOTPRINT_SETTINGS }),
@@ -1354,8 +1520,7 @@ export function LiveApp() {
     undefined,
   );
   const [activeTool, setActiveTool] = useState<DrawingToolType | null>(null);
-  const [fixedRangeProfileMode, setFixedRangeProfileMode] =
-    useState<FixedRangeProfileMode>("bidAsk");
+  const fixedRangeProfileMode: FixedRangeProfileMode = "volume";
   const [chartFocusMode, setChartFocusMode] = useState(false);
   const [marketOrderDrawerOpen, setMarketOrderDrawerOpen] = useState(false);
   const [drawingCount, setDrawingCount] = useState(0);
@@ -1366,6 +1531,9 @@ export function LiveApp() {
   const [fixedRangeDeltaProfiles, setFixedRangeDeltaProfiles] = useState<
     ReadonlyMap<string, DeltaProfileLoadState>
   >(() => new Map());
+  const [extendRightLiveBar, setExtendRightLiveBar] = useState<
+    { seriesKey: string; time: number } | undefined
+  >(undefined);
   const [deltaProfileRefreshNonce, setDeltaProfileRefreshNonce] = useState(0);
   const [profileId, setProfileId] = useState(DEFAULT_PROFILE_ID);
   const [profileSaving, setProfileSaving] = useState(false);
@@ -1411,7 +1579,12 @@ export function LiveApp() {
       chartBackgroundColor,
       showVolume,
       showVolumeDelta,
-      showCvd,
+      showDailyVolumeProfile,
+      dailyVolumeProfileWidth,
+      showDailyVolumeProfileDevelopingPoc,
+      showCvd: showMgannWaveDelta,
+      showMgannSwing,
+      mgannSwing: { ...mgannSwing },
       showFootprint,
       showFvgGrader,
       showBigTrades,
@@ -1428,17 +1601,22 @@ export function LiveApp() {
     [
       bigTradeSettings,
       chartBackgroundColor,
+      dailyVolumeProfileWidth,
       drawings,
       ema,
       footprintSettings,
       fixedRangeProfileMode,
       marketOrderSettings,
+      mgannSwing,
       outsideBar,
       showBigTrades,
       showFootprint,
+      showMgannSwing,
       showVolume,
       showVolumeDelta,
-      showCvd,
+      showDailyVolumeProfile,
+      showDailyVolumeProfileDevelopingPoc,
+      showMgannWaveDelta,
       showFvgGrader,
       smc,
       timeframe,
@@ -1480,6 +1658,7 @@ export function LiveApp() {
     undefined,
   );
   const telegramSentRef = useRef<string | undefined>(undefined);
+  const resumeRefreshAtRef = useRef(0);
   if (historyLoader.current === null) {
     historyLoader.current = new HistoryLoader(
       (url) => fetch(url),
@@ -1489,6 +1668,13 @@ export function LiveApp() {
   }
   const currentSeriesKey = seriesDataKey(SYMBOL, contract, timeframe);
   const hasLoadedCurrentSeries = loadedSeriesKey === currentSeriesKey;
+  const latestLoadedBarTime = hasLoadedCurrentSeries
+    ? bars[bars.length - 1]?.time
+    : undefined;
+  const latestExtendRightBarTime =
+    extendRightLiveBar?.seriesKey === currentSeriesKey
+      ? Math.max(latestLoadedBarTime ?? 0, extendRightLiveBar.time)
+      : latestLoadedBarTime;
 
   const applyMt5Status = useCallback(
     (status: Awaited<ReturnType<ApiClient["mt5Status"]>>) => {
@@ -1536,6 +1722,19 @@ export function LiveApp() {
       setDeltaProfileRefreshNonce((nonce) => nonce + 1);
     }, DELTA_PROFILE_REFRESH_DELAY_MS);
   }, []);
+  const onChartRealtimeBar = useCallback(
+    (bar: Bar) => {
+      setExtendRightLiveBar({ seriesKey: currentSeriesKey, time: bar.time });
+      if (
+        fixedRangeDeltaProfileDrawings(drawingsRef.current).some(
+          (drawing) => drawing.options?.fixedRangeProfileExtendRight === true,
+        )
+      ) {
+        scheduleDeltaProfileRefresh();
+      }
+    },
+    [currentSeriesKey, scheduleDeltaProfileRefresh],
+  );
 
   useEffect(() => {
     persistMarketOrderSettings(marketOrderSettings);
@@ -1576,20 +1775,36 @@ export function LiveApp() {
   );
 
   useEffect(() => {
-    let cancelled = false;
+    const extended = extendRightFixedRangeProfiles(
+      drawings,
+      latestExtendRightBarTime,
+      timeframe,
+    );
+    if (!extended.changed) return;
+    setDrawings(extended.drawings);
+    setDrawingsLoadKey((key) => key + 1);
+  }, [drawings, latestExtendRightBarTime, timeframe]);
+
+  useEffect(() => {
     const jobs = fixedRangeDeltaProfileDrawings(drawings).flatMap((drawing) => {
       const range = fixedRangeMsFromAnchors(drawing.anchors, timeframe);
       if (range === null) return [];
+      const mode = normalizeFixedRangeProfileMode(
+        drawing.options?.fixedRangeProfileMode,
+      );
+      const source = fixedRangeDeltaProfileSource(mode);
+      const rowTicks = fixedRangeDeltaProfileRowTicks(mode);
       const requestKey = [
         contract,
         timeframe,
         range.from,
         range.to,
-        DELTA_PROFILE_ROW_TICKS,
+        source,
+        rowTicks,
         DELTA_PROFILE_VALUE_AREA_PCT,
       ].join(":");
       const fetchKey = `${requestKey}:${deltaProfileRefreshNonce}`;
-      return [{ drawing, range, requestKey, fetchKey }];
+      return [{ drawing, range, requestKey, fetchKey, source, rowTicks }];
     });
     const activeIds = new Set(jobs.map((job) => job.drawing.id));
     for (const id of [...deltaProfileRequestKeysRef.current.keys()]) {
@@ -1628,12 +1843,12 @@ export function LiveApp() {
           contract,
           from: job.range.from,
           to: job.range.to,
-          rowTicks: DELTA_PROFILE_ROW_TICKS,
+          rowTicks: job.rowTicks,
           valueAreaPct: DELTA_PROFILE_VALUE_AREA_PCT,
+          source: job.source,
         })
         .then((profile) => {
           if (
-            cancelled ||
             deltaProfileRequestKeysRef.current.get(job.drawing.id) !== job.requestKey
           ) {
             return;
@@ -1646,7 +1861,6 @@ export function LiveApp() {
         })
         .catch((error) => {
           if (
-            cancelled ||
             deltaProfileRequestKeysRef.current.get(job.drawing.id) !== job.requestKey
           ) {
             return;
@@ -1665,10 +1879,6 @@ export function LiveApp() {
           });
         });
     }
-
-    return () => {
-      cancelled = true;
-    };
   }, [
     api,
     contract,
@@ -1676,6 +1886,47 @@ export function LiveApp() {
     drawings,
     timeframe,
   ]);
+
+  // Fetch delta profile for the current daily session (right-edge histogram).
+  useEffect(() => {
+    if (!showDailyVolumeProfile) {
+      setSessionVolumeProfile(null);
+      return;
+    }
+    const now = Date.now();
+    const d = new Date(now);
+    const hour = d.getUTCHours();
+    const sessionStart = new Date(Date.UTC(
+      d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(),
+      SESSION_VP_START_UTC_HOUR, 0, 0, 0,
+    ));
+    if (hour < SESSION_VP_START_UTC_HOUR) {
+      sessionStart.setUTCDate(sessionStart.getUTCDate() - 1);
+    }
+    const fromMs = sessionStart.getTime();
+    let cancelled = false;
+    const fetchProfile = () => {
+      void api
+        .deltaProfile({
+          symbol: SYMBOL,
+          contract,
+          from: fromMs,
+          to: Date.now(),
+          rowTicks: DELTA_PROFILE_ROW_TICKS,
+          valueAreaPct: DELTA_PROFILE_VALUE_AREA_PCT,
+          source: "footprint_cache",
+        })
+        .then((profile) => {
+          if (!cancelled) setSessionVolumeProfile(profile);
+        })
+        .catch(() => {
+          if (!cancelled) setSessionVolumeProfile(null);
+        });
+    };
+    fetchProfile();
+    const timer = window.setInterval(fetchProfile, 65_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [api, contract, showDailyVolumeProfile]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1727,8 +1978,10 @@ export function LiveApp() {
     const offOpen = socket.onOpen(() => {
       setConnection("connected");
       // Re-fetch REST history after reconnect so bars missed while the socket
-      // was unavailable are patched without requiring a browser reload.
+      // was unavailable are patched without requiring a browser reload. Overlay
+      // events can be missed the same way, so refresh them from REST too.
       setSocketGeneration((generation) => generation + 1);
+      setOverlayRefreshNonce((generation) => generation + 1);
     });
     const offClose = socket.onClose(() => setConnection("disconnected"));
     socket.connect();
@@ -1787,6 +2040,35 @@ export function LiveApp() {
       offOrder();
       offAccount();
       socket.close();
+    };
+  }, [socket]);
+
+  useEffect(() => {
+    const refreshAfterResume = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      const now = Date.now();
+      if (now - resumeRefreshAtRef.current < RESUME_REFRESH_THROTTLE_MS) {
+        return;
+      }
+      resumeRefreshAtRef.current = now;
+      socket.ensureConnected(SOCKET_IDLE_TIMEOUT_MS, SOCKET_TRANSITION_TIMEOUT_MS);
+      setSocketGeneration((generation) => generation + 1);
+      setOverlayRefreshNonce((generation) => generation + 1);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshAfterResume();
+      }
+    };
+    window.addEventListener("pageshow", refreshAfterResume);
+    window.addEventListener("focus", refreshAfterResume);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("pageshow", refreshAfterResume);
+      window.removeEventListener("focus", refreshAfterResume);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [socket]);
 
@@ -2000,16 +2282,15 @@ export function LiveApp() {
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void (async () => {
-        const [footprint, initialBigTrades] = await Promise.allSettled([
-          api.footprint(SYMBOL, contract),
-          api.bigTrades(SYMBOL, contract, INITIAL_BIG_TRADE_LIMIT),
-        ]);
-        if (cancelled) return;
-        if (footprint.status === "fulfilled") {
-          setFootprintBars(new Map(footprint.value.map((bar) => [bar.time, bar])));
+        let footprint: Awaited<ReturnType<ApiClient["footprint"]>> | undefined;
+        try {
+          footprint = await api.footprint(SYMBOL, contract);
+        } catch {
+          footprint = undefined;
         }
-        if (initialBigTrades.status === "fulfilled") {
-          setBigTrades((prev) => reduceBigTrades(prev, initialBigTrades.value));
+        if (cancelled) return;
+        if (footprint !== undefined) {
+          setFootprintBars(new Map(footprint.map((bar) => [bar.time, bar])));
         }
         setLoadedOverlayContract(contract);
       })();
@@ -2021,44 +2302,68 @@ export function LiveApp() {
   }, [api, contract, timeframe, hasLoadedCurrentSeries, loadedOverlayContract]);
 
   useEffect(() => {
-    if (timeframe !== "1m") {
+    if (!bigTradesEnabledForTimeframe(timeframe)) {
       return;
     }
-    if (!hasLoadedCurrentSeries || fvgSignalSeriesKey === currentSeriesKey) {
+    if (!hasLoadedCurrentSeries) {
       return;
     }
     let cancelled = false;
-    const timer = window.setTimeout(() => {
+    const loadRealtimeOverlays = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
       void (async () => {
-        try {
-          const signals = await api.fvgSignals(
+        const [bigTradeResult, fvgResult] = await Promise.allSettled([
+          api.bigTrades(SYMBOL, contract, INITIAL_BIG_TRADE_LIMIT),
+          api.fvgSignals(
             SYMBOL,
             contract,
             INITIAL_FVG_SIGNAL_LIMIT,
-          );
-          if (!cancelled) {
-            setFvgSignals(new Map(signals.map((signal) => [signal.time, signal])));
-            setFvgSignalSeriesKey(currentSeriesKey);
-          }
-        } catch {
-          if (!cancelled) {
-            setFvgSignals(new Map());
-            setFvgSignalSeriesKey(currentSeriesKey);
-          }
+          ),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        if (bigTradeResult.status === "fulfilled") {
+          setBigTrades((prev) => reduceBigTrades(prev, bigTradeResult.value));
+        }
+        if (fvgResult.status === "fulfilled") {
+          setFvgSignals((prev) => {
+            const next = new Map(prev);
+            for (const signal of fvgResult.value) {
+              next.set(signal.time, signal);
+            }
+            return next;
+          });
+          setFvgSignalSeriesKey(currentSeriesKey);
+        } else {
+          setFvgSignalSeriesKey((key) => {
+            if (key === currentSeriesKey) {
+              return key;
+            }
+            return currentSeriesKey;
+          });
         }
       })();
-    }, DEFERRED_OVERLAY_LOAD_MS);
+    };
+    const timer = window.setTimeout(loadRealtimeOverlays, DEFERRED_OVERLAY_LOAD_MS);
+    const interval = window.setInterval(
+      loadRealtimeOverlays,
+      REALTIME_OVERLAY_CATCH_UP_MS,
+    );
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      window.clearInterval(interval);
     };
   }, [
     api,
     contract,
     timeframe,
     hasLoadedCurrentSeries,
-    fvgSignalSeriesKey,
     currentSeriesKey,
+    overlayRefreshNonce,
   ]);
 
   useEffect(() => {
@@ -2166,7 +2471,7 @@ export function LiveApp() {
   };
   const onCreateAlert = (input: {
     type: Alert["type"];
-    params: Record<string, number | boolean>;
+    params: Record<string, number | string | boolean>;
   }) => {
     if (!authUser) {
       onTradingLogin();
@@ -2182,7 +2487,7 @@ export function LiveApp() {
         });
         setAlerts((prev) => [...prev, created]);
       } catch {
-        /* ignore — surfaced by the disabled state in a later iteration */
+        /* ignore â€” surfaced by the disabled state in a later iteration */
       }
     })();
   };
@@ -2253,13 +2558,13 @@ export function LiveApp() {
         } else if (!result.report) {
           setAnalystError(
             result.llmEnabled
-              ? "LLM không trả về nhận định."
-              : "LLM đang tắt.",
+              ? "LLM khÃ´ng tráº£ vá» nháº­n Ä‘á»‹nh."
+              : "LLM Ä‘ang táº¯t.",
           );
         }
       } catch (error) {
         setAnalystError(
-          error instanceof Error ? error.message : "Không gọi được AI nhận định.",
+          error instanceof Error ? error.message : "KhÃ´ng gá»i Ä‘Æ°á»£c AI nháº­n Ä‘á»‹nh.",
         );
       } finally {
         setAnalystPending(false);
@@ -2289,7 +2594,7 @@ export function LiveApp() {
         setAnalystError(
           error instanceof Error
             ? error.message
-            : "Không đổi được chế độ tự gửi AI.",
+            : "KhÃ´ng Ä‘á»•i Ä‘Æ°á»£c cháº¿ Ä‘á»™ tá»± gá»­i AI.",
         );
       } finally {
         setAnalystEventAiPending(false);
@@ -2436,7 +2741,7 @@ export function LiveApp() {
   };
 
   const onDrawingsStateChange = (state: DrawingState[]) => {
-    setDrawings(state);
+    setDrawings((previous) => mergeVisibleDrawingState(previous, state, timeframe));
     for (const drawing of state) {
       if (
         drawing.tool === "order_bracket" &&
@@ -2980,12 +3285,30 @@ export function LiveApp() {
     setShowFootprint(Boolean(payload.showFootprint));
     setShowVolume(payload.showVolume !== false);
     setShowVolumeDelta(payload.showVolumeDelta !== false);
-    setShowCvd(payload.showCvd !== false);
+    setShowDailyVolumeProfile(Boolean(payload.showDailyVolumeProfile));
+    setDailyVolumeProfileWidth(
+      normalizeSessionVolumeProfileWidth(payload.dailyVolumeProfileWidth),
+    );
+    setShowDailyVolumeProfileDevelopingPoc(
+      payload.showDailyVolumeProfileDevelopingPoc !== false,
+    );
+    setShowMgannSwing(payload.showMgannSwing === true);
+    setMgannSwing(
+      normalizeMgannSwingSettings({
+        ...(payload.mgannSwing ?? {}),
+        showWaveDelta:
+          payload.mgannSwing?.showWaveDelta ?? (payload.showCvd !== false),
+      }),
+    );
     setShowFvgGrader(payload.showFvgGrader !== false);
     setShowBigTrades(payload.showBigTrades !== false);
     setEma(normalizeEmaSettings(payload.ema));
     setSmc({ ...DEFAULT_SMC_SETTINGS, ...(payload.smc ?? {}) });
-    setOutsideBar(normalizeOutsideBarSettings(payload.outsideBar));
+    setOutsideBar(
+      payload.outsideBar
+        ? normalizeOutsideBarSettings(payload.outsideBar)
+        : { ...DEFAULT_OUTSIDE_BAR_SETTINGS, enabled: true },
+    );
     setFootprintSettings({
       ...DEFAULT_FOOTPRINT_SETTINGS,
       ...(payload.footprintSettings ?? {}),
@@ -3000,12 +3323,12 @@ export function LiveApp() {
     setTimezoneOffsetMinutes(
       normalizeTimezoneOffsetMinutes(payload.timezoneOffsetMinutes),
     );
-    setFixedRangeProfileMode(
-      normalizeFixedRangeProfileMode(payload.fixedRangeProfileMode),
-    );
     const nextDrawings = Array.isArray(payload.drawings)
       ? cloneDrawings(payload.drawings)
       : [];
+    deltaProfileRequestKeysRef.current.clear();
+    deltaProfileFetchKeysRef.current.clear();
+    setFixedRangeDeltaProfiles(new Map());
     setDrawings(nextDrawings);
     setDrawingsLoadKey((key) => key + 1);
     setDrawingCount(nextDrawings.length);
@@ -3277,6 +3600,15 @@ export function LiveApp() {
   const chartSmcAiSignals = hasLoadedCurrentSeries && timeframe === "1m"
     ? smcAiSignals
     : EMPTY_SMC_AI_SIGNALS;
+  const effectiveOutsideBar = useMemo(
+    () => outsideBarSettingsForTimeframe(outsideBar, timeframe),
+    [outsideBar, timeframe],
+  );
+  const visibleDrawings = useMemo(
+    () => visibleDrawingsForTimeframe(drawings, timeframe),
+    [drawings, timeframe],
+  );
+  const visibleDrawingsLoadKey = `${drawingsLoadKey}:${timeframe}`;
   const chartMenuLimitDraft =
     chartMenu === undefined
       ? undefined
@@ -3351,21 +3683,31 @@ export function LiveApp() {
         <IndicatorToggles
           volume={showVolume}
           volumeDelta={showVolumeDelta}
-          cvd={showCvd}
+          mgannSwing={showMgannSwing}
+          mgannSwingSettings={mgannSwing}
           footprint={showFootprint}
           fvgGrader={showFvgGrader}
           bigTrades={showBigTrades && bigTradeOverlayEnabled}
           ema={ema}
           smc={smc}
-          outsideBar={outsideBar}
+          outsideBar={effectiveOutsideBar}
           footprintSettings={footprintSettings}
           bigTradeSettings={bigTradeSettings}
           footprintDisabled={timeframe !== "1m"}
           fvgGraderDisabled={timeframe !== "1m"}
           bigTradeDisabled={!bigTradeOverlayEnabled}
+          dailyVolumeProfile={showDailyVolumeProfile}
+          dailyVolumeProfileWidth={dailyVolumeProfileWidth}
+          dailyVolumeProfileDevelopingPoc={showDailyVolumeProfileDevelopingPoc}
           onVolumeChange={setShowVolume}
+          onDailyVolumeProfileChange={setShowDailyVolumeProfile}
+          onDailyVolumeProfileWidthChange={setDailyVolumeProfileWidth}
+          onDailyVolumeProfileDevelopingPocChange={
+            setShowDailyVolumeProfileDevelopingPoc
+          }
           onVolumeDeltaChange={setShowVolumeDelta}
-          onCvdChange={setShowCvd}
+          onMgannSwingChange={setShowMgannSwing}
+          onMgannSwingSettingsChange={setMgannSwing}
           onFootprintChange={setShowFootprint}
           onFvgGraderChange={setShowFvgGrader}
           onBigTradesChange={setShowBigTrades}
@@ -3408,8 +3750,8 @@ export function LiveApp() {
           <button
             type="button"
             className={`analyst-toolbar-button${analystPanelOpen ? " is-open" : ""}`}
-            title="AI nhận định"
-            aria-label="AI nhận định"
+            title="AI nháº­n Ä‘á»‹nh"
+            aria-label="AI nháº­n Ä‘á»‹nh"
             aria-expanded={analystPanelOpen}
             onClick={onToggleAnalystPanel}
           >
@@ -3464,9 +3806,7 @@ export function LiveApp() {
           className="drawing-toolbar-desktop"
           activeTool={activeTool}
           drawingCount={drawingCount}
-          fixedRangeProfileMode={fixedRangeProfileMode}
           onToolSelect={setActiveTool}
-          onFixedRangeProfileModeChange={setFixedRangeProfileMode}
           onDeleteAll={deleteAllDrawings}
         />
         <div className="chart-stack">
@@ -3484,10 +3824,17 @@ export function LiveApp() {
             orderLines={orderLines}
             ema={ema}
             smc={smc}
-            outsideBar={outsideBar}
+            outsideBar={effectiveOutsideBar}
+            sessionVolumeProfile={showDailyVolumeProfile ? sessionVolumeProfile : null}
+            sessionVolumeProfileWidth={dailyVolumeProfileWidth}
+            sessionVolumeProfileDevelopingPoc={
+              showDailyVolumeProfileDevelopingPoc
+            }
             showVolume={showVolume}
             showVolumeDelta={showVolumeDelta}
-            showCvd={showCvd}
+            showCvd={showMgannWaveDelta}
+            showMgannSwing={showMgannSwing}
+            mgannSwing={mgannSwing}
             showFootprint={showFootprint && timeframe === "1m"}
             showFvgGrader={showFvgGrader && timeframe === "1m"}
             showBigTrades={showBigTrades && bigTradeOverlayEnabled}
@@ -3496,6 +3843,7 @@ export function LiveApp() {
             timezoneOffsetMinutes={timezoneOffsetMinutes}
             socket={socket}
             onRequestAlertAtPrice={onRequestChartMenu}
+            onRealtimeBar={onChartRealtimeBar}
             onAlertDragCommit={onAlertDragCommit}
             onAlertDelete={onDeleteAlert}
             onOrderDragCommit={onOrderDragCommit}
@@ -3507,8 +3855,8 @@ export function LiveApp() {
             fixedRangeProfileMode={fixedRangeProfileMode}
             onToolDeselect={() => setActiveTool(null)}
             onDrawingCountChange={setDrawingCount}
-            drawings={drawings}
-            drawingsLoadKey={drawingsLoadKey}
+            drawings={visibleDrawings}
+            drawingsLoadKey={visibleDrawingsLoadKey}
             onDrawingsChange={onDrawingsStateChange}
             deleteAllSignal={deleteAllSignal}
             removeDrawingIds={removeDrawingIds}
@@ -3530,9 +3878,7 @@ export function LiveApp() {
               className="drawing-toolbar-mobile"
               activeTool={activeTool}
               drawingCount={drawingCount}
-              fixedRangeProfileMode={fixedRangeProfileMode}
               onToolSelect={setActiveTool}
-              onFixedRangeProfileModeChange={setFixedRangeProfileMode}
               onDeleteAll={deleteAllDrawings}
             />
           </ChartContainer>

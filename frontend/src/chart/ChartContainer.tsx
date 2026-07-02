@@ -1,4 +1,4 @@
-// chart module — ChartContainer React component.
+// chart module â€” ChartContainer React component.
 //
 // Hosts the Lightweight Charts instance (candle + volume series) and wires it to
 // the incremental series controller (design.md "Frontend Modules": ChartContainer,
@@ -8,7 +8,7 @@
 //  - `bars` (initial REST history from the HistoryLoader/MemoryCache) is loaded
 //    once via the controller's single bulk `setBars` (Req 11.2 -> 11.3 initial
 //    load). It is re-loaded only when the series identity (symbol/contract/tf)
-//    or the history array itself changes — an allowed full repaint (Req 12.4).
+//    or the history array itself changes â€” an allowed full repaint (Req 12.4).
 //  - realtime `bar_update` messages from the ChartSocket that match this
 //    container's (symbol, contract, tf) are folded through the controller, which
 //    issues an incremental `series.update()` and skips the call entirely when the
@@ -58,6 +58,11 @@ import {
   type BigTradeSettings,
   type FootprintSettings,
 } from "./IndicatorToggles";
+import {
+  DEFAULT_MGANN_SWING_SETTINGS,
+  normalizeMgannSwingSettings,
+  type MgannSwingSettings,
+} from "./mgannSwing";
 import { bigTradeMinVolumeForTime } from "./bigTradeSessions";
 import {
   type FootprintBar,
@@ -79,7 +84,8 @@ import type {
 import { barDurationForTimeframe } from "./barCountdown";
 import { DEFAULT_TIMEZONE_OFFSET_MINUTES } from "./timezone";
 import { displayOffsetForTimeframe } from "./timeframeRange";
-import type { DeltaProfileLoadState } from "../orderflow/deltaProfile";
+import type { DeltaProfileData, DeltaProfileLoadState } from "../orderflow/deltaProfile";
+import { DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX } from "./sessionVolumeProfileSettings";
 
 /**
  * A disposable rendering port. The default factory builds a
@@ -95,6 +101,8 @@ export interface DisposableChartPort extends ChartSeriesPort {
   setVolumeVisible?(visible: boolean): void;
   setVolumeDeltaVisible?(visible: boolean): void;
   setCvdVisible?(visible: boolean): void;
+  setMgannSwingVisible?(visible: boolean): void;
+  setMgannSwingSettings?(settings: MgannSwingSettings): void;
   setVolumeDelta?(points: readonly VolumeDeltaDatum[]): void;
   updateVolumeDelta?(point: VolumeDeltaDatum): void;
   setFvgSignals?(signals: ReadonlyMap<number, FvgSignalUpdateMessage>): void;
@@ -116,6 +124,9 @@ export interface DisposableChartPort extends ChartSeriesPort {
   clearEmaLines?(): void;
   setSmcOverlay?(overlay: SmcOverlay): void;
   setOutsideBar?(settings: OutsideBarSettings): void;
+  setSessionVolumeProfile?(data: import("../orderflow/deltaProfile").DeltaProfileData | null): void;
+  setSessionVolumeProfileWidth?(widthPx: number): void;
+  setSessionVolumeProfileDevelopingPoc?(visible: boolean): void;
   setChartBackgroundColor?(color: string): void;
   createFootprintViewport?(width: number, height: number): FootprintViewport;
   subscribeContextMenu?(
@@ -237,18 +248,28 @@ export interface ChartContainerProps {
   orderControls?: readonly OrderControl[];
   /**
    * EMA overlay config. When `enabled`, an EMA line of `period` (default 200)
-   * is drawn on the candle scale, computed from `bars` (Req 19.3 — explicitly
+   * is drawn on the candle scale, computed from `bars` (Req 19.3 â€” explicitly
    * added overlay). `color` restyles the line.
    */
   ema?: Partial<EmaSettings>;
   /** Show the footprint canvas overlay. Footprint is M1-only. */
   showFootprint?: boolean;
+  /** Session volume profile data for the right-edge histogram. */
+  sessionVolumeProfile?: DeltaProfileData | null;
+  /** Session volume profile histogram width in CSS pixels. */
+  sessionVolumeProfileWidth?: number;
+  /** Show the session developing POC path. */
+  sessionVolumeProfileDevelopingPoc?: boolean;
   /** Show TradingView-style volume histogram at the bottom of the chart. */
   showVolume?: boolean;
   /** Show MyVolumeDelta-style candles at the bottom of the chart. */
   showVolumeDelta?: boolean;
   /** Show current wave delta as a line at the bottom of the chart. */
   showCvd?: boolean;
+  /** Show MGannSwing price swingline/signals. */
+  showMgannSwing?: boolean;
+  /** MGannSwing sub-settings. */
+  mgannSwing?: Partial<MgannSwingSettings>;
   /** Show BigTrade markers on the candle series. */
   showBigTrades?: boolean;
   /** Show FVG Signal Grader candle recoloring. FVG grading is M1-only. */
@@ -292,6 +313,8 @@ export interface ChartContainerProps {
   onAlertDragCommit?: (id: string, price: number) => void;
   /** Fired when the selected alert line is deleted with Delete/Backspace. */
   onAlertDelete?: (id: string) => void;
+  /** Fired after a matching realtime bar update is applied to the chart. */
+  onRealtimeBar?: (bar: Bar) => void;
   /** Fired when an order line is dragged and released. */
   onOrderDragCommit?: (id: string, price: number) => void;
   /** Fired when one selected order group has multiple pending line edits. */
@@ -392,9 +415,14 @@ export function ChartContainer({
   orderControls,
   ema,
   showFootprint = false,
+  sessionVolumeProfile = null,
+  sessionVolumeProfileWidth = DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  sessionVolumeProfileDevelopingPoc = true,
   showVolume = true,
   showVolumeDelta = true,
   showCvd = false,
+  showMgannSwing = false,
+  mgannSwing = DEFAULT_MGANN_SWING_SETTINGS,
   showBigTrades = true,
   showFvgGrader = true,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
@@ -410,13 +438,14 @@ export function ChartContainer({
   onRequestAlertAtPrice,
   onAlertDragCommit,
   onAlertDelete,
+  onRealtimeBar,
   onOrderDragCommit,
   onOrderDragBatchCommit,
   onOrderClose,
   onOrderCancel,
   priceSnap,
   activeTool,
-  fixedRangeProfileMode = "bidAsk",
+  fixedRangeProfileMode = "volume",
   onToolDeselect,
   onDrawingCountChange,
   drawings,
@@ -457,6 +486,8 @@ export function ChartContainer({
     onAlertDelete,
   );
   alertDeleteRef.current = onAlertDelete;
+  const realtimeBarRef = useRef<((bar: Bar) => void) | undefined>(onRealtimeBar);
+  realtimeBarRef.current = onRealtimeBar;
   const orderDragCommitRef = useRef<
     ((id: string, price: number) => void) | undefined
   >(onOrderDragCommit);
@@ -691,6 +722,30 @@ export function ChartContainer({
   }, [showCvd]);
 
   useEffect(() => {
+    portRef.current?.setSessionVolumeProfileWidth?.(sessionVolumeProfileWidth);
+  }, [sessionVolumeProfileWidth]);
+
+  useEffect(() => {
+    portRef.current?.setSessionVolumeProfileDevelopingPoc?.(
+      sessionVolumeProfileDevelopingPoc,
+    );
+  }, [sessionVolumeProfileDevelopingPoc]);
+
+  useEffect(() => {
+    portRef.current?.setSessionVolumeProfile?.(sessionVolumeProfile ?? null);
+  }, [sessionVolumeProfile]);
+
+  useEffect(() => {
+    portRef.current?.setMgannSwingVisible?.(showMgannSwing);
+  }, [showMgannSwing]);
+
+  useEffect(() => {
+    portRef.current?.setMgannSwingSettings?.(
+      normalizeMgannSwingSettings(mgannSwing),
+    );
+  }, [mgannSwing]);
+
+  useEffect(() => {
     portRef.current?.setFvgGraderVisible?.(showFvgGrader);
   }, [showFvgGrader]);
 
@@ -701,7 +756,12 @@ export function ChartContainer({
     }
     portRef.current?.setDisplayTimeOffset?.(displayOffsetForTimeframe(timeframe));
     controller.load(bars ?? []);
+    drawingManagerRef.current?.requestUpdateAll();
     refreshFootprintViewport();
+    const frame = window.requestAnimationFrame(() => {
+      drawingManagerRef.current?.requestUpdateAll();
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [symbol, contract, timeframe, bars]);
 
   // Load or replace the lower volume-delta candle series for this series.
@@ -830,6 +890,7 @@ export function ChartContainer({
         return;
       }
       const outcome = controller.apply(message.bar);
+      realtimeBarRef.current?.(message.bar);
 
       // Only schedule order position refresh when there are active order
       // controls, avoiding needless rAF work on every tick.
@@ -968,8 +1029,13 @@ export function ChartContainer({
     if (!mgr || drawingsLoadKey === undefined) return;
     if (appliedDrawingsLoadKey.current === drawingsLoadKey) return;
     mgr.loadState(drawings ?? []);
+    if (fixedRangeDeltaProfiles) {
+      for (const [id, state] of fixedRangeDeltaProfiles) {
+        mgr.setFixedRangeDeltaProfile(id, state);
+      }
+    }
     appliedDrawingsLoadKey.current = drawingsLoadKey;
-  }, [drawingsLoadKey, drawings]);
+  }, [drawingsLoadKey, drawings, fixedRangeDeltaProfiles]);
 
   // Delete all drawings when the signal increments.
   const prevDeleteSignal = useRef(deleteAllSignal ?? 0);

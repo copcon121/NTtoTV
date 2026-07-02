@@ -49,12 +49,20 @@ from ..models.timestamp import CanonicalTimestamp
 from ..storage.cache_store import CacheStore
 from ..storage.records import AlertEventRecord, AlertRecord
 from .breakout_box_engine import BreakoutBoxEvent
+from .mgann_fvg_retest import (
+    MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
+    MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
+    MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
+    MGANN_FVG_DEFAULT_SWING_SIZE,
+    MGANN_FVG_RETEST_TIMEFRAME,
+    MGANN_FVG_RETEST_TIMEFRAMES,
+    MgannFvgRetestBar,
+    MgannFvgRetestState,
+)
 from .smc_external import (
     SmcBar,
     SmcExternalBreakState,
     SmcStrategyTrigger,
-    SmcZoneTouchState,
-    SmcZoneTouchTrigger,
 )
 
 __all__ = [
@@ -63,15 +71,16 @@ __all__ = [
     "SMC_DEFAULT_LOOKAHEAD_BARS",
     "SMC_DEFAULT_MAX_BARS",
     "SMC_DEFAULT_PAUSE_ON_INSIDE_BARS",
+    "SMC_DEFAULT_RETEST_TOLERANCE_TICKS",
     "SMC_DEFAULT_SWING_LENGTH",
     "SMC_EXTERNAL_BREAK_BIG_TRADE",
-    "SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD",
-    "SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD",
-    "SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK",
-    "SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER",
-    "SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION",
-    "SMC_ZONE_DEFAULT_MAX_ZONE_AGE",
-    "SMC_ZONE_TOUCH_BIG_TRADE",
+    "MGANN_FVG_RETEST",
+    "MGANN_FVG_RETEST_TIMEFRAME",
+    "MGANN_FVG_RETEST_TIMEFRAMES",
+    "MGANN_FVG_DEFAULT_SWING_SIZE",
+    "MGANN_FVG_DEFAULT_MAX_ZONE_AGE",
+    "MGANN_FVG_DEFAULT_MIN_GAP_TICKS",
+    "MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS",
     "Alert",
     "MarketContext",
     "AlertEngine",
@@ -85,19 +94,14 @@ VOLUME_DELTA_THRESHOLD = "volume_delta_threshold"
 BIG_TRADE_THRESHOLD = "big_trade_threshold"
 STACKED_IMBALANCE = "stacked_imbalance"
 SMC_EXTERNAL_BREAK_BIG_TRADE = "smc_external_break_big_trade"
-SMC_ZONE_TOUCH_BIG_TRADE = "smc_zone_touch_big_trade"
 BREAKOUT_FVG_CONFLUENCE = "breakout_fvg_confluence"
+MGANN_FVG_RETEST = "mgann_fvg_retest"
 
 SMC_DEFAULT_SWING_LENGTH = 50
 SMC_DEFAULT_LOOKAHEAD_BARS = 5
 SMC_DEFAULT_MAX_BARS = 20
 SMC_DEFAULT_PAUSE_ON_INSIDE_BARS = True
-SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD = 30
-SMC_ZONE_DEFAULT_MAX_ZONE_AGE = 220
-SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD = True
-SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK = 60
-SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER = 1.5
-SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION = False
+SMC_DEFAULT_RETEST_TOLERANCE_TICKS = 50
 _SMC_WARMUP_MIN_BARS = 300
 
 ALERT_TYPES: frozenset[str] = frozenset(
@@ -109,8 +113,8 @@ ALERT_TYPES: frozenset[str] = frozenset(
         BIG_TRADE_THRESHOLD,
         STACKED_IMBALANCE,
         SMC_EXTERNAL_BREAK_BIG_TRADE,
-        SMC_ZONE_TOUCH_BIG_TRADE,
         BREAKOUT_FVG_CONFLUENCE,
+        MGANN_FVG_RETEST,
     }
 )
 
@@ -174,6 +178,7 @@ class MarketContext:
 
     # bar_closes_* / volume_delta_threshold / stacked_imbalance (closed bar only)
     bar_closed: bool = False
+    bar_tf: str | None = None
     bar_time: CanonicalTimestamp | None = None
     bar_open: float | None = None
     bar_high: float | None = None
@@ -235,7 +240,7 @@ class AlertEngine:
         self._price_state: dict[str, _PriceCrossState] = {}
         self._bar_state: dict[str, _BarState] = {}
         self._smc_state: dict[str, SmcExternalBreakState] = {}
-        self._smc_zone_state: dict[str, SmcZoneTouchState] = {}
+        self._mgann_fvg_state: dict[str, MgannFvgRetestState] = {}
         if store is not None:
             for rec in store.read_alerts(profile_id=None):
                 alert = Alert.from_record(rec)
@@ -253,7 +258,7 @@ class AlertEngine:
         self._price_state.pop(alert.id, None)
         self._bar_state.pop(alert.id, None)
         self._smc_state.pop(alert.id, None)
-        self._smc_zone_state.pop(alert.id, None)
+        self._mgann_fvg_state.pop(alert.id, None)
         if self._store is not None:
             from ..models.timestamp import now_ms
 
@@ -282,7 +287,7 @@ class AlertEngine:
         self._price_state.pop(alert_id, None)
         self._bar_state.pop(alert_id, None)
         self._smc_state.pop(alert_id, None)
-        self._smc_zone_state.pop(alert_id, None)
+        self._mgann_fvg_state.pop(alert_id, None)
         if self._store is not None:
             self._store.delete_alert(alert_id)
 
@@ -294,7 +299,7 @@ class AlertEngine:
         alert.enabled = enabled
         if enabled:
             self._smc_state.pop(alert.id, None)
-            self._smc_zone_state.pop(alert.id, None)
+            self._mgann_fvg_state.pop(alert.id, None)
             self._warm_smc_alert(alert)
         self._persist_enabled(alert)
 
@@ -317,9 +322,14 @@ class AlertEngine:
                 continue
             if alert.symbol != ctx.symbol:
                 continue
-            event = self._evaluate_one(alert, ctx)
-            if event is not None:
-                events.append(event)
+            evaluated = self._evaluate_one(alert, ctx)
+            alert_events = (
+                evaluated
+                if isinstance(evaluated, list)
+                else ([] if evaluated is None else [evaluated])
+            )
+            if alert_events:
+                events.extend(alert_events)
                 if not _is_repeat_alert(alert):
                     one_shot_fired_alerts.append(alert)
 
@@ -344,7 +354,9 @@ class AlertEngine:
                 self._persist_enabled(alert)
         return events
 
-    def _evaluate_one(self, alert: Alert, ctx: MarketContext) -> AlertEvent | None:
+    def _evaluate_one(
+        self, alert: Alert, ctx: MarketContext
+    ) -> AlertEvent | list[AlertEvent] | None:
         if alert.type == PRICE_CROSSES_LEVEL:
             return self._eval_price_crosses(alert, ctx)
         if alert.type in (BAR_CLOSES_ABOVE, BAR_CLOSES_BELOW):
@@ -357,10 +369,10 @@ class AlertEngine:
             return self._eval_stacked_imbalance(alert, ctx)
         if alert.type == SMC_EXTERNAL_BREAK_BIG_TRADE:
             return self._eval_smc_external_break_big_trade(alert, ctx)
-        if alert.type == SMC_ZONE_TOUCH_BIG_TRADE:
-            return self._eval_smc_zone_touch_big_trade(alert, ctx)
         if alert.type == BREAKOUT_FVG_CONFLUENCE:
             return self._eval_breakout_fvg_confluence(alert, ctx)
+        if alert.type == MGANN_FVG_RETEST:
+            return self._eval_mgann_fvg_retest(alert, ctx)
         return None
 
     # -- price_crosses_level (Req 16.6, 17.5, 17.7) ---------------------------
@@ -391,6 +403,8 @@ class AlertEngine:
     # -- bar_closes_above / bar_closes_below (Req 16.7, 17.6, 17.8) -----------
 
     def _eval_bar_closes(self, alert: Alert, ctx: MarketContext) -> AlertEvent | None:
+        if ctx.bar_tf not in (None, "1m"):
+            return None
         if not ctx.bar_closed or ctx.bar_close is None or ctx.bar_time is None:
             return None  # only closed bars are evaluated (Req 16.7)
         level = float(alert.params["level"])
@@ -406,6 +420,8 @@ class AlertEngine:
     # -- volume_delta_threshold ----------------------------------------------
 
     def _eval_volume_delta(self, alert: Alert, ctx: MarketContext) -> AlertEvent | None:
+        if ctx.bar_tf not in (None, "1m"):
+            return None
         if not ctx.bar_closed or ctx.bar_volume_delta is None or ctx.bar_time is None:
             return None
         threshold = float(alert.params["threshold"])
@@ -421,6 +437,8 @@ class AlertEngine:
     def _eval_stacked_imbalance(
         self, alert: Alert, ctx: MarketContext
     ) -> AlertEvent | None:
+        if ctx.bar_tf not in (None, "1m"):
+            return None
         if not ctx.bar_closed or ctx.bar_stacked_imbalance is None or ctx.bar_time is None:
             return None
         condition = bool(ctx.bar_stacked_imbalance)
@@ -455,6 +473,8 @@ class AlertEngine:
         trigger: SmcStrategyTrigger | None = None
 
         if ctx.bar_closed:
+            if ctx.bar_tf not in (None, "1m"):
+                return None
             bar = self._smc_bar_from_context(ctx)
             if bar is not None:
                 trigger = state.on_closed_bar(bar)
@@ -476,40 +496,13 @@ class AlertEngine:
             return None
         return self._make_smc_event(alert, ctx, trigger)
 
-    # -- smc_zone_touch_big_trade --------------------------------------------
-
-    def _eval_smc_zone_touch_big_trade(
-        self, alert: Alert, ctx: MarketContext
-    ) -> AlertEvent | None:
-        state = self._smc_zone_state_for(alert)
-
-        if ctx.bar_closed:
-            bar = self._smc_bar_from_context(ctx)
-            if bar is not None:
-                state.on_closed_bar(bar)
-
-        if ctx.big_trade_volume is None:
-            return None
-        price = (
-            float(ctx.big_trade_price)
-            if ctx.big_trade_price is not None
-            else 0.0
-        )
-        trigger = state.on_big_trade(
-            time=ctx.time,
-            price=price,
-            volume=int(ctx.big_trade_volume),
-            threshold=self._smc_zone_big_trade_threshold(alert),
-        )
-        if trigger is None:
-            return None
-        return self._make_smc_zone_event(alert, ctx, trigger)
-
     # -- breakout_fvg_confluence -----------------------------------------------
 
     def _eval_breakout_fvg_confluence(
         self, alert: Alert, ctx: MarketContext
     ) -> AlertEvent | None:
+        if ctx.bar_tf not in (None, "1m"):
+            return None
         if not ctx.bar_closed or ctx.bar_time is None or ctx.bar_close is None:
             return None
         breakout_events = ctx.breakout_events
@@ -560,6 +553,61 @@ class AlertEngine:
         except (TypeError, ValueError):
             return 3
         return max(1, min(5, val))
+
+    # -- mgann_fvg_retest -----------------------------------------------------
+
+    def _eval_mgann_fvg_retest(
+        self, alert: Alert, ctx: MarketContext
+    ) -> list[AlertEvent]:
+        timeframe = self._mgann_fvg_timeframe(alert)
+        if ctx.bar_tf != timeframe:
+            return []
+        if (
+            not ctx.bar_closed
+            or ctx.bar_time is None
+            or ctx.bar_open is None
+            or ctx.bar_high is None
+            or ctx.bar_low is None
+            or ctx.bar_close is None
+        ):
+            return []
+
+        state = self._mgann_fvg_state_for(alert)
+        triggers = state.on_closed_bar(
+            MgannFvgRetestBar(
+                time=ctx.bar_time,
+                open=float(ctx.bar_open),
+                high=float(ctx.bar_high),
+                low=float(ctx.bar_low),
+                close=float(ctx.bar_close),
+                volume=int(ctx.bar_volume or 0),
+            )
+        )
+        events: list[AlertEvent] = []
+        for trigger in triggers:
+            direction = "bullish" if trigger.direction == 1 else "bearish"
+            tf_label = _timeframe_label(timeframe)
+            message = (
+                f"{alert.symbol} {tf_label} {direction} FVG retest by mGann wave "
+                f"@ {trigger.price:g} zone "
+                f"{trigger.zone_bottom:g}-{trigger.zone_top:g} "
+                f"(wave {trigger.fvg_wave_index + 1} -> "
+                f"{trigger.retest_wave_index + 1})"
+            )
+            events.append(
+                AlertEvent(
+                    alert_id=alert.id,
+                    alert_type=alert.type,
+                    symbol=ctx.symbol,
+                    contract=ctx.contract,
+                    time=ctx.time,
+                    price=trigger.price,
+                    message=message,
+                    level=(trigger.zone_top + trigger.zone_bottom) / 2,
+                    profile_id=alert.profile_id,
+                )
+            )
+        return events
 
     # -- per-closed-bar fire-once + re-arm gate (Req 17.6, 17.8) --------------
 
@@ -628,23 +676,6 @@ class AlertEngine:
             profile_id=alert.profile_id,
         )
 
-    def _make_smc_zone_event(
-        self,
-        alert: Alert,
-        ctx: MarketContext,
-        trigger: SmcZoneTouchTrigger,
-    ) -> AlertEvent:
-        return AlertEvent(
-            alert_id=alert.id,
-            alert_type=alert.type,
-            symbol=ctx.symbol,
-            contract=ctx.contract,
-            time=trigger.time,
-            price=trigger.price,
-            message=self._smc_zone_message(alert, trigger),
-            level=(trigger.zone.top + trigger.zone.bottom) / 2.0,
-            profile_id=alert.profile_id,
-        )
 
     def _smc_state_for(self, alert: Alert) -> SmcExternalBreakState:
         state = self._smc_state.get(alert.id)
@@ -653,26 +684,26 @@ class AlertEngine:
             self._smc_state[alert.id] = state
         return state
 
-    def _smc_zone_state_for(self, alert: Alert) -> SmcZoneTouchState:
-        state = self._smc_zone_state.get(alert.id)
+
+    def _mgann_fvg_state_for(self, alert: Alert) -> MgannFvgRetestState:
+        state = self._mgann_fvg_state.get(alert.id)
         if state is None:
-            state = self._new_smc_zone_state(alert)
-            self._smc_zone_state[alert.id] = state
+            state = self._new_mgann_fvg_state(alert)
+            self._mgann_fvg_state[alert.id] = state
         return state
 
     def _warm_smc_alert(self, alert: Alert) -> None:
-        if alert.type not in (SMC_EXTERNAL_BREAK_BIG_TRADE, SMC_ZONE_TOUCH_BIG_TRADE):
+        if alert.type == MGANN_FVG_RETEST:
+            self._warm_mgann_fvg_alert(alert)
+            return
+        if alert.type != SMC_EXTERNAL_BREAK_BIG_TRADE:
             return
         break_state = (
             self._new_smc_state(alert)
             if alert.type == SMC_EXTERNAL_BREAK_BIG_TRADE
             else None
         )
-        zone_state = (
-            self._new_smc_zone_state(alert)
-            if alert.type == SMC_ZONE_TOUCH_BIG_TRADE
-            else None
-        )
+
         if self._store is not None:
             limit = max(
                 _SMC_WARMUP_MIN_BARS,
@@ -698,12 +729,33 @@ class AlertEngine:
                 )
                 if break_state is not None:
                     break_state.on_closed_bar(bar)
-                if zone_state is not None:
-                    zone_state.on_closed_bar(bar)
+
         if break_state is not None:
             self._smc_state[alert.id] = break_state
-        if zone_state is not None:
-            self._smc_zone_state[alert.id] = zone_state
+
+
+    def _warm_mgann_fvg_alert(self, alert: Alert) -> None:
+        state = self._new_mgann_fvg_state(alert)
+        if self._store is not None:
+            for rec in self._store.read_bars(
+                alert.symbol,
+                alert.symbol,
+                self._mgann_fvg_timeframe(alert),
+                limit=self._mgann_fvg_warmup_bars(alert),
+            ):
+                if not rec.closed:
+                    continue
+                state.on_closed_bar(
+                    MgannFvgRetestBar(
+                        time=rec.time,
+                        open=rec.open,
+                        high=rec.high,
+                        low=rec.low,
+                        close=rec.close,
+                        volume=rec.volume,
+                    )
+                )
+        self._mgann_fvg_state[alert.id] = state
 
     def _new_smc_state(self, alert: Alert) -> SmcExternalBreakState:
         return SmcExternalBreakState(
@@ -711,16 +763,16 @@ class AlertEngine:
             lookahead_bars=self._smc_lookahead_bars(alert),
             max_bars=self._smc_max_bars(alert),
             pause_on_inside_bars=self._smc_pause_on_inside_bars(alert),
+            retest_tolerance_ticks=self._smc_retest_tolerance_ticks(alert),
         )
 
-    def _new_smc_zone_state(self, alert: Alert) -> SmcZoneTouchState:
-        return SmcZoneTouchState(
-            swing_length=self._smc_swing_length(alert),
-            max_zone_age=self._smc_zone_max_zone_age(alert),
-            fvg_auto_threshold=self._smc_zone_fvg_auto_threshold(alert),
-            fvg_threshold_lookback=self._smc_zone_fvg_threshold_lookback(alert),
-            fvg_threshold_multiplier=self._smc_zone_fvg_threshold_multiplier(alert),
-            fvg_volume_confirmation=self._smc_zone_fvg_volume_confirmation(alert),
+
+    def _new_mgann_fvg_state(self, alert: Alert) -> MgannFvgRetestState:
+        return MgannFvgRetestState(
+            swing_size=self._mgann_fvg_swing_size(alert),
+            max_zone_age=self._mgann_fvg_max_zone_age(alert),
+            min_gap_ticks=self._mgann_fvg_min_gap_ticks(alert),
+            retest_tolerance_ticks=self._mgann_fvg_retest_tolerance_ticks(alert),
         )
 
     @staticmethod
@@ -739,8 +791,7 @@ class AlertEngine:
         )
 
     def _smc_warmup_extra_bars(self, alert: Alert) -> int:
-        if alert.type == SMC_ZONE_TOUCH_BIG_TRADE:
-            return self._smc_zone_max_zone_age(alert)
+
         return self._smc_lookahead_bars(alert) + self._smc_max_bars(alert)
 
     @staticmethod
@@ -776,6 +827,13 @@ class AlertEngine:
         return raw if isinstance(raw, bool) else SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
 
     @staticmethod
+    def _smc_retest_tolerance_ticks(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get("retestToleranceTicks"),
+            SMC_DEFAULT_RETEST_TOLERANCE_TICKS,
+        )
+
+    @staticmethod
     def _smc_big_trade_threshold(alert: Alert) -> float:
         raw = alert.params.get("bigTradeThreshold", 50)
         if isinstance(raw, bool):
@@ -786,71 +844,50 @@ class AlertEngine:
             return 50.0
         return threshold if threshold > 0 else 50.0
 
-    @staticmethod
-    def _smc_zone_big_trade_threshold(alert: Alert) -> float:
-        raw = alert.params.get(
-            "bigTradeThreshold",
-            SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD,
-        )
-        if isinstance(raw, bool):
-            return float(SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD)
-        try:
-            threshold = float(raw)
-        except (TypeError, ValueError):
-            return float(SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD)
-        return (
-            threshold
-            if threshold > 0
-            else float(SMC_ZONE_DEFAULT_BIG_TRADE_THRESHOLD)
+
+    def _mgann_fvg_warmup_bars(self, alert: Alert) -> int:
+        max_zone_age = self._mgann_fvg_max_zone_age(alert)
+        if max_zone_age <= 0:
+            return max(2_000, self._mgann_fvg_swing_size(alert) * 8 + 40)
+        return max(
+            max_zone_age + 80,
+            self._mgann_fvg_swing_size(alert) * 8 + 40,
         )
 
     @staticmethod
-    def _smc_zone_max_zone_age(alert: Alert) -> int:
+    def _mgann_fvg_swing_size(alert: Alert) -> int:
         return _positive_int_param(
+            alert.params.get("swingSize"),
+            MGANN_FVG_DEFAULT_SWING_SIZE,
+        )
+
+    @staticmethod
+    def _mgann_fvg_max_zone_age(alert: Alert) -> int:
+        return _nonnegative_int_param(
             alert.params.get("maxZoneAge"),
-            SMC_ZONE_DEFAULT_MAX_ZONE_AGE,
+            MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
         )
 
     @staticmethod
-    def _smc_zone_fvg_auto_threshold(alert: Alert) -> bool:
-        raw = alert.params.get(
-            "fvgAutoThreshold",
-            SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD,
-        )
-        return raw if isinstance(raw, bool) else SMC_ZONE_DEFAULT_FVG_AUTO_THRESHOLD
-
-    @staticmethod
-    def _smc_zone_fvg_threshold_lookback(alert: Alert) -> int:
-        return _positive_int_param(
-            alert.params.get("fvgThresholdLookback"),
-            SMC_ZONE_DEFAULT_FVG_THRESHOLD_LOOKBACK,
+    def _mgann_fvg_min_gap_ticks(alert: Alert) -> int:
+        return _nonnegative_int_param(
+            alert.params.get("minGapTicks"),
+            MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
         )
 
     @staticmethod
-    def _smc_zone_fvg_threshold_multiplier(alert: Alert) -> float:
-        raw = alert.params.get(
-            "fvgThresholdMultiplier",
-            SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER,
+    def _mgann_fvg_retest_tolerance_ticks(alert: Alert) -> int:
+        return _nonnegative_int_param(
+            alert.params.get("retestToleranceTicks"),
+            MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
         )
-        if isinstance(raw, bool):
-            return SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER
-        try:
-            multiplier = float(raw)
-        except (TypeError, ValueError):
-            return SMC_ZONE_DEFAULT_FVG_THRESHOLD_MULTIPLIER
-        return max(0.0, min(10.0, multiplier))
 
     @staticmethod
-    def _smc_zone_fvg_volume_confirmation(alert: Alert) -> bool:
-        raw = alert.params.get(
-            "fvgVolumeConfirmation",
-            SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION,
-        )
-        return (
-            raw
-            if isinstance(raw, bool)
-            else SMC_ZONE_DEFAULT_FVG_VOLUME_CONFIRMATION
-        )
+    def _mgann_fvg_timeframe(alert: Alert) -> str:
+        raw = alert.params.get("timeframe", MGANN_FVG_RETEST_TIMEFRAME)
+        if isinstance(raw, str) and raw in MGANN_FVG_RETEST_TIMEFRAMES:
+            return raw
+        return MGANN_FVG_RETEST_TIMEFRAME
 
     def _persist_enabled(self, alert: Alert) -> None:
         if self._store is None:
@@ -894,19 +931,6 @@ class AlertEngine:
             f"big trade {volume} > {threshold} at level {level}"
         )
 
-    @staticmethod
-    def _smc_zone_message(alert: Alert, trigger: SmcZoneTouchTrigger) -> str:
-        direction = "bullish" if trigger.zone.direction == 1 else "bearish"
-        threshold = _fmt_num(AlertEngine._smc_zone_big_trade_threshold(alert))
-        volume = _fmt_num(trigger.big_trade_volume)
-        price = _fmt_num(trigger.price)
-        top = _fmt_num(trigger.zone.top)
-        bottom = _fmt_num(trigger.zone.bottom)
-        return (
-            f"{alert.symbol} M1 external {direction} {trigger.zone.label} "
-            f"touch {price} with big trade {volume} > {threshold} "
-            f"inside {bottom}-{top}"
-        )
 
 
 def _positive_int_param(value: Any, default: int) -> int:
@@ -919,7 +943,21 @@ def _positive_int_param(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _nonnegative_int_param(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
 def _fmt_num(value: int | float | None) -> str:
     if value is None:
         return "unknown"
     return f"{float(value):g}"
+
+def _timeframe_label(timeframe: str) -> str:
+    if timeframe.endswith("m"):
+        return f"M{timeframe[:-1]}"
+    return timeframe.upper()

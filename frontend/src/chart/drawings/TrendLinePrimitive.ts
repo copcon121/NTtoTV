@@ -35,6 +35,7 @@ interface ViewPoint {
 interface TrendLineRenderOptions {
   lineColor: string;
   width: number;
+  lineStyle: "solid" | "dashed";
   showLabels: boolean;
   labelBackgroundColor: string;
   labelTextColor: string;
@@ -43,6 +44,7 @@ interface TrendLineRenderOptions {
 const DEFAULT_OPTIONS: TrendLineRenderOptions = {
   lineColor: "#2962ff",
   width: 2,
+  lineStyle: "solid",
   showLabels: true,
   labelBackgroundColor: "rgba(16, 16, 16, 0.88)",
   labelTextColor: "#d8d8d8",
@@ -53,6 +55,7 @@ function toRenderOptions(options?: DrawingOptions): TrendLineRenderOptions {
     ...DEFAULT_OPTIONS,
     lineColor: options?.lineColor ?? DEFAULT_OPTIONS.lineColor,
     width: options?.lineWidth ?? DEFAULT_OPTIONS.width,
+    lineStyle: options?.lineStyle ?? DEFAULT_OPTIONS.lineStyle,
     showLabels: options?.showLabels ?? DEFAULT_OPTIONS.showLabels,
   };
 }
@@ -86,6 +89,11 @@ class TrendLineRenderer implements IPrimitivePaneRenderer {
       ctx.save();
       ctx.lineWidth = Math.max(1, this.options.width * scope.horizontalPixelRatio);
       ctx.strokeStyle = this.options.lineColor;
+      ctx.setLineDash(
+        this.options.lineStyle === "dashed"
+          ? [8 * scope.horizontalPixelRatio, 6 * scope.horizontalPixelRatio]
+          : [],
+      );
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
@@ -179,11 +187,12 @@ class TrendLinePaneView implements IPrimitivePaneView {
 
 export class TrendLinePrimitive implements ISeriesPrimitive<Time>, IDrawing {
   readonly tool = "trendline" as const;
-  readonly renderOptions: TrendLineRenderOptions;
+  renderOptions: TrendLineRenderOptions;
   private anchorsInternal: AnchorPoint[];
   private readonly paneView: TrendLinePaneView;
   private requestUpdateFn?: () => void;
   private selectedInternal = false;
+  private optionsInternal: DrawingOptions;
 
   chart: IChartApiBase<Time> | undefined;
   series: ISeriesApi<"Candlestick", Time> | undefined;
@@ -191,10 +200,11 @@ export class TrendLinePrimitive implements ISeriesPrimitive<Time>, IDrawing {
   constructor(
     readonly id: string,
     anchors: AnchorPoint[],
-    private readonly options?: DrawingOptions,
+    options?: DrawingOptions,
   ) {
     this.anchorsInternal = [...anchors];
-    this.renderOptions = toRenderOptions(options);
+    this.optionsInternal = { ...options };
+    this.renderOptions = toRenderOptions(this.optionsInternal);
     this.paneView = new TrendLinePaneView(this);
   }
 
@@ -217,12 +227,18 @@ export class TrendLinePrimitive implements ISeriesPrimitive<Time>, IDrawing {
     this.requestUpdate();
   }
 
+  setOptions(options: DrawingOptions): void {
+    this.optionsInternal = { ...this.optionsInternal, ...options };
+    this.renderOptions = toRenderOptions(this.optionsInternal);
+    this.requestUpdate();
+  }
+
   toState(): DrawingState {
     return {
       id: this.id,
       tool: this.tool,
       anchors: [...this.anchorsInternal],
-      options: this.options,
+      options: this.optionsInternal,
     };
   }
 

@@ -151,6 +151,10 @@ Networking rule:
 - `tests/NtAddOn.Tests/`: xUnit + FsCheck tests.
 - `ninjascript/GcChartBridgeAddOn.cs`: self-contained NinjaScript AddOn used
   for deployment by copying into NinjaTrader custom AddOns.
+- `ninjascript/NTtoTVNativeDiagnostics.cs`: chart-side native bridge/diagnostic
+  indicator. It uses chart OHLCV plus NT Volumetric data and posts finalized
+  1m bars to `POST /api/nt/native-bar` for authoritative volume delta and
+  footprint cache.
 - `ninjascript/gc-chart-bridge.json`: matching config, currently pins
   `GC 08-26`.
 
@@ -171,6 +175,20 @@ Current NinjaScript behavior:
   first candidate).
 - Backend also sends control-plane subscribe/unsubscribe commands on `/ws/nt`
   connect to keep stale multi-contract subscriptions from merging into chart.
+- The AddOn tick stream remains the realtime source for raw ticks and BigTrade.
+- The native chart indicator is the source of truth for finalized 1m OHLCV,
+  volume delta, and footprint ladder. Default bridge behavior posts only
+  realtime closed bars, not historical reloads, to avoid a large startup burst.
+- FVG Signal Grader candle colors are also driven from the native finalized
+  footprint path. The live AddOn tick pipeline does not emit FVG grader updates
+  in production runtime, preventing old bid/ask-snapshot FVG signals from
+  racing the native source. The tick FVG engine may still run internally for
+  existing breakout/FVG confluence alert context, but it does not write the
+  chart color cache.
+- Expected native-bridge latency is one finalized-bar update per minute:
+  localhost HTTP + SQLite upsert + websocket broadcast after NT closes the bar.
+  This keeps footprint/delta stable and avoids backend bid/ask snapshot
+  misclassification, but footprint/delta are not tick-by-tick realtime.
 
 ## Commands
 
@@ -206,7 +224,7 @@ Get-NetTCPConnection -LocalPort 8000,80,443 -ErrorAction SilentlyContinue |
 Get-CimInstance Win32_Process |
     Where-Object {
         $_.CommandLine -match 'caddy\.exe' -or
-        ($_.CommandLine -match 'uvicorn' -and $_.CommandLine -match 'app\.app:app')
+        ($_.Name -eq 'python.exe' -and $_.CommandLine -match 'uvicorn' -and $_.CommandLine -match 'app\.app:app')
     } |
     Select-Object ProcessId,Name,CommandLine
 ```
@@ -214,32 +232,26 @@ Get-CimInstance Win32_Process |
 Backend detached restart, so closing IDE/terminal does not stop it:
 
 ```powershell
-$root = "C:\Users\Administrator\Desktop\NTtoTV"
-$backendDir = Join-Path $root "backend"
-$logDir = Join-Path $root "_run_logs\backend"
-New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-
-$oldBackend = Get-CimInstance Win32_Process |
-    Where-Object {
-        $_.CommandLine -match 'uvicorn' -and
-        $_.CommandLine -match 'app\.app:app' -and
-        $_.CommandLine -match '--port 8000'
-    }
-if ($oldBackend) {
-    $oldBackend | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-    Start-Sleep -Seconds 2
-}
-
-Start-Process `
-    -FilePath (Join-Path $backendDir ".venv\Scripts\python.exe") `
-    -WorkingDirectory $backendDir `
-    -ArgumentList "-m uvicorn app.app:app --host 0.0.0.0 --port 8000" `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput (Join-Path $logDir "backend.stdout.log") `
-    -RedirectStandardError (Join-Path $logDir "backend.stderr.log")
-
-Invoke-RestMethod -Uri http://127.0.0.1:8000/api/health -TimeoutSec 10
+cd C:\Users\Administrator\Desktop\NTtoTV
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Restart-Backend.ps1
 ```
+
+Backend runtime scripts:
+
+- `scripts\Start-Backend.ps1`: starts backend only if `/api/health` is not OK.
+- `scripts\Start-Backend.ps1 -Force`: stops existing backend runtime and starts
+  a clean detached backend.
+- `scripts\Stop-Backend.ps1`: stops uvicorn plus child MT5 worker processes.
+- `scripts\Restart-Backend.ps1`: the standard restart command for agents.
+- `scripts\Show-RuntimeLoad.ps1`: shows backend/frontend/IDE/NT runtime load.
+- `scripts\Stop-FrontendDev.ps1`: stops local Vite dev server on `5173` when
+  public Caddy/dist is being used.
+
+Important: do not hand-roll backend restart with a broad
+`Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'uvicorn' }`
+pipeline. That pattern can match the PowerShell command doing the restart and
+kill itself mid-run. Use the runtime scripts above; they filter by process name,
+port, parent/child process tree, and health-check the result.
 
 Public frontend/Caddy restart:
 
@@ -269,11 +281,24 @@ Operational notes:
 - `frontend/dist` is what Caddy serves on `https://gcflowpy.xyz/`; `npm run dev`
   is only for local development.
 - `backend\start_backend.cmd` is useful for a visible console session, but for
-  production-like runtime prefer the detached `Start-Process` flow above.
+  production-like runtime prefer `scripts\Restart-Backend.ps1`.
 - Backend detached logs go to `_run_logs\backend\backend.stdout.log` and
-  `_run_logs\backend\backend.stderr.log`; Caddy logs go to `_run_logs\caddy\`.
+  `_run_logs\backend\backend.stderr.log`; runtime state goes to
+  `_run_logs\backend\backend-runtime.json`; Caddy logs go to `_run_logs\caddy\`.
 - Do not restart Caddy when only backend is down; Caddy proxies to backend on
   loopback and can keep serving the already-built frontend.
+- Backend runtime must inherit live MT5 env:
+  `NTTOTV_MT5_BACKEND=real`, `NTTOTV_TRADING_ENABLED=1`,
+  `NTTOTV_LIVE_TRADING_ENABLED=1`, `NTTOTV_INVITE_CODE=join-9999`.
+  `scripts\Run-BackendProcess.ps1` sets these values before launching uvicorn.
+- If the machine feels heavy, first run `scripts\Show-RuntimeLoad.ps1`. If port
+  `5173` is listening and public `https://gcflowpy.xyz/` is in use, run
+  `scripts\Stop-FrontendDev.ps1` to stop Vite/node/esbuild. Do not kill
+  NinjaTrader, active MT5 terminals, Caddy, backend, or Antigravity IDE unless
+  the user explicitly asks.
+- Current expected public runtime listeners are Caddy on `80/443` and backend
+  on `8000`. Vite `5173` should normally be stopped unless doing local frontend
+  development.
 
 Frontend run:
 
@@ -376,7 +401,8 @@ Reset market data:
 
 This runs `scripts/Reset-MarketData.ps1 -StopBackend -RestartBackend`, backs up
 `backend/data` into `_data_backups` by default, recreates clean data, then
-restarts backend. Treat as destructive and only run when requested.
+restarts backend through `scripts\Start-Backend.ps1` / the shared backend runtime
+helper. Treat as destructive and only run when requested.
 
 ## Testing Conventions
 

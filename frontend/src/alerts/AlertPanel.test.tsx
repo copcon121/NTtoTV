@@ -40,17 +40,15 @@ const alerts: Alert[] = [
     enabled: true,
   },
   {
-    id: "a_4",
+    id: "a_5",
     symbol: "GC",
-    type: "smc_zone_touch_big_trade",
+    type: "mgann_fvg_retest",
     params: {
-      bigTradeThreshold: 30,
-      swingLength: 50,
-      maxZoneAge: 500,
-      fvgAutoThreshold: true,
-      fvgThresholdLookback: 60,
-      fvgThresholdMultiplier: 1.5,
-      fvgVolumeConfirmation: false,
+      timeframe: "5m",
+      swingSize: 2,
+      maxZoneAge: 0,
+      minGapTicks: 1,
+      retestToleranceTicks: 0,
       repeat: true,
     },
     enabled: true,
@@ -80,8 +78,8 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(screen.getByTestId("alert-a_3")).toHaveTextContent(
       "External BOS/CHoCH, BT > 50 (repeat)",
     );
-    expect(screen.getByTestId("alert-a_4")).toHaveTextContent(
-      "M1 external OB/FVG touch, BT > 30 (repeat)",
+    expect(screen.getByTestId("alert-a_5")).toHaveTextContent(
+      "M5 FVG retest by mGann wave (repeat)",
     );
     expect(screen.getByLabelText("Enable a_1")).toBeChecked();
     expect(screen.getByLabelText("Enable a_2")).not.toBeChecked();
@@ -174,36 +172,31 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
         effectiveLookaheadBars: 5,
         maxBars: 20,
         pauseOnInsideBars: true,
+        retestToleranceTicks: 50,
         repeat: false,
       },
     });
   });
 
-  it("raises onCreate with M1 OB/FVG zone touch params", () => {
+  it("raises onCreate with selected mGann FVG retest timeframe", () => {
     const onCreate = vi.fn();
     render(<AlertPanel alerts={alerts} onCreate={onCreate} />);
     fireEvent.change(screen.getByLabelText("Alert type"), {
-      target: { value: "smc_zone_touch_big_trade" },
+      target: { value: "mgann_fvg_retest" },
     });
 
-    expect(screen.getByLabelText("BigTrade threshold")).toHaveValue(30);
+    expect(screen.getByLabelText("mGann FVG timeframe")).toHaveValue("5m");
     expect(screen.getByLabelText("Repeat alert")).toBeChecked();
 
-    fireEvent.change(screen.getByLabelText("BigTrade threshold"), {
-      target: { value: "35" },
+    fireEvent.change(screen.getByLabelText("mGann FVG timeframe"), {
+      target: { value: "1m" },
     });
     fireEvent.click(screen.getByText("Add"));
 
     expect(onCreate).toHaveBeenCalledWith({
-      type: "smc_zone_touch_big_trade",
+      type: "mgann_fvg_retest",
       params: {
-        bigTradeThreshold: 35,
-        swingLength: 50,
-        maxZoneAge: 500,
-        fvgAutoThreshold: true,
-        fvgThresholdLookback: 60,
-        fvgThresholdMultiplier: 1.5,
-        fvgVolumeConfirmation: false,
+        timeframe: "1m",
         repeat: true,
       },
     });

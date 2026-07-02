@@ -8,6 +8,7 @@ import {
   DEFAULT_EMA_SETTINGS,
   DEFAULT_FOOTPRINT_SETTINGS,
 } from "./IndicatorToggles";
+import { DEFAULT_MGANN_SWING_SETTINGS } from "./mgannSwing";
 import { DEFAULT_OUTSIDE_BAR_SETTINGS } from "./outsideBar";
 import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./smc";
 
@@ -26,7 +27,7 @@ describe("IndicatorToggles", () => {
   it("opens the dropdown and toggles each indicator", () => {
     const onVolume = vi.fn();
     const onVolumeDelta = vi.fn();
-    const onCvd = vi.fn();
+    const onMgannSwing = vi.fn();
     const onFootprint = vi.fn();
     const onFvgGrader = vi.fn();
     const onBigTrades = vi.fn();
@@ -41,7 +42,7 @@ describe("IndicatorToggles", () => {
         smc={SMC}
         onVolumeChange={onVolume}
         onVolumeDeltaChange={onVolumeDelta}
-        onCvdChange={onCvd}
+        onMgannSwingChange={onMgannSwing}
         onFootprintChange={onFootprint}
         onFvgGraderChange={onFvgGrader}
         onBigTradesChange={onBigTrades}
@@ -58,7 +59,8 @@ describe("IndicatorToggles", () => {
     open();
     fireEvent.click(screen.getByLabelText("Volume"));
     fireEvent.click(screen.getByLabelText("Volume Delta"));
-    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB"));
+    fireEvent.click(screen.getByLabelText("MGannSwing"));
+    fireEvent.click(screen.getByLabelText("EMA/OSB"));
     fireEvent.click(screen.getByLabelText("SMC"));
     fireEvent.click(screen.getByLabelText("Footprint"));
     fireEvent.click(screen.getByLabelText("FVG Grader"));
@@ -66,16 +68,144 @@ describe("IndicatorToggles", () => {
 
     expect(onVolume).toHaveBeenCalledWith(true);
     expect(onVolumeDelta).toHaveBeenCalledWith(true);
-    expect(onCvd).toHaveBeenCalledWith(true);
-    expect(onEma).toHaveBeenCalledWith({ ...EMA, enabled: true });
+    expect(onMgannSwing).toHaveBeenCalledWith(true);
+    expect(onEma).toHaveBeenCalledWith({
+      ...EMA,
+      enabled: false,
+      showEma200: false,
+    });
     expect(onOutsideBar).toHaveBeenCalledWith({
       ...DEFAULT_OUTSIDE_BAR_SETTINGS,
-      enabled: true,
+      enabled: false,
     });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, enabled: true });
     expect(onFootprint).toHaveBeenCalledWith(true);
     expect(onFvgGrader).toHaveBeenCalledWith(true);
     expect(onBigTrades).toHaveBeenCalledWith(false);
+  });
+
+  it("shows MGannSwing as a standalone indicator with its own settings", () => {
+    const onMgannSwing = vi.fn();
+    const onMgannSwingSettings = vi.fn();
+    render(
+      <IndicatorToggles
+        mgannSwing={false}
+        mgannSwingSettings={DEFAULT_MGANN_SWING_SETTINGS}
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        onMgannSwingChange={onMgannSwing}
+        onMgannSwingSettingsChange={onMgannSwingSettings}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    expect(screen.getByLabelText("MGannSwing")).toBeInTheDocument();
+    expect(screen.getByLabelText("EMA/OSB")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("MGannSwing"));
+    fireEvent.click(screen.getByLabelText("MGannSwing settings"));
+    fireEvent.click(screen.getByLabelText("MGannSwing Wave Delta"));
+    fireEvent.click(screen.getByLabelText("MGannSwing Wave Delta Numbers"));
+    fireEvent.click(
+      screen.getByLabelText("MGannSwing Wave Delta Numbers Impulse Only"),
+    );
+    fireEvent.click(screen.getByLabelText("MGannSwing Signals"));
+    fireEvent.click(screen.getByLabelText("MGannSwing Smart Filter"));
+    fireEvent.click(screen.getByLabelText("MGannSwing Impulse Waves"));
+    fireEvent.change(
+      screen.getByLabelText("MGannSwing impulse length multiplier"),
+      { target: { value: "1.25" } },
+    );
+    fireEvent.blur(screen.getByLabelText("MGannSwing impulse length multiplier"));
+    fireEvent.change(
+      screen.getByLabelText("MGannSwing impulse delta multiplier"),
+      { target: { value: "1.5" } },
+    );
+    fireEvent.blur(screen.getByLabelText("MGannSwing impulse delta multiplier"));
+    fireEvent.change(screen.getByLabelText("MGannSwing impulse break ticks"), {
+      target: { value: "2" },
+    });
+    fireEvent.blur(screen.getByLabelText("MGannSwing impulse break ticks"));
+
+    expect(onMgannSwing).toHaveBeenCalledWith(true);
+    expect(onMgannSwingSettings).toHaveBeenNthCalledWith(1, {
+      ...DEFAULT_MGANN_SWING_SETTINGS,
+      showWaveDelta: false,
+    });
+    expect(onMgannSwingSettings).toHaveBeenNthCalledWith(2, {
+      ...DEFAULT_MGANN_SWING_SETTINGS,
+      showWaveDeltaNumbers: true,
+    });
+    expect(onMgannSwingSettings).toHaveBeenNthCalledWith(3, {
+      ...DEFAULT_MGANN_SWING_SETTINGS,
+      waveDeltaNumbersImpulseOnly: false,
+    });
+    expect(onMgannSwingSettings).toHaveBeenNthCalledWith(4, {
+      ...DEFAULT_MGANN_SWING_SETTINGS,
+      showSignals: false,
+    });
+    expect(onMgannSwingSettings).toHaveBeenNthCalledWith(5, {
+      ...DEFAULT_MGANN_SWING_SETTINGS,
+      smartFilter: false,
+    });
+    expect(onMgannSwingSettings).toHaveBeenNthCalledWith(6, {
+      ...DEFAULT_MGANN_SWING_SETTINGS,
+      showImpulseWaves: false,
+    });
+    expect(onMgannSwingSettings).toHaveBeenNthCalledWith(7, {
+      ...DEFAULT_MGANN_SWING_SETTINGS,
+      impulseLengthMultiplier: 1.25,
+    });
+    expect(onMgannSwingSettings).toHaveBeenNthCalledWith(8, {
+      ...DEFAULT_MGANN_SWING_SETTINGS,
+      impulseVolumeMultiplier: 1.5,
+    });
+    expect(onMgannSwingSettings).toHaveBeenNthCalledWith(9, {
+      ...DEFAULT_MGANN_SWING_SETTINGS,
+      impulseBreakTicks: 2,
+    });
+  });
+
+  it("edits Volume Profile display settings", () => {
+    const onWidth = vi.fn();
+    const onDevelopingPoc = vi.fn();
+    render(
+      <IndicatorToggles
+        dailyVolumeProfile
+        dailyVolumeProfileWidth={84}
+        dailyVolumeProfileDevelopingPoc
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        onDailyVolumeProfileWidthChange={onWidth}
+        onDailyVolumeProfileDevelopingPocChange={onDevelopingPoc}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    fireEvent.click(screen.getByLabelText("Volume Profile settings"));
+    fireEvent.change(screen.getByLabelText("Volume Profile width"), {
+      target: { value: "96" },
+    });
+    fireEvent.click(screen.getByLabelText("Volume Profile developing POC"));
+
+    expect(onWidth).toHaveBeenCalledWith(96);
+    expect(onDevelopingPoc).toHaveBeenCalledWith(false);
   });
 
   it("can disable footprint independently", () => {
@@ -99,7 +229,7 @@ describe("IndicatorToggles", () => {
     expect(screen.getByLabelText("Footprint")).toBeDisabled();
     expect(screen.getByLabelText("FVG Grader")).not.toBeDisabled();
     expect(screen.getByLabelText("BigTrade")).not.toBeDisabled();
-    expect(screen.getByLabelText("EMA/Wave/OSB")).not.toBeDisabled();
+    expect(screen.getByLabelText("EMA/OSB")).not.toBeDisabled();
     expect(screen.getByLabelText("SMC")).not.toBeDisabled();
   });
 
@@ -147,7 +277,7 @@ describe("IndicatorToggles", () => {
     open();
     expect(screen.getByLabelText("Footprint")).not.toBeDisabled();
     expect(screen.getByLabelText("BigTrade")).toBeDisabled();
-    expect(screen.getByLabelText("EMA/Wave/OSB")).not.toBeDisabled();
+    expect(screen.getByLabelText("EMA/OSB")).not.toBeDisabled();
     expect(screen.getByLabelText("SMC")).not.toBeDisabled();
   });
 
@@ -189,7 +319,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/OSB settings"));
     fireEvent.click(screen.getByLabelText("Outside Bar"));
     fireEvent.change(screen.getByLabelText("Outside Bar bullish color"), {
       target: { value: "#123456" },
@@ -233,7 +363,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/OSB settings"));
     const input = screen.getByLabelText(
       "Outside Bar filter delta multiplier",
     ) as HTMLInputElement;
@@ -268,7 +398,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/OSB settings"));
     const input = screen.getByLabelText("EMA length");
     fireEvent.change(input, { target: { value: "21" } });
     fireEvent.blur(input);
@@ -294,10 +424,10 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/OSB settings"));
     fireEvent.click(screen.getByLabelText("EMA 200"));
 
-    expect(onEma).toHaveBeenCalledWith({ ...EMA, showEma200: true });
+    expect(onEma).toHaveBeenCalledWith({ ...EMA, showEma200: false });
   });
 
   it("edits the SMC lengths and FVG controls via the settings panel", () => {
@@ -373,7 +503,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/OSB settings"));
     fireEvent.click(screen.getByLabelText("EMA color #e0b341"));
 
     expect(onEma).toHaveBeenCalledWith({ ...EMA, color: "#e0b341" });
@@ -397,7 +527,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("EMA/Wave/OSB settings"));
+    fireEvent.click(screen.getByLabelText("EMA/OSB settings"));
     const input = screen.getByLabelText("EMA length") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "0" } });
     fireEvent.blur(input);

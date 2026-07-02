@@ -90,31 +90,40 @@ function placeAnchors(
   }
 }
 
-function pointerDown(container: HTMLElement, x: number, y: number) {
-  container.dispatchEvent(
-    new MouseEvent("pointerdown", {
+function pointerEvent(type: string, x: number, y: number) {
+  const event = new MouseEvent(type, {
       bubbles: true,
       button: 0,
       clientX: x,
       clientY: y,
-    }),
+  });
+  Object.defineProperty(event, "pointerId", { value: 1 });
+  return event;
+}
+
+function pointerDown(container: HTMLElement, x: number, y: number) {
+  container.dispatchEvent(
+    pointerEvent("pointerdown", x, y),
   );
 }
 
 function pointerMove(container: HTMLElement, x: number, y: number) {
   container.dispatchEvent(
-    new MouseEvent("pointermove", {
-      bubbles: true,
-      clientX: x,
-      clientY: y,
-    }),
+    pointerEvent("pointermove", x, y),
   );
 }
 
 function pointerUp(container: HTMLElement, x: number, y: number) {
   container.dispatchEvent(
-    new MouseEvent("pointerup", {
+    pointerEvent("pointerup", x, y),
+  );
+}
+
+function doubleClick(container: HTMLElement, x: number, y: number) {
+  container.dispatchEvent(
+    new MouseEvent("dblclick", {
       bubbles: true,
+      button: 0,
       clientX: x,
       clientY: y,
     }),
@@ -157,6 +166,140 @@ describe("DrawingManager selection", () => {
     pointerDown(container, 180, 150);
     expect(rectangle.selected).toBe(false);
     expect(priceAxisView!.visible()).toBe(false);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("shows selected drawing actions, locks movement, and unlocks again", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("trendline");
+    placeAnchors(clickHandlers, [
+      { x: 10, y: 20 },
+      { x: 60, y: 80 },
+    ]);
+
+    pointerDown(container, 35, 50);
+    pointerUp(container, 35, 50);
+
+    const lockButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Lock drawing"]',
+    );
+    expect(lockButton).not.toBeNull();
+    lockButton!.click();
+
+    expect(manager.exportState()[0].locked).toBe(true);
+    pointerDown(container, 35, 50);
+    pointerMove(container, 55, 70);
+    pointerUp(container, 55, 70);
+    expect(
+      manager.exportState()[0].anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 10, price: 20 },
+      { logical: 60, price: 80 },
+    ]);
+
+    const unlockButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Unlock drawing"]',
+    );
+    expect(unlockButton).not.toBeNull();
+    unlockButton!.click();
+    pointerDown(container, 35, 50);
+    pointerMove(container, 45, 65);
+    pointerUp(container, 45, 65);
+
+    expect(manager.exportState()[0].locked).toBeUndefined();
+    expect(
+      manager.exportState()[0].anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 20, price: 35 },
+      { logical: 70, price: 95 },
+    ]);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("deletes the selected drawing from the floating action button", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("horizontal_ray");
+    placeAnchors(clickHandlers, [{ x: 20, y: 40 }]);
+
+    pointerDown(container, 100, 40);
+    pointerUp(container, 100, 40);
+
+    const deleteButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Delete drawing"]',
+    );
+    expect(deleteButton).not.toBeNull();
+    deleteButton!.click();
+
+    expect(manager.exportState()).toEqual([]);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("changes trendline width and dash style from selected drawing actions", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("trendline");
+    placeAnchors(clickHandlers, [
+      { x: 10, y: 20 },
+      { x: 60, y: 80 },
+    ]);
+
+    pointerDown(container, 35, 50);
+    pointerUp(container, 35, 50);
+
+    const boldButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Use bold line"]',
+    );
+    expect(boldButton).not.toBeNull();
+    boldButton!.click();
+    expect(manager.exportState()[0].options?.lineWidth).toBe(3);
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Use thin line"]'),
+    ).not.toBeNull();
+
+    const dashedButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Use dashed line"]',
+    );
+    expect(dashedButton).not.toBeNull();
+    dashedButton!.click();
+    expect(manager.exportState()[0].options?.lineStyle).toBe("dashed");
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Use solid line"]'),
+    ).not.toBeNull();
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("changes horizontal ray style from selected drawing actions", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("horizontal_ray");
+    placeAnchors(clickHandlers, [{ x: 20, y: 40 }]);
+
+    pointerDown(container, 100, 40);
+    pointerUp(container, 100, 40);
+
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Use bold line"]',
+    )!.click();
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Use dashed line"]',
+    )!.click();
+
+    const [ray] = manager.exportState();
+    expect(ray.tool).toBe("horizontal_ray");
+    expect(ray.options?.lineWidth).toBe(3);
+    expect(ray.options?.lineStyle).toBe("dashed");
 
     manager.dispose();
     container.remove();
@@ -205,19 +348,6 @@ describe("DrawingManager body dragging", () => {
       grab: { x: 100, y: 40 },
       move: { x: 115, y: 55 },
       expected: [{ logical: 35, price: 55 }],
-    },
-    {
-      tool: "fixed_range_delta_profile",
-      anchors: [
-        { x: 20, y: 40 },
-        { x: 80, y: 90 },
-      ],
-      grab: { x: 50, y: 160 },
-      move: { x: 70, y: 160 },
-      expected: [
-        { logical: 40, price: 40 },
-        { logical: 100, price: 90 },
-      ],
     },
     {
       tool: "price_range",
@@ -338,6 +468,84 @@ describe("DrawingManager body dragging", () => {
   });
 });
 
+describe("DrawingManager brush tool", () => {
+  it("places brush drawings from a pointer drag", () => {
+    const { attached, container, manager } = makeHarness();
+    manager.startDrawing("brush");
+
+    pointerDown(container, 10, 20);
+    pointerMove(container, 20, 30);
+    pointerMove(container, 34, 38);
+    pointerUp(container, 34, 38);
+
+    const [brush] = manager.exportState();
+    expect(attached).toHaveLength(1);
+    expect(brush.tool).toBe("brush");
+    expect(
+      brush.anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 10, price: 20 },
+      { logical: 20, price: 30 },
+      { logical: 34, price: 38 },
+    ]);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("moves a brush drawing when dragging its stroke", () => {
+    const { container, manager } = makeHarness();
+    manager.startDrawing("brush");
+
+    pointerDown(container, 10, 20);
+    pointerMove(container, 20, 30);
+    pointerMove(container, 30, 40);
+    pointerUp(container, 30, 40);
+
+    pointerDown(container, 20, 30);
+    pointerMove(container, 30, 45);
+    pointerUp(container, 30, 45);
+
+    const [brush] = manager.exportState();
+    expect(
+      brush.anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 20, price: 35 },
+      { logical: 30, price: 45 },
+      { logical: 40, price: 55 },
+    ]);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("keeps brush placement active after a click without a stroke", () => {
+    const { container, manager } = makeHarness();
+    manager.startDrawing("brush");
+
+    pointerDown(container, 10, 20);
+    pointerUp(container, 10, 20);
+    expect(manager.exportState()).toEqual([]);
+
+    pointerDown(container, 20, 30);
+    pointerMove(container, 35, 42);
+    pointerUp(container, 35, 42);
+
+    const [brush] = manager.exportState();
+    expect(brush.tool).toBe("brush");
+    expect(brush.anchors).toHaveLength(2);
+
+    manager.dispose();
+    container.remove();
+  });
+});
+
 describe("DrawingManager trendline constraints", () => {
   it("keeps the trendline horizontal when the second click is made with Shift", () => {
     const { clickHandlers, container, manager } = makeHarness();
@@ -404,15 +612,15 @@ describe("DrawingManager fixed range delta profile", () => {
     container.remove();
   });
 
-  it("selects fixed-range delta profiles by full-height range and deletes them", () => {
+  it("selects fixed-range delta profiles by their frame and deletes them", () => {
     const { clickHandlers, container, manager } = makeHarness();
     manager.startDrawing("fixed_range_delta_profile");
 
     clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
     clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
 
-    pointerDown(container, 50, 160);
-    pointerUp(container, 50, 160);
+    pointerDown(container, 20, 65);
+    pointerUp(container, 20, 65);
     pressDelete();
 
     expect(manager.exportState()).toEqual([]);
@@ -428,17 +636,184 @@ describe("DrawingManager fixed range delta profile", () => {
     clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
     clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
 
-    pointerDown(container, 50, 160);
-    pointerUp(container, 50, 160);
-    pointerDown(container, 80, 160);
-    pointerMove(container, 110, 160);
-    pointerUp(container, 110, 160);
+    pointerDown(container, 20, 65);
+    pointerUp(container, 20, 65);
+    pointerDown(container, 80, 65);
+    pointerMove(container, 110, 65);
+    pointerUp(container, 110, 65);
 
     const [profile] = manager.exportState();
     expect(profile.anchors[0].logical).toBe(20);
     expect(profile.anchors[0].price).toBe(40);
     expect(profile.anchors[1].logical).toBe(110);
     expect(profile.anchors[1].price).toBe(90);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("auto-fits fixed-range delta profile vertical bounds to loaded ladder rows", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fixed_range_delta_profile");
+
+    clickHandlers[0]({ point: { x: 20, y: 10 }, paneIndex: 0 });
+    clickHandlers[0]({ point: { x: 80, y: 150 }, paneIndex: 0 });
+
+    const [created] = manager.exportState();
+    manager.setFixedRangeDeltaProfile(created.id, {
+      status: "ready",
+      profile: {
+        symbol: "GC",
+        contract: "GC",
+        tf: "1m",
+        from: 1,
+        to: 2,
+        rowTicks: 100,
+        valueAreaPct: 0.7,
+        poc: 55,
+        vah: 55,
+        val: 45,
+        totalVolume: 30,
+        totalDelta: 0,
+        maxAbsDelta: 0,
+        coveredBars: 2,
+        source: "minute_bars",
+        rows: [
+          { price: 45, bidVolume: 5, askVolume: 5, totalVolume: 10, delta: 0 },
+          { price: 55, bidVolume: 10, askVolume: 10, totalVolume: 20, delta: 0 },
+        ],
+      },
+    });
+
+    const [profile] = manager.exportState();
+    expect(profile.anchors[0].price).toBe(40);
+    expect(profile.anchors[1].price).toBe(60);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("does not select or move fixed-range delta profiles from the interior", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fixed_range_delta_profile");
+
+    clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
+    clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
+
+    pointerDown(container, 50, 65);
+    pointerMove(container, 70, 75);
+    pointerUp(container, 70, 75);
+    pressDelete();
+
+    const [profile] = manager.exportState();
+    expect(profile.tool).toBe("fixed_range_delta_profile");
+    expect(profile.anchors[0].logical).toBe(20);
+    expect(profile.anchors[0].price).toBe(40);
+    expect(profile.anchors[1].logical).toBe(80);
+    expect(profile.anchors[1].price).toBe(90);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("switches fixed-range delta profile mode from the double-click settings", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fixed_range_delta_profile", {
+      fixedRangeProfileMode: "volume",
+    });
+
+    clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
+    clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
+
+    doubleClick(container, 50, 65);
+    const item = container.querySelector<HTMLButtonElement>(
+      '.drawing-profile-context-item[data-mode="delta"]',
+    );
+    expect(item).not.toBeNull();
+    item?.click();
+
+    const [profile] = manager.exportState();
+    expect(profile.options?.fixedRangeProfileMode).toBe("delta");
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("toggles fixed-range delta profile extend right from the double-click settings", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fixed_range_delta_profile", {
+      fixedRangeProfileMode: "volume",
+    });
+
+    clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
+    clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
+
+    doubleClick(container, 50, 65);
+    const item = container.querySelector<HTMLButtonElement>(
+      '.drawing-profile-context-item[data-extend-right="toggle"]',
+    );
+    expect(item).not.toBeNull();
+    expect(item).toHaveAttribute("aria-checked", "false");
+    item?.click();
+
+    const [profile] = manager.exportState();
+    expect(profile.options?.fixedRangeProfileExtendRight).toBe(true);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("toggles fixed-range delta profile developing POC from the double-click settings", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fixed_range_delta_profile", {
+      fixedRangeProfileMode: "volume",
+    });
+
+    clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
+    clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
+
+    doubleClick(container, 50, 65);
+    const item = container.querySelector<HTMLButtonElement>(
+      '.drawing-profile-context-item[data-developing-poc="toggle"]',
+    );
+    expect(item).not.toBeNull();
+    expect(item).toHaveAttribute("aria-checked", "false");
+    item?.click();
+
+    const [profile] = manager.exportState();
+    expect(profile.options?.fixedRangeProfileDevelopingPoc).toBe(true);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("updates fixed-range delta profile opacity from the settings sliders", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fixed_range_delta_profile", {
+      fixedRangeProfileMode: "volume",
+    });
+
+    clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
+    clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
+
+    doubleClick(container, 50, 65);
+    const va = container.querySelector<HTMLInputElement>(
+      'input[data-opacity="valueAreaOpacity"]',
+    );
+    const outside = container.querySelector<HTMLInputElement>(
+      'input[data-opacity="outsideValueAreaOpacity"]',
+    );
+    expect(va).not.toBeNull();
+    expect(outside).not.toBeNull();
+
+    va!.value = "70";
+    va!.dispatchEvent(new Event("input", { bubbles: true }));
+    outside!.value = "25";
+    outside!.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const [profile] = manager.exportState();
+    expect(profile.options?.fixedRangeProfileValueAreaOpacity).toBe(0.7);
+    expect(profile.options?.fixedRangeProfileOutsideValueAreaOpacity).toBe(0.25);
 
     manager.dispose();
     container.remove();

@@ -27,6 +27,7 @@ from .rest.auth import router as auth_router
 from .rest.mt5 import router as mt5_router
 from .rest.errors import install_error_handlers
 from .rest.notifications import router as notifications_router
+from .rest.nt_native import router as nt_native_router
 from .rest.orders import router as orders_router
 from .rest.orderflow import router as orderflow_router
 from .rest.profiles import router as profiles_router
@@ -92,6 +93,7 @@ def create_app(*, lifespan: bool = True) -> FastAPI:
     app.include_router(smc_ai_router)
     app.include_router(signals_router)
     app.include_router(analyst_router)
+    app.include_router(nt_native_router)
     app.include_router(nt_router)
     app.include_router(chart_router)
 

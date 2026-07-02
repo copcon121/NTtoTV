@@ -210,6 +210,20 @@ def test_footprint_level_last_write_wins(store):
     assert levels[0].imbalance is ImbalanceSide.ASK
 
 
+@pytest.mark.unit
+def test_footprint_before_after_helpers_return_bounded_ascending_rows(store):
+    for time in (1_000, 2_000, 3_000, 4_000, 5_000):
+        store.upsert_footprint_bar(
+            FootprintBarRecord("GC", "GC 08-26", "1m", time, 2345.6, 5, 55.0, 45.0)
+        )
+
+    before = store.read_footprint_bars_before("GC", "GC 08-26", "1m", 4_000, 2)
+    after = store.read_footprint_bars_after("GC", "GC 08-26", "1m", 2_000, 2)
+
+    assert [bar.time for bar in before] == [2_000, 3_000]
+    assert [bar.time for bar in after] == [3_000, 4_000]
+
+
 # --- big trades ---------------------------------------------------------------
 
 

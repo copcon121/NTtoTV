@@ -1,4 +1,4 @@
 @echo off
-cd /d "c:\Users\Administrator\Desktop\NTtoTV\backend"
-.venv\Scripts\python.exe -m uvicorn app.app:app --host 0.0.0.0 --port 8000
+cd /d "c:\Users\Administrator\Desktop\NTtoTV"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Start-Backend.ps1
 pause

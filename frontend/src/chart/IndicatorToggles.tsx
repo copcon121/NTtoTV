@@ -5,6 +5,11 @@ import {
   normalizeOutsideBarSettings,
   type OutsideBarSettings,
 } from "./outsideBar";
+import {
+  DEFAULT_MGANN_SWING_SETTINGS,
+  normalizeMgannSwingSettings,
+  type MgannSwingSettings,
+} from "./mgannSwing";
 import { type SmcSettings } from "./smc";
 import {
   BIG_TRADE_SESSIONS,
@@ -13,9 +18,15 @@ import {
   type BigTradeSession,
   type BigTradeSessionMinVolumes,
 } from "./bigTradeSessions";
+import {
+  DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  MAX_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  MIN_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  normalizeSessionVolumeProfileWidth,
+} from "./sessionVolumeProfileSettings";
 
 /**
- * IndicatorToggles — TradingView-style "Indicators" dropdown.
+ * IndicatorToggles â€” TradingView-style "Indicators" dropdown.
  *
  * A single button opens a popover listing the available indicators, each with
  * an enable/disable checkbox. The EMA row has a gear button that opens a small
@@ -32,10 +43,10 @@ export interface EmaSettings {
 }
 
 export const DEFAULT_EMA_SETTINGS: EmaSettings = {
-  enabled: false,
+  enabled: true,
   period: 21,
   color: "#2962ff",
-  showEma200: false,
+  showEma200: true,
   ema200Color: "#e0b341",
 };
 
@@ -45,13 +56,13 @@ export function normalizeEmaSettings(input?: Partial<EmaSettings> | null): EmaSe
     ? Math.max(1, Math.round(rawPeriod))
     : DEFAULT_EMA_SETTINGS.period;
   return {
-    enabled: Boolean(input?.enabled),
+    enabled: input?.enabled ?? DEFAULT_EMA_SETTINGS.enabled,
     period,
     color:
       typeof input?.color === "string"
         ? input.color
         : DEFAULT_EMA_SETTINGS.color,
-    showEma200: Boolean(input?.showEma200),
+    showEma200: input?.showEma200 ?? DEFAULT_EMA_SETTINGS.showEma200,
     ema200Color:
       typeof input?.ema200Color === "string"
         ? input.ema200Color
@@ -92,7 +103,8 @@ export const DEFAULT_BIG_TRADE_SETTINGS: BigTradeSettings = {
 export interface IndicatorTogglesProps {
   volume?: boolean;
   volumeDelta?: boolean;
-  cvd?: boolean;
+  mgannSwing?: boolean;
+  mgannSwingSettings?: Partial<MgannSwingSettings>;
   footprint: boolean;
   fvgGrader?: boolean;
   bigTrades: boolean;
@@ -106,9 +118,16 @@ export interface IndicatorTogglesProps {
   bigTradeDisabled?: boolean;
   onVolumeChange?: (enabled: boolean) => void;
   onVolumeDeltaChange?: (enabled: boolean) => void;
-  onCvdChange?: (enabled: boolean) => void;
+  onMgannSwingChange?: (enabled: boolean) => void;
+  onMgannSwingSettingsChange?: (next: MgannSwingSettings) => void;
   onFootprintChange: (enabled: boolean) => void;
   onFvgGraderChange?: (enabled: boolean) => void;
+  dailyVolumeProfile?: boolean;
+  dailyVolumeProfileWidth?: number;
+  dailyVolumeProfileDevelopingPoc?: boolean;
+  onDailyVolumeProfileChange?: (enabled: boolean) => void;
+  onDailyVolumeProfileWidthChange?: (widthPx: number) => void;
+  onDailyVolumeProfileDevelopingPocChange?: (enabled: boolean) => void;
   onBigTradesChange: (enabled: boolean) => void;
   onEmaChange: (next: EmaSettings) => void;
   onSmcChange: (next: SmcSettings) => void;
@@ -156,10 +175,14 @@ function IndicatorRow({ label, checked, disabled = false, onChange, trailing }: 
 export function IndicatorToggles({
   volume = false,
   volumeDelta = false,
-  cvd = false,
+  mgannSwing = false,
+  mgannSwingSettings = DEFAULT_MGANN_SWING_SETTINGS,
   footprint,
   fvgGrader = false,
   bigTrades,
+  dailyVolumeProfile = false,
+  dailyVolumeProfileWidth = DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  dailyVolumeProfileDevelopingPoc = true,
   ema,
   smc,
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -170,9 +193,13 @@ export function IndicatorToggles({
   bigTradeDisabled = false,
   onVolumeChange = () => {},
   onVolumeDeltaChange = () => {},
-  onCvdChange = () => {},
+  onMgannSwingChange = () => {},
+  onMgannSwingSettingsChange = () => {},
   onFootprintChange,
   onFvgGraderChange = () => {},
+  onDailyVolumeProfileChange = () => {},
+  onDailyVolumeProfileWidthChange = () => {},
+  onDailyVolumeProfileDevelopingPocChange = () => {},
   onBigTradesChange,
   onEmaChange,
   onSmcChange,
@@ -181,9 +208,13 @@ export function IndicatorToggles({
   onBigTradeSettingsChange = () => {},
 }: IndicatorTogglesProps) {
   const outsideBarConfig = normalizeOutsideBarSettings(outsideBar);
+  const mgannSwingConfig = normalizeMgannSwingSettings(mgannSwingSettings);
   const outsideBarDeltaFilter = outsideBarConfig.deltaFilter;
   const [open, setOpen] = useState(false);
   const [combinedSettingsOpen, setCombinedSettingsOpen] = useState(false);
+  const [dailyVolumeProfileSettingsOpen, setDailyVolumeProfileSettingsOpen] =
+    useState(false);
+  const [mgannSwingSettingsOpen, setMgannSwingSettingsOpen] = useState(false);
   const [smcSettingsOpen, setSmcSettingsOpen] = useState(false);
   const [fpSettingsOpen, setFpSettingsOpen] = useState(false);
   const [btSettingsOpen, setBtSettingsOpen] = useState(false);
@@ -220,6 +251,15 @@ export function IndicatorToggles({
   );
   const [obDeltaMultiplierDraft, setObDeltaMultiplierDraft] = useState(
     String(outsideBarDeltaFilter.deltaMultiplier),
+  );
+  const [mgannImpulseLengthDraft, setMgannImpulseLengthDraft] = useState(
+    String(mgannSwingConfig.impulseLengthMultiplier),
+  );
+  const [mgannImpulseVolumeDraft, setMgannImpulseVolumeDraft] = useState(
+    String(mgannSwingConfig.impulseVolumeMultiplier),
+  );
+  const [mgannImpulseBreakDraft, setMgannImpulseBreakDraft] = useState(
+    String(mgannSwingConfig.impulseBreakTicks),
   );
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -302,6 +342,18 @@ export function IndicatorToggles({
     setObDeltaMultiplierDraft(String(outsideBarDeltaFilter.deltaMultiplier));
   }, [outsideBarDeltaFilter.deltaMultiplier]);
 
+  useEffect(() => {
+    setMgannImpulseLengthDraft(String(mgannSwingConfig.impulseLengthMultiplier));
+  }, [mgannSwingConfig.impulseLengthMultiplier]);
+
+  useEffect(() => {
+    setMgannImpulseVolumeDraft(String(mgannSwingConfig.impulseVolumeMultiplier));
+  }, [mgannSwingConfig.impulseVolumeMultiplier]);
+
+  useEffect(() => {
+    setMgannImpulseBreakDraft(String(mgannSwingConfig.impulseBreakTicks));
+  }, [mgannSwingConfig.impulseBreakTicks]);
+
   // Close the popover on an outside click or Escape.
   useEffect(() => {
     if (!open) return;
@@ -309,6 +361,8 @@ export function IndicatorToggles({
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
         setOpen(false);
         setCombinedSettingsOpen(false);
+        setDailyVolumeProfileSettingsOpen(false);
+        setMgannSwingSettingsOpen(false);
         setSmcSettingsOpen(false);
         setFpSettingsOpen(false);
         setBtSettingsOpen(false);
@@ -318,6 +372,8 @@ export function IndicatorToggles({
       if (e.key === "Escape") {
         setOpen(false);
         setCombinedSettingsOpen(false);
+        setDailyVolumeProfileSettingsOpen(false);
+        setMgannSwingSettingsOpen(false);
         setSmcSettingsOpen(false);
         setFpSettingsOpen(false);
         setBtSettingsOpen(false);
@@ -332,19 +388,22 @@ export function IndicatorToggles({
   }, [open]);
 
   const combinedIndicatorActive =
-    cvd || ema.enabled || ema.showEma200 || outsideBarConfig.enabled;
+    ema.enabled || ema.showEma200 || outsideBarConfig.enabled;
 
   const activeCount =
     (volume ? 1 : 0) +
     (volumeDelta ? 1 : 0) +
+    (dailyVolumeProfile ? 1 : 0) +
+    (mgannSwing ? 1 : 0) +
     (combinedIndicatorActive ? 1 : 0) +
     (footprint ? 1 : 0) +
     (fvgGrader ? 1 : 0) +
     (bigTrades ? 1 : 0) +
     (smc.enabled ? 1 : 0);
+  const normalizedDailyVolumeProfileWidth =
+    normalizeSessionVolumeProfileWidth(dailyVolumeProfileWidth);
 
   const toggleCombinedIndicators = (enabled: boolean) => {
-    onCvdChange(enabled);
     onEmaChange(
       enabled
         ? { ...ema, enabled: true }
@@ -434,6 +493,52 @@ export function IndicatorToggles({
     }
   };
 
+  const commitMgannImpulseLength = () => {
+    const parsed = Number(mgannImpulseLengthDraft);
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 10) {
+      onMgannSwingSettingsChange(
+        normalizeMgannSwingSettings({
+          ...mgannSwingConfig,
+          impulseLengthMultiplier: parsed,
+        }),
+      );
+    } else {
+      setMgannImpulseLengthDraft(
+        String(mgannSwingConfig.impulseLengthMultiplier),
+      );
+    }
+  };
+
+  const commitMgannImpulseVolume = () => {
+    const parsed = Number(mgannImpulseVolumeDraft);
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 10) {
+      onMgannSwingSettingsChange(
+        normalizeMgannSwingSettings({
+          ...mgannSwingConfig,
+          impulseVolumeMultiplier: parsed,
+        }),
+      );
+    } else {
+      setMgannImpulseVolumeDraft(
+        String(mgannSwingConfig.impulseVolumeMultiplier),
+      );
+    }
+  };
+
+  const commitMgannImpulseBreakTicks = () => {
+    const parsed = Math.round(Number(mgannImpulseBreakDraft));
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 100) {
+      onMgannSwingSettingsChange(
+        normalizeMgannSwingSettings({
+          ...mgannSwingConfig,
+          impulseBreakTicks: parsed,
+        }),
+      );
+    } else {
+      setMgannImpulseBreakDraft(String(mgannSwingConfig.impulseBreakTicks));
+    }
+  };
+
   const commitImbMinVol = () => {
     const parsed = Math.round(Number(imbMinVolDraft));
     if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1000) {
@@ -505,7 +610,7 @@ export function IndicatorToggles({
         Indicators
         {activeCount > 0 && <span className="indicator-badge">{activeCount}</span>}
         <span className="indicator-caret" aria-hidden="true">
-          ▾
+          {"\u25BE"}
         </span>
       </button>
       {open && (
@@ -521,14 +626,254 @@ export function IndicatorToggles({
             onChange={onVolumeDeltaChange}
           />
           <IndicatorRow
-            label="EMA/Wave/OSB"
+            label="Volume Profile"
+            checked={dailyVolumeProfile}
+            onChange={onDailyVolumeProfileChange}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="Volume Profile settings"
+                aria-expanded={dailyVolumeProfileSettingsOpen}
+                onClick={() => setDailyVolumeProfileSettingsOpen((v) => !v)}
+              >
+                {"\u2699"}
+              </button>
+            }
+          />
+          {dailyVolumeProfileSettingsOpen && (
+            <div className="ema-settings" aria-label="Volume Profile settings panel">
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Width</span>
+                <div className="profile-width-control">
+                  <input
+                    type="range"
+                    min={MIN_SESSION_VOLUME_PROFILE_WIDTH_PX}
+                    max={MAX_SESSION_VOLUME_PROFILE_WIDTH_PX}
+                    step={4}
+                    aria-label="Volume Profile width"
+                    value={normalizedDailyVolumeProfileWidth}
+                    onChange={(event) =>
+                      onDailyVolumeProfileWidthChange(
+                        normalizeSessionVolumeProfileWidth(
+                          event.currentTarget.value,
+                        ),
+                      )
+                    }
+                  />
+                  <span className="profile-width-value">
+                    {normalizedDailyVolumeProfileWidth}px
+                  </span>
+                </div>
+              </div>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={dailyVolumeProfileDevelopingPoc}
+                  aria-label="Volume Profile developing POC"
+                  onChange={(event) =>
+                    onDailyVolumeProfileDevelopingPocChange(
+                      event.currentTarget.checked,
+                    )
+                  }
+                />
+                <span>Dev POC</span>
+              </label>
+            </div>
+          )}
+          <IndicatorRow
+            label="MGannSwing"
+            checked={mgannSwing}
+            onChange={onMgannSwingChange}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="MGannSwing settings"
+                aria-expanded={mgannSwingSettingsOpen}
+                onClick={() => setMgannSwingSettingsOpen((v) => !v)}
+              >
+                ...
+              </button>
+            }
+          />
+          {mgannSwingSettingsOpen && (
+            <div className="ema-settings" aria-label="MGannSwing settings panel">
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={mgannSwingConfig.showWaveDelta}
+                  aria-label="MGannSwing Wave Delta"
+                  onChange={(event) =>
+                    onMgannSwingSettingsChange({
+                      ...mgannSwingConfig,
+                      showWaveDelta: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>Wave Delta</span>
+              </label>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={mgannSwingConfig.showSwingLine}
+                  aria-label="MGannSwing Swing Line"
+                  onChange={(event) =>
+                    onMgannSwingSettingsChange({
+                      ...mgannSwingConfig,
+                      showSwingLine: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>Swing Line</span>
+              </label>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={mgannSwingConfig.showWaveDeltaNumbers}
+                  aria-label="MGannSwing Wave Delta Numbers"
+                  onChange={(event) =>
+                    onMgannSwingSettingsChange({
+                      ...mgannSwingConfig,
+                      showWaveDeltaNumbers: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>Wave Delta Numbers</span>
+              </label>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={mgannSwingConfig.waveDeltaNumbersImpulseOnly}
+                  aria-label="MGannSwing Wave Delta Numbers Impulse Only"
+                  onChange={(event) =>
+                    onMgannSwingSettingsChange({
+                      ...mgannSwingConfig,
+                      waveDeltaNumbersImpulseOnly: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>Impulse Only</span>
+              </label>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={mgannSwingConfig.showSignals}
+                  aria-label="MGannSwing Signals"
+                  onChange={(event) =>
+                    onMgannSwingSettingsChange({
+                      ...mgannSwingConfig,
+                      showSignals: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>Signals</span>
+              </label>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={mgannSwingConfig.smartFilter}
+                  aria-label="MGannSwing Smart Filter"
+                  onChange={(event) =>
+                    onMgannSwingSettingsChange({
+                      ...mgannSwingConfig,
+                      smartFilter: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>Smart Filter</span>
+              </label>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={mgannSwingConfig.showImpulseWaves}
+                  aria-label="MGannSwing Impulse Waves"
+                  onChange={(event) =>
+                    onMgannSwingSettingsChange({
+                      ...mgannSwingConfig,
+                      showImpulseWaves: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>Impulse Waves</span>
+              </label>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Len x</span>
+                <input
+                  type="number"
+                  className="ema-length-input"
+                  aria-label="MGannSwing impulse length multiplier"
+                  min={1}
+                  max={10}
+                  step={0.05}
+                  value={mgannImpulseLengthDraft}
+                  onChange={(event) =>
+                    setMgannImpulseLengthDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitMgannImpulseLength}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitMgannImpulseLength();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Delta x</span>
+                <input
+                  type="number"
+                  className="ema-length-input"
+                  aria-label="MGannSwing impulse delta multiplier"
+                  min={1}
+                  max={10}
+                  step={0.05}
+                  value={mgannImpulseVolumeDraft}
+                  onChange={(event) =>
+                    setMgannImpulseVolumeDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitMgannImpulseVolume}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitMgannImpulseVolume();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Break</span>
+                <input
+                  type="number"
+                  className="ema-length-input"
+                  aria-label="MGannSwing impulse break ticks"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={mgannImpulseBreakDraft}
+                  onChange={(event) =>
+                    setMgannImpulseBreakDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitMgannImpulseBreakTicks}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitMgannImpulseBreakTicks();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          <IndicatorRow
+            label="EMA/OSB"
             checked={combinedIndicatorActive}
             onChange={toggleCombinedIndicators}
             trailing={
               <button
                 type="button"
                 className="indicator-gear"
-                aria-label="EMA/Wave/OSB settings"
+                aria-label="EMA/OSB settings"
                 aria-expanded={combinedSettingsOpen}
                 onClick={() => setCombinedSettingsOpen((v) => !v)}
               >
@@ -549,22 +894,13 @@ export function IndicatorToggles({
                 aria-expanded={combinedSettingsOpen}
                 onClick={() => setCombinedSettingsOpen((v) => !v)}
               >
-                ⚙
+                {"\u2699"}
               </button>
             }
           />
           )}
           {combinedSettingsOpen && (
-            <div className="ema-settings" aria-label="EMA/Wave/OSB settings panel">
-              <label className="fp-toggle-label">
-                <input
-                  type="checkbox"
-                  checked={cvd}
-                  aria-label="Wave Delta"
-                  onChange={(event) => onCvdChange(event.currentTarget.checked)}
-                />
-                <span>Wave Delta</span>
-              </label>
+            <div className="ema-settings" aria-label="EMA/OSB settings panel">
               <div className="indicator-settings-section">
                 <label className="fp-toggle-label">
                   <input
@@ -987,7 +1323,7 @@ export function IndicatorToggles({
                 aria-expanded={fpSettingsOpen}
                 onClick={() => setFpSettingsOpen((v) => !v)}
               >
-                ⚙
+                {"\u2699"}
               </button>
             }
           />

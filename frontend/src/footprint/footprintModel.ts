@@ -66,6 +66,10 @@ export interface FootprintRenderInputs {
   bars: readonly FootprintBar[];
   /** The viewport (price scale + layout). */
   viewport: FootprintViewport;
+  /** Stable column count used by the canvas layout. */
+  displayCount?: number;
+  /** Overlay mode draws the compact chart panel; standalone fills its shell. */
+  layout?: "overlay" | "standalone";
 }
 
 /**
@@ -91,6 +95,9 @@ export function shouldRedraw(
     pv.textColor !== nv.textColor ||
     pv.priceToY !== nv.priceToY
   ) {
+    return true;
+  }
+  if (prev.displayCount !== next.displayCount || prev.layout !== next.layout) {
     return true;
   }
   if (prev.bars.length !== next.bars.length) return true;

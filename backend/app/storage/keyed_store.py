@@ -128,6 +128,12 @@ ON CONFLICT(symbol, contract, time, side, trade_id) DO UPDATE SET
     volume=excluded.volume
 """
 
+_FOOTPRINT_BAR_COLUMNS = (
+    "symbol, contract, timeframe, time, poc, open_price, high_price, "
+    "low_price, close_price, poc_volume, vah, val, bar_delta, buy_pct, "
+    "sell_pct, unfinished_high, unfinished_low"
+)
+
 
 def _range_clause(frm: int | None, to: int | None) -> tuple[str, list[int]]:
     """Build an optional ``time`` range predicate and its bound parameters.
@@ -359,11 +365,7 @@ class KeyedStore:
         """
         rows = self._read_keyed(
             table="footprint_bars",
-            columns=(
-                "symbol, contract, timeframe, time, poc, open_price, high_price, "
-                "low_price, close_price, poc_volume, vah, val, bar_delta, buy_pct, "
-                "sell_pct, unfinished_high, unfinished_low"
-            ),
+            columns=_FOOTPRINT_BAR_COLUMNS,
             symbol=symbol,
             contract=contract,
             timeframe=timeframe,
@@ -371,28 +373,51 @@ class KeyedStore:
             to=to,
             limit=limit,
         )
-        return [
-            FootprintBarRecord(
-                symbol=r["symbol"],
-                contract=r["contract"],
-                timeframe=r["timeframe"],
-                time=r["time"],
-                poc=r["poc"],
-                open_price=r["open_price"],
-                high_price=r["high_price"],
-                low_price=r["low_price"],
-                close_price=r["close_price"],
-                poc_volume=r["poc_volume"],
-                vah=r["vah"],
-                val=r["val"],
-                bar_delta=r["bar_delta"],
-                buy_pct=r["buy_pct"],
-                sell_pct=r["sell_pct"],
-                unfinished_high=bool(r["unfinished_high"]),
-                unfinished_low=bool(r["unfinished_low"]),
-            )
-            for r in rows
-        ]
+        return [_footprint_bar_from_row(r) for r in rows]
+
+    def read_footprint_bars_before(
+        self,
+        symbol: str,
+        contract: str,
+        timeframe: str,
+        before: int,
+        limit: int,
+    ) -> list[FootprintBarRecord]:
+        """Read up to ``limit`` footprint bars before ``before`` in ascending time."""
+        if limit <= 0:
+            return []
+        rows = self._read_footprint_bars_directional(
+            symbol=symbol,
+            contract=contract,
+            timeframe=timeframe,
+            bound=int(before),
+            comparator="<",
+            order="DESC",
+            limit=limit,
+        )
+        return list(reversed([_footprint_bar_from_row(r) for r in rows]))
+
+    def read_footprint_bars_after(
+        self,
+        symbol: str,
+        contract: str,
+        timeframe: str,
+        after: int,
+        limit: int,
+    ) -> list[FootprintBarRecord]:
+        """Read up to ``limit`` footprint bars after ``after`` in ascending time."""
+        if limit <= 0:
+            return []
+        rows = self._read_footprint_bars_directional(
+            symbol=symbol,
+            contract=contract,
+            timeframe=timeframe,
+            bound=int(after),
+            comparator=">",
+            order="ASC",
+            limit=limit,
+        )
+        return [_footprint_bar_from_row(r) for r in rows]
 
     def read_footprint_levels(
         self,
@@ -665,8 +690,56 @@ class KeyedStore:
             conn.close()
         return list(reversed(rows)) if reverse else list(rows)
 
+    def _read_footprint_bars_directional(
+        self,
+        *,
+        symbol: str,
+        contract: str,
+        timeframe: str,
+        bound: int,
+        comparator: str,
+        order: str,
+        limit: int,
+    ) -> list[sqlite3.Row]:
+        if comparator not in ("<", ">") or order not in ("ASC", "DESC"):
+            raise ValueError("invalid directional footprint read")
+        conn = self._reader_factory()
+        try:
+            return list(
+                conn.execute(
+                    f"SELECT {_FOOTPRINT_BAR_COLUMNS} FROM footprint_bars "
+                    "WHERE symbol = ? AND contract = ? AND timeframe = ? "
+                    f"AND time {comparator} ? ORDER BY time {order} LIMIT ?",
+                    (symbol, contract, timeframe, int(bound), int(limit)),
+                ).fetchall()
+            )
+        finally:
+            conn.close()
+
 
 # --- parameter row builders ---------------------------------------------------
+
+
+def _footprint_bar_from_row(r: sqlite3.Row) -> FootprintBarRecord:
+    return FootprintBarRecord(
+        symbol=r["symbol"],
+        contract=r["contract"],
+        timeframe=r["timeframe"],
+        time=r["time"],
+        poc=r["poc"],
+        open_price=r["open_price"],
+        high_price=r["high_price"],
+        low_price=r["low_price"],
+        close_price=r["close_price"],
+        poc_volume=r["poc_volume"],
+        vah=r["vah"],
+        val=r["val"],
+        bar_delta=r["bar_delta"],
+        buy_pct=r["buy_pct"],
+        sell_pct=r["sell_pct"],
+        unfinished_high=bool(r["unfinished_high"]),
+        unfinished_low=bool(r["unfinished_low"]),
+    )
 
 
 def _bar_params(b: BarRecord) -> tuple[object, ...]:

@@ -11,13 +11,15 @@ import type { IChartApi, ISeriesApi, MouseEventParams } from "lightweight-charts
 import type {
   AnchorPoint,
   DrawingOptions,
+  DrawingLineStyle,
   DrawingState,
   DrawingToolType,
   IDrawingManager,
 } from "./types";
 import { DRAWING_TOOLS } from "./types";
-import { anchorFromPoint, anchorToCoordinate, anchorToPoint } from "./coordinates";
+import { anchorFromPoint, anchorToPoint } from "./coordinates";
 import { TrendLinePrimitive } from "./TrendLinePrimitive";
+import { BrushPrimitive } from "./BrushPrimitive";
 import { HorizontalRayPrimitive } from "./HorizontalRayPrimitive";
 import { RectanglePrimitive } from "./RectanglePrimitive";
 import { PriceRangePrimitive } from "./PriceRangePrimitive";
@@ -28,12 +30,19 @@ import type { DeltaProfileLoadState } from "../../orderflow/deltaProfile";
 
 type DrawingPrimitive =
   | TrendLinePrimitive
+  | BrushPrimitive
   | HorizontalRayPrimitive
   | RectanglePrimitive
   | FixedRangeDeltaProfilePrimitive
   | PriceRangePrimitive
   | VerticalLinePrimitive
   | OrderBracketPrimitive;
+
+type DrawingSelectionActionToolType =
+  | "trendline"
+  | "brush"
+  | "horizontal_ray"
+  | "rectangle";
 
 type RectangleResizeHandle =
   | "top-left"
@@ -52,11 +61,19 @@ type RectangleSideIndices = {
   bottom: 0 | 1;
 };
 
-type FixedRangeProfileResizeHandle = "left" | "right";
+type FixedRangeProfileResizeHandle =
+  | "top-left"
+  | "top-right"
+  | "right"
+  | "bottom-right"
+  | "bottom-left"
+  | "left";
 
 type FixedRangeProfileSideIndices = {
   left: 0 | 1;
   right: 0 | 1;
+  top: 0 | 1;
+  bottom: 0 | 1;
 };
 
 type ChartPoint = { x: number; y: number };
@@ -84,6 +101,16 @@ type DrawingEdit =
       anchors: AnchorPoint[];
     };
 
+type DrawingPlacement = {
+  tool: DrawingToolType;
+  anchorsNeeded: number;
+  anchors: AnchorPoint[];
+  options?: DrawingOptions;
+  preview: DrawingPrimitive | null;
+  pointerId?: number;
+  lastPoint?: ChartPoint;
+};
+
 let nextId = 1;
 
 function uid(): string {
@@ -105,13 +132,7 @@ export class DrawingManager implements IDrawingManager {
   private readonly _drawings = new Map<string, DrawingPrimitive>();
 
   /** In-progress interactive placement state. */
-  private _placement: {
-    tool: DrawingToolType;
-    anchorsNeeded: number;
-    anchors: AnchorPoint[];
-    options?: DrawingOptions;
-    preview: DrawingPrimitive | null;
-  } | null = null;
+  private _placement: DrawingPlacement | null = null;
 
   /** Count-change subscribers. */
   private readonly _countListeners = new Set<(count: number) => void>();
@@ -125,9 +146,30 @@ export class DrawingManager implements IDrawingManager {
   private _onPointerDown: ((e: PointerEvent) => void) | null = null;
   private _onPointerMove: ((e: PointerEvent) => void) | null = null;
   private _onPointerUp: ((e: PointerEvent) => void) | null = null;
+  private _onDoubleClick: ((e: MouseEvent) => void) | null = null;
   private _edit: DrawingEdit | null = null;
   private _editCursorActive = false;
   private _selectedDrawingId: string | null = null;
+  private readonly _lockedDrawingIds = new Set<string>();
+  private _actionsEl: HTMLDivElement | null = null;
+  private _widthActionButton: HTMLButtonElement | null = null;
+  private _styleActionButton: HTMLButtonElement | null = null;
+  private _lockActionButton: HTMLButtonElement | null = null;
+  private _deleteActionButton: HTMLButtonElement | null = null;
+  private _profileMenuEl: HTMLDivElement | null = null;
+  private _onProfileMenuPointerDown: ((e: Event) => void) | null = null;
+  private _onProfileMenuClick: ((e: Event) => void) | null = null;
+  private _onProfileMenuInput: ((e: Event) => void) | null = null;
+  private _onDocumentPointerDown: ((e: PointerEvent) => void) | null = null;
+  private _onWindowResize: (() => void) | null = null;
+  private _onActionPointerDown: ((e: Event) => void) | null = null;
+  private _onWidthActionClick: ((e: Event) => void) | null = null;
+  private _onStyleActionClick: ((e: Event) => void) | null = null;
+  private _onLockActionClick: ((e: Event) => void) | null = null;
+  private _onDeleteActionClick: ((e: Event) => void) | null = null;
+  private _lastProfileTap:
+    | { drawingId: string; time: number; x: number; y: number }
+    | null = null;
 
   get drawingCount(): number {
     return this._drawings.size;
@@ -167,6 +209,11 @@ export class DrawingManager implements IDrawingManager {
     container.addEventListener("pointermove", this._onPointerMove);
     container.addEventListener("pointerup", this._onPointerUp);
     container.addEventListener("pointercancel", this._onPointerUp);
+    this._onDoubleClick = (e: MouseEvent) => this._showProfileSettingsFromMouse(e);
+    container.addEventListener("dblclick", this._onDoubleClick);
+    this._installSelectionActions(container);
+    this._onWindowResize = () => this._updateSelectionActions();
+    window.addEventListener("resize", this._onWindowResize);
   }
 
   startDrawing(tool: DrawingToolType, options?: DrawingOptions): void {
@@ -193,6 +240,10 @@ export class DrawingManager implements IDrawingManager {
       handleScroll: false,
       handleScale: false,
     });
+
+    if (tool === "brush") {
+      return;
+    }
 
     // Subscribe to chart clicks for anchor placement
     this._onClick = (param: MouseEventParams) => {
@@ -270,6 +321,7 @@ export class DrawingManager implements IDrawingManager {
     }
     this._series.detachPrimitive(drawing as unknown as Parameters<typeof this._series.detachPrimitive>[0]);
     this._drawings.delete(id);
+    this._lockedDrawingIds.delete(id);
     this._notifyCountChange();
     this._notifyStateChange();
   }
@@ -282,11 +334,28 @@ export class DrawingManager implements IDrawingManager {
     const drawing = this._drawings.get(id);
     if (drawing instanceof FixedRangeDeltaProfilePrimitive) {
       drawing.setProfileState(state);
+      if (drawing.fitVerticalRangeToProfile()) {
+        this._notifyStateChange();
+        this._updateSelectionActions();
+      }
     }
   }
 
+  requestUpdateAll(): void {
+    this._placement?.preview?.requestUpdate();
+    for (const drawing of this._drawings.values()) {
+      drawing.requestUpdate();
+    }
+    this._updateSelectionActions();
+  }
+
   exportState(): DrawingState[] {
-    return [...this._drawings.values()].map((drawing) => drawing.toState());
+    return [...this._drawings.values()].map((drawing) => {
+      const state = drawing.toState();
+      return this._lockedDrawingIds.has(drawing.id)
+        ? { ...state, locked: true }
+        : state;
+    });
   }
 
   loadState(states: readonly DrawingState[]): void {
@@ -303,6 +372,11 @@ export class DrawingManager implements IDrawingManager {
       if (!drawing) continue;
       this._series.attachPrimitive(drawing as unknown as Parameters<typeof this._series.attachPrimitive>[0]);
       this._drawings.set(state.id, drawing);
+      if (state.locked === true) {
+        this._lockedDrawingIds.add(state.id);
+      } else {
+        this._lockedDrawingIds.delete(state.id);
+      }
       bumpNextId(state.id);
     }
     this._selectDrawing(null);
@@ -340,6 +414,16 @@ export class DrawingManager implements IDrawingManager {
       this._container.removeEventListener("pointercancel", this._onPointerUp);
       this._onPointerUp = null;
     }
+    if (this._container && this._onDoubleClick) {
+      this._container.removeEventListener("dblclick", this._onDoubleClick);
+      this._onDoubleClick = null;
+    }
+    if (this._onWindowResize) {
+      window.removeEventListener("resize", this._onWindowResize);
+      this._onWindowResize = null;
+    }
+    this._uninstallSelectionActions();
+    this._hideProfileContextMenu();
   }
 
   /* ------------------------------------------------------------------ */
@@ -399,7 +483,124 @@ export class DrawingManager implements IDrawingManager {
     return y >= 0 && y <= this._chart.paneSize(0).height;
   }
 
+  private _beginBrushPlacement(e: PointerEvent): void {
+    if (
+      e.button !== 0 ||
+      !this._placement ||
+      this._placement.tool !== "brush" ||
+      this._placement.pointerId !== undefined ||
+      !this._series
+    ) {
+      return;
+    }
+    const point = this._localPoint(e.clientX, e.clientY);
+    const anchor = this._anchorFromPointerEvent(e);
+    if (point === null || anchor === null) return;
+
+    this._placement.pointerId = e.pointerId;
+    this._placement.lastPoint = point;
+    this._placement.anchors = [anchor];
+    const preview = this._createPrimitive(
+      "brush",
+      `preview-${uid()}`,
+      this._placement.anchors,
+      this._placement.options,
+    );
+    if (preview) {
+      preview.setSelected(true);
+      this._placement.preview = preview;
+      this._series.attachPrimitive(preview as unknown as Parameters<typeof this._series.attachPrimitive>[0]);
+    }
+    this._container?.setPointerCapture?.(e.pointerId);
+    this._setScroll(false);
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  private _updateBrushPlacement(e: PointerEvent): void {
+    const placement = this._placement;
+    if (
+      !placement ||
+      placement.tool !== "brush" ||
+      placement.pointerId === undefined ||
+      placement.pointerId !== e.pointerId
+    ) {
+      return;
+    }
+    const point = this._localPoint(e.clientX, e.clientY);
+    const anchor = this._anchorFromPointerEvent(e);
+    if (point === null || anchor === null) return;
+    if (
+      placement.lastPoint !== undefined &&
+      Math.hypot(point.x - placement.lastPoint.x, point.y - placement.lastPoint.y) < 3
+    ) {
+      e.preventDefault();
+      return;
+    }
+    placement.lastPoint = point;
+    placement.anchors = [...placement.anchors, anchor];
+    placement.preview?.setAnchors(placement.anchors);
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  private _finishBrushPlacement(e: PointerEvent): void {
+    const placement = this._placement;
+    if (!placement || placement.tool !== "brush") return;
+    if (
+      placement.pointerId === undefined ||
+      placement.pointerId !== e.pointerId
+    ) {
+      return;
+    }
+
+    this._container?.releasePointerCapture?.(e.pointerId);
+    if (placement.preview && this._series) {
+      this._series.detachPrimitive(placement.preview as unknown as Parameters<typeof this._series.detachPrimitive>[0]);
+    }
+
+    if (placement.anchors.length < 2) {
+      placement.anchors = [];
+      placement.preview = null;
+      placement.pointerId = undefined;
+      placement.lastPoint = undefined;
+      if (this._container) {
+        this._container.style.cursor = "crosshair";
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    if (this._series) {
+      const id = uid();
+      const drawing = this._createPrimitive(
+        "brush",
+        id,
+        placement.anchors,
+        placement.options,
+      );
+      if (drawing) {
+        this._series.attachPrimitive(drawing as unknown as Parameters<typeof this._series.attachPrimitive>[0]);
+        this._drawings.set(id, drawing);
+        this._notifyCountChange();
+        this._notifyStateChange();
+      }
+    }
+
+    this._placement = null;
+    this._cleanupListeners();
+    this._restoreChart();
+    this._selectDrawing(null);
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
   private _beginEdit(e: PointerEvent): void {
+    if (this._placement?.tool === "brush") {
+      this._beginBrushPlacement(e);
+      return;
+    }
     if (e.button !== 0 || this._placement !== null || this._edit !== null) return;
     const hit = this._hitAnchor(e.clientX, e.clientY);
     if (hit === null) {
@@ -408,17 +609,49 @@ export class DrawingManager implements IDrawingManager {
       if (drawingHit !== null) {
         const point = this._localPoint(e.clientX, e.clientY);
         const drawing = this._drawings.get(drawingHit.drawingId);
+        if (this._lockedDrawingIds.has(drawingHit.drawingId)) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         if (point !== null && drawing) {
-          this._edit = {
-            drawingId: drawingHit.drawingId,
-            moveDrawing: true,
-            pointerId: e.pointerId,
-            startPoint: point,
-            anchors: drawing.anchors.map((anchor) => ({ ...anchor })),
-          };
+          if (
+            drawing.tool === "fixed_range_delta_profile" &&
+            drawing.anchors.length >= 2 &&
+            this._chart &&
+            this._series
+          ) {
+            const p1 = anchorToPoint(this._chart, this._series, drawing.anchors[0]);
+            const p2 = anchorToPoint(this._chart, this._series, drawing.anchors[1]);
+            if (p1 !== null && p2 !== null) {
+              const leftX = Math.min(p1.x, p2.x);
+              const rightX = Math.max(p1.x, p2.x);
+              const distToLeft = Math.abs(point.x - leftX);
+              const distToRight = Math.abs(point.x - rightX);
+              const handle: FixedRangeProfileResizeHandle = distToLeft <= distToRight ? "left" : "right";
+              const sides = fixedRangeProfileSideIndices(p1, p2);
+              this._edit = {
+                drawingId: drawingHit.drawingId,
+                fixedRangeProfileHandle: handle,
+                fixedRangeProfileSides: sides,
+                pointerId: e.pointerId,
+              };
+            }
+          } else {
+            this._edit = {
+              drawingId: drawingHit.drawingId,
+              moveDrawing: true,
+              pointerId: e.pointerId,
+              startPoint: point,
+              anchors: drawing.anchors.map((anchor) => ({ ...anchor })),
+            };
+          }
           this._container?.setPointerCapture?.(e.pointerId);
           this._setScroll(false);
-          if (this._container) this._container.style.cursor = "grabbing";
+          if (this._container) {
+            this._container.style.cursor =
+              drawing.tool === "fixed_range_delta_profile" ? "ew-resize" : "grabbing";
+          }
         }
         e.preventDefault();
         e.stopPropagation();
@@ -426,6 +659,11 @@ export class DrawingManager implements IDrawingManager {
       return;
     }
     this._selectDrawing(hit.drawingId);
+    if (this._lockedDrawingIds.has(hit.drawingId)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     this._edit = { ...hit, pointerId: e.pointerId };
     this._container?.setPointerCapture?.(e.pointerId);
     this._setScroll(false);
@@ -435,6 +673,10 @@ export class DrawingManager implements IDrawingManager {
   }
 
   private _updateEdit(e: PointerEvent): void {
+    if (this._placement?.tool === "brush") {
+      this._updateBrushPlacement(e);
+      return;
+    }
     if (this._edit !== null) {
       const drawing = this._drawings.get(this._edit.drawingId);
       if ("moveDrawing" in this._edit) {
@@ -449,6 +691,7 @@ export class DrawingManager implements IDrawingManager {
               point,
             ),
           );
+          this._updateSelectionActions();
         }
       } else {
         const anchor = this._anchorFromPointerEvent(e);
@@ -462,6 +705,7 @@ export class DrawingManager implements IDrawingManager {
                 anchor,
               ),
             );
+            this._updateSelectionActions();
           } else if (
             "fixedRangeProfileHandle" in this._edit &&
             drawing.tool === "fixed_range_delta_profile"
@@ -474,10 +718,15 @@ export class DrawingManager implements IDrawingManager {
                 anchor,
               ),
             );
+            if (fixedRangeProfileHandleChangesPrice(this._edit.fixedRangeProfileHandle)) {
+              drawing.setOptions({ fixedRangeProfileAutoFitVertical: false });
+            }
+            this._updateSelectionActions();
           } else if ("anchorIndex" in this._edit) {
             const anchors = drawing.anchors.map((current) => ({ ...current }));
             anchors[this._edit.anchorIndex] = anchor;
             drawing.setAnchors(anchors);
+            this._updateSelectionActions();
           }
         }
       }
@@ -489,25 +738,44 @@ export class DrawingManager implements IDrawingManager {
     if (hit !== null && this._container) {
       this._container.style.cursor = "grab";
       this._editCursorActive = true;
+      this._updateSelectionActions();
       return;
     }
     const drawingHit = this._hitDrawing(e.clientX, e.clientY);
     if (drawingHit !== null && this._container) {
-      this._container.style.cursor = "grab";
+      if (this._lockedDrawingIds.has(drawingHit.drawingId)) {
+        this._container.style.cursor = "default";
+      } else {
+        const hitDrawing = this._drawings.get(drawingHit.drawingId);
+        if (hitDrawing?.tool === "fixed_range_delta_profile") {
+          this._container.style.cursor = "ew-resize";
+        } else {
+          this._container.style.cursor = "grab";
+        }
+      }
       this._editCursorActive = true;
     } else if (this._editCursorActive && this._container) {
       this._container.style.cursor = "";
       this._editCursorActive = false;
     }
+    this._updateSelectionActions();
   }
 
   private _endEdit(e: PointerEvent): void {
-    if (this._edit === null || this._edit.pointerId !== e.pointerId) return;
+    if (this._placement?.tool === "brush") {
+      this._finishBrushPlacement(e);
+      return;
+    }
+    if (this._edit === null || this._edit.pointerId !== e.pointerId) {
+      this._handleProfileTap(e);
+      return;
+    }
     this._edit = null;
     this._container?.releasePointerCapture?.(e.pointerId);
     this._setScroll(true);
     if (this._container) this._container.style.cursor = "";
     this._editCursorActive = false;
+    this._updateSelectionActions();
     this._notifyStateChange();
   }
 
@@ -524,10 +792,16 @@ export class DrawingManager implements IDrawingManager {
     const FIXED_RANGE_PROFILE_HIT_PX = 18;
     let best: { drawingId: string; anchorIndex: number; distance: number } | null = null;
     const selectedDrawing = this._drawings.get(this._selectedDrawingId);
+    if (selectedDrawing && this._lockedDrawingIds.has(this._selectedDrawingId)) {
+      return null;
+    }
     const drawings = selectedDrawing
       ? [[this._selectedDrawingId, selectedDrawing] as const]
       : [];
     for (const [drawingId, drawing] of drawings) {
+      if (drawing.tool === "brush") {
+        continue;
+      }
       if (drawing.tool === "rectangle" && drawing.anchors.length >= 2) {
         const rectangleHit = rectangleHandleHit(
           this._chart,
@@ -582,7 +856,7 @@ export class DrawingManager implements IDrawingManager {
     const drawings = [...this._drawings.entries()].reverse();
     for (const [drawingId, drawing] of drawings) {
       if (drawing.tool === "fixed_range_delta_profile" && drawing.anchors.length >= 2) {
-        const rangeHit = fixedRangeProfileRangeHit(
+        const rangeHit = fixedRangeProfileFrameHit(
           this._chart,
           this._series,
           drawing.anchors,
@@ -599,6 +873,11 @@ export class DrawingManager implements IDrawingManager {
       switch (drawing.tool) {
         case "trendline":
           if (points.length >= 2 && distanceToSegment(point, points[0], points[1]) <= HIT_PX) {
+            return { drawingId };
+          }
+          break;
+        case "brush":
+          if (hitPolyline(point, points, HIT_PX)) {
             return { drawingId };
           }
           break;
@@ -673,6 +952,8 @@ export class DrawingManager implements IDrawingManager {
     switch (tool) {
       case "trendline":
         return new TrendLinePrimitive(id, anchors, options);
+      case "brush":
+        return new BrushPrimitive(id, anchors, options);
       case "horizontal_ray":
         return new HorizontalRayPrimitive(id, anchors, options);
       case "rectangle":
@@ -698,6 +979,7 @@ export class DrawingManager implements IDrawingManager {
       }
     }
     this._drawings.clear();
+    this._lockedDrawingIds.clear();
     if (notify) {
       this._notifyCountChange();
       this._notifyStateChange();
@@ -730,6 +1012,9 @@ export class DrawingManager implements IDrawingManager {
   }
 
   private _selectDrawing(id: string | null): void {
+    if (id !== this._selectedDrawingId) {
+      this._hideProfileContextMenu();
+    }
     const previousId = this._selectedDrawingId;
     if (previousId !== null && previousId !== id) {
       this._drawings.get(previousId)?.setSelected(false);
@@ -738,6 +1023,7 @@ export class DrawingManager implements IDrawingManager {
     if (id !== null) {
       this._drawings.get(id)?.setSelected(true);
     }
+    this._updateSelectionActions();
   }
 
   private _notifyCountChange(): void {
@@ -754,6 +1040,514 @@ export class DrawingManager implements IDrawingManager {
     }
   }
 
+  private _showProfileSettingsFromMouse(e: MouseEvent): void {
+    if (!this._chart || !this._series || !this._container) return;
+    const point = this._localPoint(e.clientX, e.clientY);
+    if (point === null || !this._isInCandlePane(point.y)) return;
+    const hit = this._hitProfileBox(point);
+    if (hit === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this._showProfileSettings(hit.drawingId, point);
+  }
+
+  private _handleProfileTap(e: PointerEvent): void {
+    if (!this._chart || !this._series || !this._container || this._placement) return;
+    const point = this._localPoint(e.clientX, e.clientY);
+    if (point === null || !this._isInCandlePane(point.y)) return;
+    const hit = this._hitProfileBox(point);
+    if (hit === null) {
+      this._lastProfileTap = null;
+      return;
+    }
+    const now = Date.now();
+    const previous = this._lastProfileTap;
+    this._lastProfileTap = {
+      drawingId: hit.drawingId,
+      time: now,
+      x: point.x,
+      y: point.y,
+    };
+    if (
+      previous &&
+      previous.drawingId === hit.drawingId &&
+      now - previous.time <= 320 &&
+      Math.hypot(point.x - previous.x, point.y - previous.y) <= 18
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      this._showProfileSettings(hit.drawingId, point);
+      this._lastProfileTap = null;
+    }
+  }
+
+  private _showProfileSettings(drawingId: string, point: ChartPoint): void {
+    if (!this._chart || !this._container) return;
+    this._selectDrawing(drawingId);
+
+    const drawing = this._drawings.get(drawingId);
+    if (!(drawing instanceof FixedRangeDeltaProfilePrimitive)) return;
+
+    this._hideProfileContextMenu();
+    const menu = document.createElement("div");
+    menu.className = "drawing-profile-context-menu";
+    menu.setAttribute("role", "menu");
+    menu.dataset.drawingId = drawingId;
+
+    const modes: Array<{ mode: "volume" | "delta"; label: string }> = [
+      { mode: "volume", label: "Volume" },
+      { mode: "delta", label: "Delta" },
+    ];
+    for (const item of modes) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "drawing-profile-context-item";
+      button.dataset.mode = item.mode;
+      button.setAttribute("role", "menuitemradio");
+      button.setAttribute(
+        "aria-checked",
+        drawing.profileMode === item.mode ? "true" : "false",
+      );
+      button.textContent = item.label;
+      menu.appendChild(button);
+    }
+    const developingPocButton = document.createElement("button");
+    developingPocButton.type = "button";
+    developingPocButton.className = "drawing-profile-context-item";
+    developingPocButton.dataset.developingPoc = "toggle";
+    developingPocButton.setAttribute("role", "menuitemcheckbox");
+    developingPocButton.setAttribute(
+      "aria-checked",
+      drawing.showDevelopingPoc ? "true" : "false",
+    );
+    developingPocButton.textContent = "Dev POC";
+    menu.appendChild(developingPocButton);
+
+    const extendButton = document.createElement("button");
+    extendButton.type = "button";
+    extendButton.className = "drawing-profile-context-item";
+    extendButton.dataset.extendRight = "toggle";
+    extendButton.setAttribute("role", "menuitemcheckbox");
+    extendButton.setAttribute(
+      "aria-checked",
+      drawing.extendRight ? "true" : "false",
+    );
+    extendButton.textContent = "Extend Right";
+    menu.appendChild(extendButton);
+
+    menu.appendChild(
+      this._createProfileOpacityControl(
+        "VA Opacity",
+        "valueAreaOpacity",
+        drawing.valueAreaOpacity,
+      ),
+    );
+    menu.appendChild(
+      this._createProfileOpacityControl(
+        "Outside VA",
+        "outsideValueAreaOpacity",
+        drawing.outsideValueAreaOpacity,
+      ),
+    );
+
+    const paneSize = this._chart.paneSize(0);
+    const menuWidth = 188;
+    const menuHeight = 236;
+    menu.style.left = `${clamp(point.x, 8, paneSize.width - menuWidth - 8)}px`;
+    menu.style.top = `${clamp(point.y, 8, paneSize.height - menuHeight - 8)}px`;
+    menu.style.maxHeight = `${Math.max(140, paneSize.height - 16)}px`;
+
+    this._onProfileMenuPointerDown = (event: Event) => {
+      if (event.target instanceof HTMLInputElement) {
+        event.stopPropagation();
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    this._onProfileMenuClick = (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.dataset.extendRight === "toggle") {
+        const selectedId = this._profileMenuEl?.dataset.drawingId;
+        const selected = selectedId ? this._drawings.get(selectedId) : undefined;
+        if (selected instanceof FixedRangeDeltaProfilePrimitive) {
+          selected.setOptions({
+            fixedRangeProfileExtendRight: !selected.extendRight,
+          });
+          this._notifyStateChange();
+        }
+        this._hideProfileContextMenu();
+        return;
+      }
+      if (target.dataset.developingPoc === "toggle") {
+        const selectedId = this._profileMenuEl?.dataset.drawingId;
+        const selected = selectedId ? this._drawings.get(selectedId) : undefined;
+        if (selected instanceof FixedRangeDeltaProfilePrimitive) {
+          selected.setOptions({
+            fixedRangeProfileDevelopingPoc: !selected.showDevelopingPoc,
+          });
+          this._notifyStateChange();
+        }
+        this._hideProfileContextMenu();
+        return;
+      }
+      const mode = target.dataset.mode;
+      if (mode !== "volume" && mode !== "delta") return;
+      const selectedId = this._profileMenuEl?.dataset.drawingId;
+      const selected = selectedId ? this._drawings.get(selectedId) : undefined;
+      if (selected instanceof FixedRangeDeltaProfilePrimitive) {
+        selected.setOptions({ fixedRangeProfileMode: mode });
+        this._notifyStateChange();
+      }
+      this._hideProfileContextMenu();
+    };
+    this._onProfileMenuInput = (event: Event) => {
+      event.stopPropagation();
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      const selectedId = this._profileMenuEl?.dataset.drawingId;
+      const selected = selectedId ? this._drawings.get(selectedId) : undefined;
+      if (!(selected instanceof FixedRangeDeltaProfilePrimitive)) return;
+      const value = Number(target.value) / 100;
+      if (target.dataset.opacity === "valueAreaOpacity") {
+        selected.setOptions({ fixedRangeProfileValueAreaOpacity: value });
+        this._syncProfileOpacityLabel(target);
+        this._notifyStateChange();
+      } else if (target.dataset.opacity === "outsideValueAreaOpacity") {
+        selected.setOptions({ fixedRangeProfileOutsideValueAreaOpacity: value });
+        this._syncProfileOpacityLabel(target);
+        this._notifyStateChange();
+      }
+    };
+    this._onDocumentPointerDown = (event: PointerEvent) => {
+      if (
+        this._profileMenuEl &&
+        event.target instanceof Node &&
+        this._profileMenuEl.contains(event.target)
+      ) {
+        return;
+      }
+      this._hideProfileContextMenu();
+    };
+
+    menu.addEventListener("pointerdown", this._onProfileMenuPointerDown);
+    menu.addEventListener("mousedown", this._onProfileMenuPointerDown);
+    menu.addEventListener("click", this._onProfileMenuClick);
+    menu.addEventListener("input", this._onProfileMenuInput);
+    document.addEventListener("pointerdown", this._onDocumentPointerDown, true);
+    this._container.appendChild(menu);
+    this._profileMenuEl = menu;
+  }
+
+  private _createProfileOpacityControl(
+    label: string,
+    key: "valueAreaOpacity" | "outsideValueAreaOpacity",
+    value: number,
+  ): HTMLElement {
+    const wrapper = document.createElement("label");
+    wrapper.className = "drawing-profile-context-slider";
+    const header = document.createElement("span");
+    header.className = "drawing-profile-context-slider-label";
+    header.textContent = label;
+    const valueEl = document.createElement("span");
+    valueEl.className = "drawing-profile-context-slider-value";
+    valueEl.textContent = `${Math.round(value * 100)}%`;
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = "5";
+    input.max = "100";
+    input.step = "5";
+    input.value = String(Math.round(value * 100));
+    input.dataset.opacity = key;
+    wrapper.appendChild(header);
+    wrapper.appendChild(valueEl);
+    wrapper.appendChild(input);
+    return wrapper;
+  }
+
+  private _syncProfileOpacityLabel(input: HTMLInputElement): void {
+    const valueEl = input.parentElement?.querySelector<HTMLElement>(
+      ".drawing-profile-context-slider-value",
+    );
+    if (valueEl) valueEl.textContent = `${input.value}%`;
+  }
+
+  private _hideProfileContextMenu(): void {
+    if (this._profileMenuEl && this._onProfileMenuPointerDown) {
+      this._profileMenuEl.removeEventListener(
+        "pointerdown",
+        this._onProfileMenuPointerDown,
+      );
+      this._profileMenuEl.removeEventListener(
+        "mousedown",
+        this._onProfileMenuPointerDown,
+      );
+    }
+    if (this._profileMenuEl && this._onProfileMenuClick) {
+      this._profileMenuEl.removeEventListener("click", this._onProfileMenuClick);
+    }
+    if (this._profileMenuEl && this._onProfileMenuInput) {
+      this._profileMenuEl.removeEventListener("input", this._onProfileMenuInput);
+    }
+    if (this._onDocumentPointerDown) {
+      document.removeEventListener(
+        "pointerdown",
+        this._onDocumentPointerDown,
+        true,
+      );
+    }
+    this._profileMenuEl?.remove();
+    this._profileMenuEl = null;
+    this._onProfileMenuPointerDown = null;
+    this._onProfileMenuClick = null;
+    this._onProfileMenuInput = null;
+    this._onDocumentPointerDown = null;
+  }
+
+  private _hitProfileBox(point: ChartPoint): { drawingId: string } | null {
+    if (!this._chart || !this._series) return null;
+    const drawings = [...this._drawings.entries()].reverse();
+    for (const [drawingId, drawing] of drawings) {
+      if (drawing.tool !== "fixed_range_delta_profile" || drawing.anchors.length < 2) {
+        continue;
+      }
+      if (
+        fixedRangeProfileBoxHit(
+          this._chart,
+          this._series,
+          drawing.anchors,
+          point,
+          0,
+        )
+      ) {
+        return { drawingId };
+      }
+    }
+    return null;
+  }
+
+  private _installSelectionActions(container: HTMLElement): void {
+    this._actionsEl = document.createElement("div");
+    this._actionsEl.className = "drawing-selection-actions";
+    this._actionsEl.hidden = true;
+    this._actionsEl.setAttribute("aria-hidden", "true");
+
+    this._widthActionButton = document.createElement("button");
+    this._widthActionButton.type = "button";
+    this._widthActionButton.className = "drawing-selection-action";
+
+    this._styleActionButton = document.createElement("button");
+    this._styleActionButton.type = "button";
+    this._styleActionButton.className = "drawing-selection-action";
+
+    this._lockActionButton = document.createElement("button");
+    this._lockActionButton.type = "button";
+    this._lockActionButton.className = "drawing-selection-action";
+
+    this._deleteActionButton = document.createElement("button");
+    this._deleteActionButton.type = "button";
+    this._deleteActionButton.className = "drawing-selection-action";
+    this._deleteActionButton.title = "Delete drawing";
+    this._deleteActionButton.setAttribute("aria-label", "Delete drawing");
+    this._deleteActionButton.innerHTML = deleteIconSvg();
+
+    this._actionsEl.append(
+      this._widthActionButton,
+      this._styleActionButton,
+      this._lockActionButton,
+      this._deleteActionButton,
+    );
+    container.appendChild(this._actionsEl);
+
+    this._onActionPointerDown = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    this._onWidthActionClick = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._toggleSelectedLineWidth();
+    };
+    this._onStyleActionClick = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._toggleSelectedLineStyle();
+    };
+    this._onLockActionClick = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._toggleSelectedLock();
+    };
+    this._onDeleteActionClick = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (this._selectedDrawingId !== null) {
+        this.removeDrawing(this._selectedDrawingId);
+      }
+    };
+
+    this._actionsEl.addEventListener("pointerdown", this._onActionPointerDown);
+    this._actionsEl.addEventListener("mousedown", this._onActionPointerDown);
+    this._actionsEl.addEventListener("click", this._onActionPointerDown);
+    this._widthActionButton.addEventListener("click", this._onWidthActionClick);
+    this._styleActionButton.addEventListener("click", this._onStyleActionClick);
+    this._lockActionButton.addEventListener("click", this._onLockActionClick);
+    this._deleteActionButton.addEventListener("click", this._onDeleteActionClick);
+    this._updateSelectionActions();
+  }
+
+  private _uninstallSelectionActions(): void {
+    if (this._actionsEl && this._onActionPointerDown) {
+      this._actionsEl.removeEventListener("pointerdown", this._onActionPointerDown);
+      this._actionsEl.removeEventListener("mousedown", this._onActionPointerDown);
+      this._actionsEl.removeEventListener("click", this._onActionPointerDown);
+    }
+    if (this._widthActionButton && this._onWidthActionClick) {
+      this._widthActionButton.removeEventListener("click", this._onWidthActionClick);
+    }
+    if (this._styleActionButton && this._onStyleActionClick) {
+      this._styleActionButton.removeEventListener("click", this._onStyleActionClick);
+    }
+    if (this._lockActionButton && this._onLockActionClick) {
+      this._lockActionButton.removeEventListener("click", this._onLockActionClick);
+    }
+    if (this._deleteActionButton && this._onDeleteActionClick) {
+      this._deleteActionButton.removeEventListener("click", this._onDeleteActionClick);
+    }
+    this._actionsEl?.remove();
+    this._actionsEl = null;
+    this._widthActionButton = null;
+    this._styleActionButton = null;
+    this._lockActionButton = null;
+    this._deleteActionButton = null;
+    this._onActionPointerDown = null;
+    this._onWidthActionClick = null;
+    this._onStyleActionClick = null;
+    this._onLockActionClick = null;
+    this._onDeleteActionClick = null;
+  }
+
+  private _toggleSelectedLineWidth(): void {
+    const drawing = this._selectedStyleDrawing();
+    if (!drawing) return;
+    const current = drawing.renderOptions.width;
+    const lineWidth = current >= 3 ? 1 : 3;
+    drawing.setOptions({ lineWidth });
+    this._updateSelectionActions();
+    this._notifyStateChange();
+  }
+
+  private _toggleSelectedLineStyle(): void {
+    const drawing = this._selectedStyleDrawing();
+    if (!drawing) return;
+    const lineStyle: DrawingLineStyle =
+      drawing.renderOptions.lineStyle === "dashed" ? "solid" : "dashed";
+    drawing.setOptions({ lineStyle });
+    this._updateSelectionActions();
+    this._notifyStateChange();
+  }
+
+  private _selectedStyleDrawing():
+    | TrendLinePrimitive
+    | HorizontalRayPrimitive
+    | null {
+    const id = this._selectedDrawingId;
+    if (id === null) return null;
+    const drawing = this._drawings.get(id);
+    return drawing instanceof TrendLinePrimitive ||
+      drawing instanceof HorizontalRayPrimitive
+      ? drawing
+      : null;
+  }
+
+  private _toggleSelectedLock(): void {
+    const id = this._selectedDrawingId;
+    if (id === null || !this._drawings.has(id)) return;
+    if (this._lockedDrawingIds.has(id)) {
+      this._lockedDrawingIds.delete(id);
+    } else {
+      this._lockedDrawingIds.add(id);
+    }
+    this._updateSelectionActions();
+    this._notifyStateChange();
+  }
+
+  private _updateSelectionActions(): void {
+    const el = this._actionsEl;
+    const widthButton = this._widthActionButton;
+    const styleButton = this._styleActionButton;
+    const lockButton = this._lockActionButton;
+    if (!el || !widthButton || !styleButton || !lockButton) return;
+    const id = this._selectedDrawingId;
+    const drawing = id !== null ? this._drawings.get(id) : undefined;
+    if (
+      id === null ||
+      !drawing ||
+      !isActionTool(drawing.tool) ||
+      !this._chart ||
+      !this._series
+    ) {
+      el.hidden = true;
+      el.setAttribute("aria-hidden", "true");
+      return;
+    }
+
+    const position = selectionActionPosition(this._chart, this._series, drawing);
+    if (position === null) {
+      el.hidden = true;
+      el.setAttribute("aria-hidden", "true");
+      return;
+    }
+
+    const paneSize = this._chart.paneSize(0);
+    const styleDrawing =
+      drawing instanceof TrendLinePrimitive ||
+      drawing instanceof HorizontalRayPrimitive
+        ? drawing
+        : null;
+    widthButton.hidden = styleDrawing === null;
+    styleButton.hidden = styleDrawing === null;
+    if (styleDrawing !== null) {
+      const bold = styleDrawing.renderOptions.width >= 3;
+      widthButton.title = bold ? "Use thin line" : "Use bold line";
+      widthButton.setAttribute("aria-label", bold ? "Use thin line" : "Use bold line");
+      widthButton.setAttribute("aria-pressed", bold ? "true" : "false");
+      widthButton.classList.toggle("is-active", bold);
+      widthButton.innerHTML = bold ? thinLineIconSvg() : boldLineIconSvg();
+
+      const dashed = styleDrawing.renderOptions.lineStyle === "dashed";
+      styleButton.title = dashed ? "Use solid line" : "Use dashed line";
+      styleButton.setAttribute("aria-label", dashed ? "Use solid line" : "Use dashed line");
+      styleButton.setAttribute("aria-pressed", dashed ? "true" : "false");
+      styleButton.classList.toggle("is-active", dashed);
+      styleButton.innerHTML = dashed ? solidLineIconSvg() : dashedLineIconSvg();
+    }
+
+    const actionWidth = styleDrawing === null ? 82 : 154;
+    const actionHeight = 38;
+    const left = clamp(position.x - actionWidth / 2, 8, paneSize.width - actionWidth - 8);
+    let top = position.y - actionHeight - 10;
+    if (top < 8) {
+      top = position.y + 10;
+    }
+    top = clamp(top, 8, paneSize.height - actionHeight - 8);
+
+    const locked = this._lockedDrawingIds.has(id);
+    lockButton.title = locked ? "Unlock drawing" : "Lock drawing";
+    lockButton.setAttribute("aria-label", locked ? "Unlock drawing" : "Lock drawing");
+    lockButton.setAttribute("aria-pressed", locked ? "true" : "false");
+    lockButton.innerHTML = locked ? lockedIconSvg() : unlockedIconSvg();
+    lockButton.classList.toggle("is-active", locked);
+    el.classList.toggle("is-locked", locked);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    el.hidden = false;
+    el.setAttribute("aria-hidden", "false");
+  }
+
   private _isEditableTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false;
     const tagName = target.tagName.toLowerCase();
@@ -764,6 +1558,135 @@ export class DrawingManager implements IDrawingManager {
       target.isContentEditable
     );
   }
+}
+
+function isActionTool(tool: DrawingToolType): tool is DrawingSelectionActionToolType {
+  return (
+    tool === "trendline" ||
+    tool === "brush" ||
+    tool === "horizontal_ray" ||
+    tool === "rectangle"
+  );
+}
+
+function selectionActionPosition(
+  chart: IChartApi,
+  series: ISeriesApi<"Candlestick">,
+  drawing: DrawingPrimitive,
+): ChartPoint | null {
+  const points = drawing.anchors
+    .map((anchor) => anchorToPoint(chart, series, anchor))
+    .filter((point): point is ChartPoint => point !== null);
+  if (points.length === 0) return null;
+
+  switch (drawing.tool) {
+    case "trendline":
+      if (points.length < 2) return null;
+      return {
+        x: (points[0].x + points[1].x) / 2,
+        y: Math.min(points[0].y, points[1].y),
+      };
+    case "brush": {
+      if (points.length < 2) return null;
+      const middle = points[Math.floor(points.length / 2)];
+      const top = Math.min(...points.map((point) => point.y));
+      return {
+        x: middle.x,
+        y: top,
+      };
+    }
+    case "horizontal_ray":
+      return {
+        x: Math.min(points[0].x + 84, chart.paneSize(0).width - 48),
+        y: points[0].y,
+      };
+    case "rectangle": {
+      if (points.length < 2) return null;
+      const left = Math.min(points[0].x, points[1].x);
+      const right = Math.max(points[0].x, points[1].x);
+      const top = Math.min(points[0].y, points[1].y);
+      return {
+        x: (left + right) / 2,
+        y: top,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (max < min) return min;
+  return Math.min(Math.max(value, min), max);
+}
+
+function thinLineIconSvg(): string {
+  return [
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"',
+    ' stroke-width="2" stroke-linecap="round" aria-hidden="true">',
+    '<path d="M4 12h16" />',
+    '</svg>',
+  ].join("");
+}
+
+function boldLineIconSvg(): string {
+  return [
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"',
+    ' stroke-width="4" stroke-linecap="round" aria-hidden="true">',
+    '<path d="M4 12h16" />',
+    '</svg>',
+  ].join("");
+}
+
+function solidLineIconSvg(): string {
+  return [
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"',
+    ' stroke-width="2" stroke-linecap="round" aria-hidden="true">',
+    '<path d="M4 12h16" />',
+    '</svg>',
+  ].join("");
+}
+
+function dashedLineIconSvg(): string {
+  return [
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"',
+    ' stroke-width="2" stroke-linecap="round" stroke-dasharray="3 3" aria-hidden="true">',
+    '<path d="M4 12h16" />',
+    '</svg>',
+  ].join("");
+}
+
+function unlockedIconSvg(): string {
+  return [
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"',
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">',
+    '<rect x="4" y="11" width="16" height="9" rx="2" />',
+    '<path d="M8 11V7a4 4 0 0 1 7.5-2" />',
+    '</svg>',
+  ].join("");
+}
+
+function lockedIconSvg(): string {
+  return [
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"',
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">',
+    '<rect x="4" y="11" width="16" height="9" rx="2" />',
+    '<path d="M8 11V7a4 4 0 0 1 8 0v4" />',
+    '</svg>',
+  ].join("");
+}
+
+function deleteIconSvg(): string {
+  return [
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"',
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">',
+    '<path d="M3 6h18" />',
+    '<path d="M8 6V4h8v2" />',
+    '<path d="M19 6l-1 14H6L5 6" />',
+    '<path d="M10 11v5" />',
+    '<path d="M14 11v5" />',
+    '</svg>',
+  ].join("");
 }
 
 function distanceToSegment(
@@ -780,6 +1703,19 @@ function distanceToSegment(
     Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSq),
   );
   return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+}
+
+function hitPolyline(
+  point: { x: number; y: number },
+  points: readonly { x: number; y: number }[],
+  tolerance: number,
+): boolean {
+  for (let index = 0; index < points.length - 1; index += 1) {
+    if (distanceToSegment(point, points[index], points[index + 1]) <= tolerance) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function moveDrawingAnchors(
@@ -834,17 +1770,6 @@ function rectangleFrameHit(
     Math.abs(point.y - top) <= tolerance ||
     Math.abs(point.y - bottom) <= tolerance
   );
-}
-
-function pointInVerticalRange(
-  point: { x: number; y: number },
-  x1: number,
-  x2: number,
-  tolerance: number,
-): boolean {
-  const left = Math.min(x1, x2) - tolerance;
-  const right = Math.max(x1, x2) + tolerance;
-  return point.x >= left && point.x <= right;
 }
 
 function rectangleHandleHit(
@@ -973,48 +1898,93 @@ function fixedRangeProfileHandleHit(
   point: { x: number; y: number },
   tolerance: number,
 ): AnchorHit | null {
-  const x1 = anchorToCoordinate(chart, series, anchors[0]);
-  const x2 = anchorToCoordinate(chart, series, anchors[1]);
-  if (x1 === null || x2 === null) return null;
+  const p1 = anchorToPoint(chart, series, anchors[0]);
+  const p2 = anchorToPoint(chart, series, anchors[1]);
+  if (p1 === null || p2 === null) return null;
 
-  const sides = fixedRangeProfileSideIndices(x1 as number, x2 as number);
-  const left = Math.min(x1 as number, x2 as number);
-  const right = Math.max(x1 as number, x2 as number);
-  const leftDistance = Math.abs(point.x - left);
-  const rightDistance = Math.abs(point.x - right);
-  if (leftDistance > tolerance && rightDistance > tolerance) return null;
+  let best:
+    | { handle: FixedRangeProfileResizeHandle; distance: number }
+    | null = null;
+  for (const handlePoint of fixedRangeProfileHandlePoints(p1, p2)) {
+    const distance = Math.hypot(handlePoint.x - point.x, handlePoint.y - point.y);
+    if (distance <= tolerance && (best === null || distance < best.distance)) {
+      best = { handle: handlePoint.handle, distance };
+    }
+  }
+  if (best === null) return null;
   return {
     drawingId,
-    fixedRangeProfileHandle:
-      leftDistance <= rightDistance ? "left" : "right",
-    fixedRangeProfileSides: sides,
+    fixedRangeProfileHandle: best.handle,
+    fixedRangeProfileSides: fixedRangeProfileSideIndices(p1, p2),
   };
 }
 
-function fixedRangeProfileRangeHit(
+function fixedRangeProfileFrameHit(
   chart: IChartApi,
   series: ISeriesApi<"Candlestick">,
   anchors: readonly AnchorPoint[],
   point: { x: number; y: number },
   tolerance: number,
 ): boolean {
-  const x1 = anchorToCoordinate(chart, series, anchors[0]);
-  const x2 = anchorToCoordinate(chart, series, anchors[1]);
-  return (
-    x1 !== null &&
-    x2 !== null &&
-    pointInVerticalRange(point, x1 as number, x2 as number, tolerance)
-  );
+  const p1 = anchorToPoint(chart, series, anchors[0]);
+  const p2 = anchorToPoint(chart, series, anchors[1]);
+  if (p1 === null || p2 === null) return false;
+  return rectangleFrameHit(point, p1, p2, tolerance);
+}
+
+function fixedRangeProfileBoxHit(
+  chart: IChartApi,
+  series: ISeriesApi<"Candlestick">,
+  anchors: readonly AnchorPoint[],
+  point: { x: number; y: number },
+  tolerance: number,
+): boolean {
+  const p1 = anchorToPoint(chart, series, anchors[0]);
+  const p2 = anchorToPoint(chart, series, anchors[1]);
+  if (p1 === null || p2 === null) return false;
+  return pointInBox(point, p1, p2, tolerance);
+}
+
+function fixedRangeProfileHandlePoints(
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+): Array<{ handle: FixedRangeProfileResizeHandle; x: number; y: number }> {
+  const left = Math.min(p1.x, p2.x);
+  const right = Math.max(p1.x, p2.x);
+  const top = Math.min(p1.y, p2.y);
+  const bottom = Math.max(p1.y, p2.y);
+  const midY = (top + bottom) / 2;
+  return [
+    { handle: "top-left", x: left, y: top },
+    { handle: "top-right", x: right, y: top },
+    { handle: "right", x: right, y: midY },
+    { handle: "bottom-right", x: right, y: bottom },
+    { handle: "bottom-left", x: left, y: bottom },
+    { handle: "left", x: left, y: midY },
+  ];
 }
 
 function fixedRangeProfileSideIndices(
-  x1: number,
-  x2: number,
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
 ): FixedRangeProfileSideIndices {
   return {
-    left: x1 <= x2 ? 0 : 1,
-    right: x1 <= x2 ? 1 : 0,
+    left: p1.x <= p2.x ? 0 : 1,
+    right: p1.x <= p2.x ? 1 : 0,
+    top: p1.y <= p2.y ? 0 : 1,
+    bottom: p1.y <= p2.y ? 1 : 0,
   };
+}
+
+function fixedRangeProfileHandleChangesPrice(
+  handle: FixedRangeProfileResizeHandle,
+): boolean {
+  return (
+    handle === "top-left" ||
+    handle === "top-right" ||
+    handle === "bottom-right" ||
+    handle === "bottom-left"
+  );
 }
 
 function resizeFixedRangeProfileAnchors(
@@ -1025,12 +1995,34 @@ function resizeFixedRangeProfileAnchors(
 ): AnchorPoint[] {
   const next = anchors.map((anchor) => ({ ...anchor }));
   if (next.length < 2) return next;
-  const index = sides[handle];
-  next[index] = {
-    ...next[index],
-    time: pointerAnchor.time,
-    logical: pointerAnchor.logical,
+
+  const updateX = (index: 0 | 1) => {
+    next[index] = {
+      ...next[index],
+      time: pointerAnchor.time,
+      logical: pointerAnchor.logical,
+    };
   };
+  const updateY = (index: 0 | 1) => {
+    next[index] = {
+      ...next[index],
+      price: pointerAnchor.price,
+    };
+  };
+
+  if (handle === "left" || handle === "top-left" || handle === "bottom-left") {
+    updateX(sides.left);
+  }
+  if (handle === "right" || handle === "top-right" || handle === "bottom-right") {
+    updateX(sides.right);
+  }
+  if (handle === "top-left" || handle === "top-right") {
+    updateY(sides.top);
+  }
+  if (handle === "bottom-left" || handle === "bottom-right") {
+    updateY(sides.bottom);
+  }
+
   return next;
 }
 

@@ -6,6 +6,13 @@ export interface DeltaProfileRow {
   delta: number;
 }
 
+export interface DeltaProfileDevelopingPocPoint {
+  time: number;
+  price: number;
+}
+
+export type DeltaProfileSource = "footprint_cache" | "minute_bars";
+
 export interface DeltaProfileData {
   symbol: string;
   contract: string;
@@ -21,7 +28,8 @@ export interface DeltaProfileData {
   totalDelta: number;
   maxAbsDelta: number;
   coveredBars: number;
-  source: "footprint_cache";
+  source: DeltaProfileSource;
+  developingPoc?: DeltaProfileDevelopingPocPoint[];
   rows: DeltaProfileRow[];
 }
 

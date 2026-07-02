@@ -34,7 +34,7 @@ export interface AlertPanelProps {
   /** Create an alert (parent persists via POST). */
   onCreate?: (input: {
     type: AlertType;
-    params: Record<string, number | boolean>;
+    params: Record<string, number | string | boolean>;
   }) => void;
   /** Telegram notification config loaded from the backend. */
   telegram?: TelegramNotificationConfig;
@@ -56,20 +56,16 @@ export interface AlertPanelProps {
 
 const DEFAULT_TOAST_MS = 4000;
 const SMC_EXTERNAL_BREAK_TYPE: AlertType = "smc_external_break_big_trade";
-const SMC_ZONE_TOUCH_TYPE: AlertType = "smc_zone_touch_big_trade";
 const BREAKOUT_FVG_TYPE: AlertType = "breakout_fvg_confluence";
+const MGANN_FVG_RETEST_TYPE: AlertType = "mgann_fvg_retest";
 const SMC_EXTERNAL_BIG_TRADE_DEFAULT = "50";
-const SMC_ZONE_BIG_TRADE_DEFAULT = "30";
 const BREAKOUT_FVG_DEFAULT_LEVEL = "3";
+const MGANN_FVG_DEFAULT_TIMEFRAME = "5m";
 const SMC_SWING_LENGTH = 50;
 const SMC_LOOKAHEAD_BARS = 5;
 const SMC_MAX_BARS = 20;
 const SMC_PAUSE_ON_INSIDE_BARS = true;
-const SMC_ZONE_MAX_AGE = 500;
-const SMC_FVG_AUTO_THRESHOLD = true;
-const SMC_FVG_THRESHOLD_LOOKBACK = 60;
-const SMC_FVG_THRESHOLD_MULTIPLIER = 1.5;
-const SMC_FVG_VOLUME_CONFIRMATION = false;
+const SMC_RETEST_TOLERANCE_TICKS = 50;
 
 function defaultPlaySound(): void {
   // Best-effort: a short beep via the Web Audio API when available. Wrapped so
@@ -104,17 +100,22 @@ function isThresholdAlertType(type: AlertType): boolean {
 }
 
 function isSmcAlertType(type: AlertType): boolean {
-  return type === SMC_EXTERNAL_BREAK_TYPE || type === SMC_ZONE_TOUCH_TYPE;
+  return type === SMC_EXTERNAL_BREAK_TYPE;
 }
 
 function isBreakoutFvgType(type: AlertType): boolean {
   return type === BREAKOUT_FVG_TYPE;
 }
 
+function isMgannFvgRetestType(type: AlertType): boolean {
+  return type === MGANN_FVG_RETEST_TYPE;
+}
+
 function alertInputLabel(type: AlertType): string {
   if (isLevelAlertType(type)) return "Alert level";
   if (isSmcAlertType(type)) return "BigTrade threshold";
   if (isBreakoutFvgType(type)) return "Min FVG level";
+  if (isMgannFvgRetestType(type)) return "mGann FVG timeframe";
   return "Alert threshold";
 }
 
@@ -122,7 +123,12 @@ function alertInputPlaceholder(type: AlertType): string {
   if (isLevelAlertType(type)) return "level";
   if (isSmcAlertType(type)) return "BT threshold";
   if (isBreakoutFvgType(type)) return "3";
+  if (isMgannFvgRetestType(type)) return "";
   return "threshold";
+}
+
+function mgannTimeframeLabel(value: unknown): string {
+  return value === "1m" ? "M1" : "M5";
 }
 
 function alertDescription(alert: Alert): string {
@@ -131,15 +137,15 @@ function alertDescription(alert: Alert): string {
     const repeat = alert.params.repeat === true ? " (repeat)" : "";
     return `External BOS/CHoCH, BT > ${String(threshold)}${repeat}`;
   }
-  if (alert.type === SMC_ZONE_TOUCH_TYPE) {
-    const threshold = alert.params.bigTradeThreshold;
-    const repeat = alert.params.repeat === true ? " (repeat)" : "";
-    return `M1 external OB/FVG touch, BT > ${String(threshold)}${repeat}`;
-  }
   if (alert.type === BREAKOUT_FVG_TYPE) {
     const level = alert.params.minFvgLevel ?? 3;
     const repeat = alert.params.repeat === true ? " (repeat)" : "";
     return `Breakout + FVG \u2265${String(level)}${repeat}`;
+  }
+  if (alert.type === MGANN_FVG_RETEST_TYPE) {
+    const repeat = alert.params.repeat === true ? " (repeat)" : "";
+    const timeframe = mgannTimeframeLabel(alert.params.timeframe);
+    return `${timeframe} FVG retest by mGann wave${repeat}`;
   }
   return [
     alert.type,
@@ -169,6 +175,9 @@ export function AlertPanel({
   const [newType, setNewType] = useState<AlertType>("price_crosses_level");
   const [newValue, setNewValue] = useState("");
   const [newRepeat, setNewRepeat] = useState(false);
+  const [newMgannTimeframe, setNewMgannTimeframe] = useState(
+    MGANN_FVG_DEFAULT_TIMEFRAME,
+  );
   const [telegramEnabled, setTelegramEnabled] = useState(false);
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
@@ -199,9 +208,14 @@ export function AlertPanel({
   const isLevelType = isLevelAlertType(newType);
   const isThresholdType = isThresholdAlertType(newType);
   const isExternalBreakType = newType === SMC_EXTERNAL_BREAK_TYPE;
-  const isZoneTouchType = newType === SMC_ZONE_TOUCH_TYPE;
   const isBreakoutFvg = newType === BREAKOUT_FVG_TYPE;
-  const showRepeat = isThresholdType || isSmcAlertType(newType) || isBreakoutFvg;
+  const isMgannFvgRetest = newType === MGANN_FVG_RETEST_TYPE;
+  const showNumericInput = !isMgannFvgRetest;
+  const showRepeat =
+    isThresholdType ||
+    isSmcAlertType(newType) ||
+    isBreakoutFvg ||
+    isMgannFvgRetest;
   const paramKey = isLevelType ? "level" : "threshold";
 
   const changeType = (type: AlertType) => {
@@ -209,17 +223,28 @@ export function AlertPanel({
     if (type === SMC_EXTERNAL_BREAK_TYPE) {
       setNewValue((value) => value || SMC_EXTERNAL_BIG_TRADE_DEFAULT);
       setNewRepeat(true);
-    } else if (type === SMC_ZONE_TOUCH_TYPE) {
-      setNewValue((value) => value || SMC_ZONE_BIG_TRADE_DEFAULT);
-      setNewRepeat(true);
     } else if (type === BREAKOUT_FVG_TYPE) {
       setNewValue((value) => value || BREAKOUT_FVG_DEFAULT_LEVEL);
+      setNewRepeat(true);
+    } else if (type === MGANN_FVG_RETEST_TYPE) {
+      setNewValue("");
+      setNewMgannTimeframe(MGANN_FVG_DEFAULT_TIMEFRAME);
       setNewRepeat(true);
     }
   };
 
   const submitCreate = (e: FormEvent) => {
     e.preventDefault();
+    if (isMgannFvgRetest) {
+      onCreate?.({
+        type: newType,
+        params: {
+          timeframe: newMgannTimeframe,
+          repeat: newRepeat,
+        },
+      });
+      return;
+    }
     const value = Number(newValue);
     if (!Number.isFinite(value)) return;
     if (isExternalBreakType) {
@@ -232,27 +257,11 @@ export function AlertPanel({
           effectiveLookaheadBars: SMC_LOOKAHEAD_BARS,
           maxBars: SMC_MAX_BARS,
           pauseOnInsideBars: SMC_PAUSE_ON_INSIDE_BARS,
+          retestToleranceTicks: SMC_RETEST_TOLERANCE_TICKS,
           repeat: newRepeat,
         },
       });
       setNewValue(SMC_EXTERNAL_BIG_TRADE_DEFAULT);
-      return;
-    }
-    if (isZoneTouchType) {
-      onCreate?.({
-        type: newType,
-        params: {
-          bigTradeThreshold: value,
-          swingLength: SMC_SWING_LENGTH,
-          maxZoneAge: SMC_ZONE_MAX_AGE,
-          fvgAutoThreshold: SMC_FVG_AUTO_THRESHOLD,
-          fvgThresholdLookback: SMC_FVG_THRESHOLD_LOOKBACK,
-          fvgThresholdMultiplier: SMC_FVG_THRESHOLD_MULTIPLIER,
-          fvgVolumeConfirmation: SMC_FVG_VOLUME_CONFIRMATION,
-          repeat: newRepeat,
-        },
-      });
-      setNewValue(SMC_ZONE_BIG_TRADE_DEFAULT);
       return;
     }
     if (isBreakoutFvg) {
@@ -326,21 +335,33 @@ export function AlertPanel({
           <option value="smc_external_break_big_trade">
             External BOS/CHoCH + BigTrade
           </option>
-          <option value="smc_zone_touch_big_trade">
-            M1 OB/FVG touch + BigTrade
-          </option>
           <option value="breakout_fvg_confluence">
             Breakout + FVG ≥3
           </option>
+          <option value="mgann_fvg_retest">
+            FVG retest by mGann
+          </option>
         </select>
-        <input
-          type="number"
-          step="any"
-          aria-label={alertInputLabel(newType)}
-          placeholder={alertInputPlaceholder(newType)}
-          value={newValue}
-          onChange={(e) => setNewValue(e.target.value)}
-        />
+        {showNumericInput && (
+          <input
+            type="number"
+            step="any"
+            aria-label={alertInputLabel(newType)}
+            placeholder={alertInputPlaceholder(newType)}
+            value={newValue}
+            onChange={(e) => setNewValue(e.target.value)}
+          />
+        )}
+        {isMgannFvgRetest && (
+          <select
+            aria-label={alertInputLabel(newType)}
+            value={newMgannTimeframe}
+            onChange={(e) => setNewMgannTimeframe(e.target.value)}
+          >
+            <option value="5m">M5</option>
+            <option value="1m">M1</option>
+          </select>
+        )}
         {showRepeat && (
           <label className="alert-repeat">
             <input
