@@ -136,7 +136,10 @@ export function drawFootprint(
 
   const priceRange = Math.max(priceStep, dataMaxPrice - dataMinPrice);
   const numPriceLevels = Math.max(10, Math.ceil(priceRange / priceStep) + 1);
-  const rowH = Math.max(1, Math.min(20, contentHeight / numPriceLevels));
+  const rowH = Math.max(
+    1,
+    Math.min(standalone ? 32 : 20, contentHeight / numPriceLevels),
+  );
   const visibleRange = Math.max(priceRange, (contentHeight / rowH) * priceStep);
   const viewportTopPrice = dataMaxPrice + Math.max(0, visibleRange - priceRange) / 2;
   const yForPrice = (price: number) =>
@@ -150,7 +153,7 @@ export function drawFootprint(
   const sideW = Math.max(5, (cellW - 4) / 2);
   const fontSize = Math.max(7, Math.min(10, rowH * 0.7));
   const cellFontSize = standalone
-    ? Math.max(10, Math.min(13, rowH * 0.72))
+    ? Math.max(6, Math.min(13, rowH * 0.72))
     : 10;
   const textColor = viewport.textColor ?? MZ_THEME.text;
 

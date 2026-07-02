@@ -1,5 +1,7 @@
 import {
   type FormEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -31,17 +33,37 @@ const MAX_HISTORY_CONTEXT = 20;
 const FOOTPRINT_EVENTS: ChartEventType[] = ["footprint_update"];
 const MIN_BAR_WIDTH_PX = 56;
 const MIN_CANVAS_HEIGHT_PX = 360;
-const STANDALONE_ROW_HEIGHT_PX = 18;
+const DEFAULT_ROW_HEIGHT_PX = 18;
+const MIN_ROW_HEIGHT_PX = 5;
+const MAX_ROW_HEIGHT_PX = 32;
+const PRICE_AXIS_HIT_WIDTH_PX = 86;
+const SCALE_DRAG_SENSITIVITY = 0.08;
 const MAX_CANVAS_HEIGHT_PX = 16_000;
 const identityPriceToY = (price: number) => price;
 
 type PageMode = "latest" | "history";
+type ChartDragState =
+  | {
+      mode: "pan";
+      pointerId: number;
+      startX: number;
+      startY: number;
+      scrollLeft: number;
+      scrollTop: number;
+    }
+  | {
+      mode: "scale";
+      pointerId: number;
+      startY: number;
+      rowHeightPx: number;
+    };
 
 export function FootprintPage() {
   const endpoints = useMemo(() => resolveEndpoints(), []);
   const api = useMemo(() => new ApiClient({ basePath: endpoints.api }), [endpoints.api]);
   const socket = useMemo(() => new ChartSocket({ url: endpoints.ws }), [endpoints.ws]);
   const requestSeq = useRef(0);
+  const dragStateRef = useRef<ChartDragState | null>(null);
   const [canvasHostRef, canvasHostSize] = useElementSize();
 
   const [mode, setMode] = useState<PageMode>("latest");
@@ -55,6 +77,9 @@ export function FootprintPage() {
   const [connection, setConnection] = useState<"connected" | "disconnected">(
     "disconnected",
   );
+  const [isDraggingChart, setIsDraggingChart] = useState(false);
+  const [isScalingPrice, setIsScalingPrice] = useState(false);
+  const [rowHeightPx, setRowHeightPx] = useState(DEFAULT_ROW_HEIGHT_PX);
   const [historyMeta, setHistoryMeta] = useState<{
     at: number;
     context: number;
@@ -166,7 +191,7 @@ export function FootprintPage() {
     Math.max(
       canvasHostSize.height,
       MIN_CANVAS_HEIGHT_PX,
-      estimateStandaloneCanvasHeight(visibleBars),
+      estimateStandaloneCanvasHeight(visibleBars, rowHeightPx),
     ),
   );
   const viewport = useMemo(
@@ -185,6 +210,7 @@ export function FootprintPage() {
     connection,
     visibleCount: visibleBars.length,
     historyMeta,
+    rowHeightPx,
   });
 
   const submitLatest = (event: FormEvent<HTMLFormElement>) => {
@@ -217,6 +243,64 @@ export function FootprintPage() {
     setContextInput(String(context));
     setBarCount(nextCount);
     void loadHistory(at, context);
+  };
+
+  const startChartDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    const target = event.currentTarget;
+    if (isPointerOnPriceAxis(event, target, canvasWidth)) {
+      dragStateRef.current = {
+        mode: "scale",
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        rowHeightPx,
+      };
+      setIsScalingPrice(true);
+    } else {
+      dragStateRef.current = {
+        mode: "pan",
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        scrollLeft: target.scrollLeft,
+        scrollTop: target.scrollTop,
+      };
+      setIsDraggingChart(true);
+    }
+    target.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const moveChartDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const target = event.currentTarget;
+    if (drag.mode === "scale") {
+      const deltaY = event.clientY - drag.startY;
+      setRowHeightPx(
+        clampRowHeight(drag.rowHeightPx - deltaY * SCALE_DRAG_SENSITIVITY),
+      );
+    } else {
+      target.scrollLeft = drag.scrollLeft - (event.clientX - drag.startX);
+      target.scrollTop = drag.scrollTop - (event.clientY - drag.startY);
+    }
+    event.preventDefault();
+  };
+
+  const stopChartDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragStateRef.current = null;
+    setIsDraggingChart(false);
+    setIsScalingPrice(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const resetPriceScale = (event: ReactMouseEvent<HTMLElement>) => {
+    if (!isPointerOnPriceAxis(event, event.currentTarget, canvasWidth)) return;
+    setRowHeightPx(DEFAULT_ROW_HEIGHT_PX);
   };
 
   return (
@@ -268,7 +352,17 @@ export function FootprintPage() {
           {statusText}
         </div>
       </header>
-      <main ref={canvasHostRef} className="footprint-page-canvas-shell">
+      <main
+        ref={canvasHostRef}
+        className={`footprint-page-canvas-shell${
+          isDraggingChart ? " is-dragging" : ""
+        }${isScalingPrice ? " is-scaling-price" : ""}`}
+        onPointerDown={startChartDrag}
+        onPointerMove={moveChartDrag}
+        onPointerUp={stopChartDrag}
+        onPointerCancel={stopChartDrag}
+        onDoubleClick={resetPriceScale}
+      >
         <FootprintCanvas
           bars={bars}
           viewport={viewport}
@@ -285,7 +379,10 @@ function mapFromBars(bars: readonly FootprintBar[]): Map<number, FootprintBar> {
   return new Map(bars.map((bar) => [bar.time, bar]));
 }
 
-function estimateStandaloneCanvasHeight(bars: readonly FootprintBar[]): number {
+function estimateStandaloneCanvasHeight(
+  bars: readonly FootprintBar[],
+  rowHeightPx: number,
+): number {
   if (bars.length === 0) return MIN_CANVAS_HEIGHT_PX;
   const prices = bars
     .flatMap((bar) => [
@@ -309,7 +406,7 @@ function estimateStandaloneCanvasHeight(bars: readonly FootprintBar[]): number {
   minPrice -= 5 * priceStep;
   maxPrice += 5 * priceStep;
   const levels = Math.max(10, Math.ceil((maxPrice - minPrice) / priceStep) + 1);
-  return levels * STANDALONE_ROW_HEIGHT_PX + 80;
+  return levels * rowHeightPx + 80;
 }
 
 function inferPriceStep(bars: readonly FootprintBar[]): number {
@@ -326,6 +423,21 @@ function inferPriceStep(bars: readonly FootprintBar[]): number {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function isPointerOnPriceAxis(
+  event: Pick<ReactPointerEvent<HTMLElement>, "clientX"> | Pick<ReactMouseEvent<HTMLElement>, "clientX">,
+  element: HTMLElement,
+  canvasWidth: number,
+): boolean {
+  const rect = element.getBoundingClientRect();
+  const canvasX = event.clientX - rect.left + element.scrollLeft;
+  return canvasX >= canvasWidth - PRICE_AXIS_HIT_WIDTH_PX;
+}
+
+function clampRowHeight(value: number): number {
+  const clamped = Math.min(MAX_ROW_HEIGHT_PX, Math.max(MIN_ROW_HEIGHT_PX, value));
+  return Math.round(clamped * 4) / 4;
 }
 
 function trimBarsMap(
@@ -357,14 +469,16 @@ function statusFor(input: {
   connection: "connected" | "disconnected";
   visibleCount: number;
   historyMeta: { at: number; context: number; targetFound: boolean } | null;
+  rowHeightPx: number;
 }): string {
   if (input.loading) return "Loading";
   if (input.error) return input.error;
+  const scale = `scale ${input.rowHeightPx.toFixed(0)}px`;
   if (input.mode === "history" && input.historyMeta) {
     const state = input.historyMeta.targetFound ? "found" : "nearest";
-    return `${formatTime(input.historyMeta.at)} ${state} - ${input.visibleCount} bars`;
+    return `${formatTime(input.historyMeta.at)} ${state} - ${input.visibleCount} bars - ${scale}`;
   }
-  return `${input.visibleCount} bars - ${input.connection}`;
+  return `${input.visibleCount} bars - ${input.connection} - ${scale}`;
 }
 
 function formatTime(time: number): string {

@@ -1438,6 +1438,17 @@ body {
   min-height: 0;
   overflow: auto;
   background: #ffffff;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.footprint-page-canvas-shell.is-dragging {
+  cursor: grabbing;
+}
+
+.footprint-page-canvas-shell.is-scaling-price {
+  cursor: ns-resize;
 }
 
 @media (max-width: 760px) {
