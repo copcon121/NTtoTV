@@ -37,6 +37,7 @@ interface TrendLineRenderOptions {
   width: number;
   lineStyle: "solid" | "dashed";
   showLabels: boolean;
+  noteText: string;
   labelBackgroundColor: string;
   labelTextColor: string;
 }
@@ -46,6 +47,7 @@ const DEFAULT_OPTIONS: TrendLineRenderOptions = {
   width: 2,
   lineStyle: "solid",
   showLabels: true,
+  noteText: "",
   labelBackgroundColor: "rgba(16, 16, 16, 0.88)",
   labelTextColor: "#d8d8d8",
 };
@@ -57,6 +59,7 @@ function toRenderOptions(options?: DrawingOptions): TrendLineRenderOptions {
     width: options?.lineWidth ?? DEFAULT_OPTIONS.width,
     lineStyle: options?.lineStyle ?? DEFAULT_OPTIONS.lineStyle,
     showLabels: options?.showLabels ?? DEFAULT_OPTIONS.showLabels,
+    noteText: options?.noteText?.trim() ?? DEFAULT_OPTIONS.noteText,
   };
 }
 
@@ -99,6 +102,10 @@ class TrendLineRenderer implements IPrimitivePaneRenderer {
       ctx.lineTo(x2, y2);
       ctx.stroke();
 
+      if (this.options.noteText) {
+        this.drawNoteLabel(scope, this.options.noteText, (x1 + x2) / 2, (y1 + y2) / 2);
+      }
+
       if (this.selected) {
         ctx.fillStyle = this.options.lineColor;
         const radius = 4 * scope.horizontalPixelRatio;
@@ -116,6 +123,38 @@ class TrendLineRenderer implements IPrimitivePaneRenderer {
       }
       ctx.restore();
     });
+  }
+
+  private drawNoteLabel(
+    scope: BitmapCoordinatesRenderingScope,
+    text: string,
+    x: number,
+    y: number,
+  ): void {
+    const ctx = scope.context;
+    const paddingX = 6 * scope.horizontalPixelRatio;
+    const paddingY = 4 * scope.verticalPixelRatio;
+    const maxWidth = 180 * scope.horizontalPixelRatio;
+    const fontSize = 12 * scope.verticalPixelRatio;
+    ctx.font = `${fontSize}px Arial`;
+    const label = ellipsizeCanvasText(ctx, text, maxWidth);
+    const textWidth = ctx.measureText(label).width;
+    const boxW = textWidth + paddingX * 2;
+    const boxH = fontSize + paddingY * 2;
+    const boxX = x - boxW / 2;
+    let boxY = y - boxH - 7 * scope.verticalPixelRatio;
+    if (boxY < 2 * scope.verticalPixelRatio) {
+      boxY = y + 7 * scope.verticalPixelRatio;
+    }
+
+    ctx.beginPath();
+    ctx.fillStyle = this.options.labelBackgroundColor;
+    ctx.roundRect(boxX, boxY, boxW, boxH, 5 * scope.horizontalPixelRatio);
+    ctx.fill();
+    ctx.fillStyle = this.options.labelTextColor;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, x, boxY + boxH / 2);
   }
 
   private drawTextLabel(
@@ -141,8 +180,24 @@ class TrendLineRenderer implements IPrimitivePaneRenderer {
     ctx.roundRect(boxX, boxY, boxW, boxH, 5 * scope.horizontalPixelRatio);
     ctx.fill();
     ctx.fillStyle = this.options.labelTextColor;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
     ctx.fillText(text, x + offset * 2 - leftAdjustment, y);
   }
+}
+
+function ellipsizeCanvasText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  const suffix = "...";
+  let next = text;
+  while (next.length > 0 && ctx.measureText(`${next}${suffix}`).width > maxWidth) {
+    next = next.slice(0, -1);
+  }
+  return next.length > 0 ? `${next}${suffix}` : suffix;
 }
 
 class TrendLinePaneView implements IPrimitivePaneView {

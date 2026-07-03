@@ -255,7 +255,13 @@ class SmcOverlayPaneView implements IPrimitivePaneView {
     const nextLines: ViewLine[] = [];
     for (const line of this.source.lines) {
       const x1 = chart.timeScale().timeToCoordinate(line.startTime);
-      const x2 = chart.timeScale().timeToCoordinate(line.endTime);
+      const x2 = coordinateForEndTime(
+        chart,
+        series,
+        line.startTime,
+        line.endTime,
+        x1,
+      );
       const y = series.priceToCoordinate(line.price);
       if (x1 === null || x2 === null || y === null) continue;
       nextLines.push({ line, x1, x2, y });

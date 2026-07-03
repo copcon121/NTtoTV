@@ -24,12 +24,18 @@ interface HorizontalRayRenderOptions {
   lineColor: string;
   width: number;
   lineStyle: "solid" | "dashed";
+  noteText: string;
+  noteBackgroundColor: string;
+  noteTextColor: string;
 }
 
 const DEFAULT_OPTIONS: HorizontalRayRenderOptions = {
   lineColor: "#FF6D00",
   width: 1,
   lineStyle: "solid",
+  noteText: "",
+  noteBackgroundColor: "rgba(16, 16, 16, 0.88)",
+  noteTextColor: "#d8d8d8",
 };
 
 function toRenderOptions(options?: DrawingOptions): HorizontalRayRenderOptions {
@@ -38,6 +44,9 @@ function toRenderOptions(options?: DrawingOptions): HorizontalRayRenderOptions {
     lineColor: options?.lineColor ?? DEFAULT_OPTIONS.lineColor,
     width: options?.lineWidth ?? DEFAULT_OPTIONS.width,
     lineStyle: options?.lineStyle ?? DEFAULT_OPTIONS.lineStyle,
+    noteText: options?.noteText?.trim() ?? DEFAULT_OPTIONS.noteText,
+    noteBackgroundColor: DEFAULT_OPTIONS.noteBackgroundColor,
+    noteTextColor: DEFAULT_OPTIONS.noteTextColor,
   };
 }
 
@@ -66,6 +75,10 @@ class HorizontalRayRenderer implements IPrimitivePaneRenderer {
       ctx.lineTo(this._rightEdge, this._y);
       ctx.stroke();
 
+      if (this._options.noteText) {
+        this._drawNoteLabel(ctx, this._options.noteText);
+      }
+
       if (this._selected) {
         // Anchor dot
         const r = 4;
@@ -86,6 +99,50 @@ class HorizontalRayRenderer implements IPrimitivePaneRenderer {
       ctx.restore();
     });
   }
+
+  private _drawNoteLabel(ctx: CanvasRenderingContext2D, text: string): void {
+    const paddingX = 6;
+    const paddingY = 4;
+    const maxWidth = 180;
+    const fontSize = 12;
+    ctx.font = `${fontSize}px sans-serif`;
+    const label = ellipsizeCanvasText(ctx, text, maxWidth);
+    const textWidth = ctx.measureText(label).width;
+    const boxW = textWidth + paddingX * 2;
+    const boxH = fontSize + paddingY * 2;
+    const centerX = Math.min(
+      Math.max(this._x + 96, this._x + boxW / 2 + 6),
+      this._rightEdge - boxW / 2 - 8,
+    );
+    const boxX = centerX - boxW / 2;
+    let boxY = this._y - boxH - 7;
+    if (boxY < 2) {
+      boxY = this._y + 7;
+    }
+
+    ctx.beginPath();
+    ctx.fillStyle = this._options.noteBackgroundColor;
+    ctx.roundRect(boxX, boxY, boxW, boxH, 5);
+    ctx.fill();
+    ctx.fillStyle = this._options.noteTextColor;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, centerX, boxY + boxH / 2);
+  }
+}
+
+function ellipsizeCanvasText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  const suffix = "...";
+  let next = text;
+  while (next.length > 0 && ctx.measureText(`${next}${suffix}`).width > maxWidth) {
+    next = next.slice(0, -1);
+  }
+  return next.length > 0 ? `${next}${suffix}` : suffix;
 }
 
 /* ------------------------------------------------------------------ */

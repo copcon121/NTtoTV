@@ -107,6 +107,7 @@ type DrawingPlacement = {
   anchors: AnchorPoint[];
   options?: DrawingOptions;
   preview: DrawingPrimitive | null;
+  rawPreviewAnchor?: AnchorPoint;
   pointerId?: number;
   lastPoint?: ChartPoint;
 };
@@ -143,6 +144,8 @@ export class DrawingManager implements IDrawingManager {
   private _onClick: ((e: MouseEventParams) => void) | null = null;
   private _onMouseMove: ((e: MouseEventParams) => void) | null = null;
   private _onKeyDown: ((e: KeyboardEvent) => void) | null = null;
+  private _onKeyUp: ((e: KeyboardEvent) => void) | null = null;
+  private _onWindowBlur: (() => void) | null = null;
   private _onPointerDown: ((e: PointerEvent) => void) | null = null;
   private _onPointerMove: ((e: PointerEvent) => void) | null = null;
   private _onPointerUp: ((e: PointerEvent) => void) | null = null;
@@ -154,6 +157,7 @@ export class DrawingManager implements IDrawingManager {
   private _actionsEl: HTMLDivElement | null = null;
   private _widthActionButton: HTMLButtonElement | null = null;
   private _styleActionButton: HTMLButtonElement | null = null;
+  private _noteActionButton: HTMLButtonElement | null = null;
   private _lockActionButton: HTMLButtonElement | null = null;
   private _deleteActionButton: HTMLButtonElement | null = null;
   private _profileMenuEl: HTMLDivElement | null = null;
@@ -165,11 +169,13 @@ export class DrawingManager implements IDrawingManager {
   private _onActionPointerDown: ((e: Event) => void) | null = null;
   private _onWidthActionClick: ((e: Event) => void) | null = null;
   private _onStyleActionClick: ((e: Event) => void) | null = null;
+  private _onNoteActionClick: ((e: Event) => void) | null = null;
   private _onLockActionClick: ((e: Event) => void) | null = null;
   private _onDeleteActionClick: ((e: Event) => void) | null = null;
   private _lastProfileTap:
     | { drawingId: string; time: number; x: number; y: number }
     | null = null;
+  private _shiftKeyDown = false;
 
   get drawingCount(): number {
     return this._drawings.size;
@@ -198,9 +204,26 @@ export class DrawingManager implements IDrawingManager {
       ) {
         this.removeDrawing(this._selectedDrawingId);
         e.preventDefault();
+        return;
+      }
+      if (e.key === "Shift") {
+        this._shiftKeyDown = true;
+        this._updatePlacementPreviewForModifier();
       }
     };
     document.addEventListener("keydown", this._onKeyDown);
+    this._onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== "Shift") return;
+      this._shiftKeyDown = false;
+      this._updatePlacementPreviewForModifier();
+    };
+    document.addEventListener("keyup", this._onKeyUp);
+    this._onWindowBlur = () => {
+      if (!this._shiftKeyDown) return;
+      this._shiftKeyDown = false;
+      this._updatePlacementPreviewForModifier();
+    };
+    window.addEventListener("blur", this._onWindowBlur);
 
     this._onPointerDown = (e: PointerEvent) => this._beginEdit(e);
     this._onPointerMove = (e: PointerEvent) => this._updateEdit(e);
@@ -252,7 +275,7 @@ export class DrawingManager implements IDrawingManager {
 
       const anchor = this._anchorFromMouseParam(param);
       if (anchor === null) return;
-      this._addAnchor(anchor, param.sourceEvent?.shiftKey === true);
+      this._addAnchor(anchor, this._isShiftConstraintActive(param.sourceEvent));
     };
     this._chart.subscribeClick(this._onClick);
 
@@ -270,9 +293,10 @@ export class DrawingManager implements IDrawingManager {
 
         const rawPreviewAnchor = this._anchorFromMouseParam(param);
         if (rawPreviewAnchor === null) return;
+        this._placement.rawPreviewAnchor = rawPreviewAnchor;
         const previewAnchor = this._constrainPlacementAnchor(
           rawPreviewAnchor,
-          param.sourceEvent?.shiftKey === true,
+          this._isShiftConstraintActive(param.sourceEvent),
         );
 
         // Update or create preview
@@ -401,6 +425,14 @@ export class DrawingManager implements IDrawingManager {
       document.removeEventListener("keydown", this._onKeyDown);
       this._onKeyDown = null;
     }
+    if (this._onKeyUp) {
+      document.removeEventListener("keyup", this._onKeyUp);
+      this._onKeyUp = null;
+    }
+    if (this._onWindowBlur) {
+      window.removeEventListener("blur", this._onWindowBlur);
+      this._onWindowBlur = null;
+    }
     if (this._container && this._onPointerDown) {
       this._container.removeEventListener("pointerdown", this._onPointerDown);
       this._onPointerDown = null;
@@ -463,6 +495,30 @@ export class DrawingManager implements IDrawingManager {
       return anchor;
     }
     return { ...anchor, price: this._placement.anchors[0].price };
+  }
+
+  private _isShiftConstraintActive(sourceEvent?: { shiftKey?: boolean }): boolean {
+    return this._shiftKeyDown || sourceEvent?.shiftKey === true;
+  }
+
+  private _updatePlacementPreviewForModifier(): void {
+    const placement = this._placement;
+    if (
+      !placement ||
+      placement.tool !== "trendline" ||
+      placement.anchors.length < 1 ||
+      !placement.rawPreviewAnchor ||
+      !placement.preview
+    ) {
+      return;
+    }
+    placement.preview.setAnchors([
+      ...placement.anchors,
+      this._constrainPlacementAnchor(
+        placement.rawPreviewAnchor,
+        this._shiftKeyDown,
+      ),
+    ]);
   }
 
   private _anchorFromPointerEvent(e: PointerEvent): AnchorPoint | null {
@@ -1343,6 +1399,10 @@ export class DrawingManager implements IDrawingManager {
     this._styleActionButton.type = "button";
     this._styleActionButton.className = "drawing-selection-action";
 
+    this._noteActionButton = document.createElement("button");
+    this._noteActionButton.type = "button";
+    this._noteActionButton.className = "drawing-selection-action";
+
     this._lockActionButton = document.createElement("button");
     this._lockActionButton.type = "button";
     this._lockActionButton.className = "drawing-selection-action";
@@ -1357,6 +1417,7 @@ export class DrawingManager implements IDrawingManager {
     this._actionsEl.append(
       this._widthActionButton,
       this._styleActionButton,
+      this._noteActionButton,
       this._lockActionButton,
       this._deleteActionButton,
     );
@@ -1376,6 +1437,11 @@ export class DrawingManager implements IDrawingManager {
       e.stopPropagation();
       this._toggleSelectedLineStyle();
     };
+    this._onNoteActionClick = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._editSelectedLineNote();
+    };
     this._onLockActionClick = (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
@@ -1394,6 +1460,7 @@ export class DrawingManager implements IDrawingManager {
     this._actionsEl.addEventListener("click", this._onActionPointerDown);
     this._widthActionButton.addEventListener("click", this._onWidthActionClick);
     this._styleActionButton.addEventListener("click", this._onStyleActionClick);
+    this._noteActionButton.addEventListener("click", this._onNoteActionClick);
     this._lockActionButton.addEventListener("click", this._onLockActionClick);
     this._deleteActionButton.addEventListener("click", this._onDeleteActionClick);
     this._updateSelectionActions();
@@ -1411,6 +1478,9 @@ export class DrawingManager implements IDrawingManager {
     if (this._styleActionButton && this._onStyleActionClick) {
       this._styleActionButton.removeEventListener("click", this._onStyleActionClick);
     }
+    if (this._noteActionButton && this._onNoteActionClick) {
+      this._noteActionButton.removeEventListener("click", this._onNoteActionClick);
+    }
     if (this._lockActionButton && this._onLockActionClick) {
       this._lockActionButton.removeEventListener("click", this._onLockActionClick);
     }
@@ -1421,11 +1491,13 @@ export class DrawingManager implements IDrawingManager {
     this._actionsEl = null;
     this._widthActionButton = null;
     this._styleActionButton = null;
+    this._noteActionButton = null;
     this._lockActionButton = null;
     this._deleteActionButton = null;
     this._onActionPointerDown = null;
     this._onWidthActionClick = null;
     this._onStyleActionClick = null;
+    this._onNoteActionClick = null;
     this._onLockActionClick = null;
     this._onDeleteActionClick = null;
   }
@@ -1446,6 +1518,18 @@ export class DrawingManager implements IDrawingManager {
     const lineStyle: DrawingLineStyle =
       drawing.renderOptions.lineStyle === "dashed" ? "solid" : "dashed";
     drawing.setOptions({ lineStyle });
+    this._updateSelectionActions();
+    this._notifyStateChange();
+  }
+
+  private _editSelectedLineNote(): void {
+    const drawing = this._selectedStyleDrawing();
+    if (!drawing) return;
+    const current = drawing.renderOptions.noteText;
+    const result = window.prompt("Line note", current);
+    if (result === null) return;
+    const noteText = normalizeLineNote(result);
+    drawing.setOptions({ noteText: noteText || undefined });
     this._updateSelectionActions();
     this._notifyStateChange();
   }
@@ -1479,8 +1563,9 @@ export class DrawingManager implements IDrawingManager {
     const el = this._actionsEl;
     const widthButton = this._widthActionButton;
     const styleButton = this._styleActionButton;
+    const noteButton = this._noteActionButton;
     const lockButton = this._lockActionButton;
-    if (!el || !widthButton || !styleButton || !lockButton) return;
+    if (!el || !widthButton || !styleButton || !noteButton || !lockButton) return;
     const id = this._selectedDrawingId;
     const drawing = id !== null ? this._drawings.get(id) : undefined;
     if (
@@ -1510,6 +1595,7 @@ export class DrawingManager implements IDrawingManager {
         : null;
     widthButton.hidden = styleDrawing === null;
     styleButton.hidden = styleDrawing === null;
+    noteButton.hidden = styleDrawing === null;
     if (styleDrawing !== null) {
       const bold = styleDrawing.renderOptions.width >= 3;
       widthButton.title = bold ? "Use thin line" : "Use bold line";
@@ -1524,9 +1610,16 @@ export class DrawingManager implements IDrawingManager {
       styleButton.setAttribute("aria-pressed", dashed ? "true" : "false");
       styleButton.classList.toggle("is-active", dashed);
       styleButton.innerHTML = dashed ? solidLineIconSvg() : dashedLineIconSvg();
+
+      const hasNote = styleDrawing.renderOptions.noteText.length > 0;
+      noteButton.title = hasNote ? "Edit line note" : "Add line note";
+      noteButton.setAttribute("aria-label", hasNote ? "Edit line note" : "Add line note");
+      noteButton.setAttribute("aria-pressed", hasNote ? "true" : "false");
+      noteButton.classList.toggle("is-active", hasNote);
+      noteButton.innerHTML = noteIconSvg();
     }
 
-    const actionWidth = styleDrawing === null ? 82 : 154;
+    const actionWidth = styleDrawing === null ? 82 : 190;
     const actionHeight = 38;
     const left = clamp(position.x - actionWidth / 2, 8, paneSize.width - actionWidth - 8);
     let top = position.y - actionHeight - 10;
@@ -1620,6 +1713,10 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+function normalizeLineNote(value: string): string {
+  return value.trim().replace(/\s+/g, " ").slice(0, 120);
+}
+
 function thinLineIconSvg(): string {
   return [
     '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"',
@@ -1652,6 +1749,17 @@ function dashedLineIconSvg(): string {
     '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"',
     ' stroke-width="2" stroke-linecap="round" stroke-dasharray="3 3" aria-hidden="true">',
     '<path d="M4 12h16" />',
+    '</svg>',
+  ].join("");
+}
+
+function noteIconSvg(): string {
+  return [
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"',
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">',
+    '<path d="M5 5h14v10H9l-4 4V5z" />',
+    '<path d="M8 9h8" />',
+    '<path d="M8 12h5" />',
     '</svg>',
   ].join("");
 }

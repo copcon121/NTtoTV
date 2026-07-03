@@ -172,11 +172,6 @@ export function drawFootprint(
       contentTop,
       contentBottom,
       plotRight,
-      dataMinPrice,
-      dataMaxPrice,
-      priceStep,
-      rowH,
-      yForPrice,
     });
   }
 
@@ -266,14 +261,6 @@ export function drawFootprint(
     }
   });
 
-  if (standalone) {
-    drawTimeAxis(ctx, panelBars.map(({ bar }) => bar), {
-      plotLeft,
-      plotRight,
-      barW,
-      panelBottom,
-    });
-  }
   ctx.restore();
 }
 
@@ -287,77 +274,11 @@ function drawStandaloneFrame(
     contentTop: number;
     contentBottom: number;
     plotRight: number;
-    dataMinPrice: number;
-    dataMaxPrice: number;
-    priceStep: number;
-    rowH: number;
-    yForPrice: (price: number) => number;
   },
 ): void {
   ctx.strokeStyle = "#d4d4d4";
   ctx.lineWidth = 1;
   ctx.strokeRect(input.panelX, input.panelY, input.panelW, input.panelH);
-
-  ctx.strokeStyle = MZ_THEME.axis;
-  ctx.beginPath();
-  ctx.moveTo(input.plotRight, input.contentTop);
-  ctx.lineTo(input.plotRight, input.contentBottom);
-  ctx.stroke();
-
-  const labelEvery = Math.max(1, Math.ceil(24 / Math.max(1, input.rowH)));
-  const minTick = Math.floor(input.dataMinPrice / input.priceStep);
-  const maxTick = Math.ceil(input.dataMaxPrice / input.priceStep);
-  ctx.font = "11px Arial";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  for (let tick = minTick; tick <= maxTick; tick++) {
-    if ((tick - minTick) % labelEvery !== 0 && tick !== maxTick) continue;
-    const price = roundPrice(tick * input.priceStep);
-    const y = input.yForPrice(price);
-    if (y < input.contentTop || y > input.contentBottom) continue;
-    ctx.strokeStyle = MZ_THEME.grid;
-    ctx.beginPath();
-    ctx.moveTo(input.panelX + 10, y);
-    ctx.lineTo(input.plotRight, y);
-    ctx.stroke();
-    ctx.fillStyle = MZ_THEME.axis;
-    ctx.fillText(formatPrice(price, input.priceStep), input.plotRight + 6, y);
-  }
-}
-
-function drawTimeAxis(
-  ctx: CanvasRenderingContext2D,
-  bars: readonly FootprintBar[],
-  input: {
-    plotLeft: number;
-    plotRight: number;
-    barW: number;
-    panelBottom: number;
-  },
-): void {
-  ctx.strokeStyle = MZ_THEME.axis;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(input.plotLeft, input.panelBottom - 28);
-  ctx.lineTo(input.plotRight, input.panelBottom - 28);
-  ctx.stroke();
-
-  const every = Math.max(1, Math.ceil(58 / Math.max(1, input.barW)));
-  ctx.fillStyle = MZ_THEME.axis;
-  ctx.font = "11px Arial";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  bars.forEach((bar, index) => {
-    if (
-      index !== 0 &&
-      index !== bars.length - 1 &&
-      index % every !== 0
-    ) {
-      return;
-    }
-    const x = input.plotLeft + input.barW * index + input.barW / 2;
-    ctx.fillText(formatBarTime(bar.time), x, input.panelBottom - 22);
-  });
 }
 
 function inferPriceStep(bars: readonly FootprintBar[]): number {
@@ -419,21 +340,6 @@ function formatCellVolume(volume: number): string {
     return `${formatScaledVolume(volume / 1_000)}K`;
   }
   return String(volume);
-}
-
-function formatPrice(price: number, priceStep: number): string {
-  const decimals = priceStep < 1
-    ? Math.min(4, Math.max(1, Math.ceil(Math.abs(Math.log10(priceStep)))))
-    : 0;
-  return price.toFixed(decimals);
-}
-
-function formatBarTime(time: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(time));
 }
 
 function formatScaledVolume(value: number): string {

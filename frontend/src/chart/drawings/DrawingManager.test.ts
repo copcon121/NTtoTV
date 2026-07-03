@@ -139,6 +139,24 @@ function pressDelete() {
   );
 }
 
+function pressShift() {
+  document.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      bubbles: true,
+      key: "Shift",
+    }),
+  );
+}
+
+function releaseShift() {
+  document.dispatchEvent(
+    new KeyboardEvent("keyup", {
+      bubbles: true,
+      key: "Shift",
+    }),
+  );
+}
+
 describe("DrawingManager selection", () => {
   it("keeps rectangle edit handles hidden until the drawing is selected", () => {
     const { attached, chart, clickHandlers, container, manager } = makeHarness();
@@ -281,7 +299,46 @@ describe("DrawingManager selection", () => {
     container.remove();
   });
 
+  it("adds and clears a note on a selected line drawing", () => {
+    const prompt = vi.spyOn(window, "prompt");
+    prompt.mockReturnValueOnce(" breakout retest ");
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("trendline");
+    placeAnchors(clickHandlers, [
+      { x: 10, y: 20 },
+      { x: 60, y: 80 },
+    ]);
+
+    pointerDown(container, 35, 50);
+    pointerUp(container, 35, 50);
+
+    const addNoteButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Add line note"]',
+    );
+    expect(addNoteButton).not.toBeNull();
+    addNoteButton!.click();
+
+    expect(prompt).toHaveBeenCalledWith("Line note", "");
+    expect(manager.exportState()[0].options?.noteText).toBe("breakout retest");
+    const editNoteButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit line note"]',
+    );
+    expect(editNoteButton).not.toBeNull();
+
+    prompt.mockReturnValueOnce(" ");
+    editNoteButton!.click();
+
+    expect(prompt).toHaveBeenLastCalledWith("Line note", "breakout retest");
+    expect(manager.exportState()[0].options?.noteText).toBeUndefined();
+
+    prompt.mockRestore();
+    manager.dispose();
+    container.remove();
+  });
+
   it("changes horizontal ray style from selected drawing actions", () => {
+    const prompt = vi.spyOn(window, "prompt");
+    prompt.mockReturnValueOnce("HTF level");
     const { clickHandlers, container, manager } = makeHarness();
     manager.startDrawing("horizontal_ray");
     placeAnchors(clickHandlers, [{ x: 20, y: 40 }]);
@@ -295,12 +352,17 @@ describe("DrawingManager selection", () => {
     container.querySelector<HTMLButtonElement>(
       'button[aria-label="Use dashed line"]',
     )!.click();
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Add line note"]',
+    )!.click();
 
     const [ray] = manager.exportState();
     expect(ray.tool).toBe("horizontal_ray");
     expect(ray.options?.lineWidth).toBe(3);
     expect(ray.options?.lineStyle).toBe("dashed");
+    expect(ray.options?.noteText).toBe("HTF level");
 
+    prompt.mockRestore();
     manager.dispose();
     container.remove();
   });
@@ -585,6 +647,50 @@ describe("DrawingManager trendline constraints", () => {
     expect(preview.anchors[0].price).toBe(20);
     expect(preview.anchors[1].price).toBe(20);
     expect(preview.anchors[1].logical).toBe(70);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("updates an existing trendline preview when Shift is pressed or released", () => {
+    const { attached, clickHandlers, container, crosshairHandlers, manager } =
+      makeHarness();
+    manager.startDrawing("trendline");
+
+    clickHandlers[0]({ point: { x: 10, y: 20 }, paneIndex: 0 });
+    crosshairHandlers[0]({
+      point: { x: 70, y: 85 },
+      paneIndex: 0,
+    });
+
+    const preview = attached[0] as TrendLinePrimitive;
+    expect(preview.anchors[1].price).toBe(85);
+
+    pressShift();
+    expect(preview.anchors[0].price).toBe(20);
+    expect(preview.anchors[1].price).toBe(20);
+    expect(preview.anchors[1].logical).toBe(70);
+
+    releaseShift();
+    expect(preview.anchors[1].price).toBe(85);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("uses held Shift for the final trendline click even without event modifier data", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("trendline");
+
+    clickHandlers[0]({ point: { x: 10, y: 20 }, paneIndex: 0 });
+    pressShift();
+    clickHandlers[0]({ point: { x: 70, y: 85 }, paneIndex: 0 });
+    releaseShift();
+
+    const [trendline] = manager.exportState();
+    expect(trendline.tool).toBe("trendline");
+    expect(trendline.anchors[0].price).toBe(20);
+    expect(trendline.anchors[1].price).toBe(20);
 
     manager.dispose();
     container.remove();

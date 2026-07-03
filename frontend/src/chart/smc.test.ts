@@ -54,6 +54,38 @@ describe("SMC overlay", () => {
     );
   });
 
+  it("extends structure break lines past the break bar using 30-minute spacing", () => {
+    const thirtyMinutes = 30 * 60_000;
+    const overlay = computeSmcOverlay(
+      [
+        bar(0, 9.5, 10, 9, 9.5),
+        bar(thirtyMinutes, 11.5, 12, 11, 11.5),
+        bar(2 * thirtyMinutes, 10.5, 11, 10, 10.5),
+        bar(3 * thirtyMinutes, 9.5, 10, 9, 9.5),
+        bar(4 * thirtyMinutes, 10, 11, 8, 10),
+        bar(5 * thirtyMinutes, 12.5, 13, 9, 12.5),
+      ],
+      {
+        ...DEFAULT_SMC_SETTINGS,
+        enabled: true,
+        swingLength: 2,
+        internalLength: 1,
+      },
+    );
+
+    const line = overlay.lines.find(
+      (candidate) => candidate.scope === "swing" && candidate.label === "BOS",
+    );
+
+    expect(line).toEqual(
+      expect.objectContaining({
+        startTime: thirtyMinutes,
+        endTime: 35 * thirtyMinutes,
+        price: 12,
+      }),
+    );
+  });
+
   it("keeps the full candle for normal-range bullish order blocks", () => {
     const overlay = computeSmcOverlay(
       [

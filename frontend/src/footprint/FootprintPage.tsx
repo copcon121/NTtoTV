@@ -26,7 +26,7 @@ const SYMBOL = "GC";
 const CHART_CONTRACT = SYMBOL;
 const DEFAULT_LATEST_COUNT = 50;
 const MIN_LATEST_COUNT = 10;
-const MAX_LATEST_COUNT = 100;
+const MAX_LATEST_COUNT = 300;
 const DEFAULT_HISTORY_CONTEXT = 3;
 const MIN_HISTORY_CONTEXT = 3;
 const MAX_HISTORY_CONTEXT = 20;
@@ -44,19 +44,19 @@ const identityPriceToY = (price: number) => price;
 type PageMode = "latest" | "history";
 type ChartDragState =
   | {
-      mode: "pan";
-      pointerId: number;
-      startX: number;
-      startY: number;
-      scrollLeft: number;
-      scrollTop: number;
-    }
+    mode: "pan";
+    pointerId: number;
+    startX: number;
+    startY: number;
+    scrollLeft: number;
+    scrollTop: number;
+  }
   | {
-      mode: "scale";
-      pointerId: number;
-      startY: number;
-      rowHeightPx: number;
-    };
+    mode: "scale";
+    pointerId: number;
+    startY: number;
+    rowHeightPx: number;
+  };
 
 export function FootprintPage() {
   const endpoints = useMemo(() => resolveEndpoints(), []);
@@ -80,6 +80,7 @@ export function FootprintPage() {
   const [isDraggingChart, setIsDraggingChart] = useState(false);
   const [isScalingPrice, setIsScalingPrice] = useState(false);
   const [rowHeightPx, setRowHeightPx] = useState(DEFAULT_ROW_HEIGHT_PX);
+  const [scrollView, setScrollView] = useState({ left: 0, top: 0 });
   const [historyMeta, setHistoryMeta] = useState<{
     at: number;
     context: number;
@@ -203,6 +204,9 @@ export function FootprintPage() {
     }),
     [canvasHeight, canvasWidth],
   );
+  const updateScrollView = (element: HTMLElement) => {
+    setScrollView({ left: element.scrollLeft, top: element.scrollTop });
+  };
   const statusText = statusFor({
     mode,
     loading,
@@ -283,6 +287,7 @@ export function FootprintPage() {
     } else {
       target.scrollLeft = drag.scrollLeft - (event.clientX - drag.startX);
       target.scrollTop = drag.scrollTop - (event.clientY - drag.startY);
+      updateScrollView(target);
     }
     event.preventDefault();
   };
@@ -352,31 +357,116 @@ export function FootprintPage() {
           {statusText}
         </div>
       </header>
-      <main
-        ref={canvasHostRef}
-        className={`footprint-page-canvas-shell${
-          isDraggingChart ? " is-dragging" : ""
-        }${isScalingPrice ? " is-scaling-price" : ""}`}
-        onPointerDown={startChartDrag}
-        onPointerMove={moveChartDrag}
-        onPointerUp={stopChartDrag}
-        onPointerCancel={stopChartDrag}
-        onDoubleClick={resetPriceScale}
-      >
-        <FootprintCanvas
-          bars={bars}
-          viewport={viewport}
-          settings={DEFAULT_FOOTPRINT_SETTINGS}
-          displayCount={barCount}
-          layout="standalone"
+      <div className="footprint-page-chart-wrap">
+        <main
+          ref={canvasHostRef}
+          className={`footprint-page-canvas-shell${isDraggingChart ? " is-dragging" : ""
+            }${isScalingPrice ? " is-scaling-price" : ""}`}
+          onPointerDown={startChartDrag}
+          onPointerMove={moveChartDrag}
+          onPointerUp={stopChartDrag}
+          onPointerCancel={stopChartDrag}
+          onDoubleClick={resetPriceScale}
+          onScroll={(event) => updateScrollView(event.currentTarget)}
+        >
+          <FootprintCanvas
+            bars={bars}
+            viewport={viewport}
+            settings={DEFAULT_FOOTPRINT_SETTINGS}
+            displayCount={barCount}
+            layout="standalone"
+          />
+        </main>
+        <FootprintStickyAxes
+          bars={visibleBars}
+          barCount={barCount}
+          rowHeightPx={rowHeightPx}
+          canvasWidth={canvasWidth}
+          canvasHeight={canvasHeight}
+          viewportWidth={canvasHostSize.width}
+          viewportHeight={canvasHostSize.height}
+          scrollLeft={scrollView.left}
+          scrollTop={scrollView.top}
         />
-      </main>
+      </div>
     </div>
   );
 }
 
 function mapFromBars(bars: readonly FootprintBar[]): Map<number, FootprintBar> {
   return new Map(bars.map((bar) => [bar.time, bar]));
+}
+
+function FootprintStickyAxes({
+  bars,
+  barCount,
+  rowHeightPx,
+  canvasWidth,
+  canvasHeight,
+  viewportWidth,
+  viewportHeight,
+  scrollLeft,
+  scrollTop,
+}: {
+  bars: readonly FootprintBar[];
+  barCount: number;
+  rowHeightPx: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  scrollLeft: number;
+  scrollTop: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, viewportWidth, viewportHeight);
+    if (bars.length === 0 || viewportWidth <= 0 || viewportHeight <= 0) return;
+
+    const layout = computeStandaloneLayout({
+      bars,
+      barCount,
+      rowHeightPx,
+      canvasWidth,
+      canvasHeight,
+    });
+    if (!layout) return;
+
+    drawStickyPriceAxis(ctx, layout, {
+      width: viewportWidth,
+      height: viewportHeight,
+      scrollTop,
+    });
+    drawStickyTimeAxis(ctx, bars, layout, {
+      width: viewportWidth,
+      height: viewportHeight,
+      scrollLeft,
+    });
+  }, [
+    barCount,
+    bars,
+    canvasHeight,
+    canvasWidth,
+    rowHeightPx,
+    scrollLeft,
+    scrollTop,
+    viewportHeight,
+    viewportWidth,
+  ]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="footprint-page-axis-overlay"
+      width={Math.max(1, viewportWidth)}
+      height={Math.max(1, viewportHeight)}
+      aria-hidden="true"
+    />
+  );
 }
 
 function estimateStandaloneCanvasHeight(
@@ -423,6 +513,167 @@ function inferPriceStep(bars: readonly FootprintBar[]): number {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function computeStandaloneLayout(input: {
+  bars: readonly FootprintBar[];
+  barCount: number;
+  rowHeightPx: number;
+  canvasWidth: number;
+  canvasHeight: number;
+}): {
+  dataMinPrice: number;
+  dataMaxPrice: number;
+  priceStep: number;
+  rowH: number;
+  contentTop: number;
+  contentBottom: number;
+  plotLeft: number;
+  plotRight: number;
+  barW: number;
+  yForPrice: (price: number) => number;
+} | null {
+  const prices = input.bars
+    .flatMap((bar) => [
+      bar.open,
+      bar.high,
+      bar.low,
+      bar.close,
+      bar.poc,
+      ...bar.rows.map((row) => row.price),
+    ])
+    .filter(isFiniteNumber);
+  if (prices.length === 0) return null;
+
+  const priceStep = inferPriceStep(input.bars);
+  let dataMinPrice = Math.min(...prices);
+  let dataMaxPrice = Math.max(...prices);
+  if (dataMinPrice >= dataMaxPrice) {
+    dataMinPrice -= 20 * priceStep;
+    dataMaxPrice += 20 * priceStep;
+  }
+  dataMinPrice -= 5 * priceStep;
+  dataMaxPrice += 5 * priceStep;
+
+  const panelX = 10;
+  const panelY = 20;
+  const panelW = Math.max(40, input.canvasWidth - 20);
+  const panelH = Math.max(40, input.canvasHeight - 40);
+  const panelBottom = panelY + panelH;
+  const contentTop = panelY + 25;
+  const contentBottom = panelBottom - 34;
+  const contentHeight = contentBottom - contentTop;
+  if (contentHeight <= 0) return null;
+
+  const priceRange = Math.max(priceStep, dataMaxPrice - dataMinPrice);
+  const numPriceLevels = Math.max(10, Math.ceil(priceRange / priceStep) + 1);
+  const rowH = Math.max(1, Math.min(32, contentHeight / numPriceLevels));
+  const visibleRange = Math.max(priceRange, (contentHeight / rowH) * priceStep);
+  const viewportTopPrice =
+    dataMaxPrice + Math.max(0, visibleRange - priceRange) / 2;
+  const plotLeft = panelX + 10;
+  const plotRight = panelX + panelW - 58 - 10;
+  const plotW = Math.max(20, plotRight - plotLeft);
+  const barW = plotW / Math.max(1, input.barCount);
+  return {
+    dataMinPrice,
+    dataMaxPrice,
+    priceStep,
+    rowH,
+    contentTop,
+    contentBottom,
+    plotLeft,
+    plotRight,
+    barW,
+    yForPrice: (price: number) =>
+      contentTop + ((viewportTopPrice - price) / priceStep) * rowH,
+  };
+}
+
+function drawStickyPriceAxis(
+  ctx: CanvasRenderingContext2D,
+  layout: NonNullable<ReturnType<typeof computeStandaloneLayout>>,
+  viewport: { width: number; height: number; scrollTop: number },
+): void {
+  const axisW = 64;
+  const axisX = Math.max(0, viewport.width - axisW);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+  ctx.fillRect(axisX, 0, axisW, viewport.height);
+
+  ctx.strokeStyle = "#737373";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(axisX, 0);
+  ctx.lineTo(axisX, viewport.height);
+  ctx.stroke();
+
+  const labelEvery = Math.max(1, Math.ceil(24 / Math.max(1, layout.rowH)));
+  const minTick = Math.floor(layout.dataMinPrice / layout.priceStep);
+  const maxTick = Math.ceil(layout.dataMaxPrice / layout.priceStep);
+  ctx.font = "11px Arial";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#666666";
+  for (let tick = minTick; tick <= maxTick; tick++) {
+    if ((tick - minTick) % labelEvery !== 0 && tick !== maxTick) continue;
+    const price = roundPrice(tick * layout.priceStep);
+    const y = layout.yForPrice(price) - viewport.scrollTop;
+    if (y < -16 || y > viewport.height + 16) continue;
+    ctx.fillText(formatAxisPrice(price, layout.priceStep), axisX + 6, y);
+  }
+}
+
+function drawStickyTimeAxis(
+  ctx: CanvasRenderingContext2D,
+  bars: readonly FootprintBar[],
+  layout: NonNullable<ReturnType<typeof computeStandaloneLayout>>,
+  viewport: { width: number; height: number; scrollLeft: number },
+): void {
+  const axisH = 34;
+  const axisY = Math.max(0, viewport.height - axisH);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+  ctx.fillRect(0, axisY, viewport.width, axisH);
+
+  ctx.strokeStyle = "#737373";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, axisY + 6);
+  ctx.lineTo(viewport.width, axisY + 6);
+  ctx.stroke();
+
+  const every = Math.max(1, Math.ceil(58 / Math.max(1, layout.barW)));
+  ctx.fillStyle = "#666666";
+  ctx.font = "11px Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  bars.forEach((bar, index) => {
+    if (index !== 0 && index !== bars.length - 1 && index % every !== 0) {
+      return;
+    }
+    const x = layout.plotLeft + layout.barW * index + layout.barW / 2 - viewport.scrollLeft;
+    if (x < -40 || x > viewport.width + 40) return;
+    ctx.fillText(formatAxisTime(bar.time), x, axisY + 11);
+  });
+}
+
+function roundPrice(price: number): number {
+  return Math.round(price * 1e10) / 1e10;
+}
+
+function formatAxisPrice(price: number, priceStep: number): string {
+  const decimals =
+    priceStep < 1
+      ? Math.min(4, Math.max(1, Math.ceil(Math.abs(Math.log10(priceStep)))))
+      : 0;
+  return price.toFixed(decimals);
+}
+
+function formatAxisTime(time: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(time));
 }
 
 function isPointerOnPriceAxis(

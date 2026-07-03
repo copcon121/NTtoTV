@@ -131,6 +131,8 @@ export interface DrawingOptions {
   fixedRangeProfileDevelopingPoc?: boolean;
   /** For price range: show percentage and absolute diff labels. */
   showLabels?: boolean;
+  /** For line drawings: user note rendered on the line/ray. */
+  noteText?: string;
 }
 
 /* ------------------------------------------------------------------ */

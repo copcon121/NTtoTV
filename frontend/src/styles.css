@@ -1432,10 +1432,16 @@ body {
   white-space: nowrap;
 }
 
-.footprint-page-canvas-shell {
+.footprint-page-chart-wrap {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  background: #ffffff;
+}
+
+.footprint-page-canvas-shell {
+  position: absolute;
+  inset: 0;
   overflow: auto;
   background: #ffffff;
   cursor: grab;
@@ -1449,6 +1455,16 @@ body {
 
 .footprint-page-canvas-shell.is-scaling-price {
   cursor: ns-resize;
+}
+
+.footprint-page-axis-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 @media (max-width: 760px) {

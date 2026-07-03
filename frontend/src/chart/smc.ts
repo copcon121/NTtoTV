@@ -14,6 +14,7 @@ export interface SmcSettings {
   fvgThresholdMultiplier: number;
   fvgVolumeConfirmation: boolean;
   fvgExtendBars: number;
+  structureLineExtendBars: number;
   maxZoneAge: number;
   maxMarkers: number;
   maxZones: number;
@@ -36,6 +37,7 @@ export const DEFAULT_SMC_SETTINGS: SmcSettings = {
   fvgThresholdMultiplier: 1.5,
   fvgVolumeConfirmation: false,
   fvgExtendBars: 3,
+  structureLineExtendBars: 30,
   maxZoneAge: 500,
   maxMarkers: 120,
   maxZones: 20,
@@ -50,6 +52,7 @@ type Scope = "swing" | "internal";
 const FVG_VOLUME_LOOKBACK = 20;
 const ORDER_BLOCK_WIDE_RANGE_LOOKBACK = 20;
 const ORDER_BLOCK_WIDE_RANGE_MULTIPLIER = 2;
+const DEFAULT_BAR_STEP_MS = 60_000;
 
 export type SmcMarkerKind =
   | "bos"
@@ -830,6 +833,16 @@ function settingsWithDefaults(settings?: Partial<SmcSettings>): SmcSettings {
       1,
       Math.round(settings?.fvgExtendBars ?? DEFAULT_SMC_SETTINGS.fvgExtendBars),
     ),
+    structureLineExtendBars: Math.min(
+      500,
+      Math.max(
+        0,
+        Math.round(
+          settings?.structureLineExtendBars ??
+            DEFAULT_SMC_SETTINGS.structureLineExtendBars,
+        ),
+      ),
+    ),
   };
 }
 
@@ -982,18 +995,63 @@ function addLine(lines: SmcLine[], line: Omit<SmcLine, "id" | "kind">): void {
   });
 }
 
+function medianPositiveStepMs(bars: readonly Bar[], centerIndex: number): number {
+  const diffs: number[] = [];
+  const start = Math.max(1, centerIndex - 40);
+  const end = Math.min(bars.length - 1, centerIndex + 40);
+  for (let index = start; index <= end; index += 1) {
+    const diff = bars[index].time - bars[index - 1].time;
+    if (Number.isFinite(diff) && diff > 0) {
+      diffs.push(diff);
+    }
+  }
+
+  if (diffs.length === 0) return DEFAULT_BAR_STEP_MS;
+  diffs.sort((a, b) => a - b);
+  return diffs[Math.floor(diffs.length / 2)] || DEFAULT_BAR_STEP_MS;
+}
+
+function extendedStructureEndTime(
+  bars: readonly Bar[],
+  breakIndex: number,
+  extendBars: number,
+): number {
+  const breakTime = bars[breakIndex]?.time;
+  if (breakTime === undefined) return 0;
+  if (extendBars <= 0) return breakTime;
+
+  const targetIndex = breakIndex + extendBars;
+  if (targetIndex < bars.length) {
+    return bars[targetIndex].time;
+  }
+
+  return (
+    breakTime + medianPositiveStepMs(bars, breakIndex) * extendBars
+  );
+}
+
 function pushStateLines(
   lines: SmcLine[],
   state: StructureState,
-  bar: Bar,
+  bars: readonly Bar[],
+  barIndex: number,
   showInternal: boolean,
+  structureLineExtendBars: number,
 ): void {
+  const bar = bars[barIndex];
+  if (!bar) return;
+  const endTime = extendedStructureEndTime(
+    bars,
+    barIndex,
+    structureLineExtendBars,
+  );
+
   if (state.bosBull && state.swingHigh) {
     addLine(lines, {
       scope: "swing",
       direction: 1,
       startTime: state.swingHigh.timestamp,
-      endTime: bar.time,
+      endTime,
       price: state.swingHigh.price,
       label: "BOS",
     });
@@ -1003,7 +1061,7 @@ function pushStateLines(
       scope: "swing",
       direction: -1,
       startTime: state.swingLow.timestamp,
-      endTime: bar.time,
+      endTime,
       price: state.swingLow.price,
       label: "BOS",
     });
@@ -1013,7 +1071,7 @@ function pushStateLines(
       scope: "swing",
       direction: 1,
       startTime: state.swingHigh.timestamp,
-      endTime: bar.time,
+      endTime,
       price: state.swingHigh.price,
       label: "CHoCH",
     });
@@ -1023,7 +1081,7 @@ function pushStateLines(
       scope: "swing",
       direction: -1,
       startTime: state.swingLow.timestamp,
-      endTime: bar.time,
+      endTime,
       price: state.swingLow.price,
       label: "CHoCH",
     });
@@ -1036,7 +1094,7 @@ function pushStateLines(
       scope: "internal",
       direction: 1,
       startTime: state.internalHigh.timestamp,
-      endTime: bar.time,
+      endTime,
       price: state.internalHigh.price,
       label: "CHoCH",
     });
@@ -1046,7 +1104,7 @@ function pushStateLines(
       scope: "internal",
       direction: -1,
       startTime: state.internalLow.timestamp,
-      endTime: bar.time,
+      endTime,
       price: state.internalLow.price,
       label: "CHoCH",
     });
@@ -1202,7 +1260,14 @@ export function computeSmcOverlay(
   bars.forEach((bar, index) => {
     const state = detector.update(bar, index);
     pushStateMarkers(markers, state, bar, cfg.showInternal);
-    pushStateLines(lines, state, bar, cfg.showInternal);
+    pushStateLines(
+      lines,
+      state,
+      bars,
+      index,
+      cfg.showInternal,
+      cfg.structureLineExtendBars,
+    );
   });
 
   const zones: SmcZone[] = [];

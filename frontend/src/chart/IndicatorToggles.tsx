@@ -223,6 +223,8 @@ export function IndicatorToggles({
   const [smcSwingDraft, setSmcSwingDraft] = useState(String(smc.swingLength));
   const [smcInternalDraft, setSmcInternalDraft] = useState(String(smc.internalLength));
   const [smcFvgExtendDraft, setSmcFvgExtendDraft] = useState(String(smc.fvgExtendBars));
+  const [smcStructureLineExtendDraft, setSmcStructureLineExtendDraft] =
+    useState(String(smc.structureLineExtendBars));
   const [smcFvgLimitDraft, setSmcFvgLimitDraft] = useState(String(smc.maxFairValueGaps));
   const [smcSwingObLimitDraft, setSmcSwingObLimitDraft] = useState(
     String(smc.maxSwingOrderBlocks),
@@ -299,6 +301,10 @@ export function IndicatorToggles({
   useEffect(() => {
     setSmcFvgExtendDraft(String(smc.fvgExtendBars));
   }, [smc.fvgExtendBars]);
+
+  useEffect(() => {
+    setSmcStructureLineExtendDraft(String(smc.structureLineExtendBars));
+  }, [smc.structureLineExtendBars]);
 
   useEffect(() => {
     setSmcFvgLimitDraft(String(smc.maxFairValueGaps));
@@ -454,6 +460,15 @@ export function IndicatorToggles({
       onSmcChange({ ...smc, fvgExtendBars: parsed });
     } else {
       setSmcFvgExtendDraft(String(smc.fvgExtendBars));
+    }
+  };
+
+  const commitSmcStructureLineExtend = () => {
+    const parsed = Math.round(Number(smcStructureLineExtendDraft));
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 500) {
+      onSmcChange({ ...smc, structureLineExtendBars: parsed });
+    } else {
+      setSmcStructureLineExtendDraft(String(smc.structureLineExtendBars));
     }
   };
 
@@ -1138,6 +1153,27 @@ export function IndicatorToggles({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       commitSmcInternalLength();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Structure line</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  className="ema-length-input"
+                  aria-label="SMC structure line extend bars"
+                  value={smcStructureLineExtendDraft}
+                  onChange={(e) =>
+                    setSmcStructureLineExtendDraft(e.currentTarget.value)
+                  }
+                  onBlur={commitSmcStructureLineExtend}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitSmcStructureLineExtend();
                       e.currentTarget.blur();
                     }
                   }}
