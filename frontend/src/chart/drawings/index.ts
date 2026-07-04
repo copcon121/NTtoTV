@@ -6,6 +6,7 @@ export { DrawingManager } from "./DrawingManager";
 export { TrendLinePrimitive } from "./TrendLinePrimitive";
 export { BrushPrimitive } from "./BrushPrimitive";
 export { FibRetracementPrimitive } from "./FibRetracementPrimitive";
+export { DateRangePrimitive } from "./DateRangePrimitive";
 export { HorizontalRayPrimitive } from "./HorizontalRayPrimitive";
 export { RectanglePrimitive } from "./RectanglePrimitive";
 export { FixedRangeDeltaProfilePrimitive } from "./FixedRangeDeltaProfilePrimitive";

@@ -1218,7 +1218,12 @@ function cloneDrawings(drawings: readonly DrawingState[]): DrawingState[] {
   return drawings.map((drawing) => ({
     ...drawing,
     anchors: drawing.anchors.map((anchor) => ({ ...anchor })),
-    options: drawing.options ? { ...drawing.options } : undefined,
+    options: drawing.options
+      ? {
+          ...drawing.options,
+          fibLevels: drawing.options.fibLevels?.map((level) => ({ ...level })),
+        }
+      : undefined,
   }));
 }
 

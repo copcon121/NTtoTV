@@ -65,6 +65,10 @@ import {
   DivergenceLinePrimitive,
   type RenderableDivergenceLine,
 } from "./DivergenceLinePrimitive";
+import {
+  WaveDeltaMboxPrimitive,
+  type RenderableWaveDeltaMbox,
+} from "./WaveDeltaMboxPrimitive";
 import { SessionVolumeProfilePrimitive } from "./SessionVolumeProfilePrimitive";
 import { type Bar } from "../cache/types";
 import type { FvgSignalUpdateMessage } from "../socket/messages";
@@ -89,6 +93,7 @@ import {
   normalizeMgannSwingSettings,
   type MgannSwingImpulseWave,
   type MgannSwingSettings,
+  type MgannSwingWaveDeltaBox,
 } from "./mgannSwing";
 
 /** One volume-delta point, keyed by backend Canonical_Timestamp ms. */
@@ -194,7 +199,7 @@ export const WAVE_DELTA_OVERLAY_SCALE_MARGINS = {
   bottom: 0.04,
 } as const;
 // Backwards-compatible export names for callers/tests that still use the old
-// CVD prop surface. The rendered line is now current wave delta, not CVD.
+// CVD prop surface. The rendered overlay is now current wave delta, not CVD.
 export const CVD_OVERLAY_PRICE_SCALE_ID = WAVE_DELTA_OVERLAY_PRICE_SCALE_ID;
 export const CVD_OVERLAY_SCALE_MARGINS = WAVE_DELTA_OVERLAY_SCALE_MARGINS;
 export const VOLUME_OVERLAY_PRICE_SCALE_ID = "volume-overlay";
@@ -220,7 +225,16 @@ const MZ_FOOTPRINT_COLORS = {
 };
 const VOLUME_UP_COLOR = "rgba(38, 166, 154, 0.50)";
 const VOLUME_DOWN_COLOR = "rgba(239, 83, 80, 0.50)";
-const WAVE_DELTA_LINE_COLOR = "#4cc9ff";
+const WAVE_DELTA_TRANSPARENT_LINE_COLOR = "rgba(0, 0, 0, 0)";
+const WAVE_DELTA_MBOX_UP_FILL = "rgba(90, 130, 220, 0.45)";
+const WAVE_DELTA_MBOX_UP_BORDER = "rgba(90, 130, 220, 1)";
+const WAVE_DELTA_MBOX_DOWN_FILL = "rgba(230, 140, 140, 0.45)";
+const WAVE_DELTA_MBOX_DOWN_BORDER = "rgba(230, 140, 140, 1)";
+const WAVE_DELTA_MBOX_DIV_UP_FILL = "rgba(150, 80, 220, 0.45)";
+const WAVE_DELTA_MBOX_DIV_UP_BORDER = "rgba(150, 80, 220, 1)";
+const WAVE_DELTA_MBOX_DIV_DOWN_FILL = "rgba(120, 70, 190, 0.45)";
+const WAVE_DELTA_MBOX_DIV_DOWN_BORDER = "rgba(120, 70, 190, 1)";
+const WAVE_DELTA_MBOX_KEEP = 500;
 const DEFAULT_WAVE_DELTA_SWING_SIZE = 2;
 const DIVERGENCE_PIVOT_LEFT = 2;
 const DIVERGENCE_PIVOT_RIGHT = 2;
@@ -448,12 +462,13 @@ export function toCandle(
     outsideBar,
     outsideBarContext,
   );
-  const candle: CandlestickData = {
+  const candle: CandlestickData & { volume: number } = {
     time: toUtcTimestamp(bar.time, displayTimeOffsetMs),
     open: bar.open,
     high: bar.high,
     low: bar.low,
     close: bar.close,
+    volume: bar.volume,
   };
   const fvgColor = fvgSignalColor(fvgSignal);
   if (fvgColor !== undefined) {
@@ -552,6 +567,57 @@ function buildWaveDeltaValues(
   return buildMgannSwingOverlay(bars, deltaByTime).waveDeltaValues;
 }
 
+function toWaveDeltaMbox(
+  box: MgannSwingWaveDeltaBox,
+  displayTimeOffsetMs: number,
+): RenderableWaveDeltaMbox {
+  const divergent =
+    (box.direction === 1 && box.value < 0) ||
+    (box.direction === -1 && box.value > 0);
+  const fillColor = divergent
+    ? box.direction === 1
+      ? WAVE_DELTA_MBOX_DIV_UP_FILL
+      : WAVE_DELTA_MBOX_DIV_DOWN_FILL
+    : box.value >= 0
+      ? WAVE_DELTA_MBOX_UP_FILL
+      : WAVE_DELTA_MBOX_DOWN_FILL;
+  const borderColor = divergent
+    ? box.direction === 1
+      ? WAVE_DELTA_MBOX_DIV_UP_BORDER
+      : WAVE_DELTA_MBOX_DIV_DOWN_BORDER
+    : box.value >= 0
+      ? WAVE_DELTA_MBOX_UP_BORDER
+      : WAVE_DELTA_MBOX_DOWN_BORDER;
+  return {
+    id: box.id,
+    startTime: toUtcTimestamp(box.startTime, displayTimeOffsetMs),
+    endTime: toUtcTimestamp(box.endTime, displayTimeOffsetMs),
+    value: box.value,
+    direction: box.direction,
+    fillColor,
+    borderColor,
+  };
+}
+
+function toWaveDeltaLineDataFromValues(
+  bars: readonly Bar[],
+  values: readonly number[],
+  displayTimeOffsetMs: number,
+): LineData[] {
+  return bars.map((bar, index) =>
+    toWaveDeltaLineData(bar, values[index] ?? 0, displayTimeOffsetMs),
+  );
+}
+
+function toWaveDeltaMboxes(
+  boxes: readonly MgannSwingWaveDeltaBox[],
+  displayTimeOffsetMs: number,
+): RenderableWaveDeltaMbox[] {
+  return boxes
+    .slice(-WAVE_DELTA_MBOX_KEEP)
+    .map((box) => toWaveDeltaMbox(box, displayTimeOffsetMs));
+}
+
 export function buildWaveDeltaLineData(
   bars: readonly Bar[],
   deltaByTime: ReadonlyMap<number, VolumeDeltaDatum>,
@@ -559,8 +625,17 @@ export function buildWaveDeltaLineData(
   swingSize = DEFAULT_WAVE_DELTA_SWING_SIZE,
 ): LineData[] {
   const values = buildWaveDeltaValues(bars, deltaByTime, swingSize);
-  return bars.map((bar, index) =>
-    toWaveDeltaLineData(bar, values[index] ?? 0, displayTimeOffsetMs),
+  return toWaveDeltaLineDataFromValues(bars, values, displayTimeOffsetMs);
+}
+
+export function buildWaveDeltaMboxData(
+  bars: readonly Bar[],
+  deltaByTime: ReadonlyMap<number, VolumeDeltaDatum>,
+  displayTimeOffsetMs = 0,
+): RenderableWaveDeltaMbox[] {
+  return toWaveDeltaMboxes(
+    buildMgannSwingOverlay(bars, deltaByTime).waveDeltaBoxes,
+    displayTimeOffsetMs,
   );
 }
 
@@ -909,6 +984,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private bigTradePrimitive: BigTradeBubblePrimitive | undefined;
   private smcPrimitive: SmcOverlayPrimitive | undefined;
   private priceDivergencePrimitive: DivergenceLinePrimitive | undefined;
+  private waveDeltaMboxPrimitive: WaveDeltaMboxPrimitive | undefined;
   private sessionVolumeProfilePrimitive: SessionVolumeProfilePrimitive | undefined;
   private waveDivergencePrimitive: DivergenceLinePrimitive | undefined;
   private smcOverlay: SmcOverlay = emptySmcOverlay();
@@ -1105,29 +1181,32 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       borderVisible: false,
     });
 
-    // Wave Delta uses the same volume-delta feed plus candle swings. It renders
-    // as the current wave's running delta, replacing the old CVD line.
+    // Wave Delta uses the same volume-delta feed plus candle swings. The line
+    // series is kept transparent as the autoscale host; the visible layer is
+    // the MBox primitive, replacing the old CVD/current-wave line.
     this.waveDeltaSeries = this.chart.addSeries(LineSeries, {
-      color: WAVE_DELTA_LINE_COLOR,
-      lineWidth: 2,
+      color: WAVE_DELTA_TRANSPARENT_LINE_COLOR,
+      lineWidth: 1,
       priceScaleId: WAVE_DELTA_OVERLAY_PRICE_SCALE_ID,
       priceFormat: { type: "volume" },
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: false,
+      visible: false,
     }, 0);
     this.waveDeltaSeries.priceScale().applyOptions({
       scaleMargins: WAVE_DELTA_OVERLAY_SCALE_MARGINS,
       borderVisible: false,
     });
-    this.waveDeltaSeries.createPriceLine({
-      price: 0,
-      color: "rgba(255, 255, 255, 0.52)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dashed,
-      axisLabelVisible: false,
-      title: "",
+    this.waveDeltaMboxPrimitive = new WaveDeltaMboxPrimitive([], {
+      topMargin: WAVE_DELTA_OVERLAY_SCALE_MARGINS.top,
+      bottomMargin: WAVE_DELTA_OVERLAY_SCALE_MARGINS.bottom,
     });
+    this.waveDeltaSeries.attachPrimitive(
+      this.waveDeltaMboxPrimitive as unknown as Parameters<
+        typeof this.waveDeltaSeries.attachPrimitive
+      >[0],
+    );
     this.waveDivergencePrimitive = new DivergenceLinePrimitive([]);
     this.waveDeltaSeries.attachPrimitive(
       this.waveDivergencePrimitive as unknown as Parameters<
@@ -1314,9 +1393,10 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.deltaSeries.applyOptions({ visible });
   }
 
-  /** Show or hide the current wave-delta line. */
+  /** Show or hide the wave-delta MBox overlay. */
   setCvdVisible(visible: boolean): void {
     this.waveDeltaSeries.applyOptions({ visible });
+    this.waveDeltaMboxPrimitive?.setVisible(visible);
   }
 
   /** Set the session volume profile data (right-edge histogram). */
@@ -1419,12 +1499,19 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   private renderWaveDeltaSeries(): void {
+    const overlay = buildMgannSwingOverlay(
+      this.candleBars,
+      this.volumeDeltaByTime,
+    );
     this.waveDeltaSeries.setData(
-      buildWaveDeltaLineData(
+      toWaveDeltaLineDataFromValues(
         this.candleBars,
-        this.volumeDeltaByTime,
+        overlay.waveDeltaValues,
         this.displayTimeOffsetMs,
       ),
+    );
+    this.waveDeltaMboxPrimitive?.setBoxes(
+      toWaveDeltaMboxes(overlay.waveDeltaBoxes, this.displayTimeOffsetMs),
     );
     this.renderWaveDeltaDivergences();
   }

@@ -65,6 +65,16 @@ export interface MgannSwingWaveDeltaLabel {
   value: number;
 }
 
+export interface MgannSwingWaveDeltaBox {
+  id: string;
+  startIndex: number;
+  endIndex: number;
+  startTime: number;
+  endTime: number;
+  direction: 1 | -1;
+  value: number;
+}
+
 export interface MgannSwingImpulseWave {
   id: string;
   direction: 1 | -1;
@@ -84,6 +94,7 @@ export interface MgannSwingOverlay {
   line: MgannSwingLinePoint[];
   signals: MgannSwingSignal[];
   waveDeltaLabels: MgannSwingWaveDeltaLabel[];
+  waveDeltaBoxes: MgannSwingWaveDeltaBox[];
   waveDeltaValues: number[];
   impulseWaves: MgannSwingImpulseWave[];
 }
@@ -818,6 +829,20 @@ function buildWaveDeltaLabels(
   }));
 }
 
+function buildWaveDeltaBoxes(
+  waves: readonly MgannSwingWave[],
+): MgannSwingWaveDeltaBox[] {
+  return waves.map((wave) => ({
+    id: `mgann-delta-box:${wave.direction}:${wave.start.time}:${wave.end.time}`,
+    startIndex: wave.start.index,
+    endIndex: wave.end.index,
+    startTime: wave.start.time,
+    endTime: wave.end.time,
+    direction: wave.direction,
+    value: wave.delta,
+  }));
+}
+
 export function buildMgannSwingOverlay(
   bars: readonly Bar[],
   deltaByTime: ReadonlyMap<number, MgannSwingDeltaPoint>,
@@ -843,6 +868,7 @@ export function buildMgannSwingOverlay(
       impulseWaves,
       normalized.waveDeltaNumbersImpulseOnly,
     ),
+    waveDeltaBoxes: buildWaveDeltaBoxes(displayWaves),
     waveDeltaValues: buildWaveDeltaValues(bars, deltaByTime, displayPivots),
     impulseWaves,
   };

@@ -41,6 +41,20 @@ describe("DrawingToolbar", () => {
     expect(onDeleteAll).toHaveBeenCalledTimes(1);
   });
 
+  it("shows date range and hides the retired vertical line tool", () => {
+    render(
+      <DrawingToolbar
+        activeTool={null}
+        drawingCount={0}
+        onToolSelect={vi.fn()}
+        onDeleteAll={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Date Range" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Vertical Line" })).toBeNull();
+  });
+
   it("toggles the mobile toolbar open and closed", () => {
     render(
       <DrawingToolbar

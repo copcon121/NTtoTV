@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { DrawingManager } from "./DrawingManager";
+import { dateRangeStats } from "./DateRangePrimitive";
+import { fibLevelPrice } from "./FibRetracementPrimitive";
 import { type RectanglePrimitive } from "./RectanglePrimitive";
 import { type TrendLinePrimitive } from "./TrendLinePrimitive";
 import type { DrawingToolType } from "./types";
@@ -51,8 +53,12 @@ function makeHarness() {
     }),
     coordinateToPrice: (y: number) => y,
     priceToCoordinate: (price: number) => price,
-    dataByIndex: (index: number) => ({ time: index }),
-    data: () => [{ time: 0 }, { time: 60 }],
+    dataByIndex: (index: number) => ({ time: index, volume: 100 }),
+    data: () =>
+      Array.from({ length: 241 }, (_, index) => ({
+        time: index,
+        volume: 100,
+      })),
   };
 
   const container = document.createElement("div");
@@ -73,7 +79,7 @@ function makeHarness() {
 
   const manager = new DrawingManager();
   manager.attach(chart as never, series as never, container);
-  return { attached, chart, clickHandlers, container, crosshairHandlers, manager };
+  return { attached, chart, clickHandlers, container, crosshairHandlers, manager, series };
 }
 
 function placeRectangle(clickHandlers: Array<(param: unknown) => void>) {
@@ -158,6 +164,30 @@ function releaseShift() {
 }
 
 describe("DrawingManager selection", () => {
+  it("computes date range bars, duration, and volume", () => {
+    const { chart, container, manager, series } = makeHarness();
+
+    const stats = dateRangeStats(chart as never, series as never, [
+      { time: 10 as never, logical: 10, price: 20 },
+      { time: 60 as never, logical: 60, price: 20 },
+    ]);
+
+    expect(stats).toEqual({
+      bars: 51,
+      durationSeconds: 50,
+      volume: 5100,
+    });
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("maps fib levels from low price to high price regardless of draw direction", () => {
+    expect(fibLevelPrice(4170.508, 4008.642, 0)).toBe(4008.642);
+    expect(fibLevelPrice(4170.508, 4008.642, 1)).toBe(4170.508);
+    expect(fibLevelPrice(4170.508, 4008.642, 1.618)).toBeGreaterThan(4170.508);
+  });
+
   it("keeps rectangle edit handles hidden until the drawing is selected", () => {
     const { attached, chart, clickHandlers, container, manager } = makeHarness();
     manager.startDrawing("rectangle");
@@ -387,12 +417,188 @@ describe("DrawingManager selection", () => {
     manager.dispose();
     container.remove();
   });
+
+  it("selects fib retracements, drags either endpoint, and deletes them", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fib_retracement");
+    placeAnchors(clickHandlers, [
+      { x: 10, y: 20 },
+      { x: 60, y: 80 },
+    ]);
+
+    pointerDown(container, 35, 43);
+    pointerUp(container, 35, 43);
+    pointerDown(container, 10, 20);
+    pointerMove(container, 20, 30);
+    pointerUp(container, 20, 30);
+
+    let [fib] = manager.exportState();
+    expect(fib.tool).toBe("fib_retracement");
+    expect(
+      fib.anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 20, price: 30 },
+      { logical: 60, price: 80 },
+    ]);
+
+    pointerDown(container, 60, 80);
+    pointerMove(container, 70, 90);
+    pointerUp(container, 70, 90);
+
+    [fib] = manager.exportState();
+    expect(
+      fib.anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 20, price: 30 },
+      { logical: 70, price: 90 },
+    ]);
+
+    pressDelete();
+    expect(manager.exportState()).toEqual([]);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("places date ranges horizontally and drags endpoints only along time", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("date_range");
+    placeAnchors(clickHandlers, [
+      { x: 10, y: 20 },
+      { x: 60, y: 90 },
+    ]);
+
+    let [range] = manager.exportState();
+    expect(range.tool).toBe("date_range");
+    expect(
+      range.anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 10, price: 20 },
+      { logical: 60, price: 20 },
+    ]);
+
+    pointerDown(container, 35, 20);
+    pointerUp(container, 35, 20);
+    pointerDown(container, 60, 20);
+    pointerMove(container, 80, 75);
+    pointerUp(container, 80, 75);
+
+    [range] = manager.exportState();
+    expect(
+      range.anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 10, price: 20 },
+      { logical: 80, price: 20 },
+    ]);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("edits fib retracement levels and colors from selected drawing actions", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fib_retracement");
+    placeAnchors(clickHandlers, [
+      { x: 10, y: 20 },
+      { x: 60, y: 80 },
+    ]);
+
+    pointerDown(container, 35, 43);
+    pointerUp(container, 35, 43);
+
+    const settingsButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit Fib levels"]',
+    );
+    expect(settingsButton).not.toBeNull();
+    settingsButton!.click();
+
+    const levelInput = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Fib level 2"]',
+    );
+    const colorInput = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Fib level 2 color"]',
+    );
+    expect(levelInput).not.toBeNull();
+    expect(colorInput).not.toBeNull();
+
+    levelInput!.value = "0.5";
+    levelInput!.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }),
+    );
+    colorInput!.value = "#00ff00";
+    colorInput!.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const [fib] = manager.exportState();
+    expect(fib.options?.fibLevels?.[1]).toEqual({
+      value: 0.5,
+      color: "#00ff00",
+      enabled: true,
+    });
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("includes the 0.5 fib retracement level by default", () => {
+    const { attached, clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fib_retracement");
+    placeAnchors(clickHandlers, [
+      { x: 10, y: 20 },
+      { x: 60, y: 80 },
+    ]);
+
+    const fib = attached[0] as { fibLevels?: readonly { value: number }[] };
+    expect(fib.fibLevels?.map((level) => level.value)).toContain(0.5);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("does not let fib retracement levels autoscale the chart price axis", () => {
+    const { attached, clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fib_retracement");
+    placeAnchors(clickHandlers, [
+      { x: 10, y: 20 },
+      { x: 60, y: 80 },
+    ]);
+
+    const fib = attached[0] as { autoscaleInfo?: unknown };
+    expect(fib.autoscaleInfo).toBeUndefined();
+
+    manager.dispose();
+    container.remove();
+  });
 });
 
 describe("DrawingManager body dragging", () => {
   it.each([
     {
       tool: "trendline",
+      anchors: [
+        { x: 10, y: 20 },
+        { x: 60, y: 80 },
+      ],
+      grab: { x: 35, y: 50 },
+      move: { x: 45, y: 65 },
+      expected: [
+        { logical: 20, price: 35 },
+        { logical: 70, price: 95 },
+      ],
+    },
+    {
+      tool: "fib_retracement",
       anchors: [
         { x: 10, y: 20 },
         { x: 60, y: 80 },
@@ -440,11 +646,17 @@ describe("DrawingManager body dragging", () => {
       ],
     },
     {
-      tool: "vertical_line",
-      anchors: [{ x: 50, y: 30 }],
-      grab: { x: 50, y: 160 },
-      move: { x: 70, y: 160 },
-      expected: [{ logical: 70, price: 30 }],
+      tool: "date_range",
+      anchors: [
+        { x: 10, y: 20 },
+        { x: 60, y: 20 },
+      ],
+      grab: { x: 35, y: 20 },
+      move: { x: 45, y: 35 },
+      expected: [
+        { logical: 20, price: 35 },
+        { logical: 70, price: 35 },
+      ],
     },
   ] satisfies Array<{
     tool: DrawingToolType;

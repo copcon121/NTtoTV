@@ -1,18 +1,16 @@
 import type { CanvasRenderingTarget2D } from "fancy-canvas";
 import type {
-  AutoscaleInfo,
   IChartApiBase,
   IPrimitivePaneRenderer,
   IPrimitivePaneView,
   ISeriesApi,
   ISeriesPrimitive,
-  Logical,
   PrimitivePaneViewZOrder,
   SeriesAttachedParameter,
   Time,
 } from "lightweight-charts";
 
-import { anchorToCoordinate, anchorToLogical } from "./coordinates";
+import { anchorToCoordinate } from "./coordinates";
 import type {
   AnchorPoint,
   DrawingOptions,
@@ -41,6 +39,7 @@ interface FibRetracementRenderOptions {
 export const DEFAULT_FIB_RETRACEMENT_LEVELS: readonly FibRetracementLevel[] = [
   { value: 0, color: "#8a8d91", enabled: true },
   { value: 0.382, color: "#ff9800", enabled: true },
+  { value: 0.5, color: "#4caf50", enabled: true },
   { value: 0.618, color: "#00a991", enabled: true },
   { value: 1, color: "#8a8d91", enabled: true },
   { value: 3.618, color: "#9c27b0", enabled: true },
@@ -81,7 +80,9 @@ export function fibLevelPrice(
   endPrice: number,
   level: number,
 ): number {
-  return startPrice + (endPrice - startPrice) * level;
+  const low = Math.min(startPrice, endPrice);
+  const high = Math.max(startPrice, endPrice);
+  return low + (high - low) * level;
 }
 
 function toRenderOptions(options?: DrawingOptions): FibRetracementRenderOptions {
@@ -319,33 +320,6 @@ export class FibRetracementPrimitive implements ISeriesPrimitive<Time>, IDrawing
     return [this.paneView];
   }
 
-  autoscaleInfo(startTimePoint: Logical, endTimePoint: Logical): AutoscaleInfo | null {
-    if (this.anchorsInternal.length < 2) return null;
-    const p1Index = this.pointIndex(this.anchorsInternal[0]);
-    const p2Index = this.pointIndex(this.anchorsInternal[1]);
-    if (p1Index === null || p2Index === null) return null;
-    const start = Math.min(p1Index, p2Index);
-    const end = Math.max(p1Index, p2Index);
-    if (endTimePoint < start || startTimePoint > end) return null;
-
-    const prices = this.renderOptions.levels
-      .filter((level) => level.enabled !== false)
-      .map((level) =>
-        fibLevelPrice(
-          this.anchorsInternal[0].price,
-          this.anchorsInternal[1].price,
-          level.value,
-        ),
-      );
-    if (prices.length === 0) return null;
-    return {
-      priceRange: {
-        minValue: Math.min(...prices),
-        maxValue: Math.max(...prices),
-      },
-    };
-  }
-
   attached(params: SeriesAttachedParameter<Time, "Candlestick">): void {
     this.chart = params.chart;
     this.series = params.series;
@@ -356,10 +330,6 @@ export class FibRetracementPrimitive implements ISeriesPrimitive<Time>, IDrawing
     this.chart = undefined;
     this.series = undefined;
     this.requestUpdateFn = undefined;
-  }
-
-  private pointIndex(point: AnchorPoint): Logical | null {
-    return this.chart && this.series ? anchorToLogical(this.chart, this.series, point) : null;
   }
 }
 

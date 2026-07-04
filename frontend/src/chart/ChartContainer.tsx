@@ -264,7 +264,7 @@ export interface ChartContainerProps {
   showVolume?: boolean;
   /** Show MyVolumeDelta-style candles at the bottom of the chart. */
   showVolumeDelta?: boolean;
-  /** Show current wave delta as a line at the bottom of the chart. */
+  /** Show current wave delta as an MBox histogram at the bottom of the chart. */
   showCvd?: boolean;
   /** Show MGannSwing price swingline/signals. */
   showMgannSwing?: boolean;

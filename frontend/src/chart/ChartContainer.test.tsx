@@ -447,7 +447,7 @@ describe("ChartContainer", () => {
     expect(port.setVolumeDeltaVisibleCalls).toEqual([true, false]);
   });
 
-  it("toggles the Wave Delta line through the port", () => {
+  it("toggles the Wave Delta MBox overlay through the port", () => {
     const port = new FakePort();
     const factory: ChartPortFactory = () => port;
 

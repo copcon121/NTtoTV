@@ -24,9 +24,11 @@ import { BrushPrimitive } from "./BrushPrimitive";
 import {
   DEFAULT_FIB_RETRACEMENT_LEVELS,
   FibRetracementPrimitive,
+  fibLevelPrice,
   formatFibLevelValue,
   normalizeFibRetracementLevels,
 } from "./FibRetracementPrimitive";
+import { DateRangePrimitive, normalizeDateRangeAnchors } from "./DateRangePrimitive";
 import { HorizontalRayPrimitive } from "./HorizontalRayPrimitive";
 import { RectanglePrimitive } from "./RectanglePrimitive";
 import { PriceRangePrimitive } from "./PriceRangePrimitive";
@@ -39,6 +41,7 @@ type DrawingPrimitive =
   | TrendLinePrimitive
   | BrushPrimitive
   | FibRetracementPrimitive
+  | DateRangePrimitive
   | HorizontalRayPrimitive
   | RectanglePrimitive
   | FixedRangeDeltaProfilePrimitive
@@ -50,6 +53,7 @@ type DrawingSelectionActionToolType =
   | "trendline"
   | "brush"
   | "fib_retracement"
+  | "date_range"
   | "horizontal_ray"
   | "rectangle";
 
@@ -504,6 +508,12 @@ export class DrawingManager implements IDrawingManager {
     shiftKey: boolean,
   ): AnchorPoint {
     if (
+      this._placement?.tool === "date_range" &&
+      this._placement.anchors.length >= 1
+    ) {
+      return { ...anchor, price: this._placement.anchors[0].price };
+    }
+    if (
       !shiftKey ||
       !this._placement ||
       this._placement.tool !== "trendline" ||
@@ -797,8 +807,19 @@ export class DrawingManager implements IDrawingManager {
             this._updateSelectionActions();
           } else if ("anchorIndex" in this._edit) {
             const anchors = drawing.anchors.map((current) => ({ ...current }));
-            anchors[this._edit.anchorIndex] = anchor;
-            drawing.setAnchors(anchors);
+            if (drawing.tool === "date_range") {
+              const price = anchors[0]?.price ?? anchor.price;
+              anchors[this._edit.anchorIndex] = {
+                ...anchors[this._edit.anchorIndex],
+                time: anchor.time,
+                logical: anchor.logical,
+                price,
+              };
+              drawing.setAnchors(normalizeDateRangeAnchors(anchors));
+            } else {
+              anchors[this._edit.anchorIndex] = anchor;
+              drawing.setAnchors(anchors);
+            }
             this._updateSelectionActions();
           }
         }
@@ -962,6 +983,11 @@ export class DrawingManager implements IDrawingManager {
             return { drawingId };
           }
           break;
+        case "date_range":
+          if (points.length >= 2 && distanceToSegment(point, points[0], points[1]) <= HIT_PX) {
+            return { drawingId };
+          }
+          break;
         case "horizontal_ray":
           if (points.length >= 1 && point.x >= points[0].x - HIT_PX && Math.abs(point.y - points[0].y) <= HIT_PX) {
             return { drawingId };
@@ -1037,6 +1063,8 @@ export class DrawingManager implements IDrawingManager {
         return new BrushPrimitive(id, anchors, options);
       case "fib_retracement":
         return new FibRetracementPrimitive(id, anchors, options);
+      case "date_range":
+        return new DateRangePrimitive(id, anchors, options);
       case "horizontal_ray":
         return new HorizontalRayPrimitive(id, anchors, options);
       case "rectangle":
@@ -1420,6 +1448,220 @@ export class DrawingManager implements IDrawingManager {
     return null;
   }
 
+  private _hitFibRetracement(point: ChartPoint): { drawingId: string } | null {
+    if (!this._chart || !this._series) return null;
+    const drawings = [...this._drawings.entries()].reverse();
+    for (const [drawingId, drawing] of drawings) {
+      if (!(drawing instanceof FibRetracementPrimitive) || drawing.anchors.length < 2) {
+        continue;
+      }
+      if (hitFibRetracement(this._chart, this._series, drawing, point, 7)) {
+        return { drawingId };
+      }
+    }
+    return null;
+  }
+
+  private _showFibSettings(drawingId: string, point: ChartPoint): void {
+    if (!this._chart || !this._container) return;
+    this._selectDrawing(drawingId);
+
+    const drawing = this._drawings.get(drawingId);
+    if (!(drawing instanceof FibRetracementPrimitive)) return;
+
+    this._hideProfileContextMenu();
+    this._hideFibContextMenu();
+    const menu = document.createElement("div");
+    menu.className = "drawing-fib-context-menu";
+    menu.setAttribute("role", "dialog");
+    menu.setAttribute("aria-label", "Fib retracement settings");
+    menu.dataset.drawingId = drawingId;
+
+    const header = document.createElement("div");
+    header.className = "drawing-fib-context-title";
+    header.textContent = "Fib retracement";
+    menu.appendChild(header);
+
+    const levels = normalizeFibRetracementLevels(drawing.fibLevels);
+    levels.forEach((level, index) => {
+      menu.appendChild(createFibLevelRow(index, level));
+    });
+
+    const paneSize = this._chart.paneSize(0);
+    const menuWidth = 252;
+    const menuHeight = 250;
+    menu.style.left = `${clamp(point.x, 8, paneSize.width - menuWidth - 8)}px`;
+    menu.style.top = `${clamp(point.y, 8, paneSize.height - menuHeight - 8)}px`;
+    menu.style.maxHeight = `${Math.max(160, paneSize.height - 16)}px`;
+
+    this._onFibMenuPointerDown = (event: Event) => {
+      event.stopPropagation();
+      if (!(event.target instanceof HTMLInputElement)) {
+        event.preventDefault();
+      }
+    };
+    this._onFibMenuClick = (event: Event) => {
+      event.stopPropagation();
+    };
+    this._onFibMenuInput = (event: Event) => {
+      event.stopPropagation();
+      const target = event.target;
+      if (target instanceof HTMLInputElement && target.type === "color") {
+        this._applyFibSettingsFromMenu();
+      }
+    };
+    this._onFibMenuChange = (event: Event) => {
+      event.stopPropagation();
+      this._applyFibSettingsFromMenu();
+    };
+    this._onFibMenuKeyDown = (event: KeyboardEvent) => {
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this._applyFibSettingsFromMenu();
+        if (event.target instanceof HTMLElement) {
+          event.target.blur();
+        }
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        this._hideFibContextMenu();
+      }
+    };
+    this._onFibDocumentPointerDown = (event: PointerEvent) => {
+      if (
+        this._fibMenuEl &&
+        event.target instanceof Node &&
+        this._fibMenuEl.contains(event.target)
+      ) {
+        return;
+      }
+      this._hideFibContextMenu();
+    };
+
+    menu.addEventListener("pointerdown", this._onFibMenuPointerDown);
+    menu.addEventListener("mousedown", this._onFibMenuPointerDown);
+    menu.addEventListener("click", this._onFibMenuClick);
+    menu.addEventListener("input", this._onFibMenuInput);
+    menu.addEventListener("change", this._onFibMenuChange);
+    menu.addEventListener("keydown", this._onFibMenuKeyDown);
+    document.addEventListener("pointerdown", this._onFibDocumentPointerDown, true);
+    this._container.appendChild(menu);
+    this._fibMenuEl = menu;
+  }
+
+  private _toggleSelectedFibSettings(): void {
+    const id = this._selectedDrawingId;
+    if (id === null || !this._chart || !this._series) return;
+    const drawing = this._drawings.get(id);
+    if (!(drawing instanceof FibRetracementPrimitive)) return;
+    if (this._fibMenuEl?.dataset.drawingId === id) {
+      this._hideFibContextMenu();
+      return;
+    }
+    const position = selectionActionPosition(this._chart, this._series, drawing);
+    this._showFibSettings(id, position ?? { x: this._chart.paneSize(0).width / 2, y: 20 });
+  }
+
+  private _applyFibSettingsFromMenu(): void {
+    const menu = this._fibMenuEl;
+    const drawingId = menu?.dataset.drawingId;
+    if (!menu || !drawingId) return;
+    const drawing = this._drawings.get(drawingId);
+    if (!(drawing instanceof FibRetracementPrimitive)) return;
+
+    const current = normalizeFibRetracementLevels(drawing.fibLevels);
+    const rows = Array.from(
+      menu.querySelectorAll<HTMLElement>("[data-fib-level-row]"),
+    );
+    const next = rows.map((row, index): FibRetracementLevel => {
+      const fallback =
+        current[index] ??
+        DEFAULT_FIB_RETRACEMENT_LEVELS[
+          Math.min(index, DEFAULT_FIB_RETRACEMENT_LEVELS.length - 1)
+        ];
+      const enabledInput = row.querySelector<HTMLInputElement>(
+        'input[data-fib-level-enabled="true"]',
+      );
+      const valueInput = row.querySelector<HTMLInputElement>(
+        'input[data-fib-level-value="true"]',
+      );
+      const colorInput = row.querySelector<HTMLInputElement>(
+        'input[data-fib-level-color="true"]',
+      );
+      const parsedValue = parseFibLevelValue(valueInput?.value);
+      return {
+        value: parsedValue ?? fallback.value,
+        color: colorInput?.value || fallback.color,
+        enabled: enabledInput?.checked !== false,
+      };
+    });
+
+    drawing.setOptions({ fibLevels: next });
+    this._syncFibMenuRows(drawing);
+    this._updateSelectionActions();
+    this._notifyStateChange();
+  }
+
+  private _syncFibMenuRows(drawing: FibRetracementPrimitive): void {
+    if (!this._fibMenuEl) return;
+    const levels = normalizeFibRetracementLevels(drawing.fibLevels);
+    const rows = Array.from(
+      this._fibMenuEl.querySelectorAll<HTMLElement>("[data-fib-level-row]"),
+    );
+    rows.forEach((row, index) => {
+      const level = levels[index];
+      if (!level) return;
+      const enabledInput = row.querySelector<HTMLInputElement>(
+        'input[data-fib-level-enabled="true"]',
+      );
+      const valueInput = row.querySelector<HTMLInputElement>(
+        'input[data-fib-level-value="true"]',
+      );
+      const colorInput = row.querySelector<HTMLInputElement>(
+        'input[data-fib-level-color="true"]',
+      );
+      if (enabledInput) enabledInput.checked = level.enabled !== false;
+      if (valueInput && document.activeElement !== valueInput) {
+        valueInput.value = formatFibLevelValue(level.value);
+      }
+      if (colorInput) colorInput.value = normalizeHexColor(level.color);
+    });
+  }
+
+  private _hideFibContextMenu(): void {
+    if (this._fibMenuEl && this._onFibMenuPointerDown) {
+      this._fibMenuEl.removeEventListener("pointerdown", this._onFibMenuPointerDown);
+      this._fibMenuEl.removeEventListener("mousedown", this._onFibMenuPointerDown);
+    }
+    if (this._fibMenuEl && this._onFibMenuClick) {
+      this._fibMenuEl.removeEventListener("click", this._onFibMenuClick);
+    }
+    if (this._fibMenuEl && this._onFibMenuInput) {
+      this._fibMenuEl.removeEventListener("input", this._onFibMenuInput);
+    }
+    if (this._fibMenuEl && this._onFibMenuChange) {
+      this._fibMenuEl.removeEventListener("change", this._onFibMenuChange);
+    }
+    if (this._fibMenuEl && this._onFibMenuKeyDown) {
+      this._fibMenuEl.removeEventListener("keydown", this._onFibMenuKeyDown);
+    }
+    if (this._onFibDocumentPointerDown) {
+      document.removeEventListener(
+        "pointerdown",
+        this._onFibDocumentPointerDown,
+        true,
+      );
+    }
+    this._fibMenuEl?.remove();
+    this._fibMenuEl = null;
+    this._onFibMenuPointerDown = null;
+    this._onFibMenuClick = null;
+    this._onFibMenuInput = null;
+    this._onFibMenuChange = null;
+    this._onFibMenuKeyDown = null;
+    this._onFibDocumentPointerDown = null;
+  }
+
   private _installSelectionActions(container: HTMLElement): void {
     this._actionsEl = document.createElement("div");
     this._actionsEl.className = "drawing-selection-actions";
@@ -1470,6 +1712,10 @@ export class DrawingManager implements IDrawingManager {
     this._onStyleActionClick = (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
+      if (this._selectedFibDrawing()) {
+        this._toggleSelectedFibSettings();
+        return;
+      }
       this._toggleSelectedLineStyle();
     };
     this._onNoteActionClick = (e: Event) => {
@@ -1582,6 +1828,13 @@ export class DrawingManager implements IDrawingManager {
       : null;
   }
 
+  private _selectedFibDrawing(): FibRetracementPrimitive | null {
+    const id = this._selectedDrawingId;
+    if (id === null) return null;
+    const drawing = this._drawings.get(id);
+    return drawing instanceof FibRetracementPrimitive ? drawing : null;
+  }
+
   private _toggleSelectedLock(): void {
     const id = this._selectedDrawingId;
     if (id === null || !this._drawings.has(id)) return;
@@ -1628,8 +1881,9 @@ export class DrawingManager implements IDrawingManager {
       drawing instanceof HorizontalRayPrimitive
         ? drawing
         : null;
+    const fibDrawing = drawing instanceof FibRetracementPrimitive ? drawing : null;
     widthButton.hidden = styleDrawing === null;
-    styleButton.hidden = styleDrawing === null;
+    styleButton.hidden = styleDrawing === null && fibDrawing === null;
     noteButton.hidden = styleDrawing === null;
     if (styleDrawing !== null) {
       const bold = styleDrawing.renderOptions.width >= 3;
@@ -1652,9 +1906,16 @@ export class DrawingManager implements IDrawingManager {
       noteButton.setAttribute("aria-pressed", hasNote ? "true" : "false");
       noteButton.classList.toggle("is-active", hasNote);
       noteButton.innerHTML = noteIconSvg();
+    } else if (fibDrawing !== null) {
+      const open = this._fibMenuEl?.dataset.drawingId === id;
+      styleButton.title = "Edit Fib levels";
+      styleButton.setAttribute("aria-label", "Edit Fib levels");
+      styleButton.setAttribute("aria-pressed", open ? "true" : "false");
+      styleButton.classList.toggle("is-active", open);
+      styleButton.innerHTML = fibLevelsIconSvg();
     }
 
-    const actionWidth = styleDrawing === null ? 82 : 190;
+    const actionWidth = styleDrawing !== null ? 190 : fibDrawing !== null ? 118 : 82;
     const actionHeight = 38;
     const left = clamp(position.x - actionWidth / 2, 8, paneSize.width - actionWidth - 8);
     let top = position.y - actionHeight - 10;
@@ -1692,6 +1953,8 @@ function isActionTool(tool: DrawingToolType): tool is DrawingSelectionActionTool
   return (
     tool === "trendline" ||
     tool === "brush" ||
+    tool === "fib_retracement" ||
+    tool === "date_range" ||
     tool === "horizontal_ray" ||
     tool === "rectangle"
   );
@@ -1723,6 +1986,18 @@ function selectionActionPosition(
         y: top,
       };
     }
+    case "fib_retracement":
+      if (points.length < 2) return null;
+      return {
+        x: (points[0].x + points[1].x) / 2,
+        y: Math.min(points[0].y, points[1].y),
+      };
+    case "date_range":
+      if (points.length < 2) return null;
+      return {
+        x: (points[0].x + points[1].x) / 2,
+        y: points[0].y,
+      };
     case "horizontal_ray":
       return {
         x: Math.min(points[0].x + 84, chart.paneSize(0).width - 48),
@@ -1750,6 +2025,48 @@ function clamp(value: number, min: number, max: number): number {
 
 function normalizeLineNote(value: string): string {
   return value.trim().replace(/\s+/g, " ").slice(0, 120);
+}
+
+function createFibLevelRow(
+  index: number,
+  level: FibRetracementLevel,
+): HTMLElement {
+  const row = document.createElement("label");
+  row.className = "drawing-fib-level-row";
+  row.dataset.fibLevelRow = String(index);
+
+  const enabled = document.createElement("input");
+  enabled.type = "checkbox";
+  enabled.checked = level.enabled !== false;
+  enabled.dataset.fibLevelEnabled = "true";
+  enabled.setAttribute("aria-label", `Show Fib level ${index + 1}`);
+
+  const value = document.createElement("input");
+  value.type = "text";
+  value.inputMode = "decimal";
+  value.spellcheck = false;
+  value.value = formatFibLevelValue(level.value);
+  value.dataset.fibLevelValue = "true";
+  value.setAttribute("aria-label", `Fib level ${index + 1}`);
+
+  const color = document.createElement("input");
+  color.type = "color";
+  color.value = normalizeHexColor(level.color);
+  color.dataset.fibLevelColor = "true";
+  color.setAttribute("aria-label", `Fib level ${index + 1} color`);
+
+  row.append(enabled, value, color);
+  return row;
+}
+
+function parseFibLevelValue(value: string | undefined): number | null {
+  if (value === undefined) return null;
+  const parsed = Number(value.trim().replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeHexColor(value: string): string {
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : "#8a8d91";
 }
 
 function thinLineIconSvg(): string {
@@ -1795,6 +2112,18 @@ function noteIconSvg(): string {
     '<path d="M5 5h14v10H9l-4 4V5z" />',
     '<path d="M8 9h8" />',
     '<path d="M8 12h5" />',
+    '</svg>',
+  ].join("");
+}
+
+function fibLevelsIconSvg(): string {
+  return [
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"',
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">',
+    '<path d="M5 18L19 6" />',
+    '<path d="M5 8h14" />',
+    '<path d="M5 12h14" />',
+    '<path d="M5 16h14" />',
     '</svg>',
   ].join("");
 }
@@ -1855,6 +2184,36 @@ function hitPolyline(
 ): boolean {
   for (let index = 0; index < points.length - 1; index += 1) {
     if (distanceToSegment(point, points[index], points[index + 1]) <= tolerance) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hitFibRetracement(
+  chart: IChartApi,
+  series: ISeriesApi<"Candlestick">,
+  drawing: FibRetracementPrimitive,
+  point: { x: number; y: number },
+  tolerance: number,
+): boolean {
+  if (drawing.anchors.length < 2) return false;
+  const p1 = anchorToPoint(chart, series, drawing.anchors[0]);
+  const p2 = anchorToPoint(chart, series, drawing.anchors[1]);
+  if (p1 === null || p2 === null) return false;
+  if (distanceToSegment(point, p1, p2) <= tolerance) return true;
+
+  const left = Math.min(p1.x, p2.x) - tolerance;
+  const right = Math.max(p1.x, p2.x) + tolerance;
+  if (point.x < left || point.x > right) return false;
+
+  const startPrice = drawing.anchors[0].price;
+  const endPrice = drawing.anchors[1].price;
+  for (const level of drawing.fibLevels) {
+    if (level.enabled === false) continue;
+    const price = fibLevelPrice(startPrice, endPrice, level.value);
+    const y = series.priceToCoordinate(price);
+    if (y !== null && Math.abs((y as number) - point.y) <= tolerance) {
       return true;
     }
   }

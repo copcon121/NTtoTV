@@ -18,6 +18,7 @@ export type DrawingToolType =
   | "trendline"
   | "brush"
   | "fib_retracement"
+  | "date_range"
   | "price_range"
   | "order_bracket"
   | "rectangle"
@@ -58,6 +59,12 @@ export const DRAWING_TOOLS: readonly DrawingToolDef[] = [
     icon: "M5 18 L19 6 M5 8 h14 M5 12 h14 M5 16 h14",
   },
   {
+    type: "date_range",
+    label: "Date Range",
+    anchors: 2,
+    icon: "M4 12 h16 M8 8 l-4 4 4 4 M16 8 l4 4 -4 4",
+  },
+  {
     type: "brush",
     label: "Brush",
     anchors: 0,
@@ -80,12 +87,6 @@ export const DRAWING_TOOLS: readonly DrawingToolDef[] = [
     label: "Fixed Range Delta Profile",
     anchors: 2,
     icon: "M5 5 v14 M8 7 h11 M8 12 h8 M8 17 h5",
-  },
-  {
-    type: "vertical_line",
-    label: "Vertical Line",
-    anchors: 1,
-    icon: "M12 4 v16 M8 8 l4 -4 l4 4 M8 16 l4 4 l4 -4",
   },
   {
     type: "price_range",
