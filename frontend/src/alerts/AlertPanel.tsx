@@ -7,6 +7,7 @@ import {
   type AlertLogEntry,
   type TelegramNotificationConfig,
   type TelegramNotificationInput,
+  type WebPushNotificationConfig,
   toLogEntry,
 } from "./types";
 
@@ -44,6 +45,18 @@ export interface AlertPanelProps {
   onTelegramTest?: () => void;
   /** Optional save/test status shown in the Telegram section. */
   telegramStatus?: string;
+  /** Web Push notification config loaded from the backend. */
+  webPush?: WebPushNotificationConfig;
+  /** Enable Web Push on this browser/device. */
+  onWebPushEnable?: () => void;
+  /** Disable Web Push on this browser/device/profile. */
+  onWebPushDisable?: () => void;
+  /** Send a test Web Push message using saved backend subscriptions. */
+  onWebPushTest?: () => void;
+  /** Optional status shown in the Web Push section. */
+  webPushStatus?: string;
+  /** Whether the current browser exposes the Push API. */
+  webPushSupported?: boolean;
   /** Injected sound player (defaults to a no-op when unavailable). */
   playSound?: () => void;
   /** How long the toast stays visible (ms). */
@@ -165,6 +178,12 @@ export function AlertPanel({
   onTelegramSave,
   onTelegramTest,
   telegramStatus,
+  webPush,
+  onWebPushEnable,
+  onWebPushDisable,
+  onWebPushTest,
+  webPushStatus,
+  webPushSupported = false,
   playSound = defaultPlaySound,
   toastMs = DEFAULT_TOAST_MS,
   open = true,
@@ -217,6 +236,7 @@ export function AlertPanel({
     isBreakoutFvg ||
     isMgannFvgRetest;
   const paramKey = isLevelType ? "level" : "threshold";
+  const hasWebPushPublicKey = Boolean(webPush?.publicKey);
 
   const changeType = (type: AlertType) => {
     setNewType(type);
@@ -467,6 +487,49 @@ export function AlertPanel({
               )}
             </div>
           </form>
+
+          <section className="telegram-settings" aria-label="Web Push settings">
+            <div className="telegram-settings-header">iPhone / Web Push</div>
+            <div className="telegram-row">
+              <span>Alerts on this device</span>
+              <span>
+                {webPush?.enabled
+                  ? `${webPush.subscriptionCount} device${
+                      webPush.subscriptionCount === 1 ? "" : "s"
+                    }`
+                  : "Off"}
+              </span>
+            </div>
+            <div className="telegram-actions">
+              <button
+                type="button"
+                className="telegram-save"
+                disabled={!webPushSupported || !hasWebPushPublicKey}
+                onClick={() => onWebPushEnable?.()}
+              >
+                Enable
+              </button>
+              <button
+                type="button"
+                className="telegram-test"
+                disabled={!webPush?.enabled || webPush.subscriptionCount <= 0}
+                onClick={() => onWebPushTest?.()}
+              >
+                Test
+              </button>
+              <button
+                type="button"
+                className="telegram-test"
+                disabled={!webPush?.enabled}
+                onClick={() => onWebPushDisable?.()}
+              >
+                Disable
+              </button>
+              {webPushStatus && (
+                <span className="telegram-status">{webPushStatus}</span>
+              )}
+            </div>
+          </section>
         </div>
       )}
     </>

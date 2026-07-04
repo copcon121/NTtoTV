@@ -41,6 +41,23 @@ export interface TelegramNotificationInput {
   botToken?: string;
 }
 
+export interface WebPushNotificationConfig {
+  enabled: boolean;
+  subscriptionCount: number;
+  publicKey: string;
+}
+
+export interface WebPushNotificationInput {
+  enabled: boolean;
+}
+
+export interface WebPushSendResult {
+  sent: number;
+  removed: number;
+  failed: number;
+  reason?: string;
+}
+
 /** An entry in the alert event log (one per fired `alert_event`). */
 export interface AlertLogEntry {
   alertId: string;

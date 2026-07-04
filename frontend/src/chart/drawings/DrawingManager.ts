@@ -14,12 +14,19 @@ import type {
   DrawingLineStyle,
   DrawingState,
   DrawingToolType,
+  FibRetracementLevel,
   IDrawingManager,
 } from "./types";
 import { DRAWING_TOOLS } from "./types";
 import { anchorFromPoint, anchorToPoint } from "./coordinates";
 import { TrendLinePrimitive } from "./TrendLinePrimitive";
 import { BrushPrimitive } from "./BrushPrimitive";
+import {
+  DEFAULT_FIB_RETRACEMENT_LEVELS,
+  FibRetracementPrimitive,
+  formatFibLevelValue,
+  normalizeFibRetracementLevels,
+} from "./FibRetracementPrimitive";
 import { HorizontalRayPrimitive } from "./HorizontalRayPrimitive";
 import { RectanglePrimitive } from "./RectanglePrimitive";
 import { PriceRangePrimitive } from "./PriceRangePrimitive";
@@ -31,6 +38,7 @@ import type { DeltaProfileLoadState } from "../../orderflow/deltaProfile";
 type DrawingPrimitive =
   | TrendLinePrimitive
   | BrushPrimitive
+  | FibRetracementPrimitive
   | HorizontalRayPrimitive
   | RectanglePrimitive
   | FixedRangeDeltaProfilePrimitive
@@ -41,6 +49,7 @@ type DrawingPrimitive =
 type DrawingSelectionActionToolType =
   | "trendline"
   | "brush"
+  | "fib_retracement"
   | "horizontal_ray"
   | "rectangle";
 
@@ -161,10 +170,17 @@ export class DrawingManager implements IDrawingManager {
   private _lockActionButton: HTMLButtonElement | null = null;
   private _deleteActionButton: HTMLButtonElement | null = null;
   private _profileMenuEl: HTMLDivElement | null = null;
+  private _fibMenuEl: HTMLDivElement | null = null;
   private _onProfileMenuPointerDown: ((e: Event) => void) | null = null;
   private _onProfileMenuClick: ((e: Event) => void) | null = null;
   private _onProfileMenuInput: ((e: Event) => void) | null = null;
   private _onDocumentPointerDown: ((e: PointerEvent) => void) | null = null;
+  private _onFibMenuPointerDown: ((e: Event) => void) | null = null;
+  private _onFibMenuClick: ((e: Event) => void) | null = null;
+  private _onFibMenuInput: ((e: Event) => void) | null = null;
+  private _onFibMenuChange: ((e: Event) => void) | null = null;
+  private _onFibMenuKeyDown: ((e: KeyboardEvent) => void) | null = null;
+  private _onFibDocumentPointerDown: ((e: PointerEvent) => void) | null = null;
   private _onWindowResize: (() => void) | null = null;
   private _onActionPointerDown: ((e: Event) => void) | null = null;
   private _onWidthActionClick: ((e: Event) => void) | null = null;
@@ -232,7 +248,7 @@ export class DrawingManager implements IDrawingManager {
     container.addEventListener("pointermove", this._onPointerMove);
     container.addEventListener("pointerup", this._onPointerUp);
     container.addEventListener("pointercancel", this._onPointerUp);
-    this._onDoubleClick = (e: MouseEvent) => this._showProfileSettingsFromMouse(e);
+    this._onDoubleClick = (e: MouseEvent) => this._showDrawingSettingsFromMouse(e);
     container.addEventListener("dblclick", this._onDoubleClick);
     this._installSelectionActions(container);
     this._onWindowResize = () => this._updateSelectionActions();
@@ -456,6 +472,7 @@ export class DrawingManager implements IDrawingManager {
     }
     this._uninstallSelectionActions();
     this._hideProfileContextMenu();
+    this._hideFibContextMenu();
   }
 
   /* ------------------------------------------------------------------ */
@@ -937,6 +954,14 @@ export class DrawingManager implements IDrawingManager {
             return { drawingId };
           }
           break;
+        case "fib_retracement":
+          if (
+            drawing instanceof FibRetracementPrimitive &&
+            hitFibRetracement(this._chart, this._series, drawing, point, HIT_PX)
+          ) {
+            return { drawingId };
+          }
+          break;
         case "horizontal_ray":
           if (points.length >= 1 && point.x >= points[0].x - HIT_PX && Math.abs(point.y - points[0].y) <= HIT_PX) {
             return { drawingId };
@@ -1010,6 +1035,8 @@ export class DrawingManager implements IDrawingManager {
         return new TrendLinePrimitive(id, anchors, options);
       case "brush":
         return new BrushPrimitive(id, anchors, options);
+      case "fib_retracement":
+        return new FibRetracementPrimitive(id, anchors, options);
       case "horizontal_ray":
         return new HorizontalRayPrimitive(id, anchors, options);
       case "rectangle":
@@ -1070,6 +1097,7 @@ export class DrawingManager implements IDrawingManager {
   private _selectDrawing(id: string | null): void {
     if (id !== this._selectedDrawingId) {
       this._hideProfileContextMenu();
+      this._hideFibContextMenu();
     }
     const previousId = this._selectedDrawingId;
     if (previousId !== null && previousId !== id) {
@@ -1096,15 +1124,22 @@ export class DrawingManager implements IDrawingManager {
     }
   }
 
-  private _showProfileSettingsFromMouse(e: MouseEvent): void {
+  private _showDrawingSettingsFromMouse(e: MouseEvent): void {
     if (!this._chart || !this._series || !this._container) return;
     const point = this._localPoint(e.clientX, e.clientY);
     if (point === null || !this._isInCandlePane(point.y)) return;
-    const hit = this._hitProfileBox(point);
-    if (hit === null) return;
+    const profileHit = this._hitProfileBox(point);
+    if (profileHit !== null) {
+      e.preventDefault();
+      e.stopPropagation();
+      this._showProfileSettings(profileHit.drawingId, point);
+      return;
+    }
+    const fibHit = this._hitFibRetracement(point);
+    if (fibHit === null) return;
     e.preventDefault();
     e.stopPropagation();
-    this._showProfileSettings(hit.drawingId, point);
+    this._showFibSettings(fibHit.drawingId, point);
   }
 
   private _handleProfileTap(e: PointerEvent): void {

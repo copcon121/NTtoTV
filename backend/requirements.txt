@@ -1,5 +1,6 @@
 # Runtime dependencies for the GC Chart Platform backend.
 # Pinned to compatible minimum versions; install with: pip install -r requirements.txt
 fastapi>=0.110
+pywebpush>=2.3
 uvicorn[standard]>=0.29
 websockets>=12.0

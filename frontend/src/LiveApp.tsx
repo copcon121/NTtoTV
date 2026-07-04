@@ -18,6 +18,7 @@ import {
   type Alert,
   type TelegramNotificationConfig,
   type TelegramNotificationInput,
+  type WebPushNotificationConfig,
 } from "./alerts/types";
 import { ChartContainer } from "./chart/ChartContainer";
 import { DrawingToolbar } from "./chart/DrawingToolbar";
@@ -112,6 +113,11 @@ import {
   normalizeTimezoneOffsetMinutes,
 } from "./chart/timezone";
 import { resolveEndpoints } from "./endpoints";
+import {
+  isWebPushSupported,
+  subscribeBrowserWebPush,
+  unsubscribeBrowserWebPush,
+} from "./webPush";
 
 export { resolveEndpoints } from "./endpoints";
 
@@ -230,6 +236,7 @@ export interface ChartMenuState {
   price: number;
   x: number;
   y: number;
+  openedAt?: number;
   referencePrice?: number;
 }
 
@@ -1155,7 +1162,12 @@ export function ChartContextMenu({
     <>
       <div
         className="chart-menu-backdrop"
-        onClick={onClose}
+        onClick={() => {
+          const ignoreInitialBackdropClick =
+            menu.openedAt !== undefined && Date.now() - menu.openedAt < 650;
+          if (ignoreInitialBackdropClick) return;
+          onClose();
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           onClose();
@@ -1486,6 +1498,13 @@ export function LiveApp() {
       hasBotToken: false,
     });
   const [telegramStatus, setTelegramStatus] = useState("");
+  const [webPushConfig, setWebPushConfig] = useState<WebPushNotificationConfig>({
+    enabled: false,
+    subscriptionCount: 0,
+    publicKey: "",
+  });
+  const [webPushStatus, setWebPushStatus] = useState("");
+  const [webPushSupported, setWebPushSupported] = useState(false);
   const [authUser, setAuthUser] = useState<AuthUser | undefined>(undefined);
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
   const [authMode, setAuthMode] = useState<AuthDialogMode>("login");
@@ -2120,6 +2139,10 @@ export function LiveApp() {
   }, [api, authUser, profileHydrated, profileId]);
 
   useEffect(() => {
+    setWebPushSupported(isWebPushSupported());
+  }, []);
+
+  useEffect(() => {
     if (!authUser || !profileHydrated) {
       setTelegramConfig({
         enabled: false,
@@ -2143,6 +2166,37 @@ export function LiveApp() {
             chatId: "",
             sendScreenshot: true,
             hasBotToken: false,
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, authUser, profileHydrated, profileId]);
+
+  useEffect(() => {
+    if (!authUser || !profileHydrated) {
+      setWebPushConfig({
+        enabled: false,
+        subscriptionCount: 0,
+        publicKey: "",
+      });
+      setWebPushStatus("");
+      return;
+    }
+    let cancelled = false;
+    setWebPushStatus("");
+    void (async () => {
+      try {
+        const config = await api.webPushConfig(profileId);
+        if (!cancelled) setWebPushConfig(config);
+      } catch {
+        if (!cancelled) {
+          setWebPushConfig({
+            enabled: false,
+            subscriptionCount: 0,
+            publicKey: "",
           });
         }
       }
@@ -2521,6 +2575,88 @@ export function LiveApp() {
         setTelegramStatus("Test sent");
       } catch (error) {
         setTelegramStatus(
+          error instanceof Error ? `Test failed: ${error.message}` : "Test failed",
+        );
+      }
+    })();
+  };
+  const onEnableWebPush = () => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
+    if (!webPushSupported) {
+      setWebPushStatus("Not supported here");
+      return;
+    }
+    setWebPushStatus("Requesting permission...");
+    void (async () => {
+      try {
+        const config = webPushConfig.publicKey
+          ? webPushConfig
+          : await api.webPushConfig(profileId);
+        const subscription = await subscribeBrowserWebPush(config.publicKey);
+        const saved = await api.saveWebPushSubscription(subscription, profileId);
+        setWebPushConfig(saved);
+        setWebPushStatus("Enabled on this device");
+      } catch (error) {
+        setWebPushStatus(
+          error instanceof Error ? `Enable failed: ${error.message}` : "Enable failed",
+        );
+      }
+    })();
+  };
+  const onDisableWebPush = () => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
+    setWebPushStatus("Disabling...");
+    void (async () => {
+      try {
+        const endpoint = await unsubscribeBrowserWebPush();
+        if (endpoint) {
+          await api.deleteWebPushSubscription(endpoint, profileId);
+        }
+        const saved = await api.saveWebPushConfig({ enabled: false }, profileId);
+        setWebPushConfig(saved);
+        setWebPushStatus("Disabled");
+      } catch (error) {
+        setWebPushStatus(
+          error instanceof Error ? `Disable failed: ${error.message}` : "Disable failed",
+        );
+      }
+    })();
+  };
+  const onTestWebPush = () => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
+    setWebPushStatus("Sending test...");
+    void (async () => {
+      try {
+        const result = await api.testWebPushConfig(profileId);
+        if (result.removed > 0) {
+          setWebPushConfig(await api.webPushConfig(profileId));
+        }
+        if (result.sent > 0 && result.failed === 0) {
+          setWebPushStatus(`Test sent to ${result.sent} device${result.sent === 1 ? "" : "s"}`);
+        } else if (result.sent > 0) {
+          setWebPushStatus(
+            `Test sent to ${result.sent}, failed on ${result.failed}`,
+          );
+        } else if (result.reason === "disabled") {
+          setWebPushStatus("Web Push is disabled");
+        } else if (result.reason === "no_subscriptions") {
+          setWebPushStatus("No device subscription");
+        } else if (result.failed > 0) {
+          setWebPushStatus(`Test failed on ${result.failed} device${result.failed === 1 ? "" : "s"}`);
+        } else {
+          setWebPushStatus("No notification sent");
+        }
+      } catch (error) {
+        setWebPushStatus(
           error instanceof Error ? `Test failed: ${error.message}` : "Test failed",
         );
       }
@@ -3225,7 +3361,11 @@ export function LiveApp() {
     latestPrice ?? (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
 
   const onRequestChartMenu = (info: { price: number; x: number; y: number }) => {
-    setChartMenu({ ...info, referencePrice: currentChartReferencePrice() });
+    setChartMenu({
+      ...info,
+      openedAt: Date.now(),
+      referencePrice: currentChartReferencePrice(),
+    });
   };
 
   // Create a price-crosses-level alert at the price the user right-clicked.
@@ -3793,6 +3933,12 @@ export function LiveApp() {
             onTelegramSave={onSaveTelegram}
             onTelegramTest={onTestTelegram}
             telegramStatus={telegramStatus}
+            webPush={webPushConfig}
+            onWebPushEnable={onEnableWebPush}
+            onWebPushDisable={onDisableWebPush}
+            onWebPushTest={onTestWebPush}
+            webPushStatus={webPushStatus}
+            webPushSupported={webPushSupported}
           />
         </div>
         <TimezoneControl

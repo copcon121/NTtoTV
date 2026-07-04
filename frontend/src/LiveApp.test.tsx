@@ -171,6 +171,37 @@ describe("ChartContextMenu", () => {
     expect(onAddAlert).toHaveBeenCalledWith(2360.04);
     expect(onPlaceLimitOrder).toHaveBeenCalledWith(draft);
   });
+
+  it("keeps the menu open on the synthetic release click after mobile long-press", () => {
+    const openedAt = 10_000;
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(openedAt + 100);
+    const onClose = vi.fn();
+    const { container } = render(
+      <ChartContextMenu
+        menu={{
+          price: 2360.04,
+          x: 12,
+          y: 24,
+          openedAt,
+          referencePrice: 2370.02,
+        }}
+        onClose={onClose}
+        onAddAlert={vi.fn()}
+        onPlaceLimitOrder={vi.fn()}
+      />,
+    );
+
+    const backdrop = container.querySelector(".chart-menu-backdrop");
+    expect(backdrop).not.toBeNull();
+    fireEvent.click(backdrop as Element);
+    expect(onClose).not.toHaveBeenCalled();
+
+    now.mockReturnValue(openedAt + 700);
+    fireEvent.click(backdrop as Element);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    now.mockRestore();
+  });
 });
 
 describe("active profile persistence", () => {

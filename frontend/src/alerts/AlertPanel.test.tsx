@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type AlertEventMessage } from "../socket/messages";
@@ -275,5 +275,34 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
       sendScreenshot: true,
       botToken: "123:abc",
     });
+  });
+
+  it("raises Web Push actions from the notification settings", () => {
+    const onEnable = vi.fn();
+    const onDisable = vi.fn();
+    const onTest = vi.fn();
+    render(
+      <AlertPanel
+        alerts={alerts}
+        webPush={{
+          enabled: true,
+          subscriptionCount: 1,
+          publicKey: "public-key",
+        }}
+        webPushSupported
+        onWebPushEnable={onEnable}
+        onWebPushDisable={onDisable}
+        onWebPushTest={onTest}
+      />,
+    );
+
+    const section = screen.getByLabelText("Web Push settings");
+    fireEvent.click(within(section).getByText("Enable"));
+    fireEvent.click(within(section).getByText("Test"));
+    fireEvent.click(within(section).getByText("Disable"));
+
+    expect(onEnable).toHaveBeenCalledTimes(1);
+    expect(onTest).toHaveBeenCalledTimes(1);
+    expect(onDisable).toHaveBeenCalledTimes(1);
   });
 });

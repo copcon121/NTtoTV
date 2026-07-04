@@ -63,7 +63,7 @@ from .models.messages import (
     VolumeDeltaUpdate,
 )
 from .registry.registry import OutboundEvent, WebSocketRegistry
-from .rest.notifications import send_telegram_alert_from_event
+from .rest.notifications import send_telegram_alert_from_event, send_web_push_alert_from_event
 from .storage.cache_store import CacheStore
 from .storage.records import (
     BarRecord,
@@ -775,9 +775,20 @@ class Pipeline:
 
     async def _emit_alerts(self, events) -> None:
         for ev in events:
+            await self._send_web_push_safely(ev)
             if self._registry.client_count == 0:
                 await self._send_alert_text_safely(ev)
             await self._enqueue(OutboundEvent.from_message(ev))
+
+    async def _send_web_push_safely(self, event: AlertEvent) -> None:
+        try:
+            await asyncio.to_thread(send_web_push_alert_from_event, self._cache, event)
+        except Exception as exc:
+            logger.warning(
+                "web push alert failed for %s: %s",
+                event.alert_id,
+                exc,
+            )
 
     async def _send_alert_text_safely(self, event: AlertEvent) -> None:
         try:

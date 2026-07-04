@@ -67,3 +67,81 @@ def test_telegram_alert_send_is_noop_when_disabled(tmp_path):
         assert res.json() == {"sent": False, "reason": "disabled"}
     finally:
         cache.close()
+
+def _subscription(endpoint: str = "https://push.example.test/send/1"):
+    return {
+        "endpoint": endpoint,
+        "expirationTime": None,
+        "keys": {
+            "p256dh": "p256dh-key",
+            "auth": "auth-key",
+        },
+    }
+
+def test_webpush_subscription_round_trips_and_generates_public_key(tmp_path):
+    client, cache = _client(tmp_path)
+    try:
+        initial = client.get("/api/notifications/webpush?profileId=desk-a")
+        assert initial.status_code == 200
+        body = initial.json()["webPush"]
+        assert body["enabled"] is False
+        assert body["subscriptionCount"] == 0
+        assert isinstance(body["publicKey"], str)
+        assert len(body["publicKey"]) > 40
+
+        saved = client.post(
+            "/api/notifications/webpush/subscription?profileId=desk-a",
+            json=_subscription(),
+        )
+        assert saved.status_code == 200
+        assert saved.json()["webPush"]["enabled"] is True
+        assert saved.json()["webPush"]["subscriptionCount"] == 1
+
+        disabled = client.put(
+            "/api/notifications/webpush?profileId=desk-a",
+            json={"enabled": False},
+        )
+        assert disabled.status_code == 200
+        assert disabled.json()["webPush"]["enabled"] is False
+        assert disabled.json()["webPush"]["subscriptionCount"] == 1
+
+        deleted = client.request(
+            "DELETE",
+            "/api/notifications/webpush/subscription?profileId=desk-a",
+            json={"endpoint": _subscription()["endpoint"]},
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["webPush"]["subscriptionCount"] == 0
+    finally:
+        cache.close()
+
+def test_webpush_test_sends_to_saved_subscriptions(tmp_path, monkeypatch):
+    client, cache = _client(tmp_path)
+    sent: list[dict] = []
+
+    def fake_send(subscription, payload, *, vapid_private_key, ttl):
+        sent.append(
+            {
+                "subscription": subscription,
+                "payload": payload,
+                "vapid_private_key": vapid_private_key,
+                "ttl": ttl,
+            }
+        )
+
+    monkeypatch.setattr(
+        "app.rest.notifications._send_web_push_to_subscription",
+        fake_send,
+    )
+    try:
+        client.post(
+            "/api/notifications/webpush/subscription?profileId=desk-a",
+            json=_subscription(),
+        )
+        res = client.post("/api/notifications/webpush/test?profileId=desk-a")
+        assert res.status_code == 200
+        assert res.json()["sent"] == 1
+        assert sent[0]["payload"]["title"] == "GC Chart"
+        assert sent[0]["subscription"]["endpoint"] == _subscription()["endpoint"]
+    finally:
+        cache.close()

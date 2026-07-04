@@ -17,6 +17,7 @@ import type { Timeframe } from "../../socket/messages";
 export type DrawingToolType =
   | "trendline"
   | "brush"
+  | "fib_retracement"
   | "price_range"
   | "order_bracket"
   | "rectangle"
@@ -49,6 +50,12 @@ export const DRAWING_TOOLS: readonly DrawingToolDef[] = [
     label: "Trend Line",
     anchors: 2,
     icon: "M4 20 L20 4",
+  },
+  {
+    type: "fib_retracement",
+    label: "Fib Retracement",
+    anchors: 2,
+    icon: "M5 18 L19 6 M5 8 h14 M5 12 h14 M5 16 h14",
   },
   {
     type: "brush",
@@ -117,6 +124,12 @@ export interface DrawingOptions {
   lineWidth?: number;
   lineStyle?: DrawingLineStyle;
   fillColor?: string;
+  /** For Fib retracement: editable horizontal retracement/extension levels. */
+  fibLevels?: FibRetracementLevel[];
+  /** For Fib retracement: show or hide the diagonal anchor line. */
+  fibTrendLineVisible?: boolean;
+  /** For Fib retracement: color of the diagonal anchor line. */
+  fibTrendLineColor?: string;
   /** For fixed range profile: bid/ask split or total volume rows. */
   fixedRangeProfileMode?: FixedRangeProfileMode;
   /** For fixed range profile: keep the right edge pinned to the latest bar. */
@@ -133,6 +146,12 @@ export interface DrawingOptions {
   showLabels?: boolean;
   /** For line drawings: user note rendered on the line/ray. */
   noteText?: string;
+}
+
+export interface FibRetracementLevel {
+  value: number;
+  color: string;
+  enabled?: boolean;
 }
 
 /* ------------------------------------------------------------------ */

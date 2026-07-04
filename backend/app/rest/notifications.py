@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import secrets
 import urllib.error
 import urllib.parse
@@ -25,6 +26,12 @@ from .errors import bad_request, validation_error
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
 _TELEGRAM_META_PREFIX = "notification.telegram."
+_WEBPUSH_CONFIG_META_PREFIX = "notification.webpush.config."
+_WEBPUSH_SUBSCRIPTIONS_META_PREFIX = "notification.webpush.subscriptions."
+_WEBPUSH_VAPID_META_KEY = "notification.webpush.vapid"
+_WEBPUSH_VAPID_SUBJECT = "mailto:alerts@gcflowpy.xyz"
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_profile_id(value: Any) -> str:
@@ -84,6 +91,78 @@ def _save_config(cache: CacheStore, profile_id: str, config: dict[str, Any]) -> 
         now_ms(),
     )
 
+def _webpush_config_key(profile_id: str) -> str:
+    return f"{_WEBPUSH_CONFIG_META_PREFIX}{profile_id}"
+
+def _webpush_subscriptions_key(profile_id: str) -> str:
+    return f"{_WEBPUSH_SUBSCRIPTIONS_META_PREFIX}{profile_id}"
+
+def _default_webpush_config() -> dict[str, Any]:
+    return {"enabled": False}
+
+def _read_webpush_config(cache: CacheStore, profile_id: str) -> dict[str, Any]:
+    raw = cache.get_metadata(_webpush_config_key(profile_id))
+    if raw is None:
+        return _default_webpush_config()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return _default_webpush_config()
+    if not isinstance(parsed, dict):
+        return _default_webpush_config()
+    return {**_default_webpush_config(), **parsed}
+
+def _save_webpush_config(
+    cache: CacheStore,
+    profile_id: str,
+    config: dict[str, Any],
+) -> None:
+    cache.set_metadata(
+        _webpush_config_key(profile_id),
+        json.dumps(config, separators=(",", ":")),
+        now_ms(),
+    )
+
+def _read_webpush_subscriptions(
+    cache: CacheStore,
+    profile_id: str,
+) -> list[dict[str, Any]]:
+    raw = cache.get_metadata(_webpush_subscriptions_key(profile_id))
+    if raw is None:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
+
+def _save_webpush_subscriptions(
+    cache: CacheStore,
+    profile_id: str,
+    subscriptions: list[dict[str, Any]],
+) -> None:
+    cache.set_metadata(
+        _webpush_subscriptions_key(profile_id),
+        json.dumps(subscriptions, separators=(",", ":")),
+        now_ms(),
+    )
+
+def _public_webpush_config(
+    cache: CacheStore,
+    profile_id: str,
+    *,
+    public_key: str | None = None,
+) -> dict[str, Any]:
+    config = _read_webpush_config(cache, profile_id)
+    subscriptions = _read_webpush_subscriptions(cache, profile_id)
+    return {
+        "enabled": bool(config.get("enabled", False)),
+        "subscriptionCount": len(subscriptions),
+        "publicKey": public_key if public_key is not None else _ensure_vapid_keys(cache)["publicKey"],
+    }
+
 
 def _validate_update(body: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
     next_config = {**existing}
@@ -107,6 +186,131 @@ def _validate_update(body: dict[str, Any], existing: dict[str, Any]) -> dict[str
             raise validation_error("'botToken' must be a string", field="botToken")
         next_config["botToken"] = body["botToken"].strip()
     return next_config
+
+def _validate_webpush_update(
+    body: dict[str, Any],
+    existing: dict[str, Any],
+) -> dict[str, Any]:
+    next_config = {**existing}
+    if "enabled" in body:
+        if not isinstance(body["enabled"], bool):
+            raise validation_error("'enabled' must be a boolean", field="enabled")
+        next_config["enabled"] = body["enabled"]
+    return next_config
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+def _generate_vapid_keys() -> dict[str, str]:
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding,
+            PublicFormat,
+        )
+    except ImportError as exc:
+        raise bad_request("Web Push dependency is not installed") from exc
+
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    private_value = private_key.private_numbers().private_value.to_bytes(32, "big")
+    public_value = private_key.public_key().public_bytes(
+        Encoding.X962,
+        PublicFormat.UncompressedPoint,
+    )
+    return {
+        "privateKey": _b64url(private_value),
+        "publicKey": _b64url(public_value),
+    }
+
+def _ensure_vapid_keys(cache: CacheStore) -> dict[str, str]:
+    raw = cache.get_metadata(_WEBPUSH_VAPID_META_KEY)
+    if raw is not None:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = None
+        if (
+            isinstance(parsed, dict)
+            and isinstance(parsed.get("privateKey"), str)
+            and isinstance(parsed.get("publicKey"), str)
+            and parsed["privateKey"].strip()
+            and parsed["publicKey"].strip()
+        ):
+            return {
+                "privateKey": parsed["privateKey"].strip(),
+                "publicKey": parsed["publicKey"].strip(),
+            }
+
+    keys = _generate_vapid_keys()
+    cache.set_metadata(
+        _WEBPUSH_VAPID_META_KEY,
+        json.dumps(keys, separators=(",", ":")),
+        now_ms(),
+    )
+    return keys
+
+def _validate_webpush_subscription(body: dict[str, Any]) -> dict[str, Any]:
+    endpoint = body.get("endpoint")
+    keys = body.get("keys")
+    if not isinstance(endpoint, str) or not endpoint.strip():
+        raise validation_error("'endpoint' must be a non-empty string", field="endpoint")
+    if not endpoint.startswith(("https://", "http://localhost")):
+        raise validation_error("'endpoint' must be an HTTPS URL", field="endpoint")
+    if not isinstance(keys, dict):
+        raise validation_error("'keys' must be an object", field="keys")
+    p256dh = keys.get("p256dh")
+    auth = keys.get("auth")
+    if not isinstance(p256dh, str) or not p256dh.strip():
+        raise validation_error("'keys.p256dh' must be a non-empty string", field="keys.p256dh")
+    if not isinstance(auth, str) or not auth.strip():
+        raise validation_error("'keys.auth' must be a non-empty string", field="keys.auth")
+
+    expiration_time = body.get("expirationTime")
+    if expiration_time is not None and not isinstance(expiration_time, (int, float)):
+        expiration_time = None
+    return {
+        "endpoint": endpoint.strip(),
+        "expirationTime": expiration_time,
+        "keys": {
+            "p256dh": p256dh.strip(),
+            "auth": auth.strip(),
+        },
+        "createdAt": now_ms(),
+        "updatedAt": now_ms(),
+    }
+
+def _upsert_webpush_subscription(
+    cache: CacheStore,
+    profile_id: str,
+    subscription: dict[str, Any],
+) -> None:
+    existing = _read_webpush_subscriptions(cache, profile_id)
+    next_items: list[dict[str, Any]] = []
+    replaced = False
+    for item in existing:
+        if item.get("endpoint") == subscription["endpoint"]:
+            next_items.append({
+                **subscription,
+                "createdAt": item.get("createdAt", subscription["createdAt"]),
+            })
+            replaced = True
+        else:
+            next_items.append(item)
+    if not replaced:
+        next_items.append(subscription)
+    _save_webpush_subscriptions(cache, profile_id, next_items)
+
+def _delete_webpush_subscription(
+    cache: CacheStore,
+    profile_id: str,
+    endpoint: str,
+) -> bool:
+    existing = _read_webpush_subscriptions(cache, profile_id)
+    next_items = [item for item in existing if item.get("endpoint") != endpoint]
+    if len(next_items) == len(existing):
+        return False
+    _save_webpush_subscriptions(cache, profile_id, next_items)
+    return True
 
 
 def _require_sendable(config: dict[str, Any]) -> tuple[str, str]:
@@ -414,6 +618,122 @@ def send_telegram_alert_from_event(
     )
 
 
+def _webpush_payload(
+    *,
+    title: str,
+    body: str,
+    tag: str,
+    url: str = "/",
+) -> dict[str, Any]:
+    return {
+        "title": title,
+        "body": body,
+        "tag": tag,
+        "url": url,
+        "data": {"url": url},
+    }
+
+
+def _webpush_alert_payload(event: AlertEvent) -> dict[str, Any]:
+    return _webpush_payload(
+        title=f"{event.symbol} alert",
+        body=event.message,
+        tag=f"alert:{event.profile_id}:{event.alert_id}:{event.time}",
+        url="/",
+    )
+
+
+def _send_web_push_to_subscription(
+    subscription: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    vapid_private_key: str,
+    ttl: int,
+) -> None:
+    try:
+        from pywebpush import webpush
+    except ImportError as exc:
+        raise bad_request("Web Push dependency is not installed") from exc
+
+    webpush(
+        subscription_info={
+            "endpoint": subscription["endpoint"],
+            "keys": subscription["keys"],
+        },
+        data=json.dumps(payload, separators=(",", ":")),
+        vapid_private_key=vapid_private_key,
+        vapid_claims={"sub": _WEBPUSH_VAPID_SUBJECT},
+        ttl=ttl,
+        timeout=15,
+    )
+
+
+def _webpush_status_code(exc: Exception) -> int | None:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    return status_code if isinstance(status_code, int) else None
+
+
+def send_web_push_message_for_profile(
+    cache: CacheStore,
+    profile_id: str,
+    payload: dict[str, Any],
+    *,
+    ttl: int = 3600,
+) -> dict[str, Any]:
+    config = _read_webpush_config(cache, profile_id)
+    if not bool(config.get("enabled", False)):
+        return {"sent": 0, "removed": 0, "failed": 0, "reason": "disabled"}
+
+    subscriptions = _read_webpush_subscriptions(cache, profile_id)
+    if not subscriptions:
+        return {"sent": 0, "removed": 0, "failed": 0, "reason": "no_subscriptions"}
+
+    keys = _ensure_vapid_keys(cache)
+    sent = 0
+    failed = 0
+    removed_endpoints: set[str] = set()
+    for subscription in subscriptions:
+        endpoint = str(subscription.get("endpoint", ""))
+        try:
+            _send_web_push_to_subscription(
+                subscription,
+                payload,
+                vapid_private_key=keys["privateKey"],
+                ttl=ttl,
+            )
+            sent += 1
+        except Exception as exc:
+            status_code = _webpush_status_code(exc)
+            if status_code in {404, 410} and endpoint:
+                removed_endpoints.add(endpoint)
+            else:
+                failed += 1
+                logger.warning("web push failed for profile %s: %s", profile_id, exc)
+
+    if removed_endpoints:
+        remaining = [
+            item
+            for item in subscriptions
+            if str(item.get("endpoint", "")) not in removed_endpoints
+        ]
+        _save_webpush_subscriptions(cache, profile_id, remaining)
+
+    return {"sent": sent, "removed": len(removed_endpoints), "failed": failed}
+
+
+def send_web_push_alert_from_event(
+    cache: CacheStore,
+    event: AlertEvent,
+) -> dict[str, Any]:
+    return send_web_push_message_for_profile(
+        cache,
+        event.profile_id,
+        _webpush_alert_payload(event),
+        ttl=3600,
+    )
+
+
 @router.get("/telegram")
 async def get_telegram_config(
     profile_id: str = Query("default", alias="profileId"),
@@ -421,6 +741,93 @@ async def get_telegram_config(
 ) -> dict[str, Any]:
     profile_id = _normalize_profile_id(profile_id)
     return {"telegram": _public_config(_read_config(cache, profile_id))}
+
+
+@router.get("/webpush")
+async def get_webpush_config(
+    profile_id: str = Query("default", alias="profileId"),
+    cache: CacheStore = Depends(get_cache),
+) -> dict[str, Any]:
+    profile_id = _normalize_profile_id(profile_id)
+    return {"webPush": _public_webpush_config(cache, profile_id)}
+
+
+@router.put("/webpush")
+async def update_webpush_config(
+    request: Request,
+    profile_id: str = Query("default", alias="profileId"),
+    cache: CacheStore = Depends(get_cache),
+) -> dict[str, Any]:
+    profile_id = _normalize_profile_id(profile_id)
+    try:
+        body = await request.json()
+    except Exception:
+        raise bad_request("Request body must be valid JSON")
+    if not isinstance(body, dict):
+        raise bad_request("Request body must be a JSON object")
+    config = _validate_webpush_update(body, _read_webpush_config(cache, profile_id))
+    _save_webpush_config(cache, profile_id, config)
+    return {"webPush": _public_webpush_config(cache, profile_id)}
+
+
+@router.post("/webpush/subscription")
+async def save_webpush_subscription(
+    request: Request,
+    profile_id: str = Query("default", alias="profileId"),
+    cache: CacheStore = Depends(get_cache),
+) -> dict[str, Any]:
+    profile_id = _normalize_profile_id(profile_id)
+    try:
+        body = await request.json()
+    except Exception:
+        raise bad_request("Request body must be valid JSON")
+    if not isinstance(body, dict):
+        raise bad_request("Request body must be a JSON object")
+    subscription = _validate_webpush_subscription(body)
+    _upsert_webpush_subscription(cache, profile_id, subscription)
+    config = _read_webpush_config(cache, profile_id)
+    config["enabled"] = True
+    _save_webpush_config(cache, profile_id, config)
+    return {"webPush": _public_webpush_config(cache, profile_id)}
+
+
+@router.delete("/webpush/subscription")
+async def delete_webpush_subscription(
+    request: Request,
+    profile_id: str = Query("default", alias="profileId"),
+    cache: CacheStore = Depends(get_cache),
+) -> dict[str, Any]:
+    profile_id = _normalize_profile_id(profile_id)
+    try:
+        body = await request.json()
+    except Exception:
+        raise bad_request("Request body must be valid JSON")
+    if not isinstance(body, dict):
+        raise bad_request("Request body must be a JSON object")
+    endpoint = body.get("endpoint")
+    if not isinstance(endpoint, str) or not endpoint.strip():
+        raise validation_error("'endpoint' must be a non-empty string", field="endpoint")
+    _delete_webpush_subscription(cache, profile_id, endpoint.strip())
+    return {"webPush": _public_webpush_config(cache, profile_id)}
+
+
+@router.post("/webpush/test")
+async def test_webpush_config(
+    profile_id: str = Query("default", alias="profileId"),
+    cache: CacheStore = Depends(get_cache),
+) -> dict[str, Any]:
+    profile_id = _normalize_profile_id(profile_id)
+    return await run_in_threadpool(
+        send_web_push_message_for_profile,
+        cache,
+        profile_id,
+        _webpush_payload(
+            title="GC Chart",
+            body="Web Push test notification",
+            tag=f"test:{profile_id}:{now_ms()}",
+            url="/",
+        ),
+    )
 
 
 @router.put("/telegram")

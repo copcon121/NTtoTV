@@ -9,6 +9,9 @@ import {
   type Alert,
   type TelegramNotificationConfig,
   type TelegramNotificationInput,
+  type WebPushNotificationConfig,
+  type WebPushNotificationInput,
+  type WebPushSendResult,
 } from "../alerts/types";
 import type { AlertEventMessage } from "../socket/messages";
 import { type ChartProfile, type ChartProfilePayload } from "../profiles/types";
@@ -752,6 +755,96 @@ export class ApiClient {
       );
     }
     return (await res.json()) as { sent: boolean; reason?: string };
+  }
+
+  /** Load Web Push config and VAPID public key for the active alert profile. */
+  async webPushConfig(profileId = "default"): Promise<WebPushNotificationConfig> {
+    const body = await this.getJson<{ webPush: WebPushNotificationConfig }>(
+      `/notifications/webpush?${this.profileQuery(profileId)}`,
+    );
+    return body.webPush;
+  }
+
+  /** Enable/disable server-side Web Push delivery for the active profile. */
+  async saveWebPushConfig(
+    input: WebPushNotificationInput,
+    profileId = "default",
+  ): Promise<WebPushNotificationConfig> {
+    const res = await this.fetchFn(
+      `${this.basePath}/notifications/webpush?${this.profileQuery(profileId)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      },
+    );
+    if (!res.ok) {
+      throw new Error(await this.errorMessage(res, "PUT /notifications/webpush"));
+    }
+    const body = (await res.json()) as { webPush: WebPushNotificationConfig };
+    return body.webPush;
+  }
+
+  /** Save this browser/device's Push API subscription for the active profile. */
+  async saveWebPushSubscription(
+    subscription: unknown,
+    profileId = "default",
+  ): Promise<WebPushNotificationConfig> {
+    const res = await this.fetchFn(
+      `${this.basePath}/notifications/webpush/subscription?${this.profileQuery(
+        profileId,
+      )}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(subscription),
+      },
+    );
+    if (!res.ok) {
+      throw new Error(
+        await this.errorMessage(res, "POST /notifications/webpush/subscription"),
+      );
+    }
+    const body = (await res.json()) as { webPush: WebPushNotificationConfig };
+    return body.webPush;
+  }
+
+  /** Remove this browser/device's Push API subscription from the active profile. */
+  async deleteWebPushSubscription(
+    endpoint: string,
+    profileId = "default",
+  ): Promise<WebPushNotificationConfig> {
+    const res = await this.fetchFn(
+      `${this.basePath}/notifications/webpush/subscription?${this.profileQuery(
+        profileId,
+      )}`,
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endpoint }),
+      },
+    );
+    if (!res.ok) {
+      throw new Error(
+        await this.errorMessage(res, "DELETE /notifications/webpush/subscription"),
+      );
+    }
+    const body = (await res.json()) as { webPush: WebPushNotificationConfig };
+    return body.webPush;
+  }
+
+  /** Send a Web Push test notification using saved subscriptions. */
+  async testWebPushConfig(profileId = "default"): Promise<WebPushSendResult> {
+    const res = await this.fetchFn(
+      `${this.basePath}/notifications/webpush/test?${this.profileQuery(profileId)}`,
+      { method: "POST" },
+    );
+    if (!res.ok) {
+      throw new Error(
+        await this.errorMessage(res, "POST /notifications/webpush/test"),
+      );
+    }
+    return (await res.json()) as WebPushSendResult;
   }
 
   /** Load one saved frontend profile. */

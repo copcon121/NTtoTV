@@ -1,0 +1,19 @@
+{
+  "name": "GC Chart Platform",
+  "short_name": "GC Chart",
+  "description": "GC futures chart, alerts, footprint, and order-flow tools.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#101418",
+  "theme_color": "#101418",
+  "icons": [
+    {
+      "src": "/gc-pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

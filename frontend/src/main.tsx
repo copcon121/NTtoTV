@@ -4,6 +4,7 @@ import { LiveApp } from "./LiveApp";
 import { FootprintPage } from "./footprint/FootprintPage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { routeForPathname } from "./routes";
+import { registerServiceWorker } from "./webPush";
 import "./styles.css";
 
 const rootElement = document.getElementById("root");
@@ -13,6 +14,7 @@ if (!rootElement) {
 
 const route = routeForPathname(window.location.pathname);
 const app = route === "footprint" ? <FootprintPage /> : <LiveApp />;
+registerServiceWorker();
 
 createRoot(rootElement).render(
   <StrictMode>

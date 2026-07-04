@@ -5,6 +5,7 @@ export * from "./types";
 export { DrawingManager } from "./DrawingManager";
 export { TrendLinePrimitive } from "./TrendLinePrimitive";
 export { BrushPrimitive } from "./BrushPrimitive";
+export { FibRetracementPrimitive } from "./FibRetracementPrimitive";
 export { HorizontalRayPrimitive } from "./HorizontalRayPrimitive";
 export { RectanglePrimitive } from "./RectanglePrimitive";
 export { FixedRangeDeltaProfilePrimitive } from "./FixedRangeDeltaProfilePrimitive";
