@@ -1409,7 +1409,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.sessionVolumeProfilePrimitive?.setProfileWidth(widthPx);
   }
 
-  /** Show or hide the session developing POC path. */
+  /** Show or hide the session developing POC and value-area paths. */
   setSessionVolumeProfileDevelopingPoc(visible: boolean): void {
     this.sessionVolumeProfilePrimitive?.setDevelopingPocVisible(visible);
   }

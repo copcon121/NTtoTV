@@ -30,7 +30,7 @@ export interface ChartProfilePayload {
   showDailyVolumeProfile?: boolean;
   /** Optional session volume profile histogram width in CSS pixels. */
   dailyVolumeProfileWidth?: number;
-  /** Optional flag to show the session developing POC path. */
+  /** Optional flag to show the session developing POC and value-area paths. */
   showDailyVolumeProfileDevelopingPoc?: boolean;
   /** Optional for backwards compatibility with profiles saved before MGannSwing existed. */
   showMgannSwing?: boolean;
@@ -39,6 +39,8 @@ export interface ChartProfilePayload {
   showFootprint: boolean;
   /** Optional for backwards compatibility with profiles saved before FVG Grader existed. */
   showFvgGrader?: boolean;
+  /** Optional maximum number of FVG Grader signals to fetch/display on M1. */
+  fvgSignalLimit?: number;
   showBigTrades: boolean;
   ema: EmaSettings;
   smc: SmcSettings;

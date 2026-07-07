@@ -99,6 +99,15 @@ export const DEFAULT_BIG_TRADE_SETTINGS: BigTradeSettings = {
   soundEnabled: false,
   sessionMinVolumes: DEFAULT_BIG_TRADE_SESSION_MIN_VOLUMES,
 };
+export const DEFAULT_FVG_SIGNAL_LIMIT = 100;
+export const MIN_FVG_SIGNAL_LIMIT = 25;
+export const MAX_FVG_SIGNAL_LIMIT = 2000;
+
+export function normalizeFvgSignalLimit(value: unknown): number {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) return DEFAULT_FVG_SIGNAL_LIMIT;
+  return Math.min(MAX_FVG_SIGNAL_LIMIT, Math.max(MIN_FVG_SIGNAL_LIMIT, parsed));
+}
 
 export interface IndicatorTogglesProps {
   volume?: boolean;
@@ -107,6 +116,7 @@ export interface IndicatorTogglesProps {
   mgannSwingSettings?: Partial<MgannSwingSettings>;
   footprint: boolean;
   fvgGrader?: boolean;
+  fvgSignalLimit?: number;
   bigTrades: boolean;
   ema: EmaSettings;
   smc: SmcSettings;
@@ -122,6 +132,7 @@ export interface IndicatorTogglesProps {
   onMgannSwingSettingsChange?: (next: MgannSwingSettings) => void;
   onFootprintChange: (enabled: boolean) => void;
   onFvgGraderChange?: (enabled: boolean) => void;
+  onFvgSignalLimitChange?: (limit: number) => void;
   dailyVolumeProfile?: boolean;
   dailyVolumeProfileWidth?: number;
   dailyVolumeProfileDevelopingPoc?: boolean;
@@ -179,6 +190,7 @@ export function IndicatorToggles({
   mgannSwingSettings = DEFAULT_MGANN_SWING_SETTINGS,
   footprint,
   fvgGrader = false,
+  fvgSignalLimit = DEFAULT_FVG_SIGNAL_LIMIT,
   bigTrades,
   dailyVolumeProfile = false,
   dailyVolumeProfileWidth = DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
@@ -197,6 +209,7 @@ export function IndicatorToggles({
   onMgannSwingSettingsChange = () => {},
   onFootprintChange,
   onFvgGraderChange = () => {},
+  onFvgSignalLimitChange = () => {},
   onDailyVolumeProfileChange = () => {},
   onDailyVolumeProfileWidthChange = () => {},
   onDailyVolumeProfileDevelopingPocChange = () => {},
@@ -217,6 +230,7 @@ export function IndicatorToggles({
   const [mgannSwingSettingsOpen, setMgannSwingSettingsOpen] = useState(false);
   const [smcSettingsOpen, setSmcSettingsOpen] = useState(false);
   const [fpSettingsOpen, setFpSettingsOpen] = useState(false);
+  const [fvgSettingsOpen, setFvgSettingsOpen] = useState(false);
   const [btSettingsOpen, setBtSettingsOpen] = useState(false);
   // Local draft for the length input so typing is smooth; committed on blur/Enter.
   const [lengthDraft, setLengthDraft] = useState(String(ema.period));
@@ -408,6 +422,7 @@ export function IndicatorToggles({
     (smc.enabled ? 1 : 0);
   const normalizedDailyVolumeProfileWidth =
     normalizeSessionVolumeProfileWidth(dailyVolumeProfileWidth);
+  const normalizedFvgSignalLimit = normalizeFvgSignalLimit(fvgSignalLimit);
 
   const toggleCombinedIndicators = (enabled: boolean) => {
     onEmaChange(
@@ -685,14 +700,14 @@ export function IndicatorToggles({
                 <input
                   type="checkbox"
                   checked={dailyVolumeProfileDevelopingPoc}
-                  aria-label="Volume Profile developing POC"
+                  aria-label="Volume Profile developing POC and value area"
                   onChange={(event) =>
                     onDailyVolumeProfileDevelopingPocChange(
                       event.currentTarget.checked,
                     )
                   }
                 />
-                <span>Dev POC</span>
+                <span>Dev POC/VA</span>
               </label>
             </div>
           )}
@@ -1368,7 +1383,40 @@ export function IndicatorToggles({
             checked={fvgGrader}
             disabled={fvgGraderDisabled}
             onChange={onFvgGraderChange}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="FVG Grader settings"
+                aria-expanded={fvgSettingsOpen}
+                disabled={fvgGraderDisabled}
+                onClick={() => setFvgSettingsOpen((v) => !v)}
+              >
+                {"\u2699"}
+              </button>
+            }
           />
+          {fvgSettingsOpen && (
+            <div className="ema-settings" aria-label="FVG Grader settings panel">
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Limit</span>
+                <input
+                  type="number"
+                  min={MIN_FVG_SIGNAL_LIMIT}
+                  max={MAX_FVG_SIGNAL_LIMIT}
+                  step={25}
+                  className="ema-length-input"
+                  aria-label="FVG Grader display limit"
+                  value={normalizedFvgSignalLimit}
+                  onChange={(event) =>
+                    onFvgSignalLimitChange(
+                      normalizeFvgSignalLimit(event.currentTarget.value),
+                    )
+                  }
+                />
+              </div>
+            </div>
+          )}
           {fpSettingsOpen && (
             <div className="ema-settings" aria-label="Footprint settings panel">
               <div className="ema-setting-line">

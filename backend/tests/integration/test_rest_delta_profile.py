@@ -120,6 +120,14 @@ def test_delta_profile_aggregates_m1_footprint_ladders(client):
         {"time": _T0, "price": 4514.0},
         {"time": _T0 + 60_000, "price": 4514.0},
     ]
+    assert body["developingVah"] == [
+        {"time": _T0, "price": 4514.1},
+        {"time": _T0 + 60_000, "price": 4514.1},
+    ]
+    assert body["developingVal"] == [
+        {"time": _T0, "price": 4514.0},
+        {"time": _T0 + 60_000, "price": 4514.0},
+    ]
     assert body["rows"] == [
         {
             "price": 4514.2,
@@ -179,6 +187,14 @@ def test_delta_profile_minute_bar_source_matches_standard_minute_profile(client)
     assert body["developingPoc"] == [
         {"time": _T0, "price": 4514.2},
         {"time": _T0 + 60_000, "price": 4514.2},
+    ]
+    assert body["developingVah"] == [
+        {"time": _T0, "price": 4514.2},
+        {"time": _T0 + 60_000, "price": 4514.2},
+    ]
+    assert body["developingVal"] == [
+        {"time": _T0, "price": 4514.0},
+        {"time": _T0 + 60_000, "price": 4514.1},
     ]
     assert body["rows"] == [
         {
@@ -269,6 +285,9 @@ def test_delta_profile_empty_range_returns_empty_profile(client):
     body = resp.json()
     assert body["coveredBars"] == 0
     assert body["poc"] is None
+    assert body["developingPoc"] == []
+    assert body["developingVah"] == []
+    assert body["developingVal"] == []
     assert body["rows"] == []
 
 

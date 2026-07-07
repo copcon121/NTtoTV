@@ -202,7 +202,9 @@ describe("IndicatorToggles", () => {
     fireEvent.change(screen.getByLabelText("Volume Profile width"), {
       target: { value: "96" },
     });
-    fireEvent.click(screen.getByLabelText("Volume Profile developing POC"));
+    fireEvent.click(
+      screen.getByLabelText("Volume Profile developing POC and value area"),
+    );
 
     expect(onWidth).toHaveBeenCalledWith(96);
     expect(onDevelopingPoc).toHaveBeenCalledWith(false);
@@ -255,6 +257,35 @@ describe("IndicatorToggles", () => {
     expect(screen.getByLabelText("FVG Grader")).toBeDisabled();
     expect(screen.getByLabelText("Footprint")).not.toBeDisabled();
     expect(screen.getByLabelText("BigTrade")).not.toBeDisabled();
+  });
+
+  it("edits the FVG Grader display limit", () => {
+    const onLimit = vi.fn();
+    render(
+      <IndicatorToggles
+        footprint={false}
+        fvgGrader
+        fvgSignalLimit={100}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        onFvgSignalLimitChange={onLimit}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    fireEvent.click(screen.getByLabelText("FVG Grader settings"));
+    fireEvent.change(screen.getByLabelText("FVG Grader display limit"), {
+      target: { value: "150" },
+    });
+
+    expect(onLimit).toHaveBeenCalledWith(150);
   });
 
   it("can disable BigTrade independently", () => {

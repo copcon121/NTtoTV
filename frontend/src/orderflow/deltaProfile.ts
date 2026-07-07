@@ -6,10 +6,12 @@ export interface DeltaProfileRow {
   delta: number;
 }
 
-export interface DeltaProfileDevelopingPocPoint {
+export interface DeltaProfileDevelopingLevelPoint {
   time: number;
   price: number;
 }
+
+export type DeltaProfileDevelopingPocPoint = DeltaProfileDevelopingLevelPoint;
 
 export type DeltaProfileSource = "footprint_cache" | "minute_bars";
 
@@ -29,7 +31,9 @@ export interface DeltaProfileData {
   maxAbsDelta: number;
   coveredBars: number;
   source: DeltaProfileSource;
-  developingPoc?: DeltaProfileDevelopingPocPoint[];
+  developingPoc?: DeltaProfileDevelopingLevelPoint[];
+  developingVah?: DeltaProfileDevelopingLevelPoint[];
+  developingVal?: DeltaProfileDevelopingLevelPoint[];
   rows: DeltaProfileRow[];
 }
 

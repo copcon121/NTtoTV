@@ -258,7 +258,7 @@ export interface ChartContainerProps {
   sessionVolumeProfile?: DeltaProfileData | null;
   /** Session volume profile histogram width in CSS pixels. */
   sessionVolumeProfileWidth?: number;
-  /** Show the session developing POC path. */
+  /** Show the session developing POC and value-area paths. */
   sessionVolumeProfileDevelopingPoc?: boolean;
   /** Show TradingView-style volume histogram at the bottom of the chart. */
   showVolume?: boolean;

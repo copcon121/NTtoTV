@@ -186,10 +186,19 @@ namespace NinjaTrader.NinjaScript.Indicators
                 {
                     volumetricStatus = "not requested";
                 }
+
+                Print("NTtoTVNativeDiagnostics loaded: ExportEnabled=" + ExportEnabled.ToString()
+                    + ", PostToBackend=" + PostToBackend.ToString()
+                    + ", PostHistorical=" + PostHistorical.ToString()
+                    + ", UseVolumetric=" + UseVolumetric.ToString()
+                    + ", volumetricStatus=" + volumetricStatus
+                    + ", Instrument=" + (Instrument == null ? "" : Instrument.FullName)
+                    + ", BarsPeriod=" + (BarsPeriod == null ? "" : BarsPeriod.ToString())
+                    + ", BackendUrl=" + BackendUrl);
             }
             else if (State == State.Terminated)
             {
-                if (ExportEnabled && CurrentBar > 0)
+                if ((ExportEnabled || PostToBackend) && CurrentBar > 0)
                     ExportClosedBarsUpTo(CurrentBar - 1);
             }
         }
@@ -237,7 +246,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 activeMarketDataBar = CurrentBar;
             }
 
-            if (ExportEnabled)
+            if (ExportEnabled || PostToBackend)
                 ExportClosedBarsUpTo(CurrentBar - 1);
         }
 
@@ -258,8 +267,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
             try
             {
-                EnsureExportFile();
-
                 int barsAgo = CurrentBar - barIdx;
                 if (barsAgo < 0)
                     barsAgo = 0;
@@ -303,47 +310,52 @@ namespace NinjaTrader.NinjaScript.Indicators
                 string barsPeriodText = BarsPeriod == null ? "" : BarsPeriod.ToString();
                 double barVolume = Volume.GetValueAt(barIdx);
 
-                string line = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22},{23},{24},{25},{26},{27},{28},{29},{30},{31},{32},{33},{34},{35}",
-                    Csv(instrumentName),
-                    Csv(barsPeriodText),
-                    barIdx,
-                    Csv(barTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture)),
-                    Csv(utcTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture)),
-                    utcMs,
-                    Csv(bucketTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture)),
-                    Csv(bucketUtcTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture)),
-                    bucketUtcMs,
-                    Open.GetValueAt(barIdx),
-                    High.GetValueAt(barIdx),
-                    Low.GetValueAt(barIdx),
-                    Close.GetValueAt(barIdx),
-                    barVolume,
-                    barVolume,
-                    bs == null ? "" : bs.TradeEvents.ToString(CultureInfo.InvariantCulture),
-                    bs == null ? "" : bs.Volume.ToString(CultureInfo.InvariantCulture),
-                    bs == null ? "" : bs.BuyVolume.ToString(CultureInfo.InvariantCulture),
-                    bs == null ? "" : bs.SellVolume.ToString(CultureInfo.InvariantCulture),
-                    bs == null ? "" : bs.UnknownVolume.ToString(CultureInfo.InvariantCulture),
-                    bs == null ? "" : (bs.BuyVolume - bs.SellVolume).ToString(CultureInfo.InvariantCulture),
-                    Csv(ofStatus),
-                    ofOpen,
-                    ofHigh,
-                    ofLow,
-                    ofClose,
-                    Csv(vol.Status),
-                    vol.TotalVolume,
-                    vol.TotalBuyingVolume,
-                    vol.TotalSellingVolume,
-                    vol.BarDelta,
-                    vol.Trades,
-                    vol.MinSeenDelta,
-                    vol.MaxSeenDelta,
-                    Csv(vol.TypeName),
-                    barTime.Ticks);
+                if (ExportEnabled)
+                {
+                    EnsureExportFile();
 
-                File.AppendAllText(exportPath, line + Environment.NewLine);
+                    string line = string.Format(
+                        CultureInfo.InvariantCulture,
+                        "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22},{23},{24},{25},{26},{27},{28},{29},{30},{31},{32},{33},{34},{35}",
+                        Csv(instrumentName),
+                        Csv(barsPeriodText),
+                        barIdx,
+                        Csv(barTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture)),
+                        Csv(utcTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture)),
+                        utcMs,
+                        Csv(bucketTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture)),
+                        Csv(bucketUtcTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture)),
+                        bucketUtcMs,
+                        Open.GetValueAt(barIdx),
+                        High.GetValueAt(barIdx),
+                        Low.GetValueAt(barIdx),
+                        Close.GetValueAt(barIdx),
+                        barVolume,
+                        barVolume,
+                        bs == null ? "" : bs.TradeEvents.ToString(CultureInfo.InvariantCulture),
+                        bs == null ? "" : bs.Volume.ToString(CultureInfo.InvariantCulture),
+                        bs == null ? "" : bs.BuyVolume.ToString(CultureInfo.InvariantCulture),
+                        bs == null ? "" : bs.SellVolume.ToString(CultureInfo.InvariantCulture),
+                        bs == null ? "" : bs.UnknownVolume.ToString(CultureInfo.InvariantCulture),
+                        bs == null ? "" : (bs.BuyVolume - bs.SellVolume).ToString(CultureInfo.InvariantCulture),
+                        Csv(ofStatus),
+                        ofOpen,
+                        ofHigh,
+                        ofLow,
+                        ofClose,
+                        Csv(vol.Status),
+                        vol.TotalVolume,
+                        vol.TotalBuyingVolume,
+                        vol.TotalSellingVolume,
+                        vol.BarDelta,
+                        vol.Trades,
+                        vol.MinSeenDelta,
+                        vol.MaxSeenDelta,
+                        Csv(vol.TypeName),
+                        barTime.Ticks);
+
+                    File.AppendAllText(exportPath, line + Environment.NewLine);
+                }
 
                 if (ShouldPostBar())
                 {

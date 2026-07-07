@@ -50,7 +50,6 @@ const COLORS = {
   selectionFill: "#ffffff",
   valueAreaLine: "rgba(170, 205, 255, 0.98)",
   developingPoc: "rgba(218, 165, 32, 0.92)",
-  developingPocHalo: "rgba(16, 16, 16, 0.68)",
   poc: "#daa520",
   text: "#f5f5f5",
   labelBg: "rgba(16, 16, 16, 0.82)",
@@ -303,11 +302,8 @@ function drawDevelopingPoc(
   ctx.setLineDash([]);
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  ctx.strokeStyle = COLORS.developingPocHalo;
-  ctx.lineWidth = 4;
-  strokePolyline(ctx, visible);
   ctx.strokeStyle = COLORS.developingPoc;
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1;
   strokePolyline(ctx, visible);
   ctx.lineCap = "butt";
   ctx.lineJoin = "miter";

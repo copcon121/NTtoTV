@@ -450,6 +450,8 @@ def _empty_delta_profile(
         "coveredBars": covered_bars,
         "source": source,
         "developingPoc": [],
+        "developingVah": [],
+        "developingVal": [],
         "rows": [],
     }
 
@@ -460,13 +462,42 @@ def _poc_from_volumes(volumes_by_price: dict[float, float]) -> float | None:
     return max(volumes_by_price, key=lambda price: (volumes_by_price[price], price))
 
 
-def _developing_poc_from_minute_bars(
+def _empty_developing_profile_levels() -> dict[str, list[dict[str, float | int]]]:
+    return {"developingPoc": [], "developingVah": [], "developingVal": []}
+
+
+def _append_developing_profile_levels(
+    points: dict[str, list[dict[str, float | int]]],
+    *,
+    time: int,
+    volumes_by_price: dict[float, float],
+    row_ticks: int,
+    value_area_pct: float,
+) -> None:
+    poc = _poc_from_volumes(volumes_by_price)
+    if poc is None:
+        return
+    total_volume = sum(volumes_by_price.values())
+    vah, val = _compute_profile_value_area(
+        volumes_by_price,
+        poc,
+        row_ticks=row_ticks,
+        value_area_pct=value_area_pct,
+        total_volume=total_volume,
+    )
+    points["developingPoc"].append({"time": int(time), "price": poc})
+    points["developingVah"].append({"time": int(time), "price": vah})
+    points["developingVal"].append({"time": int(time), "price": val})
+
+
+def _developing_profile_levels_from_minute_bars(
     bars: list[BarRecord],
     *,
     row_ticks: int,
-) -> list[dict[str, float | int]]:
+    value_area_pct: float,
+) -> dict[str, list[dict[str, float | int]]]:
     grouped: dict[float, float] = {}
-    points: list[dict[str, float | int]] = []
+    points = _empty_developing_profile_levels()
     for bar in sorted(bars, key=lambda item: item.time):
         if bar.volume <= 0:
             continue
@@ -485,25 +516,34 @@ def _developing_poc_from_minute_bars(
         for tick in range(low_tick, high_tick + 1):
             price = _delta_profile_price(tick * DEFAULT_TICK_SIZE, row_ticks)
             grouped[price] = grouped.get(price, 0.0) + volume_per_tick
-        poc = _poc_from_volumes(grouped)
-        if poc is not None:
-            points.append({"time": int(bar.time), "price": poc})
+        _append_developing_profile_levels(
+            points,
+            time=int(bar.time),
+            volumes_by_price=grouped,
+            row_ticks=row_ticks,
+            value_area_pct=value_area_pct,
+        )
     return points
 
 
-def _developing_poc_from_footprint_levels(
+def _developing_profile_levels_from_footprint_levels(
     levels: list[FootprintLevelRecord],
     *,
     row_ticks: int,
-) -> list[dict[str, float | int]]:
+    value_area_pct: float,
+) -> dict[str, list[dict[str, float | int]]]:
     grouped: dict[float, float] = {}
-    points: list[dict[str, float | int]] = []
+    points = _empty_developing_profile_levels()
     current_time: int | None = None
     for level in levels:
         if current_time is not None and level.time != current_time:
-            poc = _poc_from_volumes(grouped)
-            if poc is not None:
-                points.append({"time": int(current_time), "price": poc})
+            _append_developing_profile_levels(
+                points,
+                time=int(current_time),
+                volumes_by_price=grouped,
+                row_ticks=row_ticks,
+                value_area_pct=value_area_pct,
+            )
         current_time = int(level.time)
         if level.bid_volume <= 0 and level.ask_volume <= 0:
             continue
@@ -514,9 +554,13 @@ def _developing_poc_from_footprint_levels(
             + float(level.ask_volume)
         )
     if current_time is not None:
-        poc = _poc_from_volumes(grouped)
-        if poc is not None:
-            points.append({"time": int(current_time), "price": poc})
+        _append_developing_profile_levels(
+            points,
+            time=int(current_time),
+            volumes_by_price=grouped,
+            row_ticks=row_ticks,
+            value_area_pct=value_area_pct,
+        )
     return points
 
 
@@ -547,10 +591,10 @@ def _delta_profile_to_dict(
             frm=frm,
             to=to,
             row_ticks=row_ticks,
-        value_area_pct=value_area_pct,
-        covered_bars=covered_bars,
-        source=DELTA_PROFILE_SOURCE_FOOTPRINT,
-    )
+            value_area_pct=value_area_pct,
+            covered_bars=covered_bars,
+            source=DELTA_PROFILE_SOURCE_FOOTPRINT,
+        )
 
     volumes_by_price = {
         price: values["bid"] + values["ask"] for price, values in grouped.items()
@@ -566,6 +610,11 @@ def _delta_profile_to_dict(
     )
     total_delta = sum(values["ask"] - values["bid"] for values in grouped.values())
     max_abs_delta = max(abs(values["ask"] - values["bid"]) for values in grouped.values())
+    developing_levels = _developing_profile_levels_from_footprint_levels(
+        levels,
+        row_ticks=row_ticks,
+        value_area_pct=value_area_pct,
+    )
     rows = []
     for price in sorted(grouped, reverse=True):
         bid = grouped[price]["bid"]
@@ -596,9 +645,9 @@ def _delta_profile_to_dict(
         "maxAbsDelta": max_abs_delta,
         "coveredBars": covered_bars,
         "source": DELTA_PROFILE_SOURCE_FOOTPRINT,
-        "developingPoc": _developing_poc_from_footprint_levels(
-            levels, row_ticks=row_ticks
-        ),
+        "developingPoc": developing_levels["developingPoc"],
+        "developingVah": developing_levels["developingVah"],
+        "developingVal": developing_levels["developingVal"],
         "rows": rows,
     }
 
@@ -670,6 +719,11 @@ def _minute_bar_profile_to_dict(
         }
         for price, volume in sorted(grouped.items(), reverse=True)
     ]
+    developing_levels = _developing_profile_levels_from_minute_bars(
+        bars,
+        row_ticks=row_ticks,
+        value_area_pct=value_area_pct,
+    )
     return {
         "symbol": symbol,
         "contract": contract,
@@ -686,9 +740,9 @@ def _minute_bar_profile_to_dict(
         "maxAbsDelta": 0,
         "coveredBars": len(bars),
         "source": DELTA_PROFILE_SOURCE_MINUTE_BARS,
-        "developingPoc": _developing_poc_from_minute_bars(
-            bars, row_ticks=row_ticks
-        ),
+        "developingPoc": developing_levels["developingPoc"],
+        "developingVah": developing_levels["developingVah"],
+        "developingVal": developing_levels["developingVal"],
         "rows": rows,
     }
 

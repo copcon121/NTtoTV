@@ -26,8 +26,10 @@ import {
   IndicatorToggles,
   DEFAULT_BIG_TRADE_SETTINGS,
   DEFAULT_EMA_SETTINGS,
+  DEFAULT_FVG_SIGNAL_LIMIT,
   DEFAULT_FOOTPRINT_SETTINGS,
   normalizeEmaSettings,
+  normalizeFvgSignalLimit,
 } from "./chart/IndicatorToggles";
 import type {
   BigTradeSettings,
@@ -178,9 +180,9 @@ const EMPTY_FVG_SIGNALS: ReadonlyMap<number, FvgSignalUpdateMessage> = new Map()
 const DEFERRED_INDICATOR_LOAD_MS = 75;
 const DEFERRED_OVERLAY_LOAD_MS = 250;
 const REALTIME_OVERLAY_CATCH_UP_MS = 10_000;
+const FVG_GRADER_CATCH_UP_MS = 30_000;
 const RESUME_REFRESH_THROTTLE_MS = 2_000;
 const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
-const INITIAL_FVG_SIGNAL_LIMIT = 2_000;
 const INITIAL_BIG_TRADE_LIMIT = DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
 const VOLUME_PROFILE_ROW_TICKS = 1;
@@ -1231,6 +1233,32 @@ function profileDrawings(drawings: readonly DrawingState[]): DrawingState[] {
   return cloneDrawings(drawings.filter((drawing) => drawing.tool !== "order_bracket"));
 }
 
+function fvgSignalsEqual(
+  current: ReadonlyMap<number, FvgSignalUpdateMessage>,
+  nextSignals: readonly FvgSignalUpdateMessage[],
+): boolean {
+  const active = nextSignals.filter(
+    (signal) => signal.phase !== "clear" && signal.pulse !== 0,
+  );
+  if (current.size !== active.length) return false;
+  for (const signal of active) {
+    const existing = current.get(signal.time);
+    if (
+      existing === undefined ||
+      existing.direction !== signal.direction ||
+      existing.level !== signal.level ||
+      existing.pulse !== signal.pulse ||
+      existing.top !== signal.top ||
+      existing.bottom !== signal.bottom ||
+      existing.breakoutRatio !== signal.breakoutRatio ||
+      existing.phase !== signal.phase
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function drawingVisibleOnTimeframe(
   drawing: DrawingState,
   timeframe: Timeframe,
@@ -1461,6 +1489,7 @@ export function LiveApp() {
   const showMgannWaveDelta = showMgannSwing && mgannSwing.showWaveDelta;
   const [showFootprint, setShowFootprint] = useState(false);
   const [showFvgGrader, setShowFvgGrader] = useState(true);
+  const [fvgSignalLimit, setFvgSignalLimit] = useState(DEFAULT_FVG_SIGNAL_LIMIT);
   const [showBigTrades, setShowBigTrades] = useState(true);
   const [ema, setEma] = useState<EmaSettings>(() => ({ ...DEFAULT_EMA_SETTINGS }));
   const [smc, setSmc] = useState<SmcSettings>(() => ({ ...DEFAULT_SMC_SETTINGS }));
@@ -1611,6 +1640,7 @@ export function LiveApp() {
       mgannSwing: { ...mgannSwing },
       showFootprint,
       showFvgGrader,
+      fvgSignalLimit,
       showBigTrades,
       ema: { ...ema },
       smc: { ...smc },
@@ -1629,12 +1659,14 @@ export function LiveApp() {
       drawings,
       ema,
       footprintSettings,
+      fvgSignalLimit,
       fixedRangeProfileMode,
       marketOrderSettings,
       mgannSwing,
       outsideBar,
       showBigTrades,
       showFootprint,
+      fvgSignalLimit,
       showMgannSwing,
       showVolume,
       showVolumeDelta,
@@ -2367,48 +2399,33 @@ export function LiveApp() {
     if (!hasLoadedCurrentSeries) {
       return;
     }
+    if (!showBigTrades) {
+      return;
+    }
     let cancelled = false;
-    const loadRealtimeOverlays = () => {
+    const loadBigTrades = () => {
       if (document.visibilityState === "hidden") {
         return;
       }
       void (async () => {
-        const [bigTradeResult, fvgResult] = await Promise.allSettled([
+        const bigTradeResult = await Promise.allSettled([
           api.bigTrades(SYMBOL, contract, INITIAL_BIG_TRADE_LIMIT),
-          api.fvgSignals(
-            SYMBOL,
-            contract,
-            INITIAL_FVG_SIGNAL_LIMIT,
-          ),
         ]);
         if (cancelled) {
           return;
         }
-        if (bigTradeResult.status === "fulfilled") {
-          setBigTrades((prev) => reduceBigTrades(prev, bigTradeResult.value));
-        }
-        if (fvgResult.status === "fulfilled") {
-          setFvgSignals((prev) => {
-            const next = new Map(prev);
-            for (const signal of fvgResult.value) {
-              next.set(signal.time, signal);
-            }
-            return next;
-          });
-          setFvgSignalSeriesKey(currentSeriesKey);
-        } else {
-          setFvgSignalSeriesKey((key) => {
-            if (key === currentSeriesKey) {
-              return key;
-            }
-            return currentSeriesKey;
-          });
+        const loadedBigTrades =
+          bigTradeResult[0].status === "fulfilled"
+            ? bigTradeResult[0].value
+            : undefined;
+        if (loadedBigTrades !== undefined) {
+          setBigTrades((prev) => reduceBigTrades(prev, loadedBigTrades));
         }
       })();
     };
-    const timer = window.setTimeout(loadRealtimeOverlays, DEFERRED_OVERLAY_LOAD_MS);
+    const timer = window.setTimeout(loadBigTrades, DEFERRED_OVERLAY_LOAD_MS);
     const interval = window.setInterval(
-      loadRealtimeOverlays,
+      loadBigTrades,
       REALTIME_OVERLAY_CATCH_UP_MS,
     );
     return () => {
@@ -2421,8 +2438,63 @@ export function LiveApp() {
     contract,
     timeframe,
     hasLoadedCurrentSeries,
+    overlayRefreshNonce,
+    showBigTrades,
+  ]);
+
+  useEffect(() => {
+    if (timeframe !== "1m") {
+      return;
+    }
+    if (!hasLoadedCurrentSeries || !showFvgGrader) {
+      return;
+    }
+    let cancelled = false;
+    const loadFvgSignals = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      void api
+        .fvgSignals(SYMBOL, contract, fvgSignalLimit)
+        .then((signals) => {
+          if (cancelled) return;
+          setFvgSignals((prev) => {
+            if (fvgSignalsEqual(prev, signals)) {
+              return prev;
+            }
+            const next = new Map<number, FvgSignalUpdateMessage>();
+            for (const signal of signals) {
+              if (signal.phase !== "clear" && signal.pulse !== 0) {
+                next.set(signal.time, signal);
+              }
+            }
+            return next;
+          });
+          setFvgSignalSeriesKey(currentSeriesKey);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setFvgSignalSeriesKey((key) =>
+            key === currentSeriesKey ? key : currentSeriesKey,
+          );
+        });
+    };
+    const timer = window.setTimeout(loadFvgSignals, DEFERRED_OVERLAY_LOAD_MS);
+    const interval = window.setInterval(loadFvgSignals, FVG_GRADER_CATCH_UP_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      window.clearInterval(interval);
+    };
+  }, [
+    api,
+    contract,
+    timeframe,
+    hasLoadedCurrentSeries,
     currentSeriesKey,
     overlayRefreshNonce,
+    showFvgGrader,
+    fvgSignalLimit,
   ]);
 
   useEffect(() => {
@@ -3446,6 +3518,7 @@ export function LiveApp() {
       }),
     );
     setShowFvgGrader(payload.showFvgGrader !== false);
+    setFvgSignalLimit(normalizeFvgSignalLimit(payload.fvgSignalLimit));
     setShowBigTrades(payload.showBigTrades !== false);
     setEma(normalizeEmaSettings(payload.ema));
     setSmc({ ...DEFAULT_SMC_SETTINGS, ...(payload.smc ?? {}) });
@@ -3734,12 +3807,13 @@ export function LiveApp() {
     : EMPTY_FOOTPRINT_BARS;
   const chartFvgSignals =
     hasLoadedCurrentSeries &&
+    showFvgGrader &&
     timeframe === "1m" &&
     fvgSignalSeriesKey === currentSeriesKey
       ? fvgSignals
       : EMPTY_FVG_SIGNALS;
   const bigTradeOverlayEnabled = bigTradesEnabledForTimeframe(timeframe);
-  const chartBigTrades = hasLoadedCurrentSeries && bigTradeOverlayEnabled
+  const chartBigTrades = hasLoadedCurrentSeries && showBigTrades && bigTradeOverlayEnabled
     ? bigTrades
     : EMPTY_BIG_TRADES;
   const chartSmcAiSignals = hasLoadedCurrentSeries && timeframe === "1m"
@@ -3832,6 +3906,7 @@ export function LiveApp() {
           mgannSwingSettings={mgannSwing}
           footprint={showFootprint}
           fvgGrader={showFvgGrader}
+          fvgSignalLimit={fvgSignalLimit}
           bigTrades={showBigTrades && bigTradeOverlayEnabled}
           ema={ema}
           smc={smc}
@@ -3855,6 +3930,7 @@ export function LiveApp() {
           onMgannSwingSettingsChange={setMgannSwing}
           onFootprintChange={setShowFootprint}
           onFvgGraderChange={setShowFvgGrader}
+          onFvgSignalLimitChange={setFvgSignalLimit}
           onBigTradesChange={setShowBigTrades}
           onEmaChange={setEma}
           onSmcChange={setSmc}

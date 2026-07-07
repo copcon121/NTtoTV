@@ -11,7 +11,10 @@ import type {
   UTCTimestamp,
 } from "lightweight-charts";
 
-import type { DeltaProfileData } from "../orderflow/deltaProfile";
+import type {
+  DeltaProfileData,
+  DeltaProfileDevelopingLevelPoint,
+} from "../orderflow/deltaProfile";
 import {
   DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
   normalizeSessionVolumeProfileWidth,
@@ -53,6 +56,8 @@ interface RenderPoint {
 interface ProfileRenderData {
   rows: readonly RenderRow[];
   developingPoc: readonly RenderPoint[];
+  developingVah: readonly RenderPoint[];
+  developingVal: readonly RenderPoint[];
   pocY: number | null;
   vahY: number | null;
   valY: number | null;
@@ -79,7 +84,32 @@ class SessionVolumeProfileRenderer implements IPrimitivePaneRenderer {
 
       ctx.save();
 
-      drawDevelopingPoc(ctx, data.developingPoc, data.rightEdge, hr, vr);
+      drawDevelopingLine(
+        ctx,
+        data.developingVah,
+        data.rightEdge,
+        hr,
+        vr,
+        data.valueAreaLineColor,
+        [Math.round(2 * hr), Math.round(3 * hr)],
+      );
+      drawDevelopingLine(
+        ctx,
+        data.developingVal,
+        data.rightEdge,
+        hr,
+        vr,
+        data.valueAreaLineColor,
+        [Math.round(2 * hr), Math.round(3 * hr)],
+      );
+      drawDevelopingLine(
+        ctx,
+        data.developingPoc,
+        data.rightEdge,
+        hr,
+        vr,
+        DEVELOPING_POC_COLOR,
+      );
 
       for (const row of data.rows) {
         const y = Math.round(row.y * vr);
@@ -144,12 +174,14 @@ class SessionVolumeProfileRenderer implements IPrimitivePaneRenderer {
   }
 }
 
-function drawDevelopingPoc(
+function drawDevelopingLine(
   ctx: CanvasRenderingContext2D,
   points: readonly RenderPoint[],
   rightEdge: number,
   horizontalPixelRatio: number,
   verticalPixelRatio: number,
+  color: string,
+  dash: readonly number[] = [],
 ): void {
   const visible = points.filter(
     (point) =>
@@ -175,12 +207,13 @@ function drawDevelopingPoc(
     ctx.stroke();
   };
 
-  ctx.setLineDash([]);
+  ctx.setLineDash([...dash]);
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  ctx.strokeStyle = DEVELOPING_POC_COLOR;
+  ctx.strokeStyle = color;
   ctx.lineWidth = Math.max(1, Math.round(horizontalPixelRatio));
   stroke();
+  ctx.setLineDash([]);
   ctx.lineCap = "butt";
   ctx.lineJoin = "miter";
 }
@@ -232,20 +265,28 @@ class SessionVolumeProfilePaneView implements IPrimitivePaneView {
     }
 
     const developingPoc = this.source.developingPocVisible
-      ? (profile.developingPoc ?? []).flatMap((point) => {
-          if (!Number.isFinite(point.time) || !Number.isFinite(point.price)) {
-            return [];
-          }
-          const x = chart.timeScale().timeToCoordinate(
-            Math.floor(
-              (point.time + this.source.displayTimeOffsetMs) / 1000,
-            ) as UTCTimestamp,
-          );
-          const y = series.priceToCoordinate(point.price);
-          return x === null || y === null
-            ? []
-            : [{ x: x as number, y: y as number }];
-        })
+      ? profilePointsToRenderPoints(
+          profile.developingPoc,
+          chart,
+          series,
+          this.source.displayTimeOffsetMs,
+        )
+      : [];
+    const developingVah = this.source.developingPocVisible
+      ? profilePointsToRenderPoints(
+          profile.developingVah,
+          chart,
+          series,
+          this.source.displayTimeOffsetMs,
+        )
+      : [];
+    const developingVal = this.source.developingPocVisible
+      ? profilePointsToRenderPoints(
+          profile.developingVal,
+          chart,
+          series,
+          this.source.displayTimeOffsetMs,
+        )
       : [];
 
     const pocY = poc !== null ? series.priceToCoordinate(poc) : null;
@@ -255,6 +296,8 @@ class SessionVolumeProfilePaneView implements IPrimitivePaneView {
     this.renderData = {
       rows,
       developingPoc,
+      developingVah,
+      developingVal,
       pocY: pocY !== null ? (pocY as number) : null,
       vahY: vahY !== null ? (vahY as number) : null,
       valY: valY !== null ? (valY as number) : null,
@@ -363,6 +406,26 @@ export class SessionVolumeProfilePrimitive implements ISeriesPrimitive<Time> {
     this.series = undefined;
     this.requestUpdateFn = undefined;
   }
+}
+
+function profilePointsToRenderPoints(
+  points: readonly DeltaProfileDevelopingLevelPoint[] | undefined,
+  chart: IChartApiBase<Time>,
+  series: ISeriesApi<"Candlestick", Time>,
+  displayTimeOffsetMs: number,
+): RenderPoint[] {
+  return (points ?? []).flatMap((point) => {
+    if (!Number.isFinite(point.time) || !Number.isFinite(point.price)) {
+      return [];
+    }
+    const x = chart
+      .timeScale()
+      .timeToCoordinate(
+        Math.floor((point.time + displayTimeOffsetMs) / 1000) as UTCTimestamp,
+      );
+    const y = series.priceToCoordinate(point.price);
+    return x === null || y === null ? [] : [{ x: x as number, y: y as number }];
+  });
 }
 
 function inferPriceStep(profile: DeltaProfileData): number {
