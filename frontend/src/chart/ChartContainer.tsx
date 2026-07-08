@@ -47,6 +47,7 @@ import {
   type OrderLine,
   type PriceLineSelection,
   type SmcAiSignalMarker,
+  type VisibleLogicalRangeInfo,
   LightweightChartsAdapter,
 } from "./lightweightChartsAdapter";
 import { type Bar } from "../cache/types";
@@ -143,6 +144,9 @@ export interface DisposableChartPort extends ChartSeriesPort {
     onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
     snap?: (price: number) => number;
   }): () => void;
+  subscribeVisibleLogicalRange?(
+    handler: (info: VisibleLogicalRangeInfo | null) => void,
+  ): () => void;
 }
 
 /** Factory that builds the rendering port for a container element. */
@@ -154,6 +158,8 @@ export type ChartPortFactory = (
 export interface OrderControl {
   id: string;
   orderId: string;
+  actionId?: string;
+  level?: "entry" | "sl" | "tp";
   price: number;
   side: "buy" | "sell";
   title: string;
@@ -176,6 +182,10 @@ const defaultPortFactory: ChartPortFactory = (container, options) =>
 const PRIMARY_EMA_LINE_ID = "primary";
 const EMA_200_LINE_ID = "ema-200";
 const EMA_200_PERIOD = 200;
+const HISTORY_EDGE_THRESHOLD_BARS = 120;
+const ORDER_CONTROL_MIN_TOP_PX = 18;
+const ORDER_CONTROL_MAX_BOTTOM_PAD_PX = 18;
+const ORDER_CONTROL_MIN_GAP_PX = 30;
 
 interface EmaLineConfig {
   id: string;
@@ -315,6 +325,8 @@ export interface ChartContainerProps {
   onAlertDelete?: (id: string) => void;
   /** Fired after a matching realtime bar update is applied to the chart. */
   onRealtimeBar?: (bar: Bar) => void;
+  /** Fired when the visible range gets close to the oldest loaded bars. */
+  onRequestMoreHistory?: () => void;
   /** Fired when an order line is dragged and released. */
   onOrderDragCommit?: (id: string, price: number) => void;
   /** Fired when one selected order group has multiple pending line edits. */
@@ -439,6 +451,7 @@ export function ChartContainer({
   onAlertDragCommit,
   onAlertDelete,
   onRealtimeBar,
+  onRequestMoreHistory,
   onOrderDragCommit,
   onOrderDragBatchCommit,
   onOrderClose,
@@ -488,6 +501,10 @@ export function ChartContainer({
   alertDeleteRef.current = onAlertDelete;
   const realtimeBarRef = useRef<((bar: Bar) => void) | undefined>(onRealtimeBar);
   realtimeBarRef.current = onRealtimeBar;
+  const requestMoreHistoryRef = useRef<(() => void) | undefined>(
+    onRequestMoreHistory,
+  );
+  requestMoreHistoryRef.current = onRequestMoreHistory;
   const orderDragCommitRef = useRef<
     ((id: string, price: number) => void) | undefined
   >(onOrderDragCommit);
@@ -562,13 +579,38 @@ export function ChartContainer({
       return;
     }
     const paneHeight = Math.max(1, port.createFootprintViewport?.(1, 1).height ?? 1);
-    const topMax = Math.max(8, paneHeight - 42);
-    const next = orderControls.flatMap((control) => {
+    const topMax = Math.max(
+      ORDER_CONTROL_MIN_TOP_PX,
+      paneHeight - ORDER_CONTROL_MAX_BOTTOM_PAD_PX,
+    );
+    const raw = orderControls.flatMap((control) => {
       const y = port.priceToCoordinate?.(control.price);
       if (y === null || y === undefined || !Number.isFinite(y)) return [];
-      const top = Math.min(Math.max(8, Math.round(y as number)), topMax);
+      const top = Math.min(
+        Math.max(ORDER_CONTROL_MIN_TOP_PX, Math.round(y as number)),
+        topMax,
+      );
       return [{ ...control, top }];
     });
+    const sorted = raw.sort((left, right) => left.top - right.top);
+    let previousTop = Number.NEGATIVE_INFINITY;
+    const next = sorted.map((control) => {
+      const top = Math.min(
+        Math.max(control.top, previousTop + ORDER_CONTROL_MIN_GAP_PX),
+        topMax,
+      );
+      previousTop = top;
+      return { ...control, top };
+    });
+    for (let index = next.length - 2; index >= 0; index -= 1) {
+      const maxTop = next[index + 1].top - ORDER_CONTROL_MIN_GAP_PX;
+      if (next[index].top > maxTop) {
+        next[index] = {
+          ...next[index],
+          top: Math.max(ORDER_CONTROL_MIN_TOP_PX, maxTop),
+        };
+      }
+    }
     setPositionedOrderControls(next);
   }, [orderControls]);
 
@@ -598,6 +640,15 @@ export function ChartContainer({
       disposeCrosshair = maybe.subscribeCrosshair((bar) =>
         crosshairRef.current?.(bar),
       );
+    }
+
+    let disposeVisibleRange: (() => void) | undefined;
+    if (typeof port.subscribeVisibleLogicalRange === "function") {
+      disposeVisibleRange = port.subscribeVisibleLogicalRange((info) => {
+        if (info !== null && info.barsBefore < HISTORY_EDGE_THRESHOLD_BARS) {
+          requestMoreHistoryRef.current?.();
+        }
+      });
     }
 
     // Wire the right-click / long-press "Add alert at price" affordance.
@@ -641,6 +692,7 @@ export function ChartContainer({
       mgr.dispose();
       drawingManagerRef.current = null;
       disposeCrosshair?.();
+      disposeVisibleRange?.();
       disposeContextMenu?.();
       disposeOrderDrag?.();
       disposeAlertDrag?.();
@@ -1085,37 +1137,38 @@ export function ChartContainer({
           {positionedOrderControls.map((control) => (
             <div
               key={control.id}
-              className={`order-action-chip ${control.side}${
+              className={`order-action-chip ${control.side} ${
+                control.level ?? "entry"
+              }${
                 (control.pnlValue ?? 0) < 0 ? " losing" : " winning"
               }`}
               style={{ top: control.top }}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="order-action-main">
+              <div className="order-action-body">
                 <span className="order-action-title">{control.title}</span>
-                {control.pnlText && (
-                  <span className="order-action-pnl">{control.pnlText}</span>
-                )}
+                <span className="order-action-value">
+                  {control.pnlText ?? control.detail ?? ""}
+                </span>
               </div>
-              {control.detail && (
-                <span className="order-action-detail">{control.detail}</span>
-              )}
               {control.canCancel ? (
                 <button
                   type="button"
+                  aria-label={`Cancel ${control.title}`}
                   disabled={control.cancelling}
-                  onClick={() => onOrderCancel?.(control.orderId)}
+                  onClick={() => onOrderCancel?.(control.actionId ?? control.orderId)}
                 >
-                  {control.cancelling ? "..." : "Cancel"}
+                  {control.cancelling ? "..." : "X"}
                 </button>
               ) : control.canClose ? (
                 <button
                   type="button"
+                  aria-label={`Close ${control.title}`}
                   disabled={control.closing}
-                  onClick={() => onOrderClose?.(control.orderId)}
+                  onClick={() => onOrderClose?.(control.actionId ?? control.orderId)}
                 >
-                  {control.closing ? "..." : "Close"}
+                  {control.closing ? "..." : "X"}
                 </button>
               ) : null}
             </div>

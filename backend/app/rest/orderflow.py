@@ -59,7 +59,7 @@ _SUPPORTED_TFS = frozenset(_SUPPORTED_TFS_LIST)
 
 # Default footprint bar count returned by the footprint endpoint. (Req 18.6)
 DEFAULT_FOOTPRINT_COUNT = 5
-MAX_FOOTPRINT_COUNT = 100
+MAX_FOOTPRINT_COUNT = 500
 DEFAULT_FOOTPRINT_CONTEXT = 3
 MAX_FOOTPRINT_CONTEXT = 20
 # Read cap shared with the history cache cap, bounding range scans.

@@ -263,18 +263,18 @@ def test_footprint_count_param_limits_bars(env):
 
 
 @pytest.mark.integration
-def test_footprint_count_allows_page_max_100(env):
+def test_footprint_count_allows_page_max_500(env):
     client, cache = env
-    for i in range(105):
+    for i in range(505):
         _seed_footprint_bar(cache, _BASE_MS + i * _MINUTE_MS)
 
-    resp = client.get("/api/orderflow/footprint", params={"symbol": "GC", "count": 100})
+    resp = client.get("/api/orderflow/footprint", params={"symbol": "GC", "count": 500})
 
     assert resp.status_code == 200
     times = [bar["time"] for bar in resp.json()["bars"]]
-    assert len(times) == 100
+    assert len(times) == 500
     assert times[0] == _BASE_MS + 5 * _MINUTE_MS
-    assert times[-1] == _BASE_MS + 104 * _MINUTE_MS
+    assert times[-1] == _BASE_MS + 504 * _MINUTE_MS
 
 
 @pytest.mark.integration

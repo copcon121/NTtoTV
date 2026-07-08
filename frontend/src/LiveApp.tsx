@@ -20,7 +20,7 @@ import {
   type TelegramNotificationInput,
   type WebPushNotificationConfig,
 } from "./alerts/types";
-import { ChartContainer } from "./chart/ChartContainer";
+import { ChartContainer, type OrderControl } from "./chart/ChartContainer";
 import { DrawingToolbar } from "./chart/DrawingToolbar";
 import {
   IndicatorToggles,
@@ -60,7 +60,11 @@ import {
   DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
   normalizeSessionVolumeProfileWidth,
 } from "./chart/sessionVolumeProfileSettings";
-import { HistoryLoader } from "./cache/historyLoader";
+import {
+  HistoryLoader,
+  buildHistoryUrl,
+  type HistoryResponse,
+} from "./cache/historyLoader";
 import { MemoryCache } from "./cache/memoryCache";
 import { type Bar } from "./cache/types";
 import { AuthDialog, type AuthDialogMode } from "./auth/AuthDialog";
@@ -182,6 +186,8 @@ const DEFERRED_OVERLAY_LOAD_MS = 250;
 const REALTIME_OVERLAY_CATCH_UP_MS = 10_000;
 const FVG_GRADER_CATCH_UP_MS = 30_000;
 const RESUME_REFRESH_THROTTLE_MS = 2_000;
+const INITIAL_HISTORY_LIMIT = 5_000;
+const HISTORY_BACKFILL_LIMIT = 5_000;
 const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
 const INITIAL_BIG_TRADE_LIMIT = DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
@@ -562,6 +568,31 @@ function estimateOrderPnl(
   return ((currentPrice - entry) * direction / tickSize) * tickValue * order.volumeLots;
 }
 
+function estimatePnlAtPrice(input: {
+  side: "buy" | "sell";
+  volumeLots: number;
+  entryGc: number | undefined;
+  exitGc: number | undefined;
+  symbol: Mt5Symbol | undefined;
+}): number | undefined {
+  if (input.entryGc === undefined || input.exitGc === undefined) return undefined;
+  const tickSize =
+    input.symbol?.tickSize && input.symbol.tickSize > 0
+      ? input.symbol.tickSize
+      : 0.01;
+  const tickValue =
+    input.symbol?.pipValue && input.symbol.pipValue > 0
+      ? input.symbol.pipValue
+      : 1;
+  const direction = input.side === "buy" ? 1 : -1;
+  return (
+    ((input.exitGc - input.entryGc) * direction) /
+    tickSize *
+    tickValue *
+    input.volumeLots
+  );
+}
+
 function formatPnl(value: number | undefined): string | undefined {
   if (value === undefined || !Number.isFinite(value)) return undefined;
   const sign = value > 0 ? "+" : "";
@@ -800,6 +831,166 @@ function toMarketOrderRows(
     });
   }
   return rows;
+}
+
+function toOrderControls(
+  orders: readonly TradingOrder[],
+  currentPrice: number | undefined,
+  symbol: Mt5Symbol | undefined,
+  mt5OpenTrades: Mt5OpenTrades,
+  closingIds: ReadonlySet<string>,
+  cancellingIds: ReadonlySet<string>,
+): OrderControl[] {
+  const controls: OrderControl[] = [];
+  const brokerPositionsByTicket = new Map(
+    mt5OpenTrades.positions.map((position) => [
+      position.brokerPositionTicket,
+      position,
+    ]),
+  );
+
+  const pushBracketControls = (input: {
+    actionId: string;
+    orderId: string;
+    side: "buy" | "sell";
+    volumeLots: number;
+    entry: number | undefined;
+    sl: number | null | undefined;
+    tp: number | null | undefined;
+    pnlValue?: number;
+    canClose?: boolean;
+    canCancel?: boolean;
+    closing?: boolean;
+    cancelling?: boolean;
+  }) => {
+    if (isFinitePrice(input.entry)) {
+      controls.push({
+        id: `${input.actionId}:entry`,
+        orderId: input.orderId,
+        actionId: input.actionId,
+        level: "entry",
+        price: input.entry,
+        side: input.side,
+        title: "ENTRY",
+        detail: `${input.volumeLots.toFixed(2)} @ ${input.entry.toFixed(1)}`,
+        pnlText: formatPnl(input.pnlValue),
+        pnlValue: input.pnlValue,
+        canClose: input.canClose,
+        canCancel: input.canCancel,
+        closing: input.closing,
+        cancelling: input.cancelling,
+      });
+    }
+    if (isFinitePrice(input.sl)) {
+      const pnlValue = estimatePnlAtPrice({
+        side: input.side,
+        volumeLots: input.volumeLots,
+        entryGc: input.entry,
+        exitGc: input.sl,
+        symbol,
+      });
+      controls.push({
+        id: `${input.actionId}:sl`,
+        orderId: input.orderId,
+        actionId: input.actionId,
+        level: "sl",
+        price: input.sl,
+        side: input.side,
+        title: "SL",
+        detail: input.sl.toFixed(1),
+        pnlText: formatPnl(pnlValue),
+        pnlValue,
+      });
+    }
+    if (isFinitePrice(input.tp)) {
+      const pnlValue = estimatePnlAtPrice({
+        side: input.side,
+        volumeLots: input.volumeLots,
+        entryGc: input.entry,
+        exitGc: input.tp,
+        symbol,
+      });
+      controls.push({
+        id: `${input.actionId}:tp`,
+        orderId: input.orderId,
+        actionId: input.actionId,
+        level: "tp",
+        price: input.tp,
+        side: input.side,
+        title: "TP",
+        detail: input.tp.toFixed(1),
+        pnlText: formatPnl(pnlValue),
+        pnlValue,
+      });
+    }
+  };
+
+  for (const order of orders) {
+    if (order.symbolInternal !== SYMBOL || !isOpenTradingOrder(order)) continue;
+    const entry = orderEntryGc(order);
+    const brokerPosition =
+      order.brokerPositionTicket == null
+        ? undefined
+        : brokerPositionsByTicket.get(order.brokerPositionTicket);
+    const hasBrokerPosition = order.brokerPositionTicket != null;
+    const actionId = appOrderRowKey(order.id);
+    pushBracketControls({
+      actionId,
+      orderId: order.id,
+      side: order.side,
+      volumeLots: order.volumeLots,
+      entry,
+      sl: order.slGc,
+      tp: order.tpGc,
+      pnlValue: brokerPosition?.profit ?? estimateOrderPnl(order, currentPrice, symbol),
+      canClose:
+        hasBrokerPosition &&
+        (order.status === "filled" || order.status === "sync_error"),
+      canCancel:
+        !hasBrokerPosition &&
+        order.status !== "filled" &&
+        order.status !== "sync_error",
+      closing: closingIds.has(order.id),
+      cancelling: cancellingIds.has(order.id),
+    });
+  }
+
+  const appPositionTickets = appBrokerPositionTickets(orders);
+  for (const position of mt5OpenTrades.positions) {
+    if (appPositionTickets.has(position.brokerPositionTicket)) continue;
+    const actionId = mt5PositionKey(position.brokerPositionTicket);
+    pushBracketControls({
+      actionId,
+      orderId: actionId,
+      side: position.side,
+      volumeLots: position.volumeLots,
+      entry: position.entryGcEstimate,
+      sl: position.slGc,
+      tp: position.tpGc,
+      pnlValue: position.profit,
+      canClose: true,
+      closing: closingIds.has(actionId),
+    });
+  }
+
+  const appOrderTickets = appBrokerOrderTickets(orders);
+  for (const pending of mt5OpenTrades.orders) {
+    if (appOrderTickets.has(pending.brokerOrderTicket)) continue;
+    const actionId = mt5OrderKey(pending.brokerOrderTicket);
+    pushBracketControls({
+      actionId,
+      orderId: actionId,
+      side: pending.side,
+      volumeLots: pending.volumeLots,
+      entry: isFinitePrice(pending.entryGc) ? pending.entryGc : undefined,
+      sl: pending.slGc,
+      tp: pending.tpGc,
+      canCancel: true,
+      cancelling: cancellingIds.has(actionId),
+    });
+  }
+
+  return controls;
 }
 
 function normalizeProfileId(value: string | null | undefined): string {
@@ -1723,6 +1914,22 @@ export function LiveApp() {
     );
   }
   const currentSeriesKey = seriesDataKey(SYMBOL, contract, timeframe);
+  const activeSeriesKeyRef = useRef(currentSeriesKey);
+  activeSeriesKeyRef.current = currentSeriesKey;
+  const historyBackfillRef = useRef<{
+    seriesKey: string;
+    pending: boolean;
+    exhaustedBefore?: number;
+  }>({
+    seriesKey: currentSeriesKey,
+    pending: false,
+  });
+  if (historyBackfillRef.current.seriesKey !== currentSeriesKey) {
+    historyBackfillRef.current = {
+      seriesKey: currentSeriesKey,
+      pending: false,
+    };
+  }
   const hasLoadedCurrentSeries = loadedSeriesKey === currentSeriesKey;
   const latestLoadedBarTime = hasLoadedCurrentSeries
     ? bars[bars.length - 1]?.time
@@ -1780,6 +1987,7 @@ export function LiveApp() {
   }, []);
   const onChartRealtimeBar = useCallback(
     (bar: Bar) => {
+      cache.append({ symbol: SYMBOL, contract, timeframe }, [bar]);
       setExtendRightLiveBar({ seriesKey: currentSeriesKey, time: bar.time });
       if (
         fixedRangeDeltaProfileDrawings(drawingsRef.current).some(
@@ -1789,8 +1997,79 @@ export function LiveApp() {
         scheduleDeltaProfileRefresh();
       }
     },
-    [currentSeriesKey, scheduleDeltaProfileRefresh],
+    [cache, contract, currentSeriesKey, scheduleDeltaProfileRefresh, timeframe],
   );
+
+  const requestMoreHistory = useCallback(() => {
+    if (!profileHydrated || !hasLoadedCurrentSeries || bars.length === 0) {
+      return;
+    }
+    const firstBar = bars[0];
+    if (!Number.isFinite(firstBar.time) || firstBar.time <= 0) {
+      return;
+    }
+    const state = historyBackfillRef.current;
+    if (
+      state.pending ||
+      state.seriesKey !== currentSeriesKey ||
+      state.exhaustedBefore === firstBar.time
+    ) {
+      return;
+    }
+
+    state.pending = true;
+    const requestedSeriesKey = currentSeriesKey;
+    const requestKey = { symbol: SYMBOL, contract, timeframe };
+    const to = firstBar.time - 1;
+
+    void (async () => {
+      try {
+        const response = await fetch(
+          buildHistoryUrl(
+            {
+              ...requestKey,
+              to,
+              limit: HISTORY_BACKFILL_LIMIT,
+            },
+            endpoints.api,
+          ),
+        );
+        if (!response.ok) return;
+        const body = (await response.json()) as Partial<HistoryResponse> | null;
+        const fetchedBars = Array.isArray(body?.bars) ? body.bars : [];
+        if (activeSeriesKeyRef.current !== requestedSeriesKey) return;
+
+        if (fetchedBars.length === 0) {
+          state.exhaustedBefore = firstBar.time;
+          return;
+        }
+
+        cache.merge(requestKey, fetchedBars, {
+          from: fetchedBars[0].time,
+          to,
+        });
+        if (fetchedBars.length < HISTORY_BACKFILL_LIMIT) {
+          state.exhaustedBefore = fetchedBars[0].time;
+        }
+        const nextSeries = cache.get(requestKey)?.bars ?? [];
+        setLoadedSeriesKey(requestedSeriesKey);
+        setBars(nextSeries);
+      } finally {
+        if (historyBackfillRef.current.seriesKey === requestedSeriesKey) {
+          historyBackfillRef.current.pending = false;
+        }
+      }
+    })();
+  }, [
+    bars,
+    cache,
+    contract,
+    currentSeriesKey,
+    endpoints.api,
+    hasLoadedCurrentSeries,
+    profileHydrated,
+    timeframe,
+  ]);
 
   useEffect(() => {
     persistMarketOrderSettings(marketOrderSettings);
@@ -2257,6 +2536,7 @@ export function LiveApp() {
           symbol: SYMBOL,
           contract,
           timeframe,
+          limit: INITIAL_HISTORY_LIMIT,
         });
         if (!cancelled) {
           setLoadedSeriesKey(requestedSeriesKey);
@@ -3798,6 +4078,25 @@ export function LiveApp() {
       breakingEvenOrderIds,
     ],
   );
+  const orderControls = useMemo(
+    () =>
+      toOrderControls(
+        orders,
+        latestPrice,
+        mt5Symbol,
+        mt5OpenTrades,
+        closingOrderIds,
+        cancellingOrderIds,
+      ),
+    [
+      orders,
+      latestPrice,
+      mt5Symbol,
+      mt5OpenTrades,
+      closingOrderIds,
+      cancellingOrderIds,
+    ],
+  );
   const chartBars = hasLoadedCurrentSeries ? bars : EMPTY_BARS;
   const chartVolumeDelta = hasLoadedCurrentSeries && volumeDeltaSeriesKey === currentSeriesKey
     ? volumeDelta
@@ -4049,6 +4348,7 @@ export function LiveApp() {
             smcAiSignals={chartSmcAiSignals}
             alertLines={alertLines}
             orderLines={orderLines}
+            orderControls={orderControls}
             ema={ema}
             smc={smc}
             outsideBar={effectiveOutsideBar}
@@ -4071,12 +4371,13 @@ export function LiveApp() {
             socket={socket}
             onRequestAlertAtPrice={onRequestChartMenu}
             onRealtimeBar={onChartRealtimeBar}
+            onRequestMoreHistory={requestMoreHistory}
             onAlertDragCommit={onAlertDragCommit}
             onAlertDelete={onDeleteAlert}
             onOrderDragCommit={onOrderDragCommit}
             onOrderDragBatchCommit={onOrderDragBatchCommit}
-            onOrderClose={onCloseOrder}
-            onOrderCancel={onCancelOrder}
+            onOrderClose={onOrderRowClose}
+            onOrderCancel={onOrderRowCancel}
             priceSnap={roundGcPrice}
             activeTool={activeTool}
             fixedRangeProfileMode={fixedRangeProfileMode}

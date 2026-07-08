@@ -9,6 +9,7 @@ import {
   type EmaLineData,
   type OrderLine,
   type PriceLineSelection,
+  type VisibleLogicalRangeInfo,
   type SmcAiSignalMarker,
   type SmcOverlay,
   type OutsideBarSettings,
@@ -85,6 +86,9 @@ class FakePort implements DisposableChartPort {
     onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
     snap?: (price: number) => number;
   }[] = [];
+  visibleLogicalRangeHandlers: ((
+    info: VisibleLogicalRangeInfo | null,
+  ) => void)[] = [];
   selectedPriceLine: PriceLineSelection | undefined;
   screenshotDataUrl = "data:image/png;base64,abc";
   disposed = false;
@@ -203,6 +207,16 @@ class FakePort implements DisposableChartPort {
     this.orderDragHandlers.push(handlers);
     return () => {
       this.orderDragHandlers = this.orderDragHandlers.filter((h) => h !== handlers);
+    };
+  }
+  subscribeVisibleLogicalRange(
+    handler: (info: VisibleLogicalRangeInfo | null) => void,
+  ): () => void {
+    this.visibleLogicalRangeHandlers.push(handler);
+    return () => {
+      this.visibleLogicalRangeHandlers = this.visibleLogicalRangeHandlers.filter(
+        (h) => h !== handler,
+      );
     };
   }
   getSelectedPriceLine(): PriceLineSelection | undefined {
@@ -1147,6 +1161,40 @@ describe("ChartContainer", () => {
     port.orderDragHandlers[0].onCommitBatch?.(updates);
 
     expect(onOrderDragBatchCommit).toHaveBeenCalledWith(updates);
+  });
+
+  it("requests more history when the visible range reaches the oldest bars", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const onRequestMoreHistory = vi.fn();
+
+    render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC"
+        timeframe="1m"
+        bars={[bar(10)]}
+        portFactory={factory}
+        onRequestMoreHistory={onRequestMoreHistory}
+      />,
+    );
+
+    expect(port.visibleLogicalRangeHandlers).toHaveLength(1);
+    port.visibleLogicalRangeHandlers[0]({
+      from: 100,
+      to: 200,
+      barsBefore: 200,
+      barsAfter: 0,
+    });
+    expect(onRequestMoreHistory).not.toHaveBeenCalled();
+
+    port.visibleLogicalRangeHandlers[0]({
+      from: 0,
+      to: 100,
+      barsBefore: 20,
+      barsAfter: 100,
+    });
+    expect(onRequestMoreHistory).toHaveBeenCalledTimes(1);
   });
 
   it("disposes the port on unmount", () => {

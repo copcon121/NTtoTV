@@ -989,10 +989,10 @@ body {
 .order-action-rail {
   position: absolute;
   top: 0;
-  right: 70px;
+  right: 74px;
   bottom: 0;
   z-index: 12;
-  width: 190px;
+  width: 154px;
   pointer-events: none;
 }
 
@@ -1000,88 +1000,101 @@ body {
   position: absolute;
   right: 0;
   transform: translateY(-50%);
-  width: 188px;
-  min-height: 38px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
+  display: inline-flex;
   align-items: center;
-  gap: 2px 7px;
-  padding: 6px 7px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-left-width: 3px;
-  border-radius: 5px;
-  background: rgba(18, 18, 18, 0.92);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.38);
-  color: #f2f2f2;
+  justify-content: flex-end;
+  gap: 5px;
+  min-height: 22px;
+  color: #ffffff;
   pointer-events: auto;
 }
 
-.order-action-chip.buy {
-  border-left-color: #22c55e;
+.order-action-body {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 84px;
+  max-width: 124px;
+  height: 23px;
+  overflow: hidden;
+  border: 1px solid rgba(251, 191, 36, 0.9);
+  border-radius: 4px;
+  background: rgba(180, 83, 9, 0.94);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(2px);
 }
 
-.order-action-chip.sell {
-  border-left-color: #ef4444;
+.order-action-chip.entry.buy .order-action-body {
+  border-color: rgba(147, 197, 253, 0.88);
+  background: rgba(29, 78, 216, 0.94);
 }
 
-.order-action-main {
-  min-width: 0;
-  display: flex;
+.order-action-chip.entry.sell .order-action-body {
+  border-color: rgba(248, 113, 113, 0.9);
+  background: rgba(185, 28, 28, 0.94);
+}
+
+.order-action-chip.tp .order-action-body {
+  background: rgba(4, 120, 87, 0.94);
+  border-color: rgba(45, 212, 191, 0.86);
+}
+
+.order-action-title {
+  flex: 0 0 auto;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-}
-
-.order-action-title,
-.order-action-detail {
+  justify-content: center;
+  min-width: 31px;
+  padding: 0 6px;
+  background: #101318;
+  color: #f6f6f6;
+  border-right: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.order-action-title {
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.order-action-detail {
-  grid-column: 1;
-  color: #a8a8a8;
-  font-size: 11px;
-}
-
-.order-action-pnl {
-  flex: 0 0 auto;
+.order-action-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 7px;
+  color: #fff7d6;
   font-variant-numeric: tabular-nums;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
-}
-
-.order-action-chip.winning .order-action-pnl {
-  color: #55d889;
-}
-
-.order-action-chip.losing .order-action-pnl {
-  color: #ff8d8d;
-}
-
-.order-action-chip button {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  min-width: 62px;
-  min-height: 30px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 4px;
-  background: #2f3540;
-  color: #f3f3f3;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.order-action-chip button {
+  width: 23px;
+  min-width: 23px;
+  height: 23px;
+  min-height: 23px;
+  padding: 0;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.78);
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.34);
+}
+
 .order-action-chip button:hover:not(:disabled) {
-  background: #3a4352;
+  background: rgba(30, 41, 59, 0.92);
+  color: #ffffff;
 }
 
 .order-action-chip button:disabled {
@@ -2437,22 +2450,23 @@ body {
   }
 
   .order-action-rail {
-    right: 50px;
-    width: 150px;
+    right: 58px;
+    width: 126px;
   }
 
-  .order-action-chip {
-    width: 148px;
-    grid-template-columns: minmax(0, 1fr) 54px;
-    padding: 5px 6px;
+  .order-action-body {
+    min-width: 74px;
+    max-width: 102px;
   }
 
-  .order-action-detail {
-    display: none;
+  .order-action-title {
+    min-width: 28px;
+    padding: 0 5px;
+    font-size: 9px;
   }
 
-  .order-action-chip button {
-    min-width: 54px;
-    min-height: 28px;
+  .order-action-value {
+    padding: 0 5px;
+    font-size: 9px;
   }
 }

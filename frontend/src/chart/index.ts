@@ -85,6 +85,7 @@ export {
   type OrderLineField,
   type PriceLineSelection,
   type SmcAiSignalMarker,
+  type VisibleLogicalRangeInfo,
   LightweightChartsAdapter,
   WAVE_DELTA_OVERLAY_PRICE_SCALE_ID,
   WAVE_DELTA_OVERLAY_SCALE_MARGINS,

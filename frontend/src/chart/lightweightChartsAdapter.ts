@@ -24,6 +24,7 @@ import {
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type LineData,
+  type LogicalRange,
   type MouseEventParams,
   type SeriesMarker,
   type Time,
@@ -164,6 +165,13 @@ export interface OrderLine {
   status: string;
   title?: string;
   editable?: boolean;
+}
+
+export interface VisibleLogicalRangeInfo {
+  from: number;
+  to: number;
+  barsBefore: number;
+  barsAfter: number;
 }
 
 export interface SmcAiSignalMarker {
@@ -312,10 +320,10 @@ const ALERT_LINE_COLORS = {
 };
 
 const ORDER_LINE_COLORS: Record<OrderLineField | "entrySell", string> = {
-  entryGc: "#1d4ed8",
-  entrySell: "#b45309",
-  slGc: "#b91c1c",
-  tpGc: "#047857",
+  entryGc: "#2563eb",
+  entrySell: "#dc2626",
+  slGc: "#d97706",
+  tpGc: "#0f766e",
 };
 
 /** EMA overlay line color (TradingView-style blue). */
@@ -1241,6 +1249,28 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     return y === null ? null : y as number;
   }
 
+  subscribeVisibleLogicalRange(
+    handler: (info: VisibleLogicalRangeInfo | null) => void,
+  ): () => void {
+    const timeScale = this.chart.timeScale();
+    const emit = (range: LogicalRange | null) => {
+      if (range === null) {
+        handler(null);
+        return;
+      }
+      const barsInfo = this.candleSeries.barsInLogicalRange(range);
+      handler({
+        from: Number(range.from),
+        to: Number(range.to),
+        barsBefore: barsInfo?.barsBefore ?? 0,
+        barsAfter: barsInfo?.barsAfter ?? 0,
+      });
+    };
+    timeScale.subscribeVisibleLogicalRangeChange(emit);
+    emit(timeScale.getVisibleLogicalRange());
+    return () => timeScale.unsubscribeVisibleLogicalRangeChange(emit);
+  }
+
   /** Set the display-only bucket-start -> chart-time offsets. */
   setDisplayTimeOffset(offsetMs: number): void {
     this.displayTimeOffsetMs = offsetMs;
@@ -2005,10 +2035,10 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     return {
       price: line.price,
       color,
-      lineWidth: (selected ? 3 : 1) as 1 | 3,
+      lineWidth: (selected ? 2 : 1) as 1 | 2,
       lineStyle: isEntry ? LineStyle.Solid : LineStyle.Dashed,
       axisLabelVisible: true,
-      title: line.title ?? "",
+      title: "",
     };
   }
 
@@ -2333,7 +2363,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const config = this.priceLineDragConfigs.get(kind);
     const line = config?.linesById.get(id);
     if (line === undefined) return;
-    line.applyOptions({ lineWidth: (selected ? 3 : 1) as 1 | 3 });
+    line.applyOptions({
+      lineWidth: (selected ? (kind === "order" ? 2 : 3) : 1) as
+        | 1
+        | 2
+        | 3,
+    });
   }
 
   private setOrderGroupSelectionStyle(orderId: string, selected: boolean): void {
