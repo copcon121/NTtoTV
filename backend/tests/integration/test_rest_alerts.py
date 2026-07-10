@@ -13,6 +13,16 @@ from app.engines.alert_engine import (
     MGANN_FVG_RETEST,
     MGANN_FVG_RETEST_TIMEFRAME,
     MGANN_FVG_RETEST_TIMEFRAMES,
+    MGANN_BIG_TRADE_SWEEP,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
     SMC_DEFAULT_LOOKAHEAD_BARS,
     SMC_DEFAULT_MAX_BARS,
     SMC_DEFAULT_PAUSE_ON_INSIDE_BARS,
@@ -130,6 +140,75 @@ def test_rest_alerts_reject_invalid_smc_strategy_threshold(tmp_path: Path):
     finally:
         cache.close()
 
+
+@pytest.mark.integration
+def test_rest_alerts_accept_and_normalize_mgann_big_trade_sweep_params(
+    tmp_path: Path,
+):
+    settings = Settings(
+        data_dir=tmp_path,
+        supported_symbols=("GC",),
+        gc_candidate_contracts=("GC 08-26",),
+    )
+    cache = CacheStore(tmp_path / "app.sqlite")
+    app = create_app()
+    app.state.contract_state = ContractStateStore(cache, settings=settings)
+    try:
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/alerts",
+                json={
+                    "symbol": "GC",
+                    "type": MGANN_BIG_TRADE_SWEEP,
+                    "params": {
+                        "bigTradeThreshold": 70,
+                        "direction": "highs",
+                        "repeat": True,
+                    },
+                },
+            )
+
+            assert created.status_code == 201
+            body = created.json()
+            assert body["type"] == MGANN_BIG_TRADE_SWEEP
+            assert "direction" not in body["params"]
+            assert body["params"]["bigTradeThreshold"] == 70
+            assert body["params"]["timeframe"] == MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME
+            assert (
+                body["params"]["volumeLookback"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK
+            )
+            assert (
+                body["params"]["volumeMultiplier"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER
+            )
+            assert (
+                body["params"]["spreadLookback"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK
+            )
+            assert (
+                body["params"]["spreadMultiplier"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER
+            )
+            assert (
+                body["params"]["swingSize"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE
+            )
+            assert (
+                body["params"]["pivotLookbackBars"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS
+            )
+            assert (
+                body["params"]["minPivotCuts"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS
+            )
+            assert (
+                body["params"]["confirmationBars"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS
+            )
+            assert body["params"]["repeat"] is True
+    finally:
+        cache.close()
 
 @pytest.mark.integration
 def test_rest_alerts_accept_and_normalize_mgann_fvg_retest_params(tmp_path: Path):

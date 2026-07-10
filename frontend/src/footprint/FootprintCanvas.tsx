@@ -49,6 +49,8 @@ const MZ_THEME = {
   vaBorder: "rgba(144, 238, 144, 0.68)",
   text: "#000000",
   poc: "#ff00ff",
+  bidAbsorption: "#0000ff",
+  askAbsorption: "#ff1493",
   deltaPos: "#008000",
   deltaNeg: "#ff0000",
   unfinishedAuction: "#ffd700",
@@ -70,11 +72,21 @@ export function drawFootprint(
 ): void {
   const showVA = settings?.showVA ?? false;
   const showImbalance = settings?.showImbalance ?? true;
+  const showAbsorption = settings?.showAbsorption ?? true;
   const showUnfinishedAuction = settings?.showUnfinishedAuction ?? true;
   const vaPercent = clampPercent(settings?.vaPercent ?? 70);
   const imbalanceMinVolume = Math.max(
     0,
     Math.round(settings?.imbalanceMinVolume ?? 10),
+  );
+  const absorptionPercent = clampRange(settings?.absorptionPercent ?? 100, 0, 500);
+  const absorptionDepth = Math.max(
+    0,
+    Math.round(settings?.absorptionDepth ?? 5),
+  );
+  const absorptionFilter = Math.max(
+    0,
+    Math.round(settings?.absorptionFilter ?? 3),
   );
   const { bars, viewport } = inputs;
   const displayCount = Math.max(
@@ -90,12 +102,21 @@ export function drawFootprint(
   if (bars.length === 0) return;
 
   const priceStep = inferPriceStep(bars);
-  const panelBars = bars.map((bar) => ({
-    bar,
-    profile: profileForBar(bar, vaPercent, priceStep),
-    imbalances: computeImbalances(bar, priceStep, imbalanceMinVolume),
-    rowsWithVolume: bar.rows.filter((row) => row.bid > 0 || row.ask > 0),
-  }));
+  const panelBars = bars.map((bar) => {
+    const profile = profileForBar(bar, vaPercent, priceStep);
+    return {
+      bar,
+      profile,
+      imbalances: computeImbalances(bar, priceStep, imbalanceMinVolume),
+      absorptions: computeAbsorptions(bar, priceStep, {
+        percent: absorptionPercent,
+        depth: absorptionDepth,
+        filter: absorptionFilter,
+        referenceClose: profile.close,
+      }),
+      rowsWithVolume: bar.rows.filter((row) => row.bid > 0 || row.ask > 0),
+    };
+  });
   if (panelBars.every(({ rowsWithVolume }) => rowsWithVolume.length === 0)) {
     return;
   }
@@ -175,7 +196,7 @@ export function drawFootprint(
     });
   }
 
-  panelBars.forEach(({ bar, profile, imbalances, rowsWithVolume }, col) => {
+  panelBars.forEach(({ bar, profile, imbalances, absorptions, rowsWithVolume }, col) => {
     const xCenter = plotLeft + barW * col + barW / 2;
     const bidRight = xCenter - 8;
     const bidLeft = bidRight - sideW;
@@ -200,6 +221,8 @@ export function drawFootprint(
       const y = yForPrice(row.price);
       const isPoc = Math.abs(row.price - profile.poc) < priceStep / 2;
       const imbalance = imbalances.get(row.price) ?? null;
+      const isSellAbsorption = showAbsorption && absorptions.sell.has(row.price);
+      const isBuyAbsorption = showAbsorption && absorptions.buy.has(row.price);
       const rowTop = y - rowH / 2;
       const rowBottom = y + rowH / 2;
       if (rowBottom < panelY || rowTop > panelBottom) continue;
@@ -230,6 +253,21 @@ export function drawFootprint(
             : `${cellFontSize}px Arial`;
         ctx.textAlign = "center";
         ctx.fillText(formatCellVolume(row.ask), textX, y);
+      }
+
+      if (isSellAbsorption) {
+        drawDashedRect(ctx, bidLeft, rowTop, fullW, rowH, MZ_THEME.bidAbsorption);
+      }
+      if (isBuyAbsorption) {
+        const inset = isSellAbsorption ? 1 : 0;
+        drawDashedRect(
+          ctx,
+          bidLeft + inset,
+          rowTop + inset,
+          Math.max(1, fullW - inset * 2),
+          Math.max(1, rowH - inset * 2),
+          MZ_THEME.askAbsorption,
+        );
       }
 
       if (isPoc) {
@@ -298,8 +336,20 @@ function clampPercent(value: number): number {
   return Math.min(95, Math.max(10, value));
 }
 
+function clampRange(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
 function roundPrice(price: number): number {
   return Math.round(price * 1e10) / 1e10;
+}
+
+function roundToPriceStep(price: number, priceStep: number): number {
+  if (!Number.isFinite(price) || !Number.isFinite(priceStep) || priceStep <= 0) {
+    return roundPrice(price);
+  }
+  return roundPrice(Math.round(price / priceStep) * priceStep);
 }
 
 function computeImbalances(
@@ -330,6 +380,52 @@ function computeImbalances(
     }
   }
   return result;
+}
+
+function computeAbsorptions(
+  bar: FootprintBar,
+  priceStep: number,
+  settings: {
+    percent: number;
+    depth: number;
+    filter: number;
+    referenceClose: number;
+  },
+): { buy: Set<number>; sell: Set<number> } {
+  const buy = new Set<number>();
+  const sell = new Set<number>();
+  if (!Number.isFinite(priceStep) || priceStep <= 0) return { buy, sell };
+
+  const byPrice = new Map(bar.rows.map((row) => [row.price, row]));
+  const pricesAsc = [...byPrice.keys()].sort((a, b) => a - b);
+  const thresholdRatio = 1 + clampRange(settings.percent, 0, 500) / 100;
+  const minDepth = Math.max(0, Math.round(settings.depth));
+  const minVolume = Math.max(0, Math.round(settings.filter));
+  const referenceClose = roundToPriceStep(settings.referenceClose, priceStep);
+
+  for (const price of pricesAsc) {
+    const row = byPrice.get(price);
+    if (!row) continue;
+    const priceAbove = roundPrice(price + priceStep);
+    const askVolAbove = byPrice.get(priceAbove)?.ask ?? 0;
+    const bidVol = row.bid;
+
+    const depthFromCloseDown = Math.floor((referenceClose - price) / priceStep + 1e-9);
+    if (depthFromCloseDown >= minDepth && askVolAbove > 0) {
+      if (bidVol >= minVolume && bidVol / askVolAbove >= thresholdRatio) {
+        sell.add(price);
+      }
+    }
+
+    const depthFromCloseUp = Math.floor((priceAbove - referenceClose) / priceStep + 1e-9);
+    if (depthFromCloseUp >= minDepth && bidVol > 0) {
+      if (askVolAbove >= minVolume && askVolAbove / bidVol >= thresholdRatio) {
+        buy.add(priceAbove);
+      }
+    }
+  }
+
+  return { buy, sell };
 }
 
 function formatCellVolume(volume: number): string {
@@ -467,6 +563,37 @@ function drawImbalanceCircle(
   ctx.fill();
 }
 
+function drawDashedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  color: string,
+): void {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 3]);
+  ctx.strokeRect(x, y, width, height);
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function footprintSettingsKey(settings?: FootprintSettings): string {
+  return [
+    settings?.showVA ?? false,
+    settings?.vaPercent ?? 70,
+    settings?.imbalanceMinVolume ?? 10,
+    settings?.showImbalance ?? true,
+    settings?.showAbsorption ?? true,
+    settings?.absorptionPercent ?? 100,
+    settings?.absorptionDepth ?? 5,
+    settings?.absorptionFilter ?? 3,
+    settings?.showUnfinishedAuction ?? true,
+  ].join("|");
+}
+
 function drawPanelCandle(
   ctx: CanvasRenderingContext2D,
   profile: BarProfile,
@@ -528,6 +655,7 @@ export function FootprintCanvas({
       viewport,
       displayCount: effectiveDisplayCount,
       layout,
+      settingsKey: footprintSettingsKey(settings),
     };
 
     if (!shouldRedraw(prevInputsRef.current, next)) {

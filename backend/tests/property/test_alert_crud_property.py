@@ -39,6 +39,19 @@ from app.engines.alert_engine import (
     MGANN_FVG_DEFAULT_SWING_SIZE,
     MGANN_FVG_RETEST,
     MGANN_FVG_RETEST_TIMEFRAME,
+    MGANN_BIG_TRADE_SWEEP,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
     SMC_DEFAULT_LOOKAHEAD_BARS,
     SMC_DEFAULT_MAX_BARS,
     SMC_DEFAULT_PAUSE_ON_INSIDE_BARS,
@@ -116,6 +129,28 @@ def _params_for(alert_type: str):
             params["maxZoneAge"] = MGANN_FVG_DEFAULT_MAX_ZONE_AGE
             params["minGapTicks"] = MGANN_FVG_DEFAULT_MIN_GAP_TICKS
             params["retestToleranceTicks"] = MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS
+        elif alert_type == MGANN_BIG_TRADE_SWEEP:
+            params["bigTradeThreshold"] = draw(_positive_numbers)
+            params["timeframe"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME
+            params["minVolume"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME
+            params["volumeLookback"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK
+            params["volumeMultiplier"] = (
+                MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER
+            )
+            params["minSpreadTicks"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS
+            params["spreadLookback"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK
+            params["spreadMultiplier"] = (
+                MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER
+            )
+            params["swingSize"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE
+            params["pivotLookbackBars"] = (
+                MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS
+            )
+            params["minPivotCuts"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS
+            params["confirmationBars"] = (
+                MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS
+            )
+            params["breakTicks"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS
         # stacked_imbalance: no required field.
         return params
 

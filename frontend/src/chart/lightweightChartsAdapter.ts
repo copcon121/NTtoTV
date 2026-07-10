@@ -150,6 +150,14 @@ export interface AlertLine {
   enabled?: boolean;
 }
 
+export interface AlertSignalMarker {
+  id: string;
+  time: number;
+  price: number;
+  direction: 1 | -1;
+  text?: string;
+}
+
 export type OrderLineField = "entryGc" | "slGc" | "tpGc";
 
 /**
@@ -987,6 +995,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly mgannSwingSeries: ISeriesApi<"Line">;
   private readonly smcMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly smcAiSignalMarkers: ISeriesMarkersPluginApi<Time>;
+  private readonly alertSignalMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly sessionMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly mgannSwingMarkers: ISeriesMarkersPluginApi<Time>;
   private bigTradePrimitive: BigTradeBubblePrimitive | undefined;
@@ -1005,11 +1014,13 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly barsByTime = new Map<number, Bar>();
   private readonly volumeDeltaByTime = new Map<number, VolumeDeltaDatum>();
   private mgannSwingVisible = false;
+  private waveDeltaVisible = false;
   private mgannSwingSettings: MgannSwingSettings = DEFAULT_MGANN_SWING_SETTINGS;
   private readonly fvgSignalsByTime = new Map<number, FvgSignalUpdateMessage>();
   private fvgGraderVisible = true;
   private readonly bigTradesByKey = new Map<string, BigTradeMarker>();
   private smcAiSignals: SmcAiSignalMarker[] = [];
+  private alertSignals: AlertSignalMarker[] = [];
   private readonly alertLinesById = new Map<string, IPriceLine>();
   // Live price/style per alert line, used for drag hit-testing + updates.
   private readonly alertLineMeta = new Map<
@@ -1110,6 +1121,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     });
     this.smcMarkers = createSeriesMarkers(this.candleSeries, []);
     this.smcAiSignalMarkers = createSeriesMarkers(this.candleSeries, []);
+    this.alertSignalMarkers = createSeriesMarkers(this.candleSeries, []);
     this.sessionMarkers = createSeriesMarkers(this.candleSeries, []);
     this.mgannSwingMarkers = createSeriesMarkers(this.candleSeries, []);
     this.bigTradePrimitive = new BigTradeBubblePrimitive([]);
@@ -1425,8 +1437,20 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   /** Show or hide the wave-delta MBox overlay. */
   setCvdVisible(visible: boolean): void {
+    if (this.waveDeltaVisible === visible) {
+      return;
+    }
+    this.waveDeltaVisible = visible;
     this.waveDeltaSeries.applyOptions({ visible });
     this.waveDeltaMboxPrimitive?.setVisible(visible);
+    if (visible) {
+      this.renderWaveDeltaSeries();
+    } else {
+      this.waveDeltaSeries.setData([]);
+      this.waveDeltaMboxPrimitive?.setBoxes([]);
+      this.priceDivergencePrimitive?.setLines([]);
+      this.waveDivergencePrimitive?.setLines([]);
+    }
   }
 
   /** Set the session volume profile data (right-edge histogram). */
@@ -1529,6 +1553,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   private renderWaveDeltaSeries(): void {
+    if (!this.waveDeltaVisible) {
+      return;
+    }
     const overlay = buildMgannSwingOverlay(
       this.candleBars,
       this.volumeDeltaByTime,
@@ -1835,7 +1862,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     for (const point of points) {
       this.volumeDeltaByTime.set(point.time, { ...point });
     }
-    this.renderCandleSeries();
+    if (this.shouldRenderMgannImpulseWaves()) {
+      this.renderCandleSeries();
+    }
     this.renderVolumeDeltaSeries();
     this.renderWaveDeltaSeries();
     this.renderMgannSwing();
@@ -1850,9 +1879,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     );
     this.renderWaveDeltaSeries();
     this.renderMgannSwing();
-    const index = this.candleBars.findIndex((bar) => bar.time === point.time);
-    this.updateCandleAt(index);
-    this.updateCandleAt(index + 1);
+    if (this.shouldRenderMgannImpulseWaves()) {
+      const index = this.candleBars.findIndex((bar) => bar.time === point.time);
+      this.updateCandleAt(index);
+      this.updateCandleAt(index + 1);
+    }
   }
 
   /** Bulk-load FVG Signal Grader candle colors. */
@@ -1899,6 +1930,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   setSmcAiSignals(markers: readonly SmcAiSignalMarker[]): void {
     this.smcAiSignals = markers.map((marker) => ({ ...marker }));
     this.renderSmcAiSignals();
+  }
+
+  setAlertSignals(markers: readonly AlertSignalMarker[]): void {
+    this.alertSignals = markers.map((marker) => ({ ...marker }));
+    this.renderAlertSignals();
   }
 
   /** Apply one incremental BigTrade marker. */
@@ -2449,7 +2485,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const meta = config?.metaById.get(drag.id);
     if (meta !== undefined) {
       if (drag.kind === "order") {
-        this.pendingOrderLineCommits.set(drag.id, meta.price);
+        if (config?.handlers.onCommitBatch) {
+          config.handlers.onCommitBatch([{ id: drag.id, price: meta.price }]);
+        } else {
+          config?.handlers.onCommit?.(drag.id, meta.price);
+        }
       } else {
         config?.handlers.onCommit?.(drag.id, meta.price);
       }
@@ -2591,6 +2631,25 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         };
       });
     this.smcAiSignalMarkers.setMarkers(markers);
+  }
+
+  private renderAlertSignals(): void {
+    const markers: SeriesMarker<Time>[] = this.alertSignals
+      .slice()
+      .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id))
+      .map((marker) => {
+        const isLong = marker.direction > 0;
+        return {
+          time: toUtcTimestamp(marker.time, this.displayTimeOffsetMs),
+          position: isLong ? "belowBar" : "aboveBar",
+          shape: isLong ? "arrowUp" : "arrowDown",
+          color: isLong ? "#00b8a9" : "#ff3131",
+          id: marker.id,
+          text: marker.text ?? (isLong ? "Break L" : "Break S"),
+          size: 1.45,
+        };
+      });
+    this.alertSignalMarkers.setMarkers(markers);
   }
 
   private renderSmcOverlay(): void {
@@ -2795,6 +2854,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
     this.smcMarkers.detach();
     this.smcAiSignalMarkers.detach();
+    this.alertSignalMarkers.detach();
     this.sessionMarkers.detach();
     this.chart.remove();
   }

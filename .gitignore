@@ -10,6 +10,7 @@ venv/
 env/
 
 # Test and tooling caches
+.codegraph/
 .pytest_cache/
 .hypothesis/
 .mypy_cache/

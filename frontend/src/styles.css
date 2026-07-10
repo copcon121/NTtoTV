@@ -1484,9 +1484,31 @@ body {
   font: inherit;
 }
 
+.footprint-page-form input[type="checkbox"] {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0;
+}
+
 .footprint-page-search input[type="text"] {
   width: 132px;
   max-width: 160px;
+}
+
+.footprint-page-absorption {
+  padding-left: 4px;
+  border-left: 1px solid #d6d6d6;
+}
+
+.footprint-page-absorption input[type="number"] {
+  width: 58px;
+  min-width: 54px;
+  max-width: 70px;
+}
+
+.footprint-page-toggle {
+  white-space: nowrap;
 }
 
 .footprint-page-form button {
@@ -1556,6 +1578,11 @@ body {
   .footprint-page-form {
     flex: 1 1 100%;
     flex-wrap: wrap;
+  }
+
+  .footprint-page-absorption {
+    padding-left: 0;
+    border-left: 0;
   }
 
   .footprint-page-status {
@@ -1835,9 +1862,15 @@ body {
 
 .alert-create {
   display: grid;
-  grid-template-columns: minmax(130px, 1fr) minmax(90px, 0.8fr) auto auto;
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+  align-items: center;
   gap: 6px;
   margin-bottom: 10px;
+}
+
+.alert-create select[aria-label="Alert type"] {
+  grid-column: span 2;
+  min-width: 130px;
 }
 
 .alert-create select,
@@ -1853,6 +1886,22 @@ body {
 .alert-create input {
   min-width: 0;
   width: 100%;
+}
+
+.alert-param {
+  display: grid;
+  grid-template-columns: auto minmax(48px, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.alert-param span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .alert-repeat {

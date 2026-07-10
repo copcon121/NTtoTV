@@ -126,6 +126,15 @@ export interface SmcAiSignalRestRow {
   text?: string;
 }
 
+export interface AlertSignalRestRow {
+  id: string;
+  alertId: string;
+  time: number;
+  price: number;
+  direction: 1 | -1;
+  text?: string;
+}
+
 export interface ProfileListItem {
   id: string;
   name: string;
@@ -1075,18 +1084,20 @@ export class ApiClient {
     return body.signals;
   }
 
-  async breakoutFvgSignals(input: {
+  async mgannBigTradeSweepSignals(input: {
     symbol: string;
     contract: string;
     timeframe: string;
+    profileId?: string;
     from?: number;
     to?: number;
     limit?: number;
-  }): Promise<SmcAiSignalRestRow[]> {
+  }): Promise<AlertSignalRestRow[]> {
     const params = new URLSearchParams({
       symbol: input.symbol,
       contract: input.contract,
       tf: input.timeframe,
+      profileId: input.profileId ?? "default",
     });
     if (input.from !== undefined) {
       params.set("from", String(input.from));
@@ -1097,8 +1108,8 @@ export class ApiClient {
     if (input.limit !== undefined) {
       params.set("limit", String(input.limit));
     }
-    const body = await this.getJson<{ signals: SmcAiSignalRestRow[] }>(
-      `/signals/breakout-fvg?${params.toString()}`,
+    const body = await this.getJson<{ signals: AlertSignalRestRow[] }>(
+      `/signals/mgann-big-trade-sweep?${params.toString()}`,
     );
     return body.signals;
   }

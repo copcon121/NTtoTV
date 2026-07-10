@@ -43,6 +43,7 @@ import {
   type LightweightChartsAdapterOptions,
   type VolumeDeltaDatum,
   type AlertLine,
+  type AlertSignalMarker,
   type EmaLineData,
   type OrderLine,
   type PriceLineSelection,
@@ -112,6 +113,7 @@ export interface DisposableChartPort extends ChartSeriesPort {
   setBigTrades?(markers: readonly BigTradeMarker[]): void;
   updateBigTrade?(marker: BigTradeMarker): void;
   setSmcAiSignals?(markers: readonly SmcAiSignalMarker[]): void;
+  setAlertSignals?(markers: readonly AlertSignalMarker[]): void;
   setAlertLines?(lines: readonly AlertLine[]): void;
   setOrderLines?(lines: readonly OrderLine[]): void;
   getSelectedPriceLine?(): PriceLineSelection | undefined;
@@ -252,6 +254,8 @@ export interface ChartContainerProps {
   smcAiSignals?: readonly SmcAiSignalMarker[];
   /** Alert level lines to draw on the candle price scale (Req 16.5). */
   alertLines?: readonly AlertLine[];
+  /** Discrete alert signal arrows, e.g. mGann BigTrade sweeps. */
+  alertSignals?: readonly AlertSignalMarker[];
   /** Live order entry/SL/TP levels to draw on the candle price scale. */
   orderLines?: readonly OrderLine[];
   /** Action chips aligned to order fill/entry lines. */
@@ -423,6 +427,7 @@ export function ChartContainer({
   bigTrades,
   smcAiSignals,
   alertLines,
+  alertSignals,
   orderLines,
   orderControls,
   ema,
@@ -842,6 +847,10 @@ export function ChartContainer({
   useEffect(() => {
     portRef.current?.setSmcAiSignals?.(smcAiSignals ?? []);
   }, [symbol, contract, timeframe, smcAiSignals]);
+
+  useEffect(() => {
+    portRef.current?.setAlertSignals?.(alertSignals ?? []);
+  }, [symbol, contract, timeframe, alertSignals]);
 
   // Draw alert level lines on the candle price scale (Req 16.5). Re-applied on
   // any change to the alert set; the adapter diffs by id so unchanged lines are

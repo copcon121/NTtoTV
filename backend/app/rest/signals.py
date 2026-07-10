@@ -1,14 +1,31 @@
-"""REST_API endpoints for historical signals (e.g. Breakout FVG Confluence)."""
+"""REST_API endpoints for historical alert signals."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from ..engines.breakout_box_engine import BreakoutBoxEngine
-from ..smc_ai.baseline import load_bars_for_signal_range
+from ..engines.alert_engine import MGANN_BIG_TRADE_SWEEP
+from ..engines.mgann_big_trade_sweep import (
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+    MgannBigTradeSweepBar,
+    MgannBigTradeSweepState,
+)
 from ..storage.cache_store import CacheStore
+from ..storage.records import AlertRecord, BarRecord, BigTradeRecord
 from .contract_state import ContractStateStore
 from .errors import bad_request, not_found
 from .orderflow import get_cache
@@ -19,15 +36,18 @@ router = APIRouter(prefix="/api", tags=["signals"])
 DEFAULT_SIGNAL_LIMIT = 500
 SIGNAL_LIMIT_CAP = 1_000
 DEFAULT_SIGNAL_WARMUP_BARS = 500
+MGANN_SWEEP_SIGNAL_BAR_CAP = 1_000
+_M1_MS = 60_000
 
-@router.get("/signals/breakout-fvg")
-async def breakout_fvg_signals(
+@router.get("/signals/mgann-big-trade-sweep")
+async def mgann_big_trade_sweep_signals(
     symbol: str = Query("GC", description="User-facing symbol, e.g. 'GC'"),
     contract: str | None = Query(
         None,
         description="Chart cache contract. Defaults to the logical chart alias.",
     ),
     tf: str = Query("1m", description="Timeframe. v1 supports 1m only."),
+    profile_id: str = Query("default", alias="profileId"),
     frm: int | None = Query(
         None, alias="from", description="Inclusive start Canonical_Timestamp (ms)"
     ),
@@ -40,115 +60,241 @@ async def breakout_fvg_signals(
         alias="warmupBars",
         description="Bars before the requested range used to warm the detector",
     ),
-    min_fvg_level: int = Query(
-        3, alias="minFvgLevel", description="Minimum FVG grade (1-5)"
-    ),
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
-    """Return historical Breakout + FVG Confluence signals.
-    
-    Loads historical 1m bars to run the BreakoutBoxEngine, and joins with
-    historically persisted FvgSignalRecords to find confluence markers.
-    """
+    """Return historical mGann BigTrade sweep markers for enabled profile alerts."""
     if not state.is_known_symbol(symbol):
         raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
     if tf != "1m":
-        raise not_found("Breakout signals currently support tf='1m'", field="tf")
+        raise not_found("mGann sweep signals currently support tf='1m'", field="tf")
     if frm is not None and to is not None and frm > to:
         raise bad_request("'from' must be less than or equal to 'to'", field="from")
     if limit < 1:
         raise bad_request("'limit' must be a positive integer", field="limit")
     if warmup_bars < 0:
         raise bad_request("'warmupBars' must be non-negative", field="warmupBars")
-    
+
     resolved_contract = (
         symbol
         if contract is None or contract == ""
         else _resolve_contract(state, symbol, contract)
     )
     effective_limit = min(limit, SIGNAL_LIMIT_CAP)
-    
-    # Load 1m bars for breakout detection
-    bars = load_bars_for_signal_range(
-        cache.db_path,
+    profile_id = _normalize_profile_id(profile_id)
+    signals = await asyncio.to_thread(
+        _load_mgann_sweep_signals,
+        cache=cache,
         symbol=symbol,
         contract=resolved_contract,
         timeframe=tf,
-        start_time=frm,
-        end_time=to,
+        profile_id=profile_id,
+        from_time=frm,
+        to_time=to,
         warmup_bars=warmup_bars,
-        latest_bars=warmup_bars if frm is None else None,
     )
-    
-    # Load historical FVG signals for the same range
-    fvg_records = cache.read_fvg_signals(
-        symbol=symbol,
-        contract=resolved_contract,
-        timeframe=tf,
-        frm=bars[0].time if bars else frm,
-        to=to,
-        limit=5000  # Pull a large enough buffer of FVGs
-    )
-    
-    # Group FVGs by bar time
-    fvg_by_time = {}
-    for rec in fvg_records:
-        if rec.level >= min_fvg_level:
-            if rec.time not in fvg_by_time:
-                fvg_by_time[rec.time] = []
-            fvg_by_time[rec.time].append(rec)
-            
-    engine = BreakoutBoxEngine()
-    signals = []
-    
-    for bar in bars:
-        # Step BreakoutBoxEngine
-        events = engine.on_closed_bar(
-            symbol=symbol,
-            contract=resolved_contract,
-            time=bar.time,
-            open=bar.open,
-            high=bar.high,
-            low=bar.low,
-            close=bar.close,
-            volume=bar.volume
-        )
-        
-        # Only keep events strictly within the requested [frm, to] window.
-        if frm is not None and bar.time < frm:
-            continue
-        if to is not None and bar.time > to:
-            continue
-            
-        # Check for FVG on the bar immediately preceding the breakout bar (to match live alert engine).
-        fvg_time = bar.time - 60_000
-        if events and fvg_time in fvg_by_time:
-            bar_fvgs = fvg_by_time[fvg_time]
-            for event in events:
-                for fvg in bar_fvgs:
-                    if fvg.direction == event.direction:
-                        # Confluence found
-                        is_long = event.direction == 1
-                        signals.append({
-                            "id": f"breakout-fvg-hist-{bar.time}-{event.direction}",
-                            "time": bar.time,
-                            "price": event.price,
-                            "side": "long" if is_long else "short",
-                            "zoneType": "fvg",
-                            "huntType": "breakout",
-                            "confirmation": "breakout_fvg",
-                            "text": "BRK L" if is_long else "BRK S",
-                        })
-                        break # One signal per bar is enough
-                        
     if len(signals) > effective_limit:
         signals = signals[-effective_limit:]
-        
     return {
         "symbol": symbol,
         "contract": resolved_contract,
         "tf": tf,
-        "source": "breakout-fvg-engine",
-        "signals": signals
+        "source": "mgann-big-trade-sweep-engine",
+        "signals": signals,
     }
+
+def _load_mgann_sweep_signals(
+    *,
+    cache: CacheStore,
+    symbol: str,
+    contract: str,
+    timeframe: str,
+    profile_id: str,
+    from_time: int | None,
+    to_time: int | None,
+    warmup_bars: int,
+) -> list[dict[str, Any]]:
+    alerts = [
+        alert
+        for alert in cache.read_alerts(symbol=symbol, profile_id=profile_id)
+        if alert.enabled and alert.type == MGANN_BIG_TRADE_SWEEP
+    ]
+    if not alerts:
+        return []
+
+    range_bars = cache.read_bars(
+        symbol,
+        contract,
+        timeframe,
+        frm=from_time,
+        to=to_time,
+        limit=MGANN_SWEEP_SIGNAL_BAR_CAP,
+    )
+    if not range_bars:
+        return []
+
+    first_time = range_bars[0].time
+    last_time = range_bars[-1].time
+    warmup = (
+        cache.read_bars(
+            symbol,
+            contract,
+            timeframe,
+            to=first_time - _M1_MS,
+            limit=warmup_bars,
+        )
+        if warmup_bars > 0
+        else []
+    )
+    bars = [*warmup, *range_bars]
+    big_trades = cache.read_big_trades(
+        symbol,
+        contract,
+        frm=bars[0].time,
+        to=last_time + _M1_MS - 1,
+    )
+    return _mgann_sweep_signals_from_history(
+        alerts=alerts,
+        bars=bars,
+        big_trades=big_trades,
+        from_time=first_time,
+        to_time=last_time,
+    )
+
+def _mgann_sweep_signals_from_history(
+    *,
+    alerts: list[AlertRecord],
+    bars: list[BarRecord],
+    big_trades: list[BigTradeRecord],
+    from_time: int,
+    to_time: int,
+) -> list[dict[str, Any]]:
+    trades_by_bucket: dict[int, list[BigTradeRecord]] = {}
+    for trade in big_trades:
+        bucket = int(trade.time) - (int(trade.time) % _M1_MS)
+        trades_by_bucket.setdefault(bucket, []).append(trade)
+
+    by_id: dict[str, dict[str, Any]] = {}
+    for alert in alerts:
+        state = _mgann_sweep_state_from_alert(alert)
+        for bar in bars:
+            for trade in trades_by_bucket.get(bar.time, []):
+                state.on_big_trade(
+                    time=trade.time,
+                    price=trade.price,
+                    volume=trade.volume,
+                )
+            triggers = state.on_closed_bar(
+                MgannBigTradeSweepBar(
+                    time=bar.time,
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                )
+            )
+            if bar.time < from_time or bar.time > to_time:
+                continue
+            for trigger in triggers:
+                signal_id = f"{alert.id}:hist:{trigger.signal_time}:{trigger.direction}"
+                by_id[signal_id] = {
+                    "id": signal_id,
+                    "alertId": alert.id,
+                    "time": trigger.signal_time,
+                    "price": trigger.signal_price,
+                    "direction": trigger.direction,
+                    "text": "Break L" if trigger.direction > 0 else "Break S",
+                    "cutTime": trigger.cut_time,
+                    "cutCount": trigger.cut_count,
+                    "bigTradeVolume": trigger.big_trade_volume,
+                    "barVolume": trigger.bar_volume,
+                    "barSpread": trigger.bar_spread,
+                    "avgVolume": trigger.avg_volume,
+                    "avgSpread": trigger.avg_spread,
+                }
+    return sorted(by_id.values(), key=lambda item: (item["time"], item["id"]))
+
+def _mgann_sweep_state_from_alert(alert: AlertRecord) -> MgannBigTradeSweepState:
+    params = alert.params
+    return MgannBigTradeSweepState(
+        big_trade_threshold=_positive_float_param(
+            params.get("bigTradeThreshold"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
+        ),
+        min_volume=_nonnegative_int_param(
+            params.get("minVolume"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
+        ),
+        volume_lookback=_positive_int_param(
+            params.get("volumeLookback"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
+        ),
+        volume_multiplier=_positive_float_param(
+            params.get("volumeMultiplier"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+        ),
+        min_spread_ticks=_nonnegative_int_param(
+            params.get("minSpreadTicks"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
+        ),
+        spread_lookback=_positive_int_param(
+            params.get("spreadLookback"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+        ),
+        spread_multiplier=_positive_float_param(
+            params.get("spreadMultiplier"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+        ),
+        swing_size=_positive_int_param(
+            params.get("swingSize"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+        ),
+        pivot_lookback_bars=_positive_int_param(
+            params.get("pivotLookbackBars"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+        ),
+        min_pivot_cuts=_positive_int_param(
+            params.get("minPivotCuts"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+        ),
+        confirmation_bars=_nonnegative_int_param(
+            params.get("confirmationBars"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+        ),
+        break_ticks=_nonnegative_int_param(
+            params.get("breakTicks"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
+        ),
+    )
+
+def _normalize_profile_id(value: str) -> str:
+    value = value.strip()
+    return value if value else "default"
+
+def _positive_int_param(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+def _nonnegative_int_param(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+def _positive_float_param(value: Any, default: float) -> float:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default

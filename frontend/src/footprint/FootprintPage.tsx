@@ -10,7 +10,10 @@ import {
 } from "react";
 
 import { ApiClient } from "../api/client";
-import { DEFAULT_FOOTPRINT_SETTINGS } from "../chart/IndicatorToggles";
+import {
+  DEFAULT_FOOTPRINT_SETTINGS,
+  type FootprintSettings,
+} from "../chart/IndicatorToggles";
 import { resolveEndpoints } from "../endpoints";
 import { ChartSocket } from "../socket/ChartSocket";
 import type { ChartEventType } from "../socket/messages";
@@ -26,7 +29,7 @@ const SYMBOL = "GC";
 const CHART_CONTRACT = SYMBOL;
 const DEFAULT_LATEST_COUNT = 50;
 const MIN_LATEST_COUNT = 10;
-const MAX_LATEST_COUNT = 500;
+const MAX_LATEST_COUNT = 120;
 const DEFAULT_HISTORY_CONTEXT = 3;
 const MIN_HISTORY_CONTEXT = 3;
 const MAX_HISTORY_CONTEXT = 20;
@@ -38,10 +41,20 @@ const MIN_ROW_HEIGHT_PX = 5;
 const MAX_ROW_HEIGHT_PX = 32;
 const PRICE_AXIS_HIT_WIDTH_PX = 86;
 const SCALE_DRAG_SENSITIVITY = 0.08;
-const MAX_CANVAS_HEIGHT_PX = 16_000;
+const MAX_CANVAS_HEIGHT_PX = 6_000;
+const MAX_CANVAS_AREA_PX = 16_000_000;
+const DEFAULT_PAGE_FOOTPRINT_SETTINGS: FootprintSettings = {
+  ...DEFAULT_FOOTPRINT_SETTINGS,
+  showVA: true,
+};
 const identityPriceToY = (price: number) => price;
 
 type PageMode = "latest" | "history";
+type FootprintNumberSettingKey =
+  | "vaPercent"
+  | "absorptionPercent"
+  | "absorptionDepth"
+  | "absorptionFilter";
 type ChartDragState =
   | {
     mode: "pan";
@@ -80,6 +93,21 @@ export function FootprintPage() {
   const [isDraggingChart, setIsDraggingChart] = useState(false);
   const [isScalingPrice, setIsScalingPrice] = useState(false);
   const [rowHeightPx, setRowHeightPx] = useState(DEFAULT_ROW_HEIGHT_PX);
+  const [footprintSettings, setFootprintSettings] = useState<FootprintSettings>(
+    () => ({ ...DEFAULT_PAGE_FOOTPRINT_SETTINGS }),
+  );
+  const [vaPercentInput, setVaPercentInput] = useState(
+    String(DEFAULT_PAGE_FOOTPRINT_SETTINGS.vaPercent),
+  );
+  const [absorptionPercentInput, setAbsorptionPercentInput] = useState(
+    String(DEFAULT_PAGE_FOOTPRINT_SETTINGS.absorptionPercent),
+  );
+  const [absorptionDepthInput, setAbsorptionDepthInput] = useState(
+    String(DEFAULT_PAGE_FOOTPRINT_SETTINGS.absorptionDepth),
+  );
+  const [absorptionFilterInput, setAbsorptionFilterInput] = useState(
+    String(DEFAULT_PAGE_FOOTPRINT_SETTINGS.absorptionFilter),
+  );
   const [scrollView, setScrollView] = useState({ left: 0, top: 0 });
   const [historyMeta, setHistoryMeta] = useState<{
     at: number;
@@ -183,12 +211,18 @@ export function FootprintPage() {
   }, [barCount, mode, socket]);
 
   const visibleBars = useMemo(() => selectDisplayBars(bars, barCount), [bars, barCount]);
+  const displayBarCount = Math.max(1, visibleBars.length);
   const canvasWidth = Math.max(
     canvasHostSize.width,
-    Math.max(1, barCount) * MIN_BAR_WIDTH_PX + 20,
+    displayBarCount * MIN_BAR_WIDTH_PX + 20,
+  );
+  const maxCanvasHeightByArea = Math.max(
+    MIN_CANVAS_HEIGHT_PX,
+    Math.floor(MAX_CANVAS_AREA_PX / Math.max(1, canvasWidth)),
   );
   const canvasHeight = Math.min(
     MAX_CANVAS_HEIGHT_PX,
+    maxCanvasHeightByArea,
     Math.max(
       canvasHostSize.height,
       MIN_CANVAS_HEIGHT_PX,
@@ -308,6 +342,18 @@ export function FootprintPage() {
     setRowHeightPx(DEFAULT_ROW_HEIGHT_PX);
   };
 
+  const commitFootprintNumberSetting = (
+    key: FootprintNumberSettingKey,
+    value: string,
+    setValue: (next: string) => void,
+    min: number,
+    max: number,
+  ) => {
+    const next = clampInteger(value, min, max, footprintSettings[key]);
+    setValue(String(next));
+    setFootprintSettings((prev) => ({ ...prev, [key]: next }));
+  };
+
   return (
     <div className="footprint-page">
       <header className="footprint-page-toolbar">
@@ -353,6 +399,170 @@ export function FootprintPage() {
           </label>
           <button type="submit">History</button>
         </form>
+        <form
+          className="footprint-page-form footprint-page-absorption"
+          aria-label="Footprint display settings"
+          onSubmit={(event) => event.preventDefault()}
+        >
+          <label className="footprint-page-toggle">
+            <input
+              type="checkbox"
+              checked={footprintSettings.showVA}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                setFootprintSettings((prev) => ({
+                  ...prev,
+                  showVA: checked,
+                }));
+              }}
+            />
+            VA
+          </label>
+          <label>
+            VA %
+            <input
+              type="number"
+              min={10}
+              max={95}
+              value={vaPercentInput}
+              onChange={(event) => setVaPercentInput(event.currentTarget.value)}
+              onBlur={() =>
+                commitFootprintNumberSetting(
+                  "vaPercent",
+                  vaPercentInput,
+                  setVaPercentInput,
+                  10,
+                  95,
+                )
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  commitFootprintNumberSetting(
+                    "vaPercent",
+                    vaPercentInput,
+                    setVaPercentInput,
+                    10,
+                    95,
+                  );
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+          <label className="footprint-page-toggle">
+            <input
+              type="checkbox"
+              checked={footprintSettings.showAbsorption}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                setFootprintSettings((prev) => ({
+                  ...prev,
+                  showAbsorption: checked,
+                }));
+              }}
+            />
+            Absorption
+          </label>
+          <label>
+            Abs %
+            <input
+              type="number"
+              min={0}
+              max={500}
+              value={absorptionPercentInput}
+              onChange={(event) =>
+                setAbsorptionPercentInput(event.currentTarget.value)
+              }
+              onBlur={() =>
+                commitFootprintNumberSetting(
+                  "absorptionPercent",
+                  absorptionPercentInput,
+                  setAbsorptionPercentInput,
+                  0,
+                  500,
+                )
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  commitFootprintNumberSetting(
+                    "absorptionPercent",
+                    absorptionPercentInput,
+                    setAbsorptionPercentInput,
+                    0,
+                    500,
+                  );
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+          <label>
+            Depth
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={absorptionDepthInput}
+              onChange={(event) =>
+                setAbsorptionDepthInput(event.currentTarget.value)
+              }
+              onBlur={() =>
+                commitFootprintNumberSetting(
+                  "absorptionDepth",
+                  absorptionDepthInput,
+                  setAbsorptionDepthInput,
+                  0,
+                  100,
+                )
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  commitFootprintNumberSetting(
+                    "absorptionDepth",
+                    absorptionDepthInput,
+                    setAbsorptionDepthInput,
+                    0,
+                    100,
+                  );
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+          <label>
+            Filter
+            <input
+              type="number"
+              min={0}
+              max={100000}
+              value={absorptionFilterInput}
+              onChange={(event) =>
+                setAbsorptionFilterInput(event.currentTarget.value)
+              }
+              onBlur={() =>
+                commitFootprintNumberSetting(
+                  "absorptionFilter",
+                  absorptionFilterInput,
+                  setAbsorptionFilterInput,
+                  0,
+                  100000,
+                )
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  commitFootprintNumberSetting(
+                    "absorptionFilter",
+                    absorptionFilterInput,
+                    setAbsorptionFilterInput,
+                    0,
+                    100000,
+                  );
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+        </form>
         <div className="footprint-page-status" aria-live="polite">
           {statusText}
         </div>
@@ -372,14 +582,14 @@ export function FootprintPage() {
           <FootprintCanvas
             bars={bars}
             viewport={viewport}
-            settings={DEFAULT_FOOTPRINT_SETTINGS}
-            displayCount={barCount}
+            settings={footprintSettings}
+            displayCount={displayBarCount}
             layout="standalone"
           />
         </main>
         <FootprintStickyAxes
           bars={visibleBars}
-          barCount={barCount}
+          barCount={displayBarCount}
           rowHeightPx={rowHeightPx}
           canvasWidth={canvasWidth}
           canvasHeight={canvasHeight}

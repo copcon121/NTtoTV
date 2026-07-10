@@ -204,6 +204,7 @@ export interface AlertEventMessage {
   price: number;
   message: string;
   level?: number;
+  direction?: number;
 }
 
 /** Connection status event (Req 5.2, 20). */

@@ -438,6 +438,43 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
+  it("loads historical mGann BigTrade sweep alert markers", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        signals: [
+          {
+            id: "a_1:hist:1000:1",
+            alertId: "a_1",
+            time: 1000,
+            price: 4510.1,
+            direction: 1,
+            text: "Break L",
+          },
+        ],
+      }),
+    );
+    const api = new ApiClient({ fetchFn });
+
+    await expect(
+      api.mgannBigTradeSweepSignals({
+        symbol: "GC",
+        contract: "GC",
+        timeframe: "1m",
+        profileId: "hieu",
+        from: 1000,
+        to: 2000,
+        limit: 250,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "a_1:hist:1000:1", text: "Break L" }),
+    ]);
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/signals/mgann-big-trade-sweep?symbol=GC&contract=GC&tf=1m&profileId=hieu&from=1000&to=2000&limit=250",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
   it("loads latest analyst report and triggers a manual analyst run", async () => {
     const report = {
       reportId: "r-1",

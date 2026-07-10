@@ -70,6 +70,8 @@ export interface FootprintRenderInputs {
   displayCount?: number;
   /** Overlay mode draws the compact chart panel; standalone fills its shell. */
   layout?: "overlay" | "standalone";
+  /** Stable key for display settings that affect drawing. */
+  settingsKey?: string;
 }
 
 /**
@@ -100,6 +102,7 @@ export function shouldRedraw(
   if (prev.displayCount !== next.displayCount || prev.layout !== next.layout) {
     return true;
   }
+  if (prev.settingsKey !== next.settingsKey) return true;
   if (prev.bars.length !== next.bars.length) return true;
   for (let i = 0; i < next.bars.length; i++) {
     // Reference inequality OR a content change (time/poc/rows length) triggers

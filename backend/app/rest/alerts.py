@@ -32,6 +32,21 @@ from ..engines.alert_engine import (
     MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
     MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
     MGANN_FVG_DEFAULT_SWING_SIZE,
+    MGANN_BIG_TRADE_SWEEP,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_TIMEFRAMES,
     MGANN_FVG_RETEST,
     MGANN_FVG_RETEST_TIMEFRAME,
     MGANN_FVG_RETEST_TIMEFRAMES,
@@ -153,20 +168,6 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         params["maxBars"] = SMC_DEFAULT_MAX_BARS
         params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
         params["retestToleranceTicks"] = SMC_DEFAULT_RETEST_TOLERANCE_TICKS
-    elif alert_type == "breakout_fvg_confluence":
-        level = params.get("minFvgLevel")
-        if level is not None:
-            if isinstance(level, bool) or not isinstance(level, (int, float)):
-                raise validation_error(
-                    "'minFvgLevel' must be numeric", field="minFvgLevel"
-                )
-            level = int(level)
-            if level < 1 or level > 5:
-                raise validation_error(
-                    "'minFvgLevel' must be between 1 and 5",
-                    field="minFvgLevel",
-                )
-            params["minFvgLevel"] = level
     elif alert_type == MGANN_FVG_RETEST:
         timeframe = params.get("timeframe", MGANN_FVG_RETEST_TIMEFRAME)
         if not isinstance(timeframe, str) or timeframe not in MGANN_FVG_RETEST_TIMEFRAMES:
@@ -187,6 +188,98 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         params["maxZoneAge"] = MGANN_FVG_DEFAULT_MAX_ZONE_AGE
         params["minGapTicks"] = MGANN_FVG_DEFAULT_MIN_GAP_TICKS
         params["retestToleranceTicks"] = MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS
+    elif alert_type == MGANN_BIG_TRADE_SWEEP:
+        params.pop("direction", None)
+        threshold = params.get(
+            "bigTradeThreshold",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
+        )
+        if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
+            raise validation_error(
+                f"alert type {alert_type!r} requires a numeric 'bigTradeThreshold'",
+                field="bigTradeThreshold",
+            )
+        if float(threshold) <= 0:
+            raise validation_error(
+                "'bigTradeThreshold' must be greater than zero",
+                field="bigTradeThreshold",
+            )
+        timeframe = params.get(
+            "timeframe",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME,
+        )
+        if (
+            not isinstance(timeframe, str)
+            or timeframe not in MGANN_BIG_TRADE_SWEEP_TIMEFRAMES
+        ):
+            allowed = ", ".join(MGANN_BIG_TRADE_SWEEP_TIMEFRAMES)
+            raise validation_error(
+                f"'timeframe' must be one of: {allowed}",
+                field="timeframe",
+            )
+        for key in (
+            "volumeLookback",
+            "spreadLookback",
+            "swingSize",
+            "pivotLookbackBars",
+            "minPivotCuts",
+        ):
+            _validate_optional_positive_number(params, key)
+        for key in (
+            "minVolume",
+            "minSpreadTicks",
+            "confirmationBars",
+            "breakTicks",
+        ):
+            _validate_optional_nonnegative_number(params, key)
+        for key in ("volumeMultiplier", "spreadMultiplier"):
+            _validate_optional_positive_number(params, key)
+        params["bigTradeThreshold"] = threshold
+        params["timeframe"] = timeframe
+        params["minVolume"] = params.get(
+            "minVolume",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
+        )
+        params["volumeLookback"] = params.get(
+            "volumeLookback",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
+        )
+        params["volumeMultiplier"] = params.get(
+            "volumeMultiplier",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+        )
+        params["minSpreadTicks"] = params.get(
+            "minSpreadTicks",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
+        )
+        params["spreadLookback"] = params.get(
+            "spreadLookback",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+        )
+        params["spreadMultiplier"] = params.get(
+            "spreadMultiplier",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+        )
+        params["swingSize"] = params.get(
+            "swingSize",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+        )
+        params["pivotLookbackBars"] = params.get(
+            "pivotLookbackBars",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+        )
+        params["minPivotCuts"] = params.get(
+            "minPivotCuts",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+        )
+        params["confirmationBars"] = params.get(
+            "confirmationBars",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+        )
+        params["breakTicks"] = params.get(
+            "breakTicks",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
+        )
     # stacked_imbalance has no required params.
     return _validate_repeat_param(params)
 

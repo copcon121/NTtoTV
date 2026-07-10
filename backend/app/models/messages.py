@@ -822,6 +822,7 @@ class AlertEvent:
     message: str
     profile_id: str = "default"
     level: float | None = None
+    direction: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -838,12 +839,15 @@ class AlertEvent:
             out["profileId"] = self.profile_id
         if self.level is not None:
             out["level"] = self.level
+        if self.direction is not None:
+            out["direction"] = self.direction
         return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AlertEvent":
         _expect_type(data, cls.type)
         raw_level = data.get("level")
+        raw_direction = data.get("direction")
         return cls(
             alert_id=data["alertId"],
             alert_type=data["alertType"],
@@ -854,6 +858,7 @@ class AlertEvent:
             message=data["message"],
             profile_id=str(data.get("profileId", "default")),
             level=None if raw_level is None else float(raw_level),
+            direction=None if raw_direction is None else int(raw_direction),
         )
 
 

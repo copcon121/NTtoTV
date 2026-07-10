@@ -3,6 +3,7 @@ import type { UTCTimestamp } from "lightweight-charts";
 
 import {
   ApiClient,
+  type AlertSignalRestRow,
   type AnalystEventAiState,
   type AnalystReport,
   type AuthUser,
@@ -75,6 +76,7 @@ import {
 import {
   type VolumeDeltaDatum,
   type AlertLine,
+  type AlertSignalMarker,
   type OrderLine,
   type OrderLineField,
   type SmcAiSignalMarker,
@@ -136,6 +138,8 @@ const PROFILE_HOT_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_CHART_BACKGROUND = "#101010";
 const SOCKET_IDLE_TIMEOUT_MS = 45_000;
 const SOCKET_TRANSITION_TIMEOUT_MS = 10_000;
+const DISCONNECT_STATUS_DEBOUNCE_MS = 1_500;
+const DEGRADED_STATUS_TTL_MS = 8_000;
 const PROFILE_TIMEFRAMES = new Set<Timeframe>([
   "1m",
   "3m",
@@ -179,6 +183,7 @@ const EMPTY_BARS: readonly Bar[] = [];
 const EMPTY_VOLUME_DELTA: readonly VolumeDeltaDatum[] = [];
 const EMPTY_BIG_TRADES: readonly BigTradeMarker[] = [];
 const EMPTY_SMC_AI_SIGNALS: readonly SmcAiSignalMarker[] = [];
+const EMPTY_ALERT_SIGNAL_MARKERS: readonly AlertSignalMarker[] = [];
 const EMPTY_FOOTPRINT_BARS: ReadonlyMap<number, FootprintBar> = new Map();
 const EMPTY_FVG_SIGNALS: ReadonlyMap<number, FvgSignalUpdateMessage> = new Map();
 const DEFERRED_INDICATOR_LOAD_MS = 75;
@@ -188,6 +193,7 @@ const FVG_GRADER_CATCH_UP_MS = 30_000;
 const RESUME_REFRESH_THROTTLE_MS = 2_000;
 const INITIAL_HISTORY_LIMIT = 5_000;
 const HISTORY_BACKFILL_LIMIT = 5_000;
+const HISTORICAL_ALERT_SIGNAL_BAR_LIMIT = 1_000;
 const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
 const INITIAL_BIG_TRADE_LIMIT = DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
@@ -277,6 +283,8 @@ const ALERT_LINE_TITLES: Record<string, string> = {
   bar_closes_below: "close <",
 };
 
+const MGANN_BIG_TRADE_SWEEP_ALERT_TYPE = "mgann_big_trade_sweep";
+
 /** Map configured alerts to the price lines the chart should draw. */
 function toAlertLines(alerts: readonly Alert[]): AlertLine[] {
   const lines: AlertLine[] = [];
@@ -292,6 +300,51 @@ function toAlertLines(alerts: readonly Alert[]): AlertLine[] {
     });
   }
   return lines;
+}
+
+function alertEventToSignalMarker(
+  event: AlertEventMessage,
+): AlertSignalMarker | undefined {
+  if (event.alertType !== MGANN_BIG_TRADE_SWEEP_ALERT_TYPE) {
+    return undefined;
+  }
+  const direction = event.direction === 1 ? 1 : -1;
+  return {
+    id: `${event.alertId}:${event.time}:${direction}`,
+    time: event.time,
+    price: event.price,
+    direction,
+    text: direction > 0 ? "Break L" : "Break S",
+  };
+}
+
+function alertSignalRowToMarker(row: AlertSignalRestRow): AlertSignalMarker {
+  const direction = row.direction === 1 ? 1 : -1;
+  return {
+    id: row.id,
+    time: row.time,
+    price: row.price,
+    direction,
+    text: row.text ?? (direction > 0 ? "Break L" : "Break S"),
+  };
+}
+
+function replaceHistoricalAlertSignalMarkers(
+  current: readonly AlertSignalMarker[],
+  historical: readonly AlertSignalMarker[],
+): readonly AlertSignalMarker[] {
+  const byId = new Map<string, AlertSignalMarker>();
+  for (const marker of current) {
+    if (!marker.id.includes(":hist:")) {
+      byId.set(marker.id, marker);
+    }
+  }
+  for (const marker of historical) {
+    byId.set(marker.id, marker);
+  }
+  return Array.from(byId.values()).sort(
+    (a, b) => a.time - b.time || a.id.localeCompare(b.id),
+  );
 }
 
 export function mergeMt5AccountUpdate(
@@ -1637,6 +1690,8 @@ export function LiveApp() {
   const [timeframe, setTimeframe] = useState<Timeframe>("1m");
   const contract = CHART_CONTRACT;
   const [connection, setConnection] = useState<ConnectionState>("disconnected");
+  const disconnectStatusTimerRef = useRef<number | undefined>(undefined);
+  const degradedStatusTimerRef = useRef<number | undefined>(undefined);
   const [socketGeneration, setSocketGeneration] = useState(0);
   const [overlayRefreshNonce, setOverlayRefreshNonce] = useState(0);
   const [bars, setBars] = useState<readonly Bar[]>([]);
@@ -1661,6 +1716,9 @@ export function LiveApp() {
   >(undefined);
   const [bigTrades, setBigTrades] = useState<readonly BigTradeMarker[]>([]);
   const [smcAiSignals, setSmcAiSignals] = useState<readonly SmcAiSignalMarker[]>([]);
+  const [alertSignalMarkers, setAlertSignalMarkers] = useState<
+    readonly AlertSignalMarker[]
+  >([]);
   const [showVolume, setShowVolume] = useState(true);
   const [showDailyVolumeProfile, setShowDailyVolumeProfile] = useState(false);
   const [dailyVolumeProfileWidth, setDailyVolumeProfileWidth] = useState(
@@ -1931,6 +1989,7 @@ export function LiveApp() {
     };
   }
   const hasLoadedCurrentSeries = loadedSeriesKey === currentSeriesKey;
+  const firstLoadedBarTime = hasLoadedCurrentSeries ? bars[0]?.time : undefined;
   const latestLoadedBarTime = hasLoadedCurrentSeries
     ? bars[bars.length - 1]?.time
     : undefined;
@@ -2307,22 +2366,62 @@ export function LiveApp() {
   // + alert handlers are attached here; subscription management lives in its
   // own effect below so status churn never tears down the connection.
   useEffect(() => {
+    const clearDisconnectStatusTimer = () => {
+      if (disconnectStatusTimerRef.current === undefined) return;
+      window.clearTimeout(disconnectStatusTimerRef.current);
+      disconnectStatusTimerRef.current = undefined;
+    };
+    const clearDegradedStatusTimer = () => {
+      if (degradedStatusTimerRef.current === undefined) return;
+      window.clearTimeout(degradedStatusTimerRef.current);
+      degradedStatusTimerRef.current = undefined;
+    };
+    const markConnected = () => {
+      clearDisconnectStatusTimer();
+      clearDegradedStatusTimer();
+      setConnection("connected");
+    };
     const reconnect = () => {
       socket.ensureConnected(SOCKET_IDLE_TIMEOUT_MS, SOCKET_TRANSITION_TIMEOUT_MS);
     };
     const offOpen = socket.onOpen(() => {
-      setConnection("connected");
+      markConnected();
       // Re-fetch REST history after reconnect so bars missed while the socket
       // was unavailable are patched without requiring a browser reload. Overlay
       // events can be missed the same way, so refresh them from REST too.
       setSocketGeneration((generation) => generation + 1);
       setOverlayRefreshNonce((generation) => generation + 1);
     });
-    const offClose = socket.onClose(() => setConnection("disconnected"));
+    const offClose = socket.onClose(() => {
+      clearDisconnectStatusTimer();
+      clearDegradedStatusTimer();
+      disconnectStatusTimerRef.current = window.setTimeout(() => {
+        disconnectStatusTimerRef.current = undefined;
+        setConnection("disconnected");
+      }, DISCONNECT_STATUS_DEBOUNCE_MS);
+    });
     socket.connect();
     const reconnectTimer = window.setInterval(reconnect, 5000);
     const offStatus = socket.on("status", (msg) => {
-      setConnection((prev) => (prev === msg.state ? prev : msg.state));
+      if (msg.state === "connected") {
+        markConnected();
+        return;
+      }
+      if (msg.state === "degraded") {
+        clearDisconnectStatusTimer();
+        clearDegradedStatusTimer();
+        setConnection("degraded");
+        degradedStatusTimerRef.current = window.setTimeout(() => {
+          degradedStatusTimerRef.current = undefined;
+          if (socket.isOpen) {
+            setConnection("connected");
+          }
+        }, DEGRADED_STATUS_TTL_MS);
+        return;
+      }
+      clearDisconnectStatusTimer();
+      clearDegradedStatusTimer();
+      setConnection("disconnected");
     });
     const offAlert = socket.on("alert_event", (msg) => {
       if ((msg.profileId ?? DEFAULT_PROFILE_ID) === profileIdRef.current) {
@@ -2334,23 +2433,13 @@ export function LiveApp() {
           ),
         );
         setLastAlert(msg);
-      }
-      if (msg.alertType === "breakout_fvg_confluence") {
-        const isLong = msg.message.includes("Bullish") || msg.message.includes("long");
-        setSmcAiSignals((prev) => {
-          // Keep signals sorted and distinct by time
-          const next = [...prev, {
-            id: `breakout-fvg-${msg.alertId}-${msg.time}`,
-            time: msg.time,
-            price: msg.price,
-            side: isLong ? "long" : "short",
-            zoneType: "fvg",
-            huntType: "breakout",
-            confirmation: "breakout_fvg",
-            text: isLong ? "BRK L" : "BRK S",
-          } as const];
-          return next.sort((a, b) => a.time - b.time);
-        });
+        const marker = alertEventToSignalMarker(msg);
+        if (marker !== undefined) {
+          setAlertSignalMarkers((prev) => {
+            if (prev.some((item) => item.id === marker.id)) return prev;
+            return [...prev, marker].sort((a, b) => a.time - b.time);
+          });
+        }
       }
     });
     const offOrder = socket.on("order_update", (msg) => {
@@ -2368,6 +2457,8 @@ export function LiveApp() {
     });
     return () => {
       window.clearInterval(reconnectTimer);
+      clearDisconnectStatusTimer();
+      clearDegradedStatusTimer();
       offOpen();
       offClose();
       offStatus();
@@ -2437,10 +2528,12 @@ export function LiveApp() {
     if (!authUser || !profileHydrated) {
       setAlerts([]);
       setLastAlert(undefined);
+      setAlertSignalMarkers([]);
       return;
     }
     let cancelled = false;
     setLastAlert(undefined);
+    setAlertSignalMarkers([]);
     void (async () => {
       try {
         const a = await api.alerts(profileId);
@@ -2529,7 +2622,6 @@ export function LiveApp() {
     socket.subscribe(SYMBOL, TIMEFRAME_SUBSCRIBED_EVENTS, timeframe);
     let cancelled = false;
     let deltaTimer: number | undefined;
-    let signalTimer: number | undefined;
     void (async () => {
       try {
         const history = await historyLoader.current!.load({
@@ -2542,34 +2634,7 @@ export function LiveApp() {
           setLoadedSeriesKey(requestedSeriesKey);
           setBars(history.bars);
           setLatestPrice(history.bars[history.bars.length - 1]?.close);
-          if (timeframe !== "1m" || history.bars.length === 0) {
-            setSmcAiSignals([]);
-          } else {
-            // Fetch historical Breakout + FVG confluence signals
-            signalTimer = window.setTimeout(() => {
-              const first = history.bars[0];
-              const last = history.bars[history.bars.length - 1];
-              void (async () => {
-                try {
-                  const signals = await api.breakoutFvgSignals({
-                    symbol: SYMBOL,
-                    contract,
-                    timeframe,
-                    from: first.time,
-                    to: last.time,
-                    limit: 500,
-                  });
-                  if (!cancelled) {
-                    setSmcAiSignals(signals);
-                  }
-                } catch {
-                  if (!cancelled) {
-                    setSmcAiSignals([]);
-                  }
-                }
-              })();
-            }, DEFERRED_OVERLAY_LOAD_MS);
-          }
+          setSmcAiSignals([]);
           deltaTimer = window.setTimeout(() => {
             void (async () => {
               try {
@@ -2625,12 +2690,86 @@ export function LiveApp() {
       if (deltaTimer !== undefined) {
         window.clearTimeout(deltaTimer);
       }
-      if (signalTimer !== undefined) {
-        window.clearTimeout(signalTimer);
-      }
       socket.unsubscribe(SYMBOL, TIMEFRAME_SUBSCRIBED_EVENTS, timeframe);
     };
   }, [api, socket, contract, timeframe, socketGeneration, profileHydrated]);
+
+  useEffect(() => {
+    const hasEnabledMgannSweepAlert = alerts.some(
+      (alert) =>
+        alert.symbol === SYMBOL &&
+        alert.type === MGANN_BIG_TRADE_SWEEP_ALERT_TYPE &&
+        alert.enabled,
+    );
+    if (
+      !authUser ||
+      !profileHydrated ||
+      !hasLoadedCurrentSeries ||
+      timeframe !== "1m" ||
+      firstLoadedBarTime === undefined ||
+      latestLoadedBarTime === undefined ||
+      !hasEnabledMgannSweepAlert
+    ) {
+      setAlertSignalMarkers((prev) =>
+        prev.some((marker) => marker.id.includes(":hist:"))
+          ? prev.filter((marker) => !marker.id.includes(":hist:"))
+          : prev,
+      );
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const signals = await api.mgannBigTradeSweepSignals({
+            symbol: SYMBOL,
+            contract,
+            timeframe,
+            profileId,
+            from: Math.max(
+              firstLoadedBarTime,
+              latestLoadedBarTime - HISTORICAL_ALERT_SIGNAL_BAR_LIMIT * 60_000,
+            ),
+            to: latestLoadedBarTime,
+            limit: 500,
+          });
+          if (!cancelled) {
+            setAlertSignalMarkers((prev) =>
+              replaceHistoricalAlertSignalMarkers(
+                prev,
+                signals.map(alertSignalRowToMarker),
+              ),
+            );
+          }
+        } catch {
+          if (!cancelled) {
+            setAlertSignalMarkers((prev) =>
+              prev.some((marker) => marker.id.includes(":hist:"))
+                ? prev.filter((marker) => !marker.id.includes(":hist:"))
+                : prev,
+            );
+          }
+        }
+      })();
+    }, DEFERRED_OVERLAY_LOAD_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    api,
+    alerts,
+    authUser,
+    contract,
+    firstLoadedBarTime,
+    hasLoadedCurrentSeries,
+    latestLoadedBarTime,
+    profileHydrated,
+    profileId,
+    timeframe,
+  ]);
 
   useEffect(() => {
     setLoadedOverlayContract(undefined);
@@ -2878,6 +3017,9 @@ export function LiveApp() {
       return;
     }
     setAlerts((prev) => prev.filter((a) => a.id !== id));
+    setAlertSignalMarkers((prev) =>
+      prev.filter((marker) => !marker.id.startsWith(`${id}:`)),
+    );
     void api.deleteAlert(id, profileId);
   };
   const onCreateAlert = (input: {
@@ -3261,6 +3403,14 @@ export function LiveApp() {
       if (parsed.field === "slGc") patch.slGc = level;
       if (parsed.field === "tpGc") patch.tpGc = level;
       setOrderError("");
+      setMt5OpenTrades((prev) => ({
+        ...prev,
+        positions: prev.positions.map((position) =>
+          position.brokerPositionTicket === ticket
+            ? { ...position, ...patch }
+            : position,
+        ),
+      }));
       void (async () => {
         try {
           await api.patchMt5Position(ticket, patch);
@@ -3283,6 +3433,12 @@ export function LiveApp() {
       const patch: { entryGc?: number; slGc?: number; tpGc?: number } = {};
       patch[parsed.field] = level;
       setOrderError("");
+      setMt5OpenTrades((prev) => ({
+        ...prev,
+        orders: prev.orders.map((order) =>
+          order.brokerOrderTicket === ticket ? { ...order, ...patch } : order,
+        ),
+      }));
       void (async () => {
         try {
           await api.patchMt5Order(ticket, patch);
@@ -4118,6 +4274,9 @@ export function LiveApp() {
   const chartSmcAiSignals = hasLoadedCurrentSeries && timeframe === "1m"
     ? smcAiSignals
     : EMPTY_SMC_AI_SIGNALS;
+  const chartAlertSignals = hasLoadedCurrentSeries && timeframe === "1m"
+    ? alertSignalMarkers
+    : EMPTY_ALERT_SIGNAL_MARKERS;
   const effectiveOutsideBar = useMemo(
     () => outsideBarSettingsForTimeframe(outsideBar, timeframe),
     [outsideBar, timeframe],
@@ -4346,6 +4505,7 @@ export function LiveApp() {
             fvgSignals={chartFvgSignals}
             bigTrades={chartBigTrades}
             smcAiSignals={chartSmcAiSignals}
+            alertSignals={chartAlertSignals}
             alertLines={alertLines}
             orderLines={orderLines}
             orderControls={orderControls}

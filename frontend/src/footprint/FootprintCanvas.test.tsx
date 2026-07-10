@@ -1,6 +1,7 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_FOOTPRINT_SETTINGS } from "../chart/IndicatorToggles";
 import { type FootprintUpdateMessage } from "../socket/messages";
 import { FootprintCanvas, drawFootprint } from "./FootprintCanvas";
 import { type FootprintViewport } from "./footprintModel";
@@ -51,8 +52,14 @@ function makeCtx() {
     textAlign: "",
     lineWidth: 1,
     strokeRectCalls: 0,
+    strokeRects: [] as Array<{
+      width: number;
+      height: number;
+      dash: number[];
+    }>,
     strokeCalls: 0,
     lineDash: [] as number[],
+    lineDashHistory: [] as number[][],
     saveCalls: 0,
     restoreCalls: 0,
     fillCalls: 0,
@@ -69,8 +76,13 @@ function makeCtx() {
       this.fillTextCalls += 1;
       this.texts.push(text);
     },
-    strokeRect() {
+    strokeRect(_x = 0, _y = 0, width = 0, height = 0) {
       this.strokeRectCalls += 1;
+      this.strokeRects.push({
+        width,
+        height,
+        dash: [...this.lineDash],
+      });
     },
     beginPath() {},
     rect() {},
@@ -89,6 +101,7 @@ function makeCtx() {
     },
     setLineDash(dash: number[]) {
       this.lineDash = dash;
+      this.lineDashHistory.push(dash);
     },
   };
 }
@@ -107,6 +120,7 @@ describe("drawFootprint (Req 14.2, 19.4)", () => {
       ctx as unknown as CanvasRenderingContext2D,
       { bars, viewport },
       {
+        ...DEFAULT_FOOTPRINT_SETTINGS,
         showVA: true,
         vaPercent: 70,
         imbalanceMinVolume: 10,
@@ -156,6 +170,7 @@ describe("drawFootprint (Req 14.2, 19.4)", () => {
       strict as unknown as CanvasRenderingContext2D,
       { bars: [bar], viewport },
       {
+        ...DEFAULT_FOOTPRINT_SETTINGS,
         showVA: false,
         vaPercent: 70,
         imbalanceMinVolume: 10,
@@ -170,6 +185,7 @@ describe("drawFootprint (Req 14.2, 19.4)", () => {
       loose as unknown as CanvasRenderingContext2D,
       { bars: [bar], viewport },
       {
+        ...DEFAULT_FOOTPRINT_SETTINGS,
         showVA: false,
         vaPercent: 70,
         imbalanceMinVolume: 1,
@@ -178,6 +194,41 @@ describe("drawFootprint (Req 14.2, 19.4)", () => {
       },
     );
     expect(loose.fillCalls).toBeGreaterThan(0);
+  });
+
+  it("draws absorption as a dashed box around the matched price level", () => {
+    const ctx = makeCtx();
+    const bar = fp(0);
+    bar.rows = [
+      { price: 100.1, bid: 0, ask: 5, imbalance: null },
+      { price: 100.0, bid: 10, ask: 0, imbalance: null },
+    ];
+    bar.open = 100.0;
+    bar.high = 100.9;
+    bar.low = 100.0;
+    bar.close = 100.9;
+    bar.poc = 100.1;
+    bar.unfinishedAuction = { high: false, low: false };
+
+    drawFootprint(
+      ctx as unknown as CanvasRenderingContext2D,
+      { bars: [bar], viewport },
+      {
+        ...DEFAULT_FOOTPRINT_SETTINGS,
+        showImbalance: false,
+        showUnfinishedAuction: false,
+        showAbsorption: true,
+        absorptionPercent: 100,
+        absorptionDepth: 5,
+        absorptionFilter: 3,
+      },
+    );
+
+    const dashedRect = ctx.strokeRects.find(
+      (rect) => rect.dash.length === 2 && rect.dash[0] === 6 && rect.dash[1] === 3,
+    );
+    expect(dashedRect).toBeDefined();
+    expect(dashedRect?.width).toBeGreaterThan(30);
   });
 
   it("draws nothing but a clear when there are no bars", () => {

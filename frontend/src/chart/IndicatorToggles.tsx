@@ -75,6 +75,10 @@ export interface FootprintSettings {
   vaPercent: number;
   imbalanceMinVolume: number;
   showImbalance: boolean;
+  showAbsorption: boolean;
+  absorptionPercent: number;
+  absorptionDepth: number;
+  absorptionFilter: number;
   showUnfinishedAuction: boolean;
 }
 
@@ -90,6 +94,10 @@ export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
   vaPercent: 70,
   imbalanceMinVolume: 10,
   showImbalance: true,
+  showAbsorption: true,
+  absorptionPercent: 100,
+  absorptionDepth: 5,
+  absorptionFilter: 3,
   showUnfinishedAuction: true,
 };
 
@@ -251,6 +259,9 @@ export function IndicatorToggles({
   );
   const [vaPercentDraft, setVaPercentDraft] = useState(String(footprintSettings.vaPercent));
   const [imbMinVolDraft, setImbMinVolDraft] = useState(String(footprintSettings.imbalanceMinVolume));
+  const [absPercentDraft, setAbsPercentDraft] = useState(String(footprintSettings.absorptionPercent));
+  const [absDepthDraft, setAbsDepthDraft] = useState(String(footprintSettings.absorptionDepth));
+  const [absFilterDraft, setAbsFilterDraft] = useState(String(footprintSettings.absorptionFilter));
   const [btSessionMinVolDrafts, setBtSessionMinVolDrafts] = useState<
     Record<BigTradeSession, string>
   >(() => {
@@ -373,6 +384,26 @@ export function IndicatorToggles({
   useEffect(() => {
     setMgannImpulseBreakDraft(String(mgannSwingConfig.impulseBreakTicks));
   }, [mgannSwingConfig.impulseBreakTicks]);
+
+  useEffect(() => {
+    setVaPercentDraft(String(footprintSettings.vaPercent));
+  }, [footprintSettings.vaPercent]);
+
+  useEffect(() => {
+    setImbMinVolDraft(String(footprintSettings.imbalanceMinVolume));
+  }, [footprintSettings.imbalanceMinVolume]);
+
+  useEffect(() => {
+    setAbsPercentDraft(String(footprintSettings.absorptionPercent));
+  }, [footprintSettings.absorptionPercent]);
+
+  useEffect(() => {
+    setAbsDepthDraft(String(footprintSettings.absorptionDepth));
+  }, [footprintSettings.absorptionDepth]);
+
+  useEffect(() => {
+    setAbsFilterDraft(String(footprintSettings.absorptionFilter));
+  }, [footprintSettings.absorptionFilter]);
 
   // Close the popover on an outside click or Escape.
   useEffect(() => {
@@ -575,6 +606,33 @@ export function IndicatorToggles({
       onFootprintSettingsChange({ ...footprintSettings, imbalanceMinVolume: parsed });
     } else {
       setImbMinVolDraft(String(footprintSettings.imbalanceMinVolume));
+    }
+  };
+
+  const commitAbsPercent = () => {
+    const parsed = Math.round(Number(absPercentDraft));
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 500) {
+      onFootprintSettingsChange({ ...footprintSettings, absorptionPercent: parsed });
+    } else {
+      setAbsPercentDraft(String(footprintSettings.absorptionPercent));
+    }
+  };
+
+  const commitAbsDepth = () => {
+    const parsed = Math.round(Number(absDepthDraft));
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 100) {
+      onFootprintSettingsChange({ ...footprintSettings, absorptionDepth: parsed });
+    } else {
+      setAbsDepthDraft(String(footprintSettings.absorptionDepth));
+    }
+  };
+
+  const commitAbsFilter = () => {
+    const parsed = Math.round(Number(absFilterDraft));
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 100000) {
+      onFootprintSettingsChange({ ...footprintSettings, absorptionFilter: parsed });
+    } else {
+      setAbsFilterDraft(String(footprintSettings.absorptionFilter));
     }
   };
 
@@ -1482,6 +1540,78 @@ export function IndicatorToggles({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       commitImbMinVol();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    checked={footprintSettings.showAbsorption}
+                    onChange={(e) =>
+                      onFootprintSettingsChange({
+                        ...footprintSettings,
+                        showAbsorption: e.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>Absorption</span>
+                </label>
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Abs %</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  className="ema-length-input"
+                  aria-label="Absorption percent"
+                  value={absPercentDraft}
+                  onChange={(e) => setAbsPercentDraft(e.currentTarget.value)}
+                  onBlur={commitAbsPercent}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitAbsPercent();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Abs depth</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  className="ema-length-input"
+                  aria-label="Absorption depth"
+                  value={absDepthDraft}
+                  onChange={(e) => setAbsDepthDraft(e.currentTarget.value)}
+                  onBlur={commitAbsDepth}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitAbsDepth();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Abs filter</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100000}
+                  className="ema-length-input"
+                  aria-label="Absorption filter"
+                  value={absFilterDraft}
+                  onChange={(e) => setAbsFilterDraft(e.currentTarget.value)}
+                  onBlur={commitAbsFilter}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitAbsFilter();
                       e.currentTarget.blur();
                     }
                   }}

@@ -14,8 +14,8 @@ export type AlertType =
   | "big_trade_threshold"
   | "stacked_imbalance"
   | "smc_external_break_big_trade"
-  | "breakout_fvg_confluence"
-  | "mgann_fvg_retest";
+  | "mgann_fvg_retest"
+  | "mgann_big_trade_sweep";
 
 /** An alert definition as returned by `GET /api/alerts`. */
 export interface Alert {

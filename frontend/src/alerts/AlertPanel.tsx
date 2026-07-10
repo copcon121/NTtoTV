@@ -69,16 +69,25 @@ export interface AlertPanelProps {
 
 const DEFAULT_TOAST_MS = 4000;
 const SMC_EXTERNAL_BREAK_TYPE: AlertType = "smc_external_break_big_trade";
-const BREAKOUT_FVG_TYPE: AlertType = "breakout_fvg_confluence";
 const MGANN_FVG_RETEST_TYPE: AlertType = "mgann_fvg_retest";
+const MGANN_BIG_TRADE_SWEEP_TYPE: AlertType = "mgann_big_trade_sweep";
 const SMC_EXTERNAL_BIG_TRADE_DEFAULT = "50";
-const BREAKOUT_FVG_DEFAULT_LEVEL = "3";
 const MGANN_FVG_DEFAULT_TIMEFRAME = "5m";
+const MGANN_SWEEP_BIG_TRADE_DEFAULT = "70";
+const MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT = "2";
+const MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT = "2";
 const SMC_SWING_LENGTH = 50;
 const SMC_LOOKAHEAD_BARS = 5;
 const SMC_MAX_BARS = 20;
 const SMC_PAUSE_ON_INSIDE_BARS = true;
 const SMC_RETEST_TOLERANCE_TICKS = 50;
+const MGANN_SWEEP_VOLUME_LOOKBACK = 20;
+const MGANN_SWEEP_SPREAD_LOOKBACK = 20;
+const MGANN_SWEEP_SWING_SIZE = 2;
+const MGANN_SWEEP_PIVOT_LOOKBACK_BARS = 120;
+const MGANN_SWEEP_MIN_PIVOT_CUTS = 2;
+const MGANN_SWEEP_CONFIRMATION_BARS = 2;
+const MGANN_SWEEP_BREAK_TICKS = 0;
 
 function defaultPlaySound(): void {
   // Best-effort: a short beep via the Web Audio API when available. Wrapped so
@@ -116,10 +125,6 @@ function isSmcAlertType(type: AlertType): boolean {
   return type === SMC_EXTERNAL_BREAK_TYPE;
 }
 
-function isBreakoutFvgType(type: AlertType): boolean {
-  return type === BREAKOUT_FVG_TYPE;
-}
-
 function isMgannFvgRetestType(type: AlertType): boolean {
   return type === MGANN_FVG_RETEST_TYPE;
 }
@@ -127,7 +132,6 @@ function isMgannFvgRetestType(type: AlertType): boolean {
 function alertInputLabel(type: AlertType): string {
   if (isLevelAlertType(type)) return "Alert level";
   if (isSmcAlertType(type)) return "BigTrade threshold";
-  if (isBreakoutFvgType(type)) return "Min FVG level";
   if (isMgannFvgRetestType(type)) return "mGann FVG timeframe";
   return "Alert threshold";
 }
@@ -135,7 +139,6 @@ function alertInputLabel(type: AlertType): string {
 function alertInputPlaceholder(type: AlertType): string {
   if (isLevelAlertType(type)) return "level";
   if (isSmcAlertType(type)) return "BT threshold";
-  if (isBreakoutFvgType(type)) return "3";
   if (isMgannFvgRetestType(type)) return "";
   return "threshold";
 }
@@ -150,15 +153,20 @@ function alertDescription(alert: Alert): string {
     const repeat = alert.params.repeat === true ? " (repeat)" : "";
     return `External BOS/CHoCH, BT > ${String(threshold)}${repeat}`;
   }
-  if (alert.type === BREAKOUT_FVG_TYPE) {
-    const level = alert.params.minFvgLevel ?? 3;
-    const repeat = alert.params.repeat === true ? " (repeat)" : "";
-    return `Breakout + FVG \u2265${String(level)}${repeat}`;
-  }
   if (alert.type === MGANN_FVG_RETEST_TYPE) {
     const repeat = alert.params.repeat === true ? " (repeat)" : "";
     const timeframe = mgannTimeframeLabel(alert.params.timeframe);
     return `${timeframe} FVG retest by mGann wave${repeat}`;
+  }
+  if (alert.type === MGANN_BIG_TRADE_SWEEP_TYPE) {
+    const repeat = alert.params.repeat === true ? " (repeat)" : "";
+    return `mGann Break L/S, BT > ${String(
+      alert.params.bigTradeThreshold,
+    )}, vol x${String(
+      alert.params.volumeMultiplier ?? MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT,
+    )}, spread x${String(
+      alert.params.spreadMultiplier ?? MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT,
+    )}${repeat}`;
   }
   return [
     alert.type,
@@ -197,6 +205,10 @@ export function AlertPanel({
   const [newMgannTimeframe, setNewMgannTimeframe] = useState(
     MGANN_FVG_DEFAULT_TIMEFRAME,
   );
+  const [newMgannSweepVolumeMultiplier, setNewMgannSweepVolumeMultiplier] =
+    useState(MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT);
+  const [newMgannSweepSpreadMultiplier, setNewMgannSweepSpreadMultiplier] =
+    useState(MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT);
   const [telegramEnabled, setTelegramEnabled] = useState(false);
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
@@ -227,14 +239,14 @@ export function AlertPanel({
   const isLevelType = isLevelAlertType(newType);
   const isThresholdType = isThresholdAlertType(newType);
   const isExternalBreakType = newType === SMC_EXTERNAL_BREAK_TYPE;
-  const isBreakoutFvg = newType === BREAKOUT_FVG_TYPE;
   const isMgannFvgRetest = newType === MGANN_FVG_RETEST_TYPE;
-  const showNumericInput = !isMgannFvgRetest;
+  const isMgannSweep = newType === MGANN_BIG_TRADE_SWEEP_TYPE;
+  const showNumericInput = !isMgannFvgRetest && !isMgannSweep;
   const showRepeat =
     isThresholdType ||
     isSmcAlertType(newType) ||
-    isBreakoutFvg ||
-    isMgannFvgRetest;
+    isMgannFvgRetest ||
+    isMgannSweep;
   const paramKey = isLevelType ? "level" : "threshold";
   const hasWebPushPublicKey = Boolean(webPush?.publicKey);
 
@@ -243,12 +255,14 @@ export function AlertPanel({
     if (type === SMC_EXTERNAL_BREAK_TYPE) {
       setNewValue((value) => value || SMC_EXTERNAL_BIG_TRADE_DEFAULT);
       setNewRepeat(true);
-    } else if (type === BREAKOUT_FVG_TYPE) {
-      setNewValue((value) => value || BREAKOUT_FVG_DEFAULT_LEVEL);
-      setNewRepeat(true);
     } else if (type === MGANN_FVG_RETEST_TYPE) {
       setNewValue("");
       setNewMgannTimeframe(MGANN_FVG_DEFAULT_TIMEFRAME);
+      setNewRepeat(true);
+    } else if (type === MGANN_BIG_TRADE_SWEEP_TYPE) {
+      setNewValue((value) => value || MGANN_SWEEP_BIG_TRADE_DEFAULT);
+      setNewMgannSweepVolumeMultiplier(MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT);
+      setNewMgannSweepSpreadMultiplier(MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT);
       setNewRepeat(true);
     }
   };
@@ -263,6 +277,39 @@ export function AlertPanel({
           repeat: newRepeat,
         },
       });
+      return;
+    }
+    if (isMgannSweep) {
+      const bigTradeThreshold = Number(newValue);
+      const volumeMultiplier = Number(newMgannSweepVolumeMultiplier);
+      const spreadMultiplier = Number(newMgannSweepSpreadMultiplier);
+      if (
+        !Number.isFinite(bigTradeThreshold) ||
+        !Number.isFinite(volumeMultiplier) ||
+        !Number.isFinite(spreadMultiplier)
+      ) {
+        return;
+      }
+      onCreate?.({
+        type: newType,
+        params: {
+          bigTradeThreshold,
+          timeframe: "1m",
+          minVolume: 0,
+          volumeLookback: MGANN_SWEEP_VOLUME_LOOKBACK,
+          volumeMultiplier,
+          minSpreadTicks: 0,
+          spreadLookback: MGANN_SWEEP_SPREAD_LOOKBACK,
+          spreadMultiplier,
+          swingSize: MGANN_SWEEP_SWING_SIZE,
+          pivotLookbackBars: MGANN_SWEEP_PIVOT_LOOKBACK_BARS,
+          minPivotCuts: MGANN_SWEEP_MIN_PIVOT_CUTS,
+          confirmationBars: MGANN_SWEEP_CONFIRMATION_BARS,
+          breakTicks: MGANN_SWEEP_BREAK_TICKS,
+          repeat: newRepeat,
+        },
+      });
+      setNewValue(MGANN_SWEEP_BIG_TRADE_DEFAULT);
       return;
     }
     const value = Number(newValue);
@@ -282,17 +329,6 @@ export function AlertPanel({
         },
       });
       setNewValue(SMC_EXTERNAL_BIG_TRADE_DEFAULT);
-      return;
-    }
-    if (isBreakoutFvg) {
-      onCreate?.({
-        type: newType,
-        params: {
-          minFvgLevel: value,
-          repeat: newRepeat,
-        },
-      });
-      setNewValue(BREAKOUT_FVG_DEFAULT_LEVEL);
       return;
     }
     onCreate?.({
@@ -355,11 +391,11 @@ export function AlertPanel({
           <option value="smc_external_break_big_trade">
             External BOS/CHoCH + BigTrade
           </option>
-          <option value="breakout_fvg_confluence">
-            Breakout + FVG ≥3
-          </option>
           <option value="mgann_fvg_retest">
             FVG retest by mGann
+          </option>
+          <option value="mgann_big_trade_sweep">
+            mGann sweep + BigTrade
           </option>
         </select>
         {showNumericInput && (
@@ -381,6 +417,47 @@ export function AlertPanel({
             <option value="5m">M5</option>
             <option value="1m">M1</option>
           </select>
+        )}
+        {isMgannSweep && (
+          <>
+            <label className="alert-param">
+              <span>BigTrade &gt;</span>
+              <input
+                type="number"
+                step="any"
+                aria-label="BigTrade threshold"
+                placeholder="70"
+                value={newValue}
+                onChange={(e) => setNewValue(e.target.value)}
+              />
+            </label>
+            <label className="alert-param">
+              <span>Vol x</span>
+              <input
+                type="number"
+                step="0.1"
+                aria-label="Volume multiplier"
+                placeholder="2"
+                value={newMgannSweepVolumeMultiplier}
+                onChange={(e) =>
+                  setNewMgannSweepVolumeMultiplier(e.target.value)
+                }
+              />
+            </label>
+            <label className="alert-param">
+              <span>Spread x</span>
+              <input
+                type="number"
+                step="0.1"
+                aria-label="Spread multiplier"
+                placeholder="2"
+                value={newMgannSweepSpreadMultiplier}
+                onChange={(e) =>
+                  setNewMgannSweepSpreadMultiplier(e.target.value)
+                }
+              />
+            </label>
+          </>
         )}
         {showRepeat && (
           <label className="alert-repeat">

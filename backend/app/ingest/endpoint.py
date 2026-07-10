@@ -267,6 +267,14 @@ class IngestEndpoint:
                 await self._handle_raw(raw)
         except WebSocketDisconnect:
             return
+        except RuntimeError as exc:
+            # Starlette can raise this instead of WebSocketDisconnect when the
+            # peer drops during an accept/close race. Treat it as a clean
+            # disconnect so transient NT reconnects do not surface as ASGI
+            # application errors.
+            if "WebSocket is not connected" in str(exc):
+                return
+            raise
 
     async def status_timeout_loop(self) -> None:
         """Watchdog: time out a silent `/ws/nt` connection as disconnected.

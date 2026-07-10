@@ -53,6 +53,28 @@ const alerts: Alert[] = [
     },
     enabled: true,
   },
+  {
+    id: "a_6",
+    symbol: "GC",
+    type: "mgann_big_trade_sweep",
+    params: {
+      bigTradeThreshold: 70,
+      timeframe: "1m",
+      minVolume: 0,
+      volumeLookback: 20,
+      volumeMultiplier: 2,
+      minSpreadTicks: 0,
+      spreadLookback: 20,
+      spreadMultiplier: 2,
+      swingSize: 2,
+      pivotLookbackBars: 120,
+      minPivotCuts: 2,
+      confirmationBars: 2,
+      breakTicks: 0,
+      repeat: true,
+    },
+    enabled: true,
+  },
 ];
 
 function event(overrides: Partial<AlertEventMessage> = {}): AlertEventMessage {
@@ -80,6 +102,9 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     );
     expect(screen.getByTestId("alert-a_5")).toHaveTextContent(
       "M5 FVG retest by mGann wave (repeat)",
+    );
+    expect(screen.getByTestId("alert-a_6")).toHaveTextContent(
+      "mGann Break L/S, BT > 70, vol x2, spread x2 (repeat)",
     );
     expect(screen.getByLabelText("Enable a_1")).toBeChecked();
     expect(screen.getByLabelText("Enable a_2")).not.toBeChecked();
@@ -197,6 +222,54 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
       type: "mgann_fvg_retest",
       params: {
         timeframe: "1m",
+        repeat: true,
+      },
+    });
+  });
+
+  it("raises onCreate with mGann BigTrade sweep params", () => {
+    const onCreate = vi.fn();
+    render(<AlertPanel alerts={alerts} onCreate={onCreate} />);
+    fireEvent.change(screen.getByLabelText("Alert type"), {
+      target: { value: "mgann_big_trade_sweep" },
+    });
+
+    expect(screen.getByLabelText("BigTrade threshold")).toHaveValue(70);
+    expect(screen.getByText("BigTrade >")).toBeInTheDocument();
+    expect(screen.getByText("Vol x")).toBeInTheDocument();
+    expect(screen.getByText("Spread x")).toBeInTheDocument();
+    expect(screen.queryByLabelText("mGann sweep direction")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Volume multiplier")).toHaveValue(2);
+    expect(screen.getByLabelText("Spread multiplier")).toHaveValue(2);
+    expect(screen.getByLabelText("Repeat alert")).toBeChecked();
+
+    fireEvent.change(screen.getByLabelText("BigTrade threshold"), {
+      target: { value: "85" },
+    });
+    fireEvent.change(screen.getByLabelText("Volume multiplier"), {
+      target: { value: "2.5" },
+    });
+    fireEvent.change(screen.getByLabelText("Spread multiplier"), {
+      target: { value: "2.2" },
+    });
+    fireEvent.click(screen.getByText("Add"));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      type: "mgann_big_trade_sweep",
+      params: {
+        bigTradeThreshold: 85,
+        timeframe: "1m",
+        minVolume: 0,
+        volumeLookback: 20,
+        volumeMultiplier: 2.5,
+        minSpreadTicks: 0,
+        spreadLookback: 20,
+        spreadMultiplier: 2.2,
+        swingSize: 2,
+        pivotLookbackBars: 120,
+        minPivotCuts: 2,
+        confirmationBars: 2,
+        breakTicks: 0,
         repeat: true,
       },
     });

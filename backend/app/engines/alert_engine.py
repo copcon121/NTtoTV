@@ -14,7 +14,6 @@ Supported alert types (Req 16.1):
 * ``volume_delta_threshold`` — a closed bar's volume delta meets a threshold.
 * ``big_trade_threshold``    — a reconstructed big trade meets a volume threshold.
 * ``stacked_imbalance``      — a closed footprint bar exhibits a stacked imbalance.
-* ``breakout_fvg_confluence`` — a breakout box event coincides with an FVG signal.
 
 Price source and evaluation timing (Req 16.6, 16.7):
 
@@ -59,6 +58,25 @@ from .mgann_fvg_retest import (
     MgannFvgRetestBar,
     MgannFvgRetestState,
 )
+from .mgann_big_trade_sweep import (
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_TIMEFRAMES,
+    MgannBigTradeSweepBar,
+    MgannBigTradeSweepState,
+    MgannBigTradeSweepTrigger,
+)
 from .smc_external import (
     SmcBar,
     SmcExternalBreakState,
@@ -81,6 +99,21 @@ __all__ = [
     "MGANN_FVG_DEFAULT_MAX_ZONE_AGE",
     "MGANN_FVG_DEFAULT_MIN_GAP_TICKS",
     "MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS",
+    "MGANN_BIG_TRADE_SWEEP",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER",
+    "MGANN_BIG_TRADE_SWEEP_TIMEFRAMES",
     "Alert",
     "MarketContext",
     "AlertEngine",
@@ -94,8 +127,8 @@ VOLUME_DELTA_THRESHOLD = "volume_delta_threshold"
 BIG_TRADE_THRESHOLD = "big_trade_threshold"
 STACKED_IMBALANCE = "stacked_imbalance"
 SMC_EXTERNAL_BREAK_BIG_TRADE = "smc_external_break_big_trade"
-BREAKOUT_FVG_CONFLUENCE = "breakout_fvg_confluence"
 MGANN_FVG_RETEST = "mgann_fvg_retest"
+MGANN_BIG_TRADE_SWEEP = "mgann_big_trade_sweep"
 
 SMC_DEFAULT_SWING_LENGTH = 50
 SMC_DEFAULT_LOOKAHEAD_BARS = 5
@@ -113,8 +146,8 @@ ALERT_TYPES: frozenset[str] = frozenset(
         BIG_TRADE_THRESHOLD,
         STACKED_IMBALANCE,
         SMC_EXTERNAL_BREAK_BIG_TRADE,
-        BREAKOUT_FVG_CONFLUENCE,
         MGANN_FVG_RETEST,
+        MGANN_BIG_TRADE_SWEEP,
     }
 )
 
@@ -193,7 +226,7 @@ class MarketContext:
     big_trade_price: float | None = None
     big_trade_side: Side | None = None
 
-    # breakout_fvg_confluence
+    # legacy breakout/FVG signal context; no alert type consumes it.
     breakout_events: list[BreakoutBoxEvent] | None = None
     fvg_level: int | None = None
     fvg_direction: int | None = None
@@ -241,6 +274,7 @@ class AlertEngine:
         self._bar_state: dict[str, _BarState] = {}
         self._smc_state: dict[str, SmcExternalBreakState] = {}
         self._mgann_fvg_state: dict[str, MgannFvgRetestState] = {}
+        self._mgann_sweep_state: dict[str, MgannBigTradeSweepState] = {}
         if store is not None:
             for rec in store.read_alerts(profile_id=None):
                 alert = Alert.from_record(rec)
@@ -259,6 +293,7 @@ class AlertEngine:
         self._bar_state.pop(alert.id, None)
         self._smc_state.pop(alert.id, None)
         self._mgann_fvg_state.pop(alert.id, None)
+        self._mgann_sweep_state.pop(alert.id, None)
         if self._store is not None:
             from ..models.timestamp import now_ms
 
@@ -288,6 +323,7 @@ class AlertEngine:
         self._bar_state.pop(alert_id, None)
         self._smc_state.pop(alert_id, None)
         self._mgann_fvg_state.pop(alert_id, None)
+        self._mgann_sweep_state.pop(alert_id, None)
         if self._store is not None:
             self._store.delete_alert(alert_id)
 
@@ -300,6 +336,7 @@ class AlertEngine:
         if enabled:
             self._smc_state.pop(alert.id, None)
             self._mgann_fvg_state.pop(alert.id, None)
+            self._mgann_sweep_state.pop(alert.id, None)
             self._warm_smc_alert(alert)
         self._persist_enabled(alert)
 
@@ -369,10 +406,10 @@ class AlertEngine:
             return self._eval_stacked_imbalance(alert, ctx)
         if alert.type == SMC_EXTERNAL_BREAK_BIG_TRADE:
             return self._eval_smc_external_break_big_trade(alert, ctx)
-        if alert.type == BREAKOUT_FVG_CONFLUENCE:
-            return self._eval_breakout_fvg_confluence(alert, ctx)
         if alert.type == MGANN_FVG_RETEST:
             return self._eval_mgann_fvg_retest(alert, ctx)
+        if alert.type == MGANN_BIG_TRADE_SWEEP:
+            return self._eval_mgann_big_trade_sweep(alert, ctx)
         return None
 
     # -- price_crosses_level (Req 16.6, 17.5, 17.7) ---------------------------
@@ -496,64 +533,6 @@ class AlertEngine:
             return None
         return self._make_smc_event(alert, ctx, trigger)
 
-    # -- breakout_fvg_confluence -----------------------------------------------
-
-    def _eval_breakout_fvg_confluence(
-        self, alert: Alert, ctx: MarketContext
-    ) -> AlertEvent | None:
-        if ctx.bar_tf not in (None, "1m"):
-            return None
-        if not ctx.bar_closed or ctx.bar_time is None or ctx.bar_close is None:
-            return None
-        breakout_events = ctx.breakout_events
-        if not breakout_events:
-            return None
-        fvg_level = ctx.fvg_level
-        fvg_direction = ctx.fvg_direction
-        if fvg_level is None or fvg_direction is None or fvg_level == 0:
-            return None
-
-        min_fvg_level = self._breakout_fvg_min_level(alert)
-
-        for event in breakout_events:
-            if event.direction != fvg_direction:
-                continue
-            if fvg_level < min_fvg_level:
-                continue
-            # Confluence match: breakout direction matches FVG direction
-            # and FVG level is high enough.
-            condition = True
-            if not self._bar_gate(alert, ctx.bar_time, condition):
-                return None
-            direction_str = "bullish" if event.direction == 1 else "bearish"
-            message = (
-                f"{alert.symbol} {direction_str} breakout + FVG L{fvg_level} "
-                f"@ {event.price:g}"
-            )
-            return AlertEvent(
-                alert_id=alert.id,
-                alert_type=alert.type,
-                symbol=ctx.symbol,
-                contract=ctx.contract,
-                time=ctx.time,
-                price=event.price,
-                message=message,
-                level=event.box_top if event.direction == 1 else event.box_bottom,
-                profile_id=alert.profile_id,
-            )
-        return None
-
-    @staticmethod
-    def _breakout_fvg_min_level(alert: Alert) -> int:
-        raw = alert.params.get("minFvgLevel", 3)
-        if isinstance(raw, bool):
-            return 3
-        try:
-            val = int(raw)
-        except (TypeError, ValueError):
-            return 3
-        return max(1, min(5, val))
-
     # -- mgann_fvg_retest -----------------------------------------------------
 
     def _eval_mgann_fvg_retest(
@@ -607,6 +586,53 @@ class AlertEngine:
                     profile_id=alert.profile_id,
                 )
             )
+        return events
+
+    # -- mgann_big_trade_sweep -----------------------------------------------
+
+    def _eval_mgann_big_trade_sweep(
+        self, alert: Alert, ctx: MarketContext
+    ) -> list[AlertEvent]:
+        state = self._mgann_sweep_state_for(alert)
+
+        if ctx.big_trade_volume is not None:
+            price = (
+                float(ctx.big_trade_price)
+                if ctx.big_trade_price is not None
+                else 0.0
+            )
+            state.on_big_trade(
+                time=ctx.time,
+                price=price,
+                volume=int(ctx.big_trade_volume),
+            )
+
+        timeframe = self._mgann_sweep_timeframe(alert)
+        if ctx.bar_tf != timeframe:
+            return []
+        if (
+            not ctx.bar_closed
+            or ctx.bar_time is None
+            or ctx.bar_open is None
+            or ctx.bar_high is None
+            or ctx.bar_low is None
+            or ctx.bar_close is None
+        ):
+            return []
+
+        triggers = state.on_closed_bar(
+            MgannBigTradeSweepBar(
+                time=ctx.bar_time,
+                open=float(ctx.bar_open),
+                high=float(ctx.bar_high),
+                low=float(ctx.bar_low),
+                close=float(ctx.bar_close),
+                volume=int(ctx.bar_volume or 0),
+            )
+        )
+        events: list[AlertEvent] = []
+        for trigger in triggers:
+            events.append(self._make_mgann_sweep_event(alert, ctx, trigger))
         return events
 
     # -- per-closed-bar fire-once + re-arm gate (Req 17.6, 17.8) --------------
@@ -677,6 +703,34 @@ class AlertEngine:
         )
 
 
+    def _make_mgann_sweep_event(
+        self,
+        alert: Alert,
+        ctx: MarketContext,
+        trigger: MgannBigTradeSweepTrigger,
+    ) -> AlertEvent:
+        direction = "highs" if trigger.direction > 0 else "lows"
+        tf_label = _timeframe_label(self._mgann_sweep_timeframe(alert))
+        threshold = _fmt_num(self._mgann_sweep_big_trade_threshold(alert))
+        message = (
+            f"{alert.symbol} {tf_label} mGann {direction} breakout "
+            f"{trigger.cut_count} pivots + BigTrade "
+            f"{_fmt_num(trigger.big_trade_volume)} > {threshold}; "
+            f"vol {trigger.bar_volume}, spread {trigger.bar_spread:.1f}"
+        )
+        return AlertEvent(
+            alert_id=alert.id,
+            alert_type=alert.type,
+            symbol=ctx.symbol,
+            contract=ctx.contract,
+            time=trigger.signal_time,
+            price=trigger.signal_price,
+            message=message,
+            level=sum(trigger.cut_levels) / len(trigger.cut_levels),
+            profile_id=alert.profile_id,
+            direction=trigger.direction,
+        )
+
     def _smc_state_for(self, alert: Alert) -> SmcExternalBreakState:
         state = self._smc_state.get(alert.id)
         if state is None:
@@ -692,9 +746,19 @@ class AlertEngine:
             self._mgann_fvg_state[alert.id] = state
         return state
 
+    def _mgann_sweep_state_for(self, alert: Alert) -> MgannBigTradeSweepState:
+        state = self._mgann_sweep_state.get(alert.id)
+        if state is None:
+            state = self._new_mgann_sweep_state(alert)
+            self._mgann_sweep_state[alert.id] = state
+        return state
+
     def _warm_smc_alert(self, alert: Alert) -> None:
         if alert.type == MGANN_FVG_RETEST:
             self._warm_mgann_fvg_alert(alert)
+            return
+        if alert.type == MGANN_BIG_TRADE_SWEEP:
+            self._warm_mgann_sweep_alert(alert)
             return
         if alert.type != SMC_EXTERNAL_BREAK_BIG_TRADE:
             return
@@ -757,6 +821,29 @@ class AlertEngine:
                 )
         self._mgann_fvg_state[alert.id] = state
 
+    def _warm_mgann_sweep_alert(self, alert: Alert) -> None:
+        state = self._new_mgann_sweep_state(alert)
+        if self._store is not None:
+            for rec in self._store.read_bars(
+                alert.symbol,
+                alert.symbol,
+                self._mgann_sweep_timeframe(alert),
+                limit=self._mgann_sweep_warmup_bars(alert),
+            ):
+                if not rec.closed:
+                    continue
+                state.on_closed_bar(
+                    MgannBigTradeSweepBar(
+                        time=rec.time,
+                        open=rec.open,
+                        high=rec.high,
+                        low=rec.low,
+                        close=rec.close,
+                        volume=rec.volume,
+                    )
+                )
+        self._mgann_sweep_state[alert.id] = state
+
     def _new_smc_state(self, alert: Alert) -> SmcExternalBreakState:
         return SmcExternalBreakState(
             swing_length=self._smc_swing_length(alert),
@@ -773,6 +860,23 @@ class AlertEngine:
             max_zone_age=self._mgann_fvg_max_zone_age(alert),
             min_gap_ticks=self._mgann_fvg_min_gap_ticks(alert),
             retest_tolerance_ticks=self._mgann_fvg_retest_tolerance_ticks(alert),
+        )
+
+    def _new_mgann_sweep_state(self, alert: Alert) -> MgannBigTradeSweepState:
+        return MgannBigTradeSweepState(
+            timeframe=self._mgann_sweep_timeframe(alert),
+            big_trade_threshold=self._mgann_sweep_big_trade_threshold(alert),
+            min_volume=self._mgann_sweep_min_volume(alert),
+            volume_lookback=self._mgann_sweep_volume_lookback(alert),
+            volume_multiplier=self._mgann_sweep_volume_multiplier(alert),
+            min_spread_ticks=self._mgann_sweep_min_spread_ticks(alert),
+            spread_lookback=self._mgann_sweep_spread_lookback(alert),
+            spread_multiplier=self._mgann_sweep_spread_multiplier(alert),
+            swing_size=self._mgann_sweep_swing_size(alert),
+            pivot_lookback_bars=self._mgann_sweep_pivot_lookback_bars(alert),
+            min_pivot_cuts=self._mgann_sweep_min_pivot_cuts(alert),
+            confirmation_bars=self._mgann_sweep_confirmation_bars(alert),
+            break_ticks=self._mgann_sweep_break_ticks(alert),
         )
 
     @staticmethod
@@ -889,6 +993,108 @@ class AlertEngine:
             return raw
         return MGANN_FVG_RETEST_TIMEFRAME
 
+    def _mgann_sweep_warmup_bars(self, alert: Alert) -> int:
+        return max(
+            500,
+            self._mgann_sweep_pivot_lookback_bars(alert)
+            + self._mgann_sweep_volume_lookback(alert)
+            + self._mgann_sweep_spread_lookback(alert)
+            + self._mgann_sweep_confirmation_bars(alert)
+            + self._mgann_sweep_swing_size(alert) * 8
+            + 40,
+        )
+
+    @staticmethod
+    def _mgann_sweep_timeframe(alert: Alert) -> str:
+        raw = alert.params.get("timeframe", MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME)
+        if isinstance(raw, str) and raw in MGANN_BIG_TRADE_SWEEP_TIMEFRAMES:
+            return raw
+        return MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME
+
+    @staticmethod
+    def _mgann_sweep_big_trade_threshold(alert: Alert) -> float:
+        return _positive_float_param(
+            alert.params.get("bigTradeThreshold"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
+        )
+
+    @staticmethod
+    def _mgann_sweep_min_volume(alert: Alert) -> int:
+        return _nonnegative_int_param(
+            alert.params.get("minVolume"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
+        )
+
+    @staticmethod
+    def _mgann_sweep_volume_lookback(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get("volumeLookback"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
+        )
+
+    @staticmethod
+    def _mgann_sweep_volume_multiplier(alert: Alert) -> float:
+        return _positive_float_param(
+            alert.params.get("volumeMultiplier"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+        )
+
+    @staticmethod
+    def _mgann_sweep_min_spread_ticks(alert: Alert) -> int:
+        return _nonnegative_int_param(
+            alert.params.get("minSpreadTicks"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
+        )
+
+    @staticmethod
+    def _mgann_sweep_spread_lookback(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get("spreadLookback"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+        )
+
+    @staticmethod
+    def _mgann_sweep_spread_multiplier(alert: Alert) -> float:
+        return _positive_float_param(
+            alert.params.get("spreadMultiplier"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+        )
+
+    @staticmethod
+    def _mgann_sweep_swing_size(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get("swingSize"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+        )
+
+    @staticmethod
+    def _mgann_sweep_pivot_lookback_bars(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get("pivotLookbackBars"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+        )
+
+    @staticmethod
+    def _mgann_sweep_min_pivot_cuts(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get("minPivotCuts"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+        )
+
+    @staticmethod
+    def _mgann_sweep_confirmation_bars(alert: Alert) -> int:
+        return _nonnegative_int_param(
+            alert.params.get("confirmationBars"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+        )
+
+    @staticmethod
+    def _mgann_sweep_break_ticks(alert: Alert) -> int:
+        return _nonnegative_int_param(
+            alert.params.get("breakTicks"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
+        )
+
     def _persist_enabled(self, alert: Alert) -> None:
         if self._store is None:
             return
@@ -916,8 +1122,8 @@ class AlertEngine:
             return f"{sym} big trade threshold met"
         if alert.type == STACKED_IMBALANCE:
             return f"{sym} stacked imbalance"
-        if alert.type == BREAKOUT_FVG_CONFLUENCE:
-            return f"{sym} breakout + FVG confluence"
+        if alert.type == MGANN_BIG_TRADE_SWEEP:
+            return f"{sym} mGann BigTrade sweep"
         return f"{sym} alert"
 
     @staticmethod
@@ -951,6 +1157,15 @@ def _nonnegative_int_param(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed >= 0 else default
+
+def _positive_float_param(value: Any, default: float) -> float:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 def _fmt_num(value: int | float | None) -> str:
     if value is None:
