@@ -15,6 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Request
 
+from ..engines.bar_aggregator import SUPPORTED_TFS
 from ..engines.footprint_engine import (
     DEFAULT_TICK_SIZE,
     FOOTPRINT_TIMEFRAME,
@@ -22,6 +23,7 @@ from ..engines.footprint_engine import (
     _BarState,
     _Level,
 )
+from ..engines.session_calendar import TF_MS, timeframe_bucket_start
 from ..models.messages import (
     BarUpdate,
     FootprintUpdate,
@@ -42,6 +44,8 @@ from .errors import bad_request
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/nt", tags=["nt-native"])
+
+ROLLUP_TFS = tuple(tf for tf in SUPPORTED_TFS if tf != FOOTPRINT_TIMEFRAME)
 
 
 @router.post("/native-bar")
@@ -76,6 +80,30 @@ async def ingest_native_bar(
     rows_payload = payload.get("rows") or []
     if not isinstance(rows_payload, list):
         raise bad_request("rows must be a list", field="rows")
+
+    if not _is_valid_ohlcv(open_price, high_price, low_price, close_price, volume):
+        logger.warning(
+            "ignored invalid native bar symbol=%s contract=%s tf=%s time=%s "
+            "open=%s high=%s low=%s close=%s volume=%s",
+            symbol,
+            contract,
+            tf,
+            time_ms,
+            open_price,
+            high_price,
+            low_price,
+            close_price,
+            volume,
+        )
+        return {
+            "ok": True,
+            "ignored": "invalid_ohlcv",
+            "symbol": symbol,
+            "contract": contract,
+            "tf": tf,
+            "time": time_ms,
+            "source": "nt_native",
+        }
 
     footprint_update = (
         _build_footprint_update(
@@ -122,7 +150,7 @@ async def ingest_native_bar(
         close_delta=close_delta,
     )
 
-    _persist_native_payload(
+    rollup_bar_updates, rollup_delta_updates = _persist_native_payload(
         runtime.cache,
         bar_update=bar_update,
         volume_delta_update=volume_delta_update,
@@ -133,6 +161,10 @@ async def ingest_native_bar(
     runtime.registry.enqueue(OutboundEvent.from_message(volume_delta_update))
     if footprint_update is not None:
         runtime.registry.enqueue(OutboundEvent.from_message(footprint_update))
+    for update in rollup_bar_updates:
+        runtime.registry.enqueue(OutboundEvent.from_message(update))
+    for update in rollup_delta_updates:
+        runtime.registry.enqueue(OutboundEvent.from_message(update))
 
     fvg_updates: list[FvgSignalUpdate] = []
     # FVG grading uses only finalized native footprint rows. If NT does not
@@ -349,7 +381,7 @@ def _persist_native_payload(
     bar_update: BarUpdate,
     volume_delta_update: VolumeDeltaUpdate,
     footprint_update: FootprintUpdate | None,
-) -> None:
+) -> tuple[list[BarUpdate], list[VolumeDeltaUpdate]]:
     footprint_bar = None
     footprint_levels: list[FootprintLevelRecord] = []
     if footprint_update is not None:
@@ -433,6 +465,189 @@ def _persist_native_payload(
         volume_deltas=[vd_record],
         footprint_bars=[] if footprint_bar is None else [footprint_bar],
         footprint_levels=footprint_levels,
+    )
+
+    rollup_bars, rollup_deltas = _rebuild_native_rollups(cache, bar_record)
+    if rollup_bars or rollup_deltas:
+        cache.upsert_derived_batch(
+            bars=rollup_bars,
+            volume_deltas=rollup_deltas,
+        )
+
+    return (
+        [_bar_update_from_record(rec) for rec in rollup_bars],
+        [_volume_delta_update_from_record(rec) for rec in rollup_deltas],
+    )
+
+
+def _rebuild_native_rollups(
+    cache,
+    m1_bar: BarRecord,
+) -> tuple[list[BarRecord], list[VolumeDeltaRecord]]:
+    bars: list[BarRecord] = []
+    deltas: list[VolumeDeltaRecord] = []
+    for tf in ROLLUP_TFS:
+        bucket = timeframe_bucket_start(m1_bar.time, tf)
+        end = bucket + TF_MS[tf] - 1
+
+        m1_bars = cache.read_bars(
+            m1_bar.symbol,
+            m1_bar.contract,
+            FOOTPRINT_TIMEFRAME,
+            bucket,
+            end,
+        )
+        bar = _rollup_bar(m1_bar.symbol, m1_bar.contract, tf, bucket, m1_bars)
+        if bar is not None:
+            bars.append(bar)
+
+        m1_deltas = cache.read_volume_delta(
+            m1_bar.symbol,
+            m1_bar.contract,
+            FOOTPRINT_TIMEFRAME,
+            bucket,
+            end,
+        )
+        delta = _rollup_volume_delta(
+            m1_bar.symbol,
+            m1_bar.contract,
+            tf,
+            bucket,
+            m1_deltas,
+        )
+        if delta is not None:
+            deltas.append(delta)
+    return bars, deltas
+
+
+def _rollup_bar(
+    symbol: str,
+    contract: str,
+    tf: str,
+    bucket: int,
+    m1_bars: list[BarRecord],
+) -> BarRecord | None:
+    m1_bars = [bar for bar in m1_bars if _is_valid_bar_record(bar)]
+    if not m1_bars:
+        return None
+    return BarRecord(
+        symbol=symbol,
+        contract=contract,
+        timeframe=tf,
+        time=bucket,
+        open=m1_bars[0].open,
+        high=max(bar.high for bar in m1_bars),
+        low=min(bar.low for bar in m1_bars),
+        close=m1_bars[-1].close,
+        volume=sum(bar.volume for bar in m1_bars),
+        closed=_rollup_bar_closed(tf, bucket, m1_bars),
+    )
+
+
+def _rollup_volume_delta(
+    symbol: str,
+    contract: str,
+    tf: str,
+    bucket: int,
+    m1_deltas: list[VolumeDeltaRecord],
+) -> VolumeDeltaRecord | None:
+    m1_deltas = [rec for rec in m1_deltas if _is_valid_volume_delta_record(rec)]
+    if not m1_deltas:
+        return None
+
+    running = 0
+    delta_high: int | None = None
+    delta_low: int | None = None
+    for rec in m1_deltas:
+        high = running + rec.delta_high
+        low = running + rec.delta_low
+        delta_high = high if delta_high is None else max(delta_high, high)
+        delta_low = low if delta_low is None else min(delta_low, low)
+        running += rec.close_delta
+
+    return VolumeDeltaRecord(
+        symbol=symbol,
+        contract=contract,
+        timeframe=tf,
+        time=bucket,
+        volume=sum(rec.volume for rec in m1_deltas),
+        buy_volume=sum(rec.buy_volume for rec in m1_deltas),
+        sell_volume=sum(rec.sell_volume for rec in m1_deltas),
+        delta=running,
+        delta_high=0 if delta_high is None else delta_high,
+        delta_low=0 if delta_low is None else delta_low,
+        open_delta=m1_deltas[0].open_delta,
+        close_delta=running,
+    )
+
+
+def _rollup_bar_closed(tf: str, bucket: int, m1_bars: list[BarRecord]) -> bool:
+    if not m1_bars:
+        return False
+    last_m1_start = bucket + TF_MS[tf] - TF_MS[FOOTPRINT_TIMEFRAME]
+    return m1_bars[-1].time >= last_m1_start
+
+
+def _is_valid_bar_record(bar: BarRecord) -> bool:
+    return _is_valid_ohlcv(bar.open, bar.high, bar.low, bar.close, bar.volume)
+
+
+def _is_valid_ohlcv(
+    open_price: float,
+    high_price: float,
+    low_price: float,
+    close_price: float,
+    volume: int,
+) -> bool:
+    return (
+        volume > 0
+        and open_price > 0
+        and high_price > 0
+        and low_price > 0
+        and close_price > 0
+        and high_price >= open_price
+        and high_price >= close_price
+        and high_price >= low_price
+        and low_price <= open_price
+        and low_price <= close_price
+    )
+
+
+def _is_valid_volume_delta_record(rec: VolumeDeltaRecord) -> bool:
+    return rec.volume > 0 or rec.buy_volume > 0 or rec.sell_volume > 0
+
+
+def _bar_update_from_record(rec: BarRecord) -> BarUpdate:
+    return BarUpdate(
+        symbol=rec.symbol,
+        contract=rec.contract,
+        tf=rec.timeframe,
+        bar=OHLCVBar(
+            time=rec.time,
+            open=rec.open,
+            high=rec.high,
+            low=rec.low,
+            close=rec.close,
+            volume=rec.volume,
+        ),
+        closed=rec.closed,
+    )
+
+
+def _volume_delta_update_from_record(rec: VolumeDeltaRecord) -> VolumeDeltaUpdate:
+    return VolumeDeltaUpdate(
+        symbol=rec.symbol,
+        contract=rec.contract,
+        tf=rec.timeframe,
+        time=rec.time,
+        volume=rec.volume,
+        buy_volume=rec.buy_volume,
+        sell_volume=rec.sell_volume,
+        delta=rec.delta,
+        delta_high=rec.delta_high,
+        delta_low=rec.delta_low,
+        open_delta=rec.open_delta,
+        close_delta=rec.close_delta,
     )
 
 

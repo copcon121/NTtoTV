@@ -95,6 +95,7 @@ export interface SmcLine {
   direction: Direction;
   startTime: number;
   endTime: number;
+  labelTime: number;
   price: number;
   label: string;
 }
@@ -1040,7 +1041,8 @@ function pushStateLines(
 ): void {
   const bar = bars[barIndex];
   if (!bar) return;
-  const endTime = extendedStructureEndTime(
+  const breakTime = bar.time;
+  const swingEndTime = extendedStructureEndTime(
     bars,
     barIndex,
     structureLineExtendBars,
@@ -1051,7 +1053,8 @@ function pushStateLines(
       scope: "swing",
       direction: 1,
       startTime: state.swingHigh.timestamp,
-      endTime,
+      endTime: swingEndTime,
+      labelTime: breakTime,
       price: state.swingHigh.price,
       label: "BOS",
     });
@@ -1061,7 +1064,8 @@ function pushStateLines(
       scope: "swing",
       direction: -1,
       startTime: state.swingLow.timestamp,
-      endTime,
+      endTime: swingEndTime,
+      labelTime: breakTime,
       price: state.swingLow.price,
       label: "BOS",
     });
@@ -1071,7 +1075,8 @@ function pushStateLines(
       scope: "swing",
       direction: 1,
       startTime: state.swingHigh.timestamp,
-      endTime,
+      endTime: swingEndTime,
+      labelTime: breakTime,
       price: state.swingHigh.price,
       label: "CHoCH",
     });
@@ -1081,7 +1086,8 @@ function pushStateLines(
       scope: "swing",
       direction: -1,
       startTime: state.swingLow.timestamp,
-      endTime,
+      endTime: swingEndTime,
+      labelTime: breakTime,
       price: state.swingLow.price,
       label: "CHoCH",
     });
@@ -1094,7 +1100,8 @@ function pushStateLines(
       scope: "internal",
       direction: 1,
       startTime: state.internalHigh.timestamp,
-      endTime,
+      endTime: breakTime,
+      labelTime: breakTime,
       price: state.internalHigh.price,
       label: "CHoCH",
     });
@@ -1104,7 +1111,8 @@ function pushStateLines(
       scope: "internal",
       direction: -1,
       startTime: state.internalLow.timestamp,
-      endTime,
+      endTime: breakTime,
+      labelTime: breakTime,
       price: state.internalLow.price,
       label: "CHoCH",
     });

@@ -9,6 +9,7 @@ from app.config import Settings
 from app.engines.fvg_signal_engine import FvgSignalEngine
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
+from app.storage.records import BarRecord, VolumeDeltaRecord
 from app.storage.tick_store import TickStore
 
 
@@ -112,14 +113,242 @@ def test_native_bar_upserts_cache_and_enqueues_updates(tmp_path):
             (2400.2, 6, 5),
         ]
 
-        assert [event.payload["type"] for event in runtime.registry.events] == [
+        assert [event.payload["type"] for event in runtime.registry.events[:3]] == [
             "bar_update",
             "volume_delta_update",
             "footprint_update",
         ]
+        assert ("bar_update", "3m") in [
+            (event.payload["type"], event.payload.get("tf"))
+            for event in runtime.registry.events
+        ]
+        assert ("volume_delta_update", "3m") in [
+            (event.payload["type"], event.payload.get("tf"))
+            for event in runtime.registry.events
+        ]
     finally:
         tick_store.close()
         cache.close()
+
+def test_native_m1_history_rolls_up_chart_timeframes(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path,
+        supported_symbols=(_SYMBOL,),
+        gc_candidate_contracts=(_SOURCE,),
+    )
+    cache = CacheStore(tmp_path / "app.sqlite")
+    tick_store = TickStore(tmp_path / "ticks")
+    runtime = _Runtime(cache)
+    app = create_app(lifespan=False)
+    app.state.runtime = runtime
+    app.state.contract_state = ContractStateStore(cache, settings=settings)
+    app.state.tick_store = tick_store
+
+    payloads = [
+        {
+            "time": _BASE_MS,
+            "open": 100.0,
+            "high": 102.0,
+            "low": 99.0,
+            "close": 101.0,
+            "volume": 10,
+            "buyVolume": 6,
+            "sellVolume": 4,
+            "delta": 2,
+            "deltaHigh": 3,
+            "deltaLow": -1,
+            "openDelta": 1,
+            "closeDelta": 2,
+        },
+        {
+            "time": _BASE_MS + 60_000,
+            "open": 101.0,
+            "high": 105.0,
+            "low": 100.0,
+            "close": 104.0,
+            "volume": 20,
+            "buyVolume": 7,
+            "sellVolume": 13,
+            "delta": -6,
+            "deltaHigh": 1,
+            "deltaLow": -7,
+            "openDelta": -2,
+            "closeDelta": -6,
+        },
+        {
+            "time": _BASE_MS + 120_000,
+            "open": 104.0,
+            "high": 106.0,
+            "low": 103.0,
+            "close": 105.0,
+            "volume": 30,
+            "buyVolume": 20,
+            "sellVolume": 10,
+            "delta": 10,
+            "deltaHigh": 12,
+            "deltaLow": -3,
+            "openDelta": 3,
+            "closeDelta": 10,
+        },
+    ]
+
+    try:
+        with TestClient(app) as client:
+            for payload in payloads:
+                resp = client.post(
+                    "/api/nt/native-bar",
+                    json={
+                        "symbol": _SYMBOL,
+                        "contract": _ACTIVE,
+                        "sourceContract": _SOURCE,
+                        "tf": "1m",
+                        "rows": [],
+                        **payload,
+                    },
+                )
+                assert resp.status_code == 200
+
+        for tf in ("3m", "5m", "15m", "30m", "1h", "4h", "1D"):
+            bars = cache.read_bars(_SYMBOL, _ACTIVE, tf, limit=1)
+            assert len(bars) == 1
+            assert bars[0].open == 100.0
+            assert bars[0].high == 106.0
+            assert bars[0].low == 99.0
+            assert bars[0].close == 105.0
+            assert bars[0].volume == 60
+
+            deltas = cache.read_volume_delta(_SYMBOL, _ACTIVE, tf, limit=1)
+            assert len(deltas) == 1
+            assert deltas[0].volume == 60
+            assert deltas[0].buy_volume == 33
+            assert deltas[0].sell_volume == 27
+            assert deltas[0].delta == 6
+            assert deltas[0].delta_high == 8
+            assert deltas[0].delta_low == -7
+            assert deltas[0].open_delta == 1
+            assert deltas[0].close_delta == 6
+
+        event_slots = [
+            (event.payload["type"], event.payload.get("tf"))
+            for event in runtime.registry.events
+        ]
+        assert ("bar_update", "5m") in event_slots
+        assert ("volume_delta_update", "5m") in event_slots
+    finally:
+        tick_store.close()
+        cache.close()
+
+
+def test_native_rollup_ignores_invalid_zero_rows(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path,
+        supported_symbols=(_SYMBOL,),
+        gc_candidate_contracts=(_SOURCE,),
+    )
+    cache = CacheStore(tmp_path / "app.sqlite")
+    tick_store = TickStore(tmp_path / "ticks")
+    runtime = _Runtime(cache)
+    app = create_app(lifespan=False)
+    app.state.runtime = runtime
+    app.state.contract_state = ContractStateStore(cache, settings=settings)
+    app.state.tick_store = tick_store
+
+    zero_time = _BASE_MS + 60_000
+    cache.upsert_bar(
+        BarRecord(
+            symbol=_SYMBOL,
+            contract=_ACTIVE,
+            timeframe="1m",
+            time=zero_time,
+            open=0.0,
+            high=0.0,
+            low=0.0,
+            close=0.0,
+            volume=0,
+            closed=True,
+        )
+    )
+    cache.upsert_volume_delta(
+        VolumeDeltaRecord(
+            symbol=_SYMBOL,
+            contract=_ACTIVE,
+            timeframe="1m",
+            time=zero_time,
+            volume=0,
+            buy_volume=0,
+            sell_volume=0,
+            delta=0,
+            delta_high=0,
+            delta_low=0,
+            open_delta=0,
+            close_delta=0,
+        )
+    )
+
+    valid_payload = {
+        "symbol": _SYMBOL,
+        "contract": _ACTIVE,
+        "sourceContract": _SOURCE,
+        "tf": "1m",
+        "time": _BASE_MS,
+        "open": 2400.0,
+        "high": 2400.4,
+        "low": 2399.8,
+        "close": 2400.2,
+        "volume": 21,
+        "buyVolume": 13,
+        "sellVolume": 8,
+        "delta": 5,
+        "deltaHigh": 7,
+        "deltaLow": -2,
+        "openDelta": 0,
+        "closeDelta": 5,
+        "rows": [],
+    }
+    invalid_payload = {
+        **valid_payload,
+        "open": 0.0,
+        "high": 0.0,
+        "low": 0.0,
+        "close": 0.0,
+        "volume": 0,
+        "buyVolume": 0,
+        "sellVolume": 0,
+        "delta": 0,
+        "deltaHigh": 0,
+        "deltaLow": 0,
+        "closeDelta": 0,
+    }
+
+    try:
+        with TestClient(app) as client:
+            valid = client.post("/api/nt/native-bar", json=valid_payload)
+            assert valid.status_code == 200
+            event_count = len(runtime.registry.events)
+
+            ignored = client.post("/api/nt/native-bar", json=invalid_payload)
+            assert ignored.status_code == 200
+            assert ignored.json()["ignored"] == "invalid_ohlcv"
+            assert len(runtime.registry.events) == event_count
+
+        day_bars = cache.read_bars(_SYMBOL, _ACTIVE, "1D", limit=1)
+        assert len(day_bars) == 1
+        assert day_bars[0].open == 2400.0
+        assert day_bars[0].high == 2400.4
+        assert day_bars[0].low == 2399.8
+        assert day_bars[0].close == 2400.2
+        assert day_bars[0].volume == 21
+
+        day_deltas = cache.read_volume_delta(_SYMBOL, _ACTIVE, "1D", limit=1)
+        assert len(day_deltas) == 1
+        assert day_deltas[0].volume == 21
+        assert day_deltas[0].buy_volume == 13
+        assert day_deltas[0].sell_volume == 8
+        assert day_deltas[0].delta == 5
+    finally:
+        tick_store.close()
+        cache.close()
+
 
 def test_native_bar_drives_fvg_grader_from_finalized_footprint(tmp_path):
     settings = Settings(

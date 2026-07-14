@@ -4,6 +4,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -29,12 +30,14 @@ const SYMBOL = "GC";
 const CHART_CONTRACT = SYMBOL;
 const DEFAULT_LATEST_COUNT = 50;
 const MIN_LATEST_COUNT = 10;
-const MAX_LATEST_COUNT = 120;
+const MAX_LATEST_COUNT = 500;
 const DEFAULT_HISTORY_CONTEXT = 3;
 const MIN_HISTORY_CONTEXT = 3;
 const MAX_HISTORY_CONTEXT = 20;
 const FOOTPRINT_EVENTS: ChartEventType[] = ["footprint_update"];
-const MIN_BAR_WIDTH_PX = 56;
+const DEFAULT_BAR_WIDTH_PX = 56;
+const MIN_BAR_WIDTH_PX = 18;
+const MAX_BAR_WIDTH_PX = 180;
 const MIN_CANVAS_HEIGHT_PX = 360;
 const DEFAULT_ROW_HEIGHT_PX = 18;
 const MIN_ROW_HEIGHT_PX = 5;
@@ -43,6 +46,9 @@ const PRICE_AXIS_HIT_WIDTH_PX = 86;
 const SCALE_DRAG_SENSITIVITY = 0.08;
 const MAX_CANVAS_HEIGHT_PX = 6_000;
 const MAX_CANVAS_AREA_PX = 16_000_000;
+const MAX_FOCUSED_SCALE_CANVAS_HEIGHT_PX = 12_000;
+const MAX_FOCUSED_SCALE_CANVAS_AREA_PX = 64_000_000;
+const FOCUSED_SCALE_BAR_COUNT = 240;
 const DEFAULT_PAGE_FOOTPRINT_SETTINGS: FootprintSettings = {
   ...DEFAULT_FOOTPRINT_SETTINGS,
   showVA: true,
@@ -55,6 +61,12 @@ type FootprintNumberSettingKey =
   | "absorptionPercent"
   | "absorptionDepth"
   | "absorptionFilter";
+interface ChartPointerState {
+  pointerId: number;
+  clientX: number;
+  clientY: number;
+}
+
 type ChartDragState =
   | {
     mode: "pan";
@@ -69,6 +81,20 @@ type ChartDragState =
     pointerId: number;
     startY: number;
     rowHeightPx: number;
+  }
+  | {
+    mode: "pinch";
+    pointerIds: [number, number];
+    startDistanceX: number;
+    startDistanceY: number;
+    originX: number;
+    originY: number;
+    scrollLeft: number;
+    scrollTop: number;
+    rowHeightPx: number;
+    barWidthPx: number;
+    canvasWidth: number;
+    canvasHeight: number;
   };
 
 export function FootprintPage() {
@@ -77,7 +103,17 @@ export function FootprintPage() {
   const socket = useMemo(() => new ChartSocket({ url: endpoints.ws }), [endpoints.ws]);
   const requestSeq = useRef(0);
   const dragStateRef = useRef<ChartDragState | null>(null);
-  const [canvasHostRef, canvasHostSize] = useElementSize();
+  const activePointersRef = useRef<Map<number, ChartPointerState>>(new Map());
+  const canvasShellRef = useRef<HTMLElement | null>(null);
+  const pendingLatestScrollRef = useRef(false);
+  const [measureCanvasHostRef, canvasHostSize] = useElementSize();
+  const canvasHostRef = useCallback(
+    (node: HTMLElement | null) => {
+      canvasShellRef.current = node;
+      measureCanvasHostRef(node);
+    },
+    [measureCanvasHostRef],
+  );
 
   const [mode, setMode] = useState<PageMode>("latest");
   const [bars, setBars] = useState<ReadonlyMap<number, FootprintBar>>(new Map());
@@ -92,6 +128,8 @@ export function FootprintPage() {
   );
   const [isDraggingChart, setIsDraggingChart] = useState(false);
   const [isScalingPrice, setIsScalingPrice] = useState(false);
+  const [isPinchingChart, setIsPinchingChart] = useState(false);
+  const [barWidthPx, setBarWidthPx] = useState(DEFAULT_BAR_WIDTH_PX);
   const [rowHeightPx, setRowHeightPx] = useState(DEFAULT_ROW_HEIGHT_PX);
   const [footprintSettings, setFootprintSettings] = useState<FootprintSettings>(
     () => ({ ...DEFAULT_PAGE_FOOTPRINT_SETTINGS }),
@@ -126,6 +164,7 @@ export function FootprintPage() {
           count: nextCount,
         });
         if (seq !== requestSeq.current) return;
+        pendingLatestScrollRef.current = true;
         setMode("latest");
         setBars(mapFromBars(result.bars));
       } catch (err) {
@@ -151,6 +190,7 @@ export function FootprintPage() {
           context,
         });
         if (seq !== requestSeq.current) return;
+        pendingLatestScrollRef.current = false;
         setMode("history");
         setHistoryMeta({
           at,
@@ -212,23 +252,18 @@ export function FootprintPage() {
 
   const visibleBars = useMemo(() => selectDisplayBars(bars, barCount), [bars, barCount]);
   const displayBarCount = Math.max(1, visibleBars.length);
-  const canvasWidth = Math.max(
+  const canvasWidth = canvasWidthForBarWidth(
+    displayBarCount,
     canvasHostSize.width,
-    displayBarCount * MIN_BAR_WIDTH_PX + 20,
+    barWidthPx,
   );
-  const maxCanvasHeightByArea = Math.max(
-    MIN_CANVAS_HEIGHT_PX,
-    Math.floor(MAX_CANVAS_AREA_PX / Math.max(1, canvasWidth)),
-  );
-  const canvasHeight = Math.min(
-    MAX_CANVAS_HEIGHT_PX,
-    maxCanvasHeightByArea,
-    Math.max(
-      canvasHostSize.height,
-      MIN_CANVAS_HEIGHT_PX,
-      estimateStandaloneCanvasHeight(visibleBars, rowHeightPx),
-    ),
-  );
+  const canvasHeight = canvasHeightForFootprint({
+    bars: visibleBars,
+    displayBarCount,
+    canvasWidth,
+    hostHeight: canvasHostSize.height,
+    rowHeightPx,
+  });
   const viewport = useMemo(
     () => ({
       priceToY: identityPriceToY,
@@ -238,9 +273,36 @@ export function FootprintPage() {
     }),
     [canvasHeight, canvasWidth],
   );
-  const updateScrollView = (element: HTMLElement) => {
+  const updateScrollView = useCallback((element: HTMLElement) => {
     setScrollView({ left: element.scrollLeft, top: element.scrollTop });
-  };
+  }, []);
+  useLayoutEffect(() => {
+    if (!pendingLatestScrollRef.current || mode !== "latest" || visibleBars.length === 0) {
+      return;
+    }
+    const element = canvasShellRef.current;
+    if (!element) return;
+    const frame = window.requestAnimationFrame(() => {
+      scrollLatestBarIntoView(element, {
+        bars: visibleBars,
+        barCount: displayBarCount,
+        rowHeightPx,
+        canvasWidth,
+        canvasHeight,
+      });
+      updateScrollView(element);
+      pendingLatestScrollRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    canvasHeight,
+    canvasWidth,
+    displayBarCount,
+    mode,
+    rowHeightPx,
+    updateScrollView,
+    visibleBars,
+  ]);
   const statusText = statusFor({
     mode,
     loading,
@@ -284,8 +346,20 @@ export function FootprintPage() {
   };
 
   const startChartDrag = (event: ReactPointerEvent<HTMLElement>) => {
-    if (event.button !== 0) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
     const target = event.currentTarget;
+    activePointersRef.current.set(event.pointerId, {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+    target.setPointerCapture(event.pointerId);
+
+    if (startPinchGesture(target)) {
+      event.preventDefault();
+      return;
+    }
+
     if (isPointerOnPriceAxis(event, target, canvasWidth)) {
       dragStateRef.current = {
         mode: "scale",
@@ -305,14 +379,59 @@ export function FootprintPage() {
       };
       setIsDraggingChart(true);
     }
-    target.setPointerCapture(event.pointerId);
     event.preventDefault();
   };
 
   const moveChartDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    const pointer = activePointersRef.current.get(event.pointerId);
+    if (pointer) {
+      pointer.clientX = event.clientX;
+      pointer.clientY = event.clientY;
+    }
+
     const drag = dragStateRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag) return;
     const target = event.currentTarget;
+    if (drag.mode === "pinch") {
+      const first = activePointersRef.current.get(drag.pointerIds[0]);
+      const second = activePointersRef.current.get(drag.pointerIds[1]);
+      if (!first || !second) return;
+      const distances = pinchDistances(first, second);
+      const nextBarWidth = clampBarWidth(
+        drag.barWidthPx * pinchScaleRatio(drag.startDistanceX, distances.x),
+      );
+      const nextRowHeight = clampRowHeight(
+        drag.rowHeightPx * pinchScaleRatio(drag.startDistanceY, distances.y),
+      );
+      const nextCanvasWidth = canvasWidthForBarWidth(
+        displayBarCount,
+        canvasHostSize.width,
+        nextBarWidth,
+      );
+      const nextCanvasHeight = canvasHeightForFootprint({
+        bars: visibleBars,
+        displayBarCount,
+        canvasWidth: nextCanvasWidth,
+        hostHeight: canvasHostSize.height,
+        rowHeightPx: nextRowHeight,
+      });
+      const nextScrollLeft =
+        ((drag.scrollLeft + drag.originX) / Math.max(1, drag.canvasWidth)) *
+          nextCanvasWidth -
+        drag.originX;
+      const nextScrollTop =
+        ((drag.scrollTop + drag.originY) / Math.max(1, drag.canvasHeight)) *
+          nextCanvasHeight -
+        drag.originY;
+
+      setBarWidthPx(nextBarWidth);
+      setRowHeightPx(nextRowHeight);
+      scrollElementAfterRender(target, nextScrollLeft, nextScrollTop, updateScrollView);
+      event.preventDefault();
+      return;
+    }
+
+    if (drag.pointerId !== event.pointerId) return;
     if (drag.mode === "scale") {
       const deltaY = event.clientY - drag.startY;
       setRowHeightPx(
@@ -327,14 +446,51 @@ export function FootprintPage() {
   };
 
   const stopChartDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    activePointersRef.current.delete(event.pointerId);
     const drag = dragStateRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    dragStateRef.current = null;
-    setIsDraggingChart(false);
-    setIsScalingPrice(false);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    if (!drag) return;
+    if (drag.mode === "pinch") {
+      if (drag.pointerIds.includes(event.pointerId)) {
+        dragStateRef.current = null;
+        setIsPinchingChart(false);
+        setIsDraggingChart(false);
+        setIsScalingPrice(false);
+      }
+      return;
+    }
+    if (drag.pointerId !== event.pointerId) return;
+    dragStateRef.current = null;
+    setIsDraggingChart(false);
+    setIsScalingPrice(false);
+  };
+
+  const startPinchGesture = (target: HTMLElement): boolean => {
+    const pointers = Array.from(activePointersRef.current.values());
+    if (pointers.length < 2) return false;
+    const [first, second] = pointers.slice(-2);
+    const rect = target.getBoundingClientRect();
+    const distances = pinchDistances(first, second);
+    dragStateRef.current = {
+      mode: "pinch",
+      pointerIds: [first.pointerId, second.pointerId],
+      startDistanceX: distances.x,
+      startDistanceY: distances.y,
+      originX: (first.clientX + second.clientX) / 2 - rect.left,
+      originY: (first.clientY + second.clientY) / 2 - rect.top,
+      scrollLeft: target.scrollLeft,
+      scrollTop: target.scrollTop,
+      rowHeightPx,
+      barWidthPx,
+      canvasWidth,
+      canvasHeight,
+    };
+    setIsPinchingChart(true);
+    setIsDraggingChart(false);
+    setIsScalingPrice(false);
+    return true;
   };
 
   const resetPriceScale = (event: ReactMouseEvent<HTMLElement>) => {
@@ -359,6 +515,9 @@ export function FootprintPage() {
       <header className="footprint-page-toolbar">
         <a className="footprint-page-back" href="/">
           Chart
+        </a>
+        <a className="footprint-page-back" href="/mp">
+          MP
         </a>
         <div className="footprint-page-title">
           <span>GC Footprint</span>
@@ -571,7 +730,7 @@ export function FootprintPage() {
         <main
           ref={canvasHostRef}
           className={`footprint-page-canvas-shell${isDraggingChart ? " is-dragging" : ""
-            }${isScalingPrice ? " is-scaling-price" : ""}`}
+            }${isScalingPrice ? " is-scaling-price" : ""}${isPinchingChart ? " is-pinching" : ""}`}
           onPointerDown={startChartDrag}
           onPointerMove={moveChartDrag}
           onPointerUp={stopChartDrag}
@@ -584,6 +743,7 @@ export function FootprintPage() {
             viewport={viewport}
             settings={footprintSettings}
             displayCount={displayBarCount}
+            rowHeightPx={rowHeightPx}
             layout="standalone"
           />
         </main>
@@ -605,6 +765,44 @@ export function FootprintPage() {
 
 function mapFromBars(bars: readonly FootprintBar[]): Map<number, FootprintBar> {
   return new Map(bars.map((bar) => [bar.time, bar]));
+}
+
+function canvasWidthForBarWidth(
+  displayBarCount: number,
+  hostWidth: number,
+  barWidthPx: number,
+): number {
+  return Math.max(hostWidth, displayBarCount * barWidthPx + 20);
+}
+
+function canvasHeightForFootprint(input: {
+  bars: readonly FootprintBar[];
+  displayBarCount: number;
+  canvasWidth: number;
+  hostHeight: number;
+  rowHeightPx: number;
+}): number {
+  const canvasAreaLimit =
+    input.displayBarCount <= FOCUSED_SCALE_BAR_COUNT
+      ? MAX_FOCUSED_SCALE_CANVAS_AREA_PX
+      : MAX_CANVAS_AREA_PX;
+  const canvasHeightLimit =
+    input.displayBarCount <= FOCUSED_SCALE_BAR_COUNT
+      ? MAX_FOCUSED_SCALE_CANVAS_HEIGHT_PX
+      : MAX_CANVAS_HEIGHT_PX;
+  const maxCanvasHeightByArea = Math.max(
+    MIN_CANVAS_HEIGHT_PX,
+    Math.floor(canvasAreaLimit / Math.max(1, input.canvasWidth)),
+  );
+  return Math.min(
+    canvasHeightLimit,
+    maxCanvasHeightByArea,
+    Math.max(
+      input.hostHeight,
+      MIN_CANVAS_HEIGHT_PX,
+      estimateStandaloneCanvasHeight(input.bars, input.rowHeightPx),
+    ),
+  );
 }
 
 function FootprintStickyAxes({
@@ -776,8 +974,7 @@ function computeStandaloneLayout(input: {
   if (contentHeight <= 0) return null;
 
   const priceRange = Math.max(priceStep, dataMaxPrice - dataMinPrice);
-  const numPriceLevels = Math.max(10, Math.ceil(priceRange / priceStep) + 1);
-  const rowH = Math.max(1, Math.min(32, contentHeight / numPriceLevels));
+  const rowH = Math.max(1, Math.min(32, input.rowHeightPx));
   const visibleRange = Math.max(priceRange, (contentHeight / rowH) * priceStep);
   const viewportTopPrice =
     dataMaxPrice + Math.max(0, visibleRange - priceRange) / 2;
@@ -798,6 +995,42 @@ function computeStandaloneLayout(input: {
     yForPrice: (price: number) =>
       contentTop + ((viewportTopPrice - price) / priceStep) * rowH,
   };
+}
+
+function scrollLatestBarIntoView(
+  element: HTMLElement,
+  input: {
+    bars: readonly FootprintBar[];
+    barCount: number;
+    rowHeightPx: number;
+    canvasWidth: number;
+    canvasHeight: number;
+  },
+): void {
+  const maxLeft = Math.max(0, element.scrollWidth - element.clientWidth);
+  element.scrollLeft = maxLeft;
+
+  const latest = input.bars[input.bars.length - 1];
+  const layout = computeStandaloneLayout(input);
+  if (!latest || !layout) return;
+
+  const targetPrice = isFiniteNumber(latest.close)
+    ? latest.close
+    : isFiniteNumber(latest.poc)
+      ? latest.poc
+      : null;
+  if (targetPrice === null) return;
+
+  const maxTop = Math.max(0, element.scrollHeight - element.clientHeight);
+  element.scrollTop = clampScroll(
+    layout.yForPrice(targetPrice) - element.clientHeight / 2,
+    maxTop,
+  );
+}
+
+function clampScroll(value: number, max: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(max, Math.max(0, value));
 }
 
 function drawStickyPriceAxis(
@@ -896,6 +1129,42 @@ function isPointerOnPriceAxis(
   return canvasX >= canvasWidth - PRICE_AXIS_HIT_WIDTH_PX;
 }
 
+function pinchDistances(
+  first: ChartPointerState,
+  second: ChartPointerState,
+): { x: number; y: number } {
+  return {
+    x: Math.abs(second.clientX - first.clientX),
+    y: Math.abs(second.clientY - first.clientY),
+  };
+}
+
+function pinchScaleRatio(startDistance: number, currentDistance: number): number {
+  if (!Number.isFinite(startDistance) || !Number.isFinite(currentDistance)) return 1;
+  if (startDistance < 24 || currentDistance < 1) return 1;
+  return Math.min(2.85, Math.max(0.35, currentDistance / startDistance));
+}
+
+function scrollElementAfterRender(
+  element: HTMLElement,
+  left: number,
+  top: number,
+  updateScrollView: (element: HTMLElement) => void,
+): void {
+  const apply = () => {
+    element.scrollLeft = clampScroll(left, Math.max(0, element.scrollWidth - element.clientWidth));
+    element.scrollTop = clampScroll(top, Math.max(0, element.scrollHeight - element.clientHeight));
+    updateScrollView(element);
+  };
+  apply();
+  window.requestAnimationFrame(apply);
+}
+
+function clampBarWidth(value: number): number {
+  const clamped = Math.min(MAX_BAR_WIDTH_PX, Math.max(MIN_BAR_WIDTH_PX, value));
+  return Math.round(clamped * 4) / 4;
+}
+
 function clampRowHeight(value: number): number {
   const clamped = Math.min(MAX_ROW_HEIGHT_PX, Math.max(MIN_ROW_HEIGHT_PX, value));
   return Math.round(clamped * 4) / 4;
@@ -952,10 +1221,10 @@ function formatTime(time: number): string {
 }
 
 function useElementSize(): [
-  (node: HTMLDivElement | null) => void,
+  (node: HTMLElement | null) => void,
   { width: number; height: number },
 ] {
-  const nodeRef = useRef<HTMLDivElement | null>(null);
+  const nodeRef = useRef<HTMLElement | null>(null);
   const [size, setSize] = useState({ width: 900, height: 520 });
 
   const measure = useCallback(() => {
@@ -969,7 +1238,7 @@ function useElementSize(): [
   }, []);
 
   const ref = useCallback(
-    (node: HTMLDivElement | null) => {
+    (node: HTMLElement | null) => {
       nodeRef.current = node;
       measure();
     },

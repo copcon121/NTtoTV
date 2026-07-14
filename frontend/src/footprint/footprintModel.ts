@@ -68,6 +68,8 @@ export interface FootprintRenderInputs {
   viewport: FootprintViewport;
   /** Stable column count used by the canvas layout. */
   displayCount?: number;
+  /** Optional standalone page price-row height in CSS pixels. */
+  rowHeightPx?: number;
   /** Overlay mode draws the compact chart panel; standalone fills its shell. */
   layout?: "overlay" | "standalone";
   /** Stable key for display settings that affect drawing. */
@@ -99,7 +101,11 @@ export function shouldRedraw(
   ) {
     return true;
   }
-  if (prev.displayCount !== next.displayCount || prev.layout !== next.layout) {
+  if (
+    prev.displayCount !== next.displayCount ||
+    prev.rowHeightPx !== next.rowHeightPx ||
+    prev.layout !== next.layout
+  ) {
     return true;
   }
   if (prev.settingsKey !== next.settingsKey) return true;

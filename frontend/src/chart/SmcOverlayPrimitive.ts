@@ -18,9 +18,10 @@ export interface RenderableSmcZone extends Omit<SmcZone, "startTime" | "endTime"
   endTime?: Time;
 }
 
-export interface RenderableSmcLine extends Omit<SmcLine, "startTime" | "endTime"> {
+export interface RenderableSmcLine extends Omit<SmcLine, "startTime" | "endTime" | "labelTime"> {
   startTime: Time;
   endTime: Time;
+  labelTime: Time;
 }
 
 interface ViewZone {
@@ -35,6 +36,7 @@ interface ViewLine {
   line: RenderableSmcLine;
   x1: Coordinate;
   x2: Coordinate;
+  labelX: Coordinate;
   y: Coordinate;
 }
 
@@ -207,7 +209,8 @@ class SmcOverlayRenderer implements IPrimitivePaneRenderer {
         ctx.lineTo(x2, y);
         ctx.stroke();
 
-        const textX = x1 + (x2 - x1) / 2;
+        const labelX = Math.round(view.labelX * scope.horizontalPixelRatio);
+        const textX = x1 + (labelX - x1) / 2;
         const textYOffset =
           (view.line.direction === 1 ? -8 : 8) * scope.verticalPixelRatio;
         ctx.setLineDash([]);
@@ -262,9 +265,16 @@ class SmcOverlayPaneView implements IPrimitivePaneView {
         line.endTime,
         x1,
       );
+      const labelX = coordinateForEndTime(
+        chart,
+        series,
+        line.startTime,
+        line.labelTime,
+        x1,
+      );
       const y = series.priceToCoordinate(line.price);
-      if (x1 === null || x2 === null || y === null) continue;
-      nextLines.push({ line, x1, x2, y });
+      if (x1 === null || x2 === null || labelX === null || y === null) continue;
+      nextLines.push({ line, x1, x2, labelX, y });
     }
     this.viewZones = nextZones;
     this.viewLines = nextLines;

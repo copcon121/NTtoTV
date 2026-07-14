@@ -4356,6 +4356,10 @@ export function LiveApp() {
     <div className={appShellClassName(chartFocusMode)}>
       <Toolbar>
         <SymbolContractLabel symbol={SYMBOL} contract={contract} hideContract />
+        <nav className="toolbar-page-links" aria-label="Chart pages">
+          <a href="/fp">FP</a>
+          <a href="/mp">MP</a>
+        </nav>
         <TimeframeSelector value={timeframe} onChange={setTimeframe} />
         <IndicatorToggles
           volume={showVolume}

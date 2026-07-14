@@ -279,6 +279,7 @@ const SMC_AI_SHORT_COLOR = "#ff7043";
 interface ChartContrastPalette {
   text: string;
   grid: string;
+  verticalGrid: string;
   crosshair: string;
   priceLine: string;
 }
@@ -316,6 +317,7 @@ export function chartContrastPalette(backgroundColor: string): ChartContrastPale
   return {
     text: isLight ? LIGHT_CHART_TEXT : DARK_CHART_TEXT,
     grid: rgba(ink, isLight ? 0.12 : 0.10),
+    verticalGrid: rgba(ink, isLight ? 0.045 : 0.05),
     crosshair: rgba(ink, isLight ? 0.42 : 0.35),
     priceLine: rgba(ink, isLight ? 0.62 : 0.55),
   };
@@ -1079,7 +1081,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         textColor: palette.text,
       },
       grid: {
-        vertLines: { color: palette.grid },
+        vertLines: { color: palette.verticalGrid },
         horzLines: { color: palette.grid },
       },
       localization: {
@@ -1352,7 +1354,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         textColor: palette.text,
       },
       grid: {
-        vertLines: { color: palette.grid },
+        vertLines: { color: palette.verticalGrid },
         horzLines: { color: palette.grid },
       },
       crosshair: {
@@ -2685,6 +2687,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       ...line,
       startTime: toUtcTimestamp(line.startTime, this.displayTimeOffsetMs),
       endTime: toUtcTimestamp(line.endTime, this.displayTimeOffsetMs),
+      labelTime: toUtcTimestamp(line.labelTime, this.displayTimeOffsetMs),
     }));
     if (zones.length === 0 && lines.length === 0) {
       if (this.smcPrimitive !== undefined) {

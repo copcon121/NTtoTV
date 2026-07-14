@@ -81,7 +81,74 @@ describe("SMC overlay", () => {
       expect.objectContaining({
         startTime: thirtyMinutes,
         endTime: 35 * thirtyMinutes,
+        labelTime: 5 * thirtyMinutes,
         price: 12,
+      }),
+    );
+  });
+
+  it("extends only swing structure lines while keeping internal lines at the break bar", () => {
+    const minute = 60_000;
+    const rows = [
+      [0, 100, 101.11, 96.38, 97.89],
+      [1, 97.89, 99.68, 96.78, 99.53],
+      [2, 99.53, 103.4, 99.48, 101.73],
+      [3, 101.73, 103.59, 100.46, 102.84],
+      [4, 102.84, 106.08, 102.14, 103.57],
+      [5, 103.57, 110, 102.59, 107.42],
+      [6, 107.42, 110.47, 106.77, 108.88],
+      [7, 108.88, 109.09, 104.76, 105.71],
+      [8, 105.71, 107.83, 101, 102.75],
+      [9, 102.75, 103.54, 99.53, 101.79],
+      [10, 101.79, 105.76, 100.78, 105.23],
+      [11, 105.23, 110.26, 103.59, 109.1],
+      [12, 109.1, 112.08, 106.2, 108.83],
+      [13, 108.83, 113.39, 105.9, 110.52],
+      [14, 110.52, 111.63, 105.7, 107.76],
+      [15, 107.76, 109.23, 104.54, 105.06],
+      [16, 105.06, 108.42, 104.07, 105.8],
+      [17, 105.8, 108.66, 101.26, 101.96],
+      [18, 101.96, 104.69, 100.8, 104.61],
+      [19, 104.61, 105.64, 100.59, 100.98],
+      [20, 100.98, 104.68, 100.54, 103.46],
+      [21, 103.46, 106.73, 100.66, 104.35],
+      [22, 104.35, 104.44, 97.44, 100.44],
+    ] as const;
+    const overlay = computeSmcOverlay(
+      rows.map(([index, open, high, low, close]) =>
+        bar(index * minute, open, high, low, close),
+      ),
+      {
+        ...DEFAULT_SMC_SETTINGS,
+        enabled: true,
+        showInternal: true,
+        swingLength: 2,
+        internalLength: 1,
+        structureLineExtendBars: 10,
+      },
+    );
+
+    const swingLine = overlay.lines.find(
+      (line) => line.scope === "swing" && line.label === "BOS",
+    );
+    const internalLine = overlay.lines.find(
+      (line) => line.scope === "internal" && line.label === "CHoCH",
+    );
+
+    expect(swingLine).toEqual(
+      expect.objectContaining({
+        startTime: 6 * minute,
+        endTime: 23 * minute,
+        labelTime: 13 * minute,
+        price: 110.47,
+      }),
+    );
+    expect(internalLine).toEqual(
+      expect.objectContaining({
+        startTime: 20 * minute,
+        endTime: 22 * minute,
+        labelTime: 22 * minute,
+        price: 100.54,
       }),
     );
   });

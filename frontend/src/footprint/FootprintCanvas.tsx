@@ -36,6 +36,8 @@ export interface FootprintCanvasProps {
   settings?: FootprintSettings;
   /** Number of most-recent bars selected and used for stable columns. */
   displayCount?: number;
+  /** Standalone page price-row height in CSS pixels. */
+  rowHeightPx?: number;
   /** Compact chart overlay or full standalone page canvas. */
   layout?: "overlay" | "standalone";
 }
@@ -157,10 +159,10 @@ export function drawFootprint(
 
   const priceRange = Math.max(priceStep, dataMaxPrice - dataMinPrice);
   const numPriceLevels = Math.max(10, Math.ceil(priceRange / priceStep) + 1);
-  const rowH = Math.max(
-    1,
-    Math.min(standalone ? 32 : 20, contentHeight / numPriceLevels),
-  );
+  const defaultRowH = contentHeight / numPriceLevels;
+  const rowH = standalone
+    ? Math.max(1, Math.min(32, inputs.rowHeightPx ?? defaultRowH))
+    : Math.max(1, Math.min(20, defaultRowH));
   const visibleRange = Math.max(priceRange, (contentHeight / rowH) * priceStep);
   const viewportTopPrice = dataMaxPrice + Math.max(0, visibleRange - priceRange) / 2;
   const yForPrice = (price: number) =>
@@ -634,6 +636,7 @@ export function FootprintCanvas({
   now = () => Date.now(),
   settings,
   displayCount = FOOTPRINT_DISPLAY_COUNT,
+  rowHeightPx,
   layout = "overlay",
 }: FootprintCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -654,6 +657,7 @@ export function FootprintCanvas({
       bars: selectDisplayBars(bars, effectiveDisplayCount),
       viewport,
       displayCount: effectiveDisplayCount,
+      rowHeightPx,
       layout,
       settingsKey: footprintSettingsKey(settings),
     };
@@ -683,7 +687,7 @@ export function FootprintCanvas({
         timerRef.current = null;
       }
     };
-  }, [bars, viewport, interval, now, settings, effectiveDisplayCount, layout]);
+  }, [bars, viewport, interval, now, settings, effectiveDisplayCount, rowHeightPx, layout]);
 
   return (
     <canvas
