@@ -37,9 +37,11 @@ from ..engines.alert_engine import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
@@ -228,6 +230,8 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         for key in (
             "minVolume",
             "minSpreadTicks",
+            "pivotToleranceTicks",
+            "minPivotWickTicks",
             "confirmationBars",
             "breakTicks",
         ):
@@ -271,6 +275,14 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         params["minPivotCuts"] = params.get(
             "minPivotCuts",
             MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+        )
+        params["pivotToleranceTicks"] = params.get(
+            "pivotToleranceTicks",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
+        )
+        params["minPivotWickTicks"] = params.get(
+            "minPivotWickTicks",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
         )
         params["confirmationBars"] = params.get(
             "confirmationBars",

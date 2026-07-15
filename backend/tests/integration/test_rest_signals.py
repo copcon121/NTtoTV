@@ -68,6 +68,8 @@ def test_mgann_big_trade_sweep_signals_replays_profile_alert(env):
                 "swingSize": 1,
                 "pivotLookbackBars": 20,
                 "minPivotCuts": 2,
+                "pivotToleranceTicks": 5,
+                "minPivotWickTicks": 2,
                 "confirmationBars": 2,
                 "breakTicks": 0,
                 "repeat": True,
@@ -80,14 +82,14 @@ def test_mgann_big_trade_sweep_signals_replays_profile_alert(env):
     cache.upsert_bars(
         [
             _bar(0, 99.5, 100.0, 98.0, 99.0, 100),
-            _bar(1, 99.0, 102.0, 98.5, 101.5, 100),
-            _bar(2, 101.5, 101.0, 99.0, 99.5, 100),
+            _bar(1, 99.0, 103.6, 98.5, 103.2, 100),
+            _bar(2, 103.2, 103.3, 98.0, 99.5, 100),
             _bar(3, 99.5, 100.0, 97.5, 98.5, 100),
             _bar(4, 98.5, 103.0, 98.0, 102.5, 100),
             _bar(5, 102.5, 104.0, 101.0, 103.5, 100),
             _bar(6, 103.5, 103.0, 99.0, 100.0, 100),
             _bar(7, 100.0, 101.0, 98.2, 99.0, 100),
-            _bar(8, 99.0, 105.0, 98.0, 103.0, 500),
+            _bar(8, 99.0, 105.0, 97.0, 103.0, 500),
         ]
     )
     cache.upsert_big_trade(
@@ -129,6 +131,6 @@ def test_mgann_big_trade_sweep_signals_replays_profile_alert(env):
     assert signal["cutCount"] == 2
     assert signal["bigTradeVolume"] == 80
     assert signal["barVolume"] == 500
-    assert signal["barSpread"] == 7.0
+    assert signal["barSpread"] == 8.0
     assert signal["avgVolume"] == 100.0
-    assert signal["avgSpread"] == pytest.approx(3.1)
+    assert signal["avgSpread"] == pytest.approx(3.7125)

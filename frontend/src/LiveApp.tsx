@@ -329,20 +329,63 @@ function alertSignalRowToMarker(row: AlertSignalRestRow): AlertSignalMarker {
   };
 }
 
+function alertSignalMarkerKey(marker: AlertSignalMarker): string {
+  const historicalParts = marker.id.split(":hist:");
+  if (historicalParts.length === 2) {
+    const [alertId, rest] = historicalParts;
+    const [time, direction] = rest.split(":");
+    if (alertId && time && direction) {
+      return `${alertId}:${time}:${direction}`;
+    }
+  }
+  const parts = marker.id.split(":");
+  if (parts.length >= 3) {
+    const direction = parts[parts.length - 1];
+    const time = parts[parts.length - 2];
+    const alertId = parts.slice(0, -2).join(":");
+    if (alertId && time && direction) {
+      return `${alertId}:${time}:${direction}`;
+    }
+  }
+  return `${marker.id}:${marker.time}:${marker.direction}`;
+}
+
+function mergeAlertSignalMarker(
+  current: readonly AlertSignalMarker[],
+  marker: AlertSignalMarker,
+): readonly AlertSignalMarker[] {
+  const key = alertSignalMarkerKey(marker);
+  let replaced = false;
+  const next = current.map((item) => {
+    if (alertSignalMarkerKey(item) !== key) return item;
+    replaced = true;
+    return item.id.includes(":hist:") && !marker.id.includes(":hist:")
+      ? marker
+      : item;
+  });
+  if (!replaced) {
+    next.push(marker);
+  }
+  return next.sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
+}
+
 function replaceHistoricalAlertSignalMarkers(
   current: readonly AlertSignalMarker[],
   historical: readonly AlertSignalMarker[],
 ): readonly AlertSignalMarker[] {
-  const byId = new Map<string, AlertSignalMarker>();
+  const byKey = new Map<string, AlertSignalMarker>();
   for (const marker of current) {
     if (!marker.id.includes(":hist:")) {
-      byId.set(marker.id, marker);
+      byKey.set(alertSignalMarkerKey(marker), marker);
     }
   }
   for (const marker of historical) {
-    byId.set(marker.id, marker);
+    const key = alertSignalMarkerKey(marker);
+    if (!byKey.has(key)) {
+      byKey.set(key, marker);
+    }
   }
-  return Array.from(byId.values()).sort(
+  return Array.from(byKey.values()).sort(
     (a, b) => a.time - b.time || a.id.localeCompare(b.id),
   );
 }
@@ -2435,10 +2478,7 @@ export function LiveApp() {
         setLastAlert(msg);
         const marker = alertEventToSignalMarker(msg);
         if (marker !== undefined) {
-          setAlertSignalMarkers((prev) => {
-            if (prev.some((item) => item.id === marker.id)) return prev;
-            return [...prev, marker].sort((a, b) => a.time - b.time);
-          });
+          setAlertSignalMarkers((prev) => mergeAlertSignalMarker(prev, marker));
         }
       }
     });

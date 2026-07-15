@@ -75,8 +75,30 @@ def _engine() -> AlertEngine:
 
 _WARMUP_BARS = [
     (99.5, 100.0, 98.0, 99.0, 100),
+    (99.0, 103.6, 98.5, 103.2, 100),
+    (103.2, 103.3, 98.0, 99.5, 100),
+    (99.5, 100.0, 97.5, 98.5, 100),
+    (98.5, 103.0, 98.0, 102.5, 100),
+    (102.5, 104.0, 101.0, 103.5, 100),
+    (103.5, 103.0, 99.0, 100.0, 100),
+    (100.0, 101.0, 98.2, 99.0, 100),
+]
+
+_FAR_HIGH_WARMUP_BARS = [
+    (99.5, 100.0, 98.0, 99.0, 100),
     (99.0, 102.0, 98.5, 101.5, 100),
-    (101.5, 101.0, 99.0, 99.5, 100),
+    (101.5, 101.8, 98.0, 99.5, 100),
+    (99.5, 100.0, 97.5, 98.5, 100),
+    (98.5, 103.0, 98.0, 102.5, 100),
+    (102.5, 104.0, 101.0, 103.5, 100),
+    (103.5, 103.0, 99.0, 100.0, 100),
+    (100.0, 101.0, 98.2, 99.0, 100),
+]
+
+_NO_HIGH_WICK_WARMUP_BARS = [
+    (99.5, 100.0, 98.0, 99.0, 100),
+    (99.0, 103.6, 98.5, 103.55, 100),
+    (103.2, 103.3, 98.0, 99.5, 100),
     (99.5, 100.0, 97.5, 98.5, 100),
     (98.5, 103.0, 98.0, 102.5, 100),
     (102.5, 104.0, 101.0, 103.5, 100),
@@ -85,17 +107,20 @@ _WARMUP_BARS = [
 ]
 
 
-def _feed_warmup(engine: AlertEngine) -> None:
-    for index, bar in enumerate(_WARMUP_BARS):
+def _feed_warmup(
+    engine: AlertEngine,
+    bars: list[tuple[float, float, float, float, int]] | None = None,
+) -> None:
+    for index, bar in enumerate(bars or _WARMUP_BARS):
         assert engine.evaluate(_bar_ctx(index, *bar)) == []
 
 
-def test_mgann_big_trade_sweep_fires_on_bar_that_cuts_two_prior_highs():
+def test_mgann_big_trade_sweep_fires_on_bar_that_breaks_near_equal_high_zone():
     engine = _engine()
     _feed_warmup(engine)
 
     assert engine.evaluate(_big_trade_ctx(8, 80, price=104.8)) == []
-    events = engine.evaluate(_bar_ctx(8, 99.0, 105.0, 98.0, 103.0, 500))
+    events = engine.evaluate(_bar_ctx(8, 99.0, 105.0, 97.0, 103.0, 500))
 
     assert [event.alert_id for event in events] == ["mgann-sweep"]
     assert events[0].alert_type == MGANN_BIG_TRADE_SWEEP
@@ -104,6 +129,26 @@ def test_mgann_big_trade_sweep_fires_on_bar_that_cuts_two_prior_highs():
     assert events[0].direction == 1
     assert "mGann highs breakout 2 pivots" in events[0].message
     assert "BigTrade 80 > 70" in events[0].message
+
+
+def test_mgann_big_trade_sweep_ignores_highs_outside_equal_zone_tolerance():
+    engine = _engine()
+    _feed_warmup(engine, _FAR_HIGH_WARMUP_BARS)
+
+    assert engine.evaluate(_big_trade_ctx(8, 80, price=104.8)) == []
+    events = engine.evaluate(_bar_ctx(8, 99.0, 105.0, 97.0, 103.0, 500))
+
+    assert events == []
+
+
+def test_mgann_big_trade_sweep_requires_rejection_wicks_on_zone_pivots():
+    engine = _engine()
+    _feed_warmup(engine, _NO_HIGH_WICK_WARMUP_BARS)
+
+    assert engine.evaluate(_big_trade_ctx(8, 80, price=104.8)) == []
+    events = engine.evaluate(_bar_ctx(8, 99.0, 105.0, 97.0, 103.0, 500))
+
+    assert events == []
 
 
 def test_mgann_big_trade_sweep_can_fire_on_next_bar_after_sweep():
@@ -123,7 +168,7 @@ def test_mgann_big_trade_sweep_fires_on_bearish_bar_that_cuts_two_prior_lows():
     _feed_warmup(engine)
 
     assert engine.evaluate(_big_trade_ctx(8, 80, price=97.2)) == []
-    events = engine.evaluate(_bar_ctx(8, 100.0, 104.0, 97.0, 97.5, 500))
+    events = engine.evaluate(_bar_ctx(8, 100.0, 105.0, 97.0, 97.5, 500))
 
     assert [event.alert_id for event in events] == ["mgann-sweep"]
     assert events[0].alert_type == MGANN_BIG_TRADE_SWEEP

@@ -14,8 +14,10 @@ __all__ = [
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK",
@@ -38,6 +40,8 @@ MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER = 2.0
 MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE = 2
 MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS = 120
 MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS = 2
+MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS = 5
+MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS = 2
 MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS = 2
 MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS = 0
 
@@ -124,6 +128,8 @@ class MgannBigTradeSweepState:
         swing_size: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
         pivot_lookback_bars: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
         min_pivot_cuts: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+        pivot_tolerance_ticks: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
+        min_pivot_wick_ticks: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
         confirmation_bars: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
         break_ticks: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
         tick_size: float = _TICK_SIZE,
@@ -140,6 +146,8 @@ class MgannBigTradeSweepState:
         self._swing_size = max(1, int(swing_size))
         self._pivot_lookback_bars = max(1, int(pivot_lookback_bars))
         self._min_pivot_cuts = max(1, int(min_pivot_cuts))
+        self._pivot_tolerance = max(0, int(pivot_tolerance_ticks)) * float(tick_size)
+        self._min_pivot_wick = max(0, int(min_pivot_wick_ticks)) * float(tick_size)
         self._confirmation_bars = max(0, int(confirmation_bars))
         self._break_distance = max(0, int(break_ticks)) * float(tick_size)
         self._max_bars = max(
@@ -304,14 +312,13 @@ class MgannBigTradeSweepState:
         is_bullish_breakout = float(bar.close) > float(bar.open)
         is_bearish_breakout = float(bar.close) < float(bar.open)
         if is_bullish_breakout:
-            levels = tuple(
-                pivot.price
-                for pivot in pivots
-                if pivot.kind == "high"
-                and float(previous.high) < pivot.price + self._break_distance
-                and float(bar.high) >= pivot.price + self._break_distance
+            levels = self._breakout_zone_levels(
+                direction=1,
+                pivots=pivots,
+                previous=previous,
+                bar=bar,
             )
-            if len(levels) >= self._min_pivot_cuts:
+            if levels is not None:
                 price = max(levels)
                 candidates.append(
                     _SweepCandidate(
@@ -324,14 +331,13 @@ class MgannBigTradeSweepState:
                     )
                 )
         if is_bearish_breakout:
-            levels = tuple(
-                pivot.price
-                for pivot in pivots
-                if pivot.kind == "low"
-                and float(previous.low) > pivot.price - self._break_distance
-                and float(bar.low) <= pivot.price - self._break_distance
+            levels = self._breakout_zone_levels(
+                direction=-1,
+                pivots=pivots,
+                previous=previous,
+                bar=bar,
             )
-            if len(levels) >= self._min_pivot_cuts:
+            if levels is not None:
                 price = min(levels)
                 candidates.append(
                     _SweepCandidate(
@@ -344,6 +350,88 @@ class MgannBigTradeSweepState:
                     )
                 )
         return candidates
+
+    def _breakout_zone_levels(
+        self,
+        *,
+        direction: int,
+        pivots: list[_Pivot],
+        previous: MgannBigTradeSweepBar,
+        bar: MgannBigTradeSweepBar,
+    ) -> tuple[float, ...] | None:
+        kind = "high" if direction > 0 else "low"
+        zones = self._pivot_zones(
+            [
+                pivot
+                for pivot in pivots
+                if pivot.kind == kind and self._has_rejection_wick(pivot)
+            ],
+            direction=direction,
+        )
+        crossed: list[tuple[float, ...]] = []
+        for levels in zones:
+            zone_high = max(levels)
+            zone_low = min(levels)
+            if direction > 0:
+                breakout_price = zone_high + self._break_distance
+                if float(previous.high) < breakout_price <= float(bar.high):
+                    crossed.append(levels)
+            else:
+                breakout_price = zone_low - self._break_distance
+                if float(previous.low) > breakout_price >= float(bar.low):
+                    crossed.append(levels)
+        if not crossed:
+            return None
+        crossed.sort(
+            key=lambda levels: (
+                len(levels),
+                max(levels) if direction > 0 else -min(levels),
+                -max(levels) + min(levels),
+            ),
+            reverse=True,
+        )
+        return crossed[0]
+
+    def _pivot_zones(
+        self,
+        pivots: list[_Pivot],
+        *,
+        direction: int,
+    ) -> list[tuple[float, ...]]:
+        if len(pivots) < self._min_pivot_cuts:
+            return []
+        sorted_pivots = sorted(pivots, key=lambda pivot: pivot.price)
+        zones: list[tuple[float, ...]] = []
+        seen: set[tuple[float, ...]] = set()
+        for start, base in enumerate(sorted_pivots):
+            levels = [
+                pivot.price
+                for pivot in sorted_pivots[start:]
+                if pivot.price - base.price <= self._pivot_tolerance + 1e-9
+            ]
+            if len(levels) < self._min_pivot_cuts:
+                continue
+            ordered = (
+                tuple(sorted(levels, reverse=True))
+                if direction > 0
+                else tuple(sorted(levels))
+            )
+            key = tuple(round(level, 10) for level in ordered)
+            if key in seen:
+                continue
+            seen.add(key)
+            zones.append(ordered)
+        return zones
+
+    def _has_rejection_wick(self, pivot: _Pivot) -> bool:
+        if self._min_pivot_wick <= 0:
+            return True
+        bar = self._bars[pivot.index]
+        if pivot.kind == "high":
+            wick = float(bar.high) - max(float(bar.open), float(bar.close))
+        else:
+            wick = min(float(bar.open), float(bar.close)) - float(bar.low)
+        return wick + 1e-9 >= self._min_pivot_wick
 
     @staticmethod
     def _candidate_id(

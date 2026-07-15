@@ -63,9 +63,11 @@ from .mgann_big_trade_sweep import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
@@ -104,9 +106,11 @@ __all__ = [
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE",
@@ -875,6 +879,8 @@ class AlertEngine:
             swing_size=self._mgann_sweep_swing_size(alert),
             pivot_lookback_bars=self._mgann_sweep_pivot_lookback_bars(alert),
             min_pivot_cuts=self._mgann_sweep_min_pivot_cuts(alert),
+            pivot_tolerance_ticks=self._mgann_sweep_pivot_tolerance_ticks(alert),
+            min_pivot_wick_ticks=self._mgann_sweep_min_pivot_wick_ticks(alert),
             confirmation_bars=self._mgann_sweep_confirmation_bars(alert),
             break_ticks=self._mgann_sweep_break_ticks(alert),
         )
@@ -1079,6 +1085,20 @@ class AlertEngine:
         return _positive_int_param(
             alert.params.get("minPivotCuts"),
             MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+        )
+
+    @staticmethod
+    def _mgann_sweep_pivot_tolerance_ticks(alert: Alert) -> int:
+        return _nonnegative_int_param(
+            alert.params.get("pivotToleranceTicks"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
+        )
+
+    @staticmethod
+    def _mgann_sweep_min_pivot_wick_ticks(alert: Alert) -> int:
+        return _nonnegative_int_param(
+            alert.params.get("minPivotWickTicks"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
         )
 
     @staticmethod
