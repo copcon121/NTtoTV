@@ -34,9 +34,9 @@ from .routes import _resolve_contract, get_contract_state
 router = APIRouter(prefix="/api", tags=["signals"])
 
 DEFAULT_SIGNAL_LIMIT = 500
-SIGNAL_LIMIT_CAP = 1_000
+SIGNAL_LIMIT_CAP = 5_000
 DEFAULT_SIGNAL_WARMUP_BARS = 500
-MGANN_SWEEP_SIGNAL_BAR_CAP = 1_000
+MGANN_SWEEP_SIGNAL_BAR_CAP = 5_000
 _M1_MS = 60_000
 
 @router.get("/signals/mgann-break-ls")

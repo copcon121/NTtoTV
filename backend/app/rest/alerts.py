@@ -255,6 +255,7 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
             "swingSize",
             "pivotLookbackBars",
             "minPivotCuts",
+            "historySignalLimit",
         ):
             _validate_optional_positive_number(params, key)
         for key in (

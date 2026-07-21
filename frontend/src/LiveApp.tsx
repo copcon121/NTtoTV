@@ -207,6 +207,9 @@ const HISTORY_BACKFILL_LIMIT = 5_000;
 const HISTORICAL_ALERT_SIGNAL_BAR_LIMIT = 1_000;
 const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
 const INITIAL_BIG_TRADE_LIMIT = DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
+const DEFAULT_MGANN_BREAK_HISTORY_SIGNAL_LIMIT = 500;
+const MIN_MGANN_BREAK_HISTORY_SIGNAL_LIMIT = 50;
+const MAX_MGANN_BREAK_HISTORY_SIGNAL_LIMIT = 5000;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
 const VOLUME_PROFILE_ROW_TICKS = 1;
 const DELTA_PROFILE_ROW_TICKS = 2;
@@ -350,6 +353,26 @@ function alertSignalRowToMarker(
     direction,
     text: row.text ?? (direction > 0 ? "Break L" : "Break S"),
   };
+}
+
+function normalizeMgannBreakHistorySignalLimit(value: unknown): number {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) return DEFAULT_MGANN_BREAK_HISTORY_SIGNAL_LIMIT;
+  return Math.min(
+    MAX_MGANN_BREAK_HISTORY_SIGNAL_LIMIT,
+    Math.max(MIN_MGANN_BREAK_HISTORY_SIGNAL_LIMIT, parsed),
+  );
+}
+
+function mgannBreakHistorySignalLimit(alerts: readonly Alert[]): number {
+  return alerts.reduce(
+    (limit, alert) =>
+      Math.max(
+        limit,
+        normalizeMgannBreakHistorySignalLimit(alert.params.historySignalLimit),
+      ),
+    DEFAULT_MGANN_BREAK_HISTORY_SIGNAL_LIMIT,
+  );
 }
 
 function alertSignalMarkerKey(marker: AlertSignalMarker): string {
@@ -2761,12 +2784,14 @@ export function LiveApp() {
   }, [api, socket, contract, timeframe, socketGeneration, profileHydrated]);
 
   useEffect(() => {
-    const hasEnabledMgannSweepAlert = alerts.some(
+    const enabledMgannSweepAlerts = alerts.filter(
       (alert) =>
         alert.symbol === SYMBOL &&
         MGANN_SWEEP_ALERT_TYPES.has(alert.type) &&
         alert.enabled,
     );
+    const historySignalLimit =
+      mgannBreakHistorySignalLimit(enabledMgannSweepAlerts);
     if (
       !authUser ||
       !profileHydrated ||
@@ -2774,7 +2799,7 @@ export function LiveApp() {
       timeframe !== "1m" ||
       firstLoadedBarTime === undefined ||
       latestLoadedBarTime === undefined ||
-      !hasEnabledMgannSweepAlert
+      enabledMgannSweepAlerts.length === 0
     ) {
       setAlertSignalMarkers((prev) =>
         prev.some((marker) => marker.id.includes(":hist:"))
@@ -2795,10 +2820,15 @@ export function LiveApp() {
             profileId,
             from: Math.max(
               firstLoadedBarTime,
-              latestLoadedBarTime - HISTORICAL_ALERT_SIGNAL_BAR_LIMIT * 60_000,
+              latestLoadedBarTime -
+                Math.max(
+                  HISTORICAL_ALERT_SIGNAL_BAR_LIMIT,
+                  historySignalLimit,
+                ) *
+                  60_000,
             ),
             to: latestLoadedBarTime,
-            limit: 500,
+            limit: historySignalLimit,
           });
           if (!cancelled) {
             setAlertSignalMarkers((prev) =>
@@ -3090,6 +3120,19 @@ export function LiveApp() {
       prev.filter((marker) => !marker.id.startsWith(`${id}:`)),
     );
     void api.deleteAlert(id, profileId);
+  };
+  const onUpdateAlertParams = (
+    id: string,
+    params: Record<string, number | string | boolean>,
+  ) => {
+    if (!authUser) {
+      onTradingLogin();
+      return;
+    }
+    setAlerts((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, params: { ...params } } : a)),
+    );
+    void api.patchAlertParams(id, params, profileId);
   };
   const onCreateAlert = (input: {
     type: Alert["type"];
@@ -4537,6 +4580,7 @@ export function LiveApp() {
             lastEvent={lastAlert}
             onToggle={onToggleAlert}
             onDelete={onDeleteAlert}
+            onUpdateParams={onUpdateAlertParams}
             onCreate={onCreateAlert}
             telegram={telegramConfig}
             onTelegramSave={onSaveTelegram}

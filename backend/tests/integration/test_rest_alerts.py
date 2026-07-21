@@ -165,6 +165,7 @@ def test_rest_alerts_accept_and_normalize_mgann_break_ls_params(
                     "params": {
                         "bigTradeThreshold": 70,
                         "requireBigTrade": True,
+                        "historySignalLimit": 2500,
                         "direction": "highs",
                         "repeat": True,
                     },
@@ -177,6 +178,7 @@ def test_rest_alerts_accept_and_normalize_mgann_break_ls_params(
             assert "direction" not in body["params"]
             assert body["params"]["requireBigTrade"] is True
             assert body["params"]["bigTradeThreshold"] == 70
+            assert body["params"]["historySignalLimit"] == 2500
             assert body["params"]["timeframe"] == MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME
             assert (
                 body["params"]["volumeLookback"]
