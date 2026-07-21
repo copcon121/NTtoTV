@@ -14,6 +14,7 @@ Supported alert types (Req 16.1):
 * ``volume_delta_threshold`` — a closed bar's volume delta meets a threshold.
 * ``big_trade_threshold``    — a reconstructed big trade meets a volume threshold.
 * ``stacked_imbalance``      — a closed footprint bar exhibits a stacked imbalance.
+* ``mgann_break_ls``         — SMC internal mGann Break L/S by body/volume.
 
 Price source and evaluation timing (Req 16.6, 16.7):
 
@@ -101,6 +102,8 @@ __all__ = [
     "MGANN_FVG_DEFAULT_MAX_ZONE_AGE",
     "MGANN_FVG_DEFAULT_MIN_GAP_TICKS",
     "MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS",
+    "MGANN_BREAK_LS",
+    "MGANN_SWEEP",
     "MGANN_BIG_TRADE_SWEEP",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS",
@@ -132,7 +135,12 @@ BIG_TRADE_THRESHOLD = "big_trade_threshold"
 STACKED_IMBALANCE = "stacked_imbalance"
 SMC_EXTERNAL_BREAK_BIG_TRADE = "smc_external_break_big_trade"
 MGANN_FVG_RETEST = "mgann_fvg_retest"
+MGANN_BREAK_LS = "mgann_break_ls"
+MGANN_SWEEP = "mgann_sweep"
 MGANN_BIG_TRADE_SWEEP = "mgann_big_trade_sweep"
+MGANN_BREAK_LS_TYPES = frozenset(
+    {MGANN_BREAK_LS, MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP}
+)
 
 SMC_DEFAULT_SWING_LENGTH = 50
 SMC_DEFAULT_LOOKAHEAD_BARS = 5
@@ -151,6 +159,8 @@ ALERT_TYPES: frozenset[str] = frozenset(
         STACKED_IMBALANCE,
         SMC_EXTERNAL_BREAK_BIG_TRADE,
         MGANN_FVG_RETEST,
+        MGANN_BREAK_LS,
+        MGANN_SWEEP,
         MGANN_BIG_TRADE_SWEEP,
     }
 )
@@ -159,6 +169,19 @@ ALERT_TYPES: frozenset[str] = frozenset(
 LEVEL_ALERT_TYPES: frozenset[str] = frozenset(
     {PRICE_CROSSES_LEVEL, BAR_CLOSES_ABOVE, BAR_CLOSES_BELOW}
 )
+
+
+def _canonical_alert_type(alert_type: str) -> str:
+    return MGANN_BREAK_LS if alert_type in MGANN_BREAK_LS_TYPES else alert_type
+
+
+def _canonical_alert_params(alert_type: str, params: dict[str, Any]) -> dict[str, Any]:
+    out = dict(params)
+    if alert_type == MGANN_BIG_TRADE_SWEEP:
+        out["requireBigTrade"] = True
+    elif alert_type == MGANN_SWEEP:
+        out["requireBigTrade"] = False
+    return out
 
 
 @dataclass(slots=True)
@@ -179,11 +202,12 @@ class Alert:
 
     @classmethod
     def from_record(cls, rec: AlertRecord) -> "Alert":
+        params = _canonical_alert_params(rec.type, dict(rec.params))
         return cls(
             id=rec.id,
             symbol=rec.symbol,
-            type=rec.type,
-            params=dict(rec.params),
+            type=_canonical_alert_type(rec.type),
+            params=params,
             enabled=rec.enabled,
             profile_id=rec.profile_id,
         )
@@ -412,7 +436,7 @@ class AlertEngine:
             return self._eval_smc_external_break_big_trade(alert, ctx)
         if alert.type == MGANN_FVG_RETEST:
             return self._eval_mgann_fvg_retest(alert, ctx)
-        if alert.type == MGANN_BIG_TRADE_SWEEP:
+        if alert.type in MGANN_BREAK_LS_TYPES:
             return self._eval_mgann_big_trade_sweep(alert, ctx)
         return None
 
@@ -592,7 +616,7 @@ class AlertEngine:
             )
         return events
 
-    # -- mgann_big_trade_sweep -----------------------------------------------
+    # -- mgann_break_ls --------------------------------------------------------
 
     def _eval_mgann_big_trade_sweep(
         self, alert: Alert, ctx: MarketContext
@@ -713,18 +737,26 @@ class AlertEngine:
         ctx: MarketContext,
         trigger: MgannBigTradeSweepTrigger,
     ) -> AlertEvent:
-        direction = "highs" if trigger.direction > 0 else "lows"
         tf_label = _timeframe_label(self._mgann_sweep_timeframe(alert))
-        threshold = _fmt_num(self._mgann_sweep_big_trade_threshold(alert))
-        message = (
-            f"{alert.symbol} {tf_label} mGann {direction} breakout "
-            f"{trigger.cut_count} pivots + BigTrade "
-            f"{_fmt_num(trigger.big_trade_volume)} > {threshold}; "
-            f"vol {trigger.bar_volume}, spread {trigger.bar_spread:.1f}"
-        )
+        if self._mgann_sweep_require_big_trade(alert):
+            threshold = _fmt_num(self._mgann_sweep_big_trade_threshold(alert))
+            message = (
+                f"{alert.symbol} {tf_label} mGann Break "
+                f"{'L' if trigger.direction > 0 else 'S'} "
+                f"internal {trigger.structure_kind} + BigTrade "
+                f"{_fmt_num(trigger.big_trade_volume)} > {threshold}; "
+                f"vol {trigger.bar_volume}, body {trigger.bar_spread:.1f}"
+            )
+        else:
+            message = (
+                f"{alert.symbol} {tf_label} mGann Break "
+                f"{'L' if trigger.direction > 0 else 'S'} "
+                f"internal {trigger.structure_kind}; "
+                f"vol {trigger.bar_volume}, body {trigger.bar_spread:.1f}"
+            )
         return AlertEvent(
             alert_id=alert.id,
-            alert_type=alert.type,
+            alert_type=_canonical_alert_type(alert.type),
             symbol=ctx.symbol,
             contract=ctx.contract,
             time=trigger.signal_time,
@@ -761,7 +793,7 @@ class AlertEngine:
         if alert.type == MGANN_FVG_RETEST:
             self._warm_mgann_fvg_alert(alert)
             return
-        if alert.type == MGANN_BIG_TRADE_SWEEP:
+        if alert.type in MGANN_BREAK_LS_TYPES:
             self._warm_mgann_sweep_alert(alert)
             return
         if alert.type != SMC_EXTERNAL_BREAK_BIG_TRADE:
@@ -883,6 +915,7 @@ class AlertEngine:
             min_pivot_wick_ticks=self._mgann_sweep_min_pivot_wick_ticks(alert),
             confirmation_bars=self._mgann_sweep_confirmation_bars(alert),
             break_ticks=self._mgann_sweep_break_ticks(alert),
+            require_big_trade=self._mgann_sweep_require_big_trade(alert),
         )
 
     @staticmethod
@@ -966,7 +999,7 @@ class AlertEngine:
 
     @staticmethod
     def _mgann_fvg_swing_size(alert: Alert) -> int:
-        return _positive_int_param(
+        return _mgann_swing_size_param(
             alert.params.get("swingSize"),
             MGANN_FVG_DEFAULT_SWING_SIZE,
         )
@@ -1025,6 +1058,14 @@ class AlertEngine:
         )
 
     @staticmethod
+    def _mgann_sweep_require_big_trade(alert: Alert) -> bool:
+        if alert.type == MGANN_BIG_TRADE_SWEEP:
+            return True
+        if alert.type == MGANN_SWEEP:
+            return False
+        return alert.params.get("requireBigTrade") is True
+
+    @staticmethod
     def _mgann_sweep_min_volume(alert: Alert) -> int:
         return _nonnegative_int_param(
             alert.params.get("minVolume"),
@@ -1068,7 +1109,7 @@ class AlertEngine:
 
     @staticmethod
     def _mgann_sweep_swing_size(alert: Alert) -> int:
-        return _positive_int_param(
+        return _mgann_swing_size_param(
             alert.params.get("swingSize"),
             MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
         )
@@ -1142,8 +1183,8 @@ class AlertEngine:
             return f"{sym} big trade threshold met"
         if alert.type == STACKED_IMBALANCE:
             return f"{sym} stacked imbalance"
-        if alert.type == MGANN_BIG_TRADE_SWEEP:
-            return f"{sym} mGann BigTrade sweep"
+        if alert.type in MGANN_BREAK_LS_TYPES:
+            return f"{sym} mGann Break L/S"
         return f"{sym} alert"
 
     @staticmethod
@@ -1167,6 +1208,11 @@ def _positive_int_param(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _mgann_swing_size_param(value: Any, default: int) -> int:
+    parsed = _positive_int_param(value, default)
+    return default if parsed == 2 else parsed
 
 
 def _nonnegative_int_param(value: Any, default: int) -> int:

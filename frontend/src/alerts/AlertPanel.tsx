@@ -70,6 +70,8 @@ export interface AlertPanelProps {
 const DEFAULT_TOAST_MS = 4000;
 const SMC_EXTERNAL_BREAK_TYPE: AlertType = "smc_external_break_big_trade";
 const MGANN_FVG_RETEST_TYPE: AlertType = "mgann_fvg_retest";
+const MGANN_BREAK_LS_TYPE: AlertType = "mgann_break_ls";
+const MGANN_SWEEP_TYPE: AlertType = "mgann_sweep";
 const MGANN_BIG_TRADE_SWEEP_TYPE: AlertType = "mgann_big_trade_sweep";
 const SMC_EXTERNAL_BIG_TRADE_DEFAULT = "50";
 const MGANN_FVG_DEFAULT_TIMEFRAME = "5m";
@@ -81,9 +83,10 @@ const SMC_LOOKAHEAD_BARS = 5;
 const SMC_MAX_BARS = 20;
 const SMC_PAUSE_ON_INSIDE_BARS = true;
 const SMC_RETEST_TOLERANCE_TICKS = 50;
+const MGANN_FVG_SWING_SIZE = 5;
 const MGANN_SWEEP_VOLUME_LOOKBACK = 20;
 const MGANN_SWEEP_SPREAD_LOOKBACK = 20;
-const MGANN_SWEEP_SWING_SIZE = 2;
+const MGANN_SWEEP_SWING_SIZE = 5;
 const MGANN_SWEEP_PIVOT_LOOKBACK_BARS = 120;
 const MGANN_SWEEP_MIN_PIVOT_CUTS = 2;
 const MGANN_SWEEP_CONFIRMATION_BARS = 2;
@@ -129,6 +132,20 @@ function isMgannFvgRetestType(type: AlertType): boolean {
   return type === MGANN_FVG_RETEST_TYPE;
 }
 
+function isMgannBreakType(type: AlertType): boolean {
+  return (
+    type === MGANN_BREAK_LS_TYPE ||
+    type === MGANN_SWEEP_TYPE ||
+    type === MGANN_BIG_TRADE_SWEEP_TYPE
+  );
+}
+
+function mgannBreakRequiresBigTrade(alert: Alert): boolean {
+  if (alert.type === MGANN_BIG_TRADE_SWEEP_TYPE) return true;
+  if (alert.type === MGANN_SWEEP_TYPE) return false;
+  return alert.params.requireBigTrade === true;
+}
+
 function alertInputLabel(type: AlertType): string {
   if (isLevelAlertType(type)) return "Alert level";
   if (isSmcAlertType(type)) return "BigTrade threshold";
@@ -158,11 +175,12 @@ function alertDescription(alert: Alert): string {
     const timeframe = mgannTimeframeLabel(alert.params.timeframe);
     return `${timeframe} FVG retest by mGann wave${repeat}`;
   }
-  if (alert.type === MGANN_BIG_TRADE_SWEEP_TYPE) {
+  if (isMgannBreakType(alert.type)) {
     const repeat = alert.params.repeat === true ? " (repeat)" : "";
-    return `mGann Break L/S, BT > ${String(
-      alert.params.bigTradeThreshold,
-    )}, vol x${String(
+    const bigTrade = mgannBreakRequiresBigTrade(alert)
+      ? `, BT > ${String(alert.params.bigTradeThreshold)}`
+      : "";
+    return `mGann Break L/S${bigTrade}, vol x${String(
       alert.params.volumeMultiplier ?? MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT,
     )}, spread x${String(
       alert.params.spreadMultiplier ?? MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT,
@@ -205,6 +223,7 @@ export function AlertPanel({
   const [newMgannTimeframe, setNewMgannTimeframe] = useState(
     MGANN_FVG_DEFAULT_TIMEFRAME,
   );
+  const [newMgannRequireBigTrade, setNewMgannRequireBigTrade] = useState(false);
   const [newMgannSweepVolumeMultiplier, setNewMgannSweepVolumeMultiplier] =
     useState(MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT);
   const [newMgannSweepSpreadMultiplier, setNewMgannSweepSpreadMultiplier] =
@@ -240,7 +259,8 @@ export function AlertPanel({
   const isThresholdType = isThresholdAlertType(newType);
   const isExternalBreakType = newType === SMC_EXTERNAL_BREAK_TYPE;
   const isMgannFvgRetest = newType === MGANN_FVG_RETEST_TYPE;
-  const isMgannSweep = newType === MGANN_BIG_TRADE_SWEEP_TYPE;
+  const isMgannSweep = isMgannBreakType(newType);
+  const isMgannSweepWithBigTrade = isMgannSweep && newMgannRequireBigTrade;
   const showNumericInput = !isMgannFvgRetest && !isMgannSweep;
   const showRepeat =
     isThresholdType ||
@@ -259,7 +279,8 @@ export function AlertPanel({
       setNewValue("");
       setNewMgannTimeframe(MGANN_FVG_DEFAULT_TIMEFRAME);
       setNewRepeat(true);
-    } else if (type === MGANN_BIG_TRADE_SWEEP_TYPE) {
+    } else if (isMgannBreakType(type)) {
+      setNewMgannRequireBigTrade(type === MGANN_BIG_TRADE_SWEEP_TYPE);
       setNewValue((value) => value || MGANN_SWEEP_BIG_TRADE_DEFAULT);
       setNewMgannSweepVolumeMultiplier(MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT);
       setNewMgannSweepSpreadMultiplier(MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT);
@@ -274,13 +295,18 @@ export function AlertPanel({
         type: newType,
         params: {
           timeframe: newMgannTimeframe,
+          swingSize: MGANN_FVG_SWING_SIZE,
           repeat: newRepeat,
         },
       });
       return;
     }
     if (isMgannSweep) {
-      const bigTradeThreshold = Number(newValue);
+      const bigTradeThreshold = Number(
+        newMgannRequireBigTrade
+          ? newValue || MGANN_SWEEP_BIG_TRADE_DEFAULT
+          : MGANN_SWEEP_BIG_TRADE_DEFAULT,
+      );
       const volumeMultiplier = Number(newMgannSweepVolumeMultiplier);
       const spreadMultiplier = Number(newMgannSweepSpreadMultiplier);
       if (
@@ -291,8 +317,9 @@ export function AlertPanel({
         return;
       }
       onCreate?.({
-        type: newType,
+        type: MGANN_BREAK_LS_TYPE,
         params: {
+          requireBigTrade: newMgannRequireBigTrade,
           bigTradeThreshold,
           timeframe: "1m",
           minVolume: 0,
@@ -394,8 +421,8 @@ export function AlertPanel({
           <option value="mgann_fvg_retest">
             FVG retest by mGann
           </option>
-          <option value="mgann_big_trade_sweep">
-            mGann sweep + BigTrade
+          <option value="mgann_break_ls">
+            mGann Break L/S
           </option>
         </select>
         {showNumericInput && (
@@ -420,17 +447,28 @@ export function AlertPanel({
         )}
         {isMgannSweep && (
           <>
-            <label className="alert-param">
-              <span>BigTrade &gt;</span>
+            <label className="alert-param alert-param-checkbox">
               <input
-                type="number"
-                step="any"
-                aria-label="BigTrade threshold"
-                placeholder="70"
-                value={newValue}
-                onChange={(e) => setNewValue(e.target.value)}
+                type="checkbox"
+                aria-label="Require BigTrade"
+                checked={newMgannRequireBigTrade}
+                onChange={(e) => setNewMgannRequireBigTrade(e.target.checked)}
               />
+              <span>BigTrade</span>
             </label>
+            {isMgannSweepWithBigTrade && (
+              <label className="alert-param">
+                <span>BigTrade &gt;</span>
+                <input
+                  type="number"
+                  step="any"
+                  aria-label="BigTrade threshold"
+                  placeholder="70"
+                  value={newValue}
+                  onChange={(e) => setNewValue(e.target.value)}
+                />
+              </label>
+            )}
             <label className="alert-param">
               <span>Vol x</span>
               <input

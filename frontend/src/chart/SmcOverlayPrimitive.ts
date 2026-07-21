@@ -90,23 +90,23 @@ function styleFor(zone: RenderableSmcZone): ZoneStyle {
   if (zone.scope === "internal") {
     return zone.direction === 1
       ? {
-          fill: "rgba(25, 35, 45, 0.46)",
-          stroke: "rgba(40, 80, 120, 0.72)",
+          fill: "rgba(25, 35, 45, 0.20)",
+          stroke: "rgba(40, 80, 120, 0.48)",
         }
       : {
-          fill: "rgba(45, 25, 25, 0.46)",
-          stroke: "rgba(120, 40, 40, 0.72)",
+          fill: "rgba(45, 25, 25, 0.20)",
+          stroke: "rgba(120, 40, 40, 0.48)",
         };
   }
 
   return zone.direction === 1
     ? {
-        fill: "rgba(30, 45, 60, 0.42)",
-        stroke: "rgba(50, 100, 150, 0.75)",
+        fill: "rgba(30, 45, 60, 0.18)",
+        stroke: "rgba(50, 100, 150, 0.50)",
       }
     : {
-        fill: "rgba(60, 30, 30, 0.42)",
-        stroke: "rgba(150, 50, 50, 0.75)",
+        fill: "rgba(60, 30, 30, 0.18)",
+        stroke: "rgba(150, 50, 50, 0.50)",
       };
 }
 

@@ -54,6 +54,137 @@ describe("SMC overlay", () => {
     );
   });
 
+  it("anchors bearish BOS order blocks to the lower high after the broken low", () => {
+    const rows: Bar[] = [
+      bar(0, 88, 90, 85, 88),
+      bar(1, 119, 120, 118, 119),
+    ];
+
+    for (let index = 2; index < 10; index += 1) {
+      rows.push(bar(index, 92, 95, 90, 92));
+    }
+    rows.push(bar(10, 86, 92, 80, 85));
+    for (let index = 11; index <= 60; index += 1) {
+      rows.push(bar(index, 90, 94, 84, 90));
+    }
+    for (let index = 61; index <= 64; index += 1) {
+      rows.push(bar(index, 92, 96, 88, 92));
+    }
+    rows.push(bar(65, 96, 100, 95, 96));
+    rows.push(bar(66, 81, 99, 78, 79));
+    for (let index = 67; index <= 116; index += 1) {
+      rows.push(bar(index, 88, 94, 76, 88));
+    }
+
+    const overlay = computeSmcOverlay(rows, {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      showInternal: false,
+      showPremiumDiscount: false,
+      swingLength: 50,
+      internalLength: 5,
+    });
+
+    expect(overlay.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "BOS",
+          direction: -1,
+          scope: "swing",
+        }),
+      ]),
+    );
+    expect(overlay.markers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "LH",
+          time: 65,
+          scope: "swing",
+        }),
+      ]),
+    );
+    expect(overlay.zones).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ob",
+          scope: "swing",
+          direction: -1,
+          top: 100,
+          bottom: 95,
+          startTime: 65,
+        }),
+      ]),
+    );
+    expect(overlay.zones).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ob",
+          scope: "swing",
+          direction: -1,
+          top: 120,
+          bottom: 118,
+        }),
+      ]),
+    );
+  });
+
+  it("promotes the next higher swing bearish order block after the nearest one is broken", () => {
+    const rows: Bar[] = [
+      bar(0, 88, 90, 85, 88),
+      bar(1, 119, 120, 118, 119),
+    ];
+
+    for (let index = 2; index < 10; index += 1) {
+      rows.push(bar(index, 92, 95, 90, 92));
+    }
+    rows.push(bar(10, 86, 92, 80, 85));
+    for (let index = 11; index <= 60; index += 1) {
+      rows.push(bar(index, 90, 94, 84, 90));
+    }
+    for (let index = 61; index <= 64; index += 1) {
+      rows.push(bar(index, 92, 96, 88, 92));
+    }
+    rows.push(bar(65, 96, 100, 95, 96));
+    rows.push(bar(66, 81, 99, 78, 79));
+    for (let index = 67; index <= 116; index += 1) {
+      rows.push(bar(index, 88, 94, 76, 88));
+    }
+    rows.push(bar(117, 98, 102, 94, 101));
+
+    const overlay = computeSmcOverlay(rows, {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      showInternal: false,
+      showPremiumDiscount: false,
+      swingLength: 50,
+      internalLength: 5,
+    });
+
+    expect(overlay.zones).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ob",
+          scope: "swing",
+          direction: -1,
+          top: 120,
+          bottom: 118,
+          startTime: 1,
+        }),
+      ]),
+    );
+    expect(overlay.zones).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ob",
+          scope: "swing",
+          direction: -1,
+          top: 100,
+          bottom: 95,
+        }),
+      ]),
+    );
+  });
+
   it("extends structure break lines past the break bar using 30-minute spacing", () => {
     const thirtyMinutes = 30 * 60_000;
     const overlay = computeSmcOverlay(
@@ -178,6 +309,55 @@ describe("SMC overlay", () => {
           direction: 1,
           top: 10.5,
           bottom: 8.9,
+        }),
+      ]),
+    );
+  });
+
+  it("keeps external bearish order blocks until price closes through them", () => {
+    const rows = [
+      bar(0, 9.5, 10, 9, 9.5),
+      bar(1, 7.5, 8, 7, 7.5),
+      bar(2, 8.5, 9, 8, 8.5),
+      bar(3, 9.4, 10, 9, 9.4),
+      bar(4, 8.7, 9, 8, 8.7),
+      bar(5, 8.6, 9.5, 6.5, 6.8),
+      bar(6, 9.2, 10.2, 8.8, 9.7),
+    ];
+    const settings = {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      showInternal: false,
+      showPremiumDiscount: false,
+      swingLength: 1,
+      internalLength: 1,
+    };
+
+    const wickSweepOverlay = computeSmcOverlay(rows, settings);
+    expect(wickSweepOverlay.zones).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ob",
+          scope: "swing",
+          direction: -1,
+          top: 10,
+          bottom: 9,
+        }),
+      ]),
+    );
+
+    const closeThroughOverlay = computeSmcOverlay(
+      [...rows, bar(7, 9.8, 10.4, 9.6, 10.1)],
+      settings,
+    );
+    expect(closeThroughOverlay.zones).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ob",
+          scope: "swing",
+          direction: -1,
+          top: 10,
+          bottom: 9,
         }),
       ]),
     );

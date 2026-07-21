@@ -12,10 +12,6 @@ function bar(time: number, high: number, low: number): Bar {
   return { time, open: close, high, low, close, volume: 1 };
 }
 
-function withClose(source: Bar, close: number): Bar {
-  return { ...source, open: close, close };
-}
-
 function withVolume(source: Bar, volume: number): Bar {
   return { ...source, volume };
 }
@@ -44,90 +40,100 @@ function delta(points: readonly [number, number][]) {
   );
 }
 
+function internalFiveSwingBars(
+  pivotPrices: readonly number[],
+  tailPrice: number,
+  wide = false,
+): Bar[] {
+  const step = MGANN_SWING_SIZE + 1;
+  const firstPivotIndex = MGANN_SWING_SIZE;
+  const lastPivotIndex = firstPivotIndex + (pivotPrices.length - 1) * step;
+  const endIndex = lastPivotIndex + MGANN_SWING_SIZE;
+  const out: Bar[] = [];
+  const previousPrice = pivotPrices[1] ?? pivotPrices[0];
+
+  for (let index = 0; index <= endIndex; index += 1) {
+    let value: number;
+    if (index <= firstPivotIndex) {
+      value =
+        previousPrice +
+        ((pivotPrices[0] - previousPrice) * index) / firstPivotIndex;
+    } else if (index <= lastPivotIndex) {
+      const segment = Math.min(
+        Math.floor((index - firstPivotIndex) / step),
+        pivotPrices.length - 2,
+      );
+      const offset = index - firstPivotIndex - segment * step;
+      const start = pivotPrices[segment];
+      const end = pivotPrices[segment + 1];
+      value = start + ((end - start) * offset) / step;
+    } else {
+      const offset = index - lastPivotIndex;
+      const start = pivotPrices[pivotPrices.length - 1];
+      value = start + ((tailPrice - start) * offset) / MGANN_SWING_SIZE;
+    }
+
+    out.push(wide ? bar(index, value + 0.5, value - 0.5) : bar(index, value, value));
+  }
+
+  return out;
+}
+
 const BEARISH_IMPULSE_DELTAS = delta([
-  [4, -30],
-  [5, -40],
-  [6, -30],
-  [7, 10],
-  [8, 10],
-  [9, 10],
-  [10, 10],
-  [11, -40],
-  [12, -30],
-  [13, -30],
-  [14, -30],
-  [15, 20],
-  [16, 20],
+  [12, -20],
+  [13, -20],
+  [14, -20],
+  [15, -20],
+  [16, -10],
+  [17, -10],
+  [18, 10],
+  [19, 10],
+  [20, 5],
+  [21, 5],
+  [22, 5],
+  [23, 5],
+  [24, -30],
+  [25, -30],
+  [26, -20],
+  [27, -20],
+  [28, -15],
+  [29, -15],
 ]);
 
 const BULLISH_IMPULSE_DELTAS = delta([
-  [5, 20],
-  [6, 20],
-  [7, 20],
-  [8, 20],
-  [9, 20],
-  [10, -10],
-  [11, -10],
-  [12, -10],
-  [13, 30],
-  [14, 30],
-  [15, 30],
-  [16, 40],
-  [17, -20],
-  [18, -20],
+  [12, 20],
+  [13, 20],
+  [14, 20],
+  [15, 20],
+  [16, 10],
+  [17, 10],
+  [18, -10],
+  [19, -10],
+  [20, -5],
+  [21, -5],
+  [22, -5],
+  [23, -5],
+  [24, 30],
+  [25, 30],
+  [26, 20],
+  [27, 20],
+  [28, 15],
+  [29, 15],
 ]);
 
 function bearishImpulseBars(): Bar[] {
-  return [
-    bar(0, 10, 10),
-    bar(1, 11, 10.5),
-    bar(2, 13, 11),
-    bar(3, 15, 12),
-    bar(4, 14.5, 11),
-    bar(5, 13, 10.2),
-    bar(6, 12, 9.8),
-    bar(7, 12.5, 10.2),
-    bar(8, 13, 10.8),
-    bar(9, 14, 12.5),
-    bar(10, 14.5, 13),
-    bar(11, 13.5, 12),
-    bar(12, 12, 10.5),
-    bar(13, 10, 9),
-    bar(14, 9, 8),
-    bar(15, 10, 8.5),
-    bar(16, 11, 9),
-  ];
+  return internalFiveSwingBars([12, 15.2, 10, 14, 7.5, 12], 11);
 }
 
 function bullishImpulseBars(): Bar[] {
-  const bars = [
-    bar(0, 15, 15),
-    bar(1, 14.5, 14),
-    bar(2, 14, 13),
-    bar(3, 13, 12),
-    bar(4, 12, 10),
-    bar(5, 11, 10.5),
-    bar(6, 12, 11),
-    bar(7, 13, 12),
-    bar(8, 14, 13),
-    bar(9, 15.2, 14),
-    bar(10, 14.5, 13),
-    bar(11, 13.5, 12),
-    bar(12, 12.5, 10.5),
-    bar(13, 13.5, 11.5),
-    bar(14, 14.5, 12.5),
-    bar(15, 15.5, 13.5),
-    bar(16, 17, 14.5),
-    bar(17, 16, 14),
-    bar(18, 15, 13),
-  ];
+  const bars = internalFiveSwingBars([13, 9.8, 15, 11, 17.5, 12], 13);
   return bars.map((source) =>
-    source.time >= 13 && source.time <= 16 ? withVolume(source, 2) : source,
+    source.time >= 24 && source.time <= 29 ? withVolume(source, 2) : source,
   );
 }
 
 describe("MGannSwing model", () => {
-  it("uses fixed swing-2 pivots and appends a live leg for the zigzag line", () => {
+  it("uses fixed SMC internal-5 confirmed pivots for the zigzag line", () => {
     const bars = [
       bar(0, 10, 10),
       bar(1, 11, 10.5),
@@ -177,15 +183,11 @@ describe("MGannSwing model", () => {
       { waveDeltaNumbersImpulseOnly: false },
     );
 
-    expect(MGANN_SWING_SIZE).toBe(2);
+    expect(MGANN_SWING_SIZE).toBe(5);
     expect(overlay.line).toEqual([
-      { time: 0, value: 10 },
-      { time: 3, value: 13 },
       { time: 6, value: 9.5 },
       { time: 10, value: 14.5 },
       { time: 14, value: 8.5 },
-      { time: 17, value: 13.5 },
-      { time: 19, value: 9 },
     ]);
     expect(
       overlay.waveDeltaLabels.map((label) => ({
@@ -193,16 +195,12 @@ describe("MGannSwing model", () => {
         value: label.value,
       })),
     ).toEqual([
-      { time: 3, value: 100 },
-      { time: 6, value: -80 },
       { time: 10, value: 40 },
       { time: 14, value: 10 },
-      { time: 17, value: 20 },
-      { time: 19, value: -10 },
     ]);
   });
 
-  it("refines confirmed swing lows to the lowest wick before the next high pivot", () => {
+  it("uses SMC internal-5 confirmed pivots without segment-extreme refinement", () => {
     const bars = [
       bar(0, 10, 9),
       bar(1, 11, 10),
@@ -226,67 +224,18 @@ describe("MGannSwing model", () => {
     });
 
     expect(overlay.line).toEqual([
-      { time: 0, value: 9 },
-      { time: 3, value: 13 },
       { time: 8, value: 7.5 },
-      { time: 10, value: 16 },
-      { time: 13, value: 8 },
     ]);
   });
 
-  it("builds NT-style # and SP signals from wave volume and VolumeDelta", () => {
-    const bars = [
-      bar(0, 10, 10),
-      bar(1, 11, 10.5),
-      bar(2, 12, 11),
-      bar(3, 13, 12),
-      bar(4, 12.5, 11.5),
-      bar(5, 12, 10.5),
-      bar(6, 11, 9.5),
-      bar(7, 12, 10.5),
-      bar(8, 13.5, 11.5),
-      bar(9, 14, 12),
-      bar(10, 14.5, 12.5),
-      bar(11, 14, 11.5),
-      bar(12, 13, 10.5),
-      bar(13, 12, 9),
-      withClose(bar(14, 11, 8.5), 9),
-      bar(15, 10, 9),
-      bar(16, 12, 10),
-      bar(17, 13.5, 11),
-      bar(18, 12, 10),
-      bar(19, 11, 9),
-    ];
+  it("builds NT-style # signals from internal-5 waves", () => {
+    const bars = internalFiveSwingBars([10, 16, 12, 15, 13, 14], 11);
 
-    const overlay = buildMgannSwingOverlay(
-      bars,
-      delta([
-        [1, 30],
-        [2, 30],
-        [3, 40],
-        [4, -20],
-        [5, -30],
-        [6, -30],
-        [7, 10],
-        [8, 10],
-        [9, 10],
-        [10, 10],
-        [11, 2],
-        [12, 3],
-        [13, 2],
-        [14, 3],
-        [15, 5],
-        [16, 5],
-        [17, 10],
-      ]),
-      { smartFilter: false },
-    );
-
-    expect(overlay.signals.map((signal) => signal.labels)).toEqual([
-      ["SP"],
-      ["#"],
-    ]);
-    expect(overlay.signals.map((signal) => signal.time)).toEqual([14, 17]);
+    const overlay = buildMgannSwingOverlay(bars, delta([]), {
+      smartFilter: false,
+    });
+    expect(overlay.signals.map((signal) => signal.labels)).toEqual([["#"]]);
+    expect(overlay.signals.map((signal) => signal.time)).toEqual([35]);
   });
 
   it("normalizes missing settings to line and signals enabled", () => {
@@ -307,7 +256,7 @@ describe("MGannSwing model", () => {
   it("detects a confirmed bearish impulse wave after W4 confirms W3", () => {
     const bars = bearishImpulseBars();
     const beforeConfirmation = buildMgannSwingOverlay(
-      bars.slice(0, 16),
+      bars.slice(0, 34),
       BEARISH_IMPULSE_DELTAS,
       { smartFilter: false },
     );
@@ -319,12 +268,12 @@ describe("MGannSwing model", () => {
     expect(confirmed.impulseWaves).toEqual([
       expect.objectContaining({
         direction: -1,
-        startIndex: 3,
-        endIndex: 14,
+        startIndex: 11,
+        endIndex: 29,
         w1Length: expect.closeTo(5.2, 5),
         w3Length: expect.closeTo(6.5, 5),
-        w1Volume: 3,
-        w3Volume: 4,
+        w1Volume: 6,
+        w3Volume: 6,
         w1Delta: -100,
         w3Delta: -130,
       }),
@@ -335,9 +284,9 @@ describe("MGannSwing model", () => {
         value: label.value,
       })),
     ).toEqual([
-      { time: 6, value: -100 },
-      { time: 10, value: 40 },
-      { time: 14, value: -130 },
+      { time: 17, value: -100 },
+      { time: 23, value: 40 },
+      { time: 29, value: -130 },
     ]);
   });
 
@@ -352,11 +301,11 @@ describe("MGannSwing model", () => {
     );
 
     expect(overlay.waveDeltaLabels.map((label) => label.time)).toEqual([
-      3,
-      6,
-      10,
-      14,
-      16,
+      11,
+      17,
+      23,
+      29,
+      35,
     ]);
   });
 
@@ -372,12 +321,12 @@ describe("MGannSwing model", () => {
     expect(overlay.impulseWaves).toEqual([
       expect.objectContaining({
         direction: 1,
-        startIndex: 4,
-        endIndex: 16,
+        startIndex: 11,
+        endIndex: 29,
         w1Length: expect.closeTo(5.2, 5),
         w3Length: expect.closeTo(6.5, 5),
-        w1Volume: 5,
-        w3Volume: 8,
+        w1Volume: 6,
+        w3Volume: 12,
         w1Delta: 100,
         w3Delta: 130,
       }),
@@ -385,9 +334,7 @@ describe("MGannSwing model", () => {
   });
 
   it("rejects impulses when W3 does not break the prior swing level", () => {
-    const bars = bearishImpulseBars().map((source) =>
-      source.time === 14 ? { ...source, low: 9.8 } : source,
-    );
+    const bars = internalFiveSwingBars([7, 15.2, 10, 14, 9.95, 12], 11);
 
     const overlay = buildMgannSwingOverlay(bars, BEARISH_IMPULSE_DELTAS, {
       smartFilter: false,
@@ -398,7 +345,7 @@ describe("MGannSwing model", () => {
 
   it("rejects bearish impulses when W2 wick breaks the W1 high", () => {
     const bars = bearishImpulseBars().map((source) =>
-      source.time === 10 ? { ...source, high: 15.2 } : source,
+      source.time === 23 ? { ...source, high: 15.3 } : source,
     );
 
     const overlay = buildMgannSwingOverlay(bars, BEARISH_IMPULSE_DELTAS, {
@@ -410,7 +357,7 @@ describe("MGannSwing model", () => {
 
   it("rejects bullish impulses when W2 wick breaks the W1 low", () => {
     const bars = bullishImpulseBars().map((source) =>
-      source.time === 12 ? { ...source, low: 9.9 } : source,
+      source.time === 23 ? { ...source, low: 9.7 } : source,
     );
 
     const overlay = buildMgannSwingOverlay(bars, BULLISH_IMPULSE_DELTAS, {
@@ -437,54 +384,12 @@ describe("MGannSwing model", () => {
   });
 
   it("places NT Spring/UpThrust signals on the prior pivot", () => {
-    const bars = [
-      bar(0, 10, 10),
-      bar(1, 11, 10.5),
-      bar(2, 12, 11),
-      bar(3, 13, 12),
-      bar(4, 12.5, 11.5),
-      bar(5, 12, 10.5),
-      bar(6, 11, 9.5),
-      bar(7, 12, 10.5),
-      bar(8, 13.5, 11.5),
-      bar(9, 14, 12),
-      withClose(bar(10, 14.5, 11.5), 12),
-      bar(11, 14, 11.5),
-      bar(12, 13, 10.5),
-      bar(13, 12, 9),
-      withClose(bar(14, 11, 8.5), 11),
-      bar(15, 10, 9),
-      bar(16, 12, 10),
-      bar(17, 13.5, 11),
-      bar(18, 12, 10),
-      bar(19, 11, 9),
-    ];
+    const bars = internalFiveSwingBars([10, 16, 12, 15, 11, 14], 12, true);
+    const overlay = buildMgannSwingOverlay(bars, delta([]), {
+      smartFilter: false,
+    });
 
-    const overlay = buildMgannSwingOverlay(
-      bars,
-      delta([
-        [1, 30],
-        [2, 30],
-        [3, 40],
-        [4, -20],
-        [5, -30],
-        [6, -30],
-        [7, 10],
-        [8, 10],
-        [9, 10],
-        [10, 10],
-        [11, 2],
-        [12, 3],
-        [13, 2],
-        [14, 3],
-        [15, 5],
-        [16, 5],
-        [17, 10],
-      ]),
-      { smartFilter: false },
-    );
-
-    expect(overlay.signals.find((signal) => signal.time === 14)?.labels).toEqual([
+    expect(overlay.signals.find((signal) => signal.time === 29)?.labels).toEqual([
       "SP",
     ]);
     expect(overlay.signals.some((signal) => signal.labels.includes("UT"))).toBe(
@@ -493,54 +398,12 @@ describe("MGannSwing model", () => {
   });
 
   it("wraps NT # labels in brackets when the pivot close chain confirms trend", () => {
-    const bars = [
-      bar(0, 10, 10),
-      bar(1, 11, 10.5),
-      bar(2, 12, 11),
-      withClose(bar(3, 16, 14), 15),
-      bar(4, 12.5, 11.5),
-      bar(5, 12, 10.5),
-      bar(6, 11, 9.5),
-      bar(7, 12, 10.5),
-      bar(8, 13.5, 11.5),
-      bar(9, 14, 12),
-      withClose(bar(10, 15, 13), 14),
-      bar(11, 14, 11.5),
-      bar(12, 13, 10.5),
-      bar(13, 12, 9),
-      bar(14, 11, 8.5),
-      bar(15, 10, 9),
-      bar(16, 12, 10),
-      withClose(bar(17, 14, 12), 13),
-      bar(18, 12, 10),
-      bar(19, 11, 9),
-    ];
+    const bars = internalFiveSwingBars([10, 16, 12, 15, 11, 14], 12, true);
+    const overlay = buildMgannSwingOverlay(bars, delta([]), {
+      smartFilter: false,
+    });
 
-    const overlay = buildMgannSwingOverlay(
-      bars,
-      delta([
-        [1, 30],
-        [2, 30],
-        [3, 40],
-        [4, -20],
-        [5, -30],
-        [6, -30],
-        [7, 10],
-        [8, 10],
-        [9, 10],
-        [10, 10],
-        [11, 2],
-        [12, 3],
-        [13, 2],
-        [14, 3],
-        [15, 5],
-        [16, 5],
-        [17, 10],
-      ]),
-      { smartFilter: false },
-    );
-
-    expect(overlay.signals.find((signal) => signal.time === 17)?.labels).toEqual([
+    expect(overlay.signals.find((signal) => signal.time === 35)?.labels).toEqual([
       "[#]",
     ]);
   });
@@ -550,53 +413,12 @@ describe("MGannSwing model", () => {
       bar(index, index + 2, index + 1),
     );
     const pattern = shiftBars(
-      [
-        bar(0, 10, 10),
-        bar(1, 11, 10.5),
-        bar(2, 12, 11),
-        bar(3, 13, 12),
-        bar(4, 12.5, 11.5),
-        bar(5, 12, 10.5),
-        bar(6, 11, 9.5),
-        bar(7, 12, 10.5),
-        bar(8, 13.5, 11.5),
-        bar(9, 14, 12),
-        bar(10, 14.5, 12.5),
-        bar(11, 14, 11.5),
-        bar(12, 13, 10.5),
-        bar(13, 12, 9),
-        bar(14, 11, 8.5),
-        bar(15, 10, 9),
-        bar(16, 12, 10),
-        bar(17, 13.5, 11),
-        bar(18, 12, 10),
-        bar(19, 11, 9),
-      ],
+      internalFiveSwingBars([10, 16, 12, 15, 13, 14], 11),
       prefix.length,
       300,
     );
     const bars = [...prefix, ...pattern];
-    const deltas = delta(
-      [
-        [1, 30],
-        [2, 30],
-        [3, 40],
-        [4, -20],
-        [5, -30],
-        [6, -30],
-        [7, 10],
-        [8, 10],
-        [9, 10],
-        [10, 10],
-        [11, 2],
-        [12, 3],
-        [13, 2],
-        [14, 3],
-        [15, 5],
-        [16, 5],
-        [17, 10],
-      ].map(([time, value]) => [time + prefix.length, value] as [number, number]),
-    );
+    const deltas = delta([]);
 
     const unfiltered = buildMgannSwingOverlay(bars, deltas, {
       smartFilter: false,

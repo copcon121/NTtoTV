@@ -135,7 +135,8 @@ const DEFAULT_PROFILE_ID = "default";
 const ACTIVE_PROFILE_STORAGE_KEY = "gc-chart-platform.active-profile";
 const PROFILE_HOT_SNAPSHOT_STORAGE_KEY = "gc-chart-platform.profile-hot-snapshot";
 const PROFILE_HOT_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
-const DEFAULT_CHART_BACKGROUND = "#101010";
+const LEGACY_DEFAULT_CHART_BACKGROUND = "#101010";
+const DEFAULT_CHART_BACKGROUND = "#d3d3d3";
 const SOCKET_IDLE_TIMEOUT_MS = 45_000;
 const SOCKET_TRANSITION_TIMEOUT_MS = 10_000;
 const DISCONNECT_STATUS_DEBOUNCE_MS = 1_500;
@@ -150,6 +151,16 @@ const PROFILE_TIMEFRAMES = new Set<Timeframe>([
   "4h",
   "1D",
 ]);
+
+function normalizeChartBackgroundColor(value: unknown): string {
+  if (typeof value !== "string") {
+    return DEFAULT_CHART_BACKGROUND;
+  }
+  return value.trim().toLowerCase() === LEGACY_DEFAULT_CHART_BACKGROUND
+    ? DEFAULT_CHART_BACKGROUND
+    : value;
+}
+
 const TIMEFRAME_RANK: Record<Timeframe, number> = {
   "1m": 1,
   "3m": 3,
@@ -283,7 +294,11 @@ const ALERT_LINE_TITLES: Record<string, string> = {
   bar_closes_below: "close <",
 };
 
-const MGANN_BIG_TRADE_SWEEP_ALERT_TYPE = "mgann_big_trade_sweep";
+const MGANN_SWEEP_ALERT_TYPES = new Set<Alert["type"]>([
+  "mgann_break_ls",
+  "mgann_sweep",
+  "mgann_big_trade_sweep",
+]);
 
 /** Map configured alerts to the price lines the chart should draw. */
 function toAlertLines(alerts: readonly Alert[]): AlertLine[] {
@@ -305,10 +320,13 @@ function toAlertLines(alerts: readonly Alert[]): AlertLine[] {
 function alertEventToSignalMarker(
   event: AlertEventMessage,
 ): AlertSignalMarker | undefined {
-  if (event.alertType !== MGANN_BIG_TRADE_SWEEP_ALERT_TYPE) {
+  if (!MGANN_SWEEP_ALERT_TYPES.has(event.alertType as Alert["type"])) {
     return undefined;
   }
-  const direction = event.direction === 1 ? 1 : -1;
+  if (event.direction !== 1 && event.direction !== -1) {
+    return undefined;
+  }
+  const direction = event.direction;
   return {
     id: `${event.alertId}:${event.time}:${direction}`,
     time: event.time,
@@ -318,8 +336,13 @@ function alertEventToSignalMarker(
   };
 }
 
-function alertSignalRowToMarker(row: AlertSignalRestRow): AlertSignalMarker {
-  const direction = row.direction === 1 ? 1 : -1;
+function alertSignalRowToMarker(
+  row: AlertSignalRestRow,
+): AlertSignalMarker | undefined {
+  if (row.direction !== 1 && row.direction !== -1) {
+    return undefined;
+  }
+  const direction = row.direction;
   return {
     id: row.id,
     time: row.time,
@@ -1778,7 +1801,10 @@ export function LiveApp() {
   const [mgannSwing, setMgannSwing] = useState<MgannSwingSettings>(() => ({
     ...DEFAULT_MGANN_SWING_SETTINGS,
   }));
-  const showMgannWaveDelta = showMgannSwing && mgannSwing.showWaveDelta;
+  const mgannSwingDisabled = timeframe === "1m";
+  const showMgannSwingForTimeframe = showMgannSwing && !mgannSwingDisabled;
+  const showMgannWaveDelta =
+    showMgannSwingForTimeframe && mgannSwing.showWaveDelta;
   const [showFootprint, setShowFootprint] = useState(false);
   const [showFvgGrader, setShowFvgGrader] = useState(true);
   const [fvgSignalLimit, setFvgSignalLimit] = useState(DEFAULT_FVG_SIGNAL_LIMIT);
@@ -2738,7 +2764,7 @@ export function LiveApp() {
     const hasEnabledMgannSweepAlert = alerts.some(
       (alert) =>
         alert.symbol === SYMBOL &&
-        alert.type === MGANN_BIG_TRADE_SWEEP_ALERT_TYPE &&
+        MGANN_SWEEP_ALERT_TYPES.has(alert.type) &&
         alert.enabled,
     );
     if (
@@ -2778,7 +2804,10 @@ export function LiveApp() {
             setAlertSignalMarkers((prev) =>
               replaceHistoricalAlertSignalMarkers(
                 prev,
-                signals.map(alertSignalRowToMarker),
+                signals.flatMap((signal) => {
+                  const marker = alertSignalRowToMarker(signal);
+                  return marker === undefined ? [] : [marker];
+                }),
               ),
             );
           }
@@ -3970,11 +3999,7 @@ export function LiveApp() {
     if (isTimeframe(payload.timeframe)) {
       setTimeframe(payload.timeframe);
     }
-    setChartBackgroundColor(
-      typeof payload.chartBackgroundColor === "string"
-        ? payload.chartBackgroundColor
-        : DEFAULT_CHART_BACKGROUND,
-    );
+    setChartBackgroundColor(normalizeChartBackgroundColor(payload.chartBackgroundColor));
     setShowFootprint(Boolean(payload.showFootprint));
     setShowVolume(payload.showVolume !== false);
     setShowVolumeDelta(payload.showVolumeDelta !== false);
@@ -4415,6 +4440,7 @@ export function LiveApp() {
           outsideBar={effectiveOutsideBar}
           footprintSettings={footprintSettings}
           bigTradeSettings={bigTradeSettings}
+          mgannSwingDisabled={mgannSwingDisabled}
           footprintDisabled={timeframe !== "1m"}
           fvgGraderDisabled={timeframe !== "1m"}
           bigTradeDisabled={!bigTradeOverlayEnabled}
@@ -4564,7 +4590,7 @@ export function LiveApp() {
             showVolume={showVolume}
             showVolumeDelta={showVolumeDelta}
             showCvd={showMgannWaveDelta}
-            showMgannSwing={showMgannSwing}
+            showMgannSwing={showMgannSwingForTimeframe}
             mgannSwing={mgannSwing}
             showFootprint={showFootprint && timeframe === "1m"}
             showFvgGrader={showFvgGrader && timeframe === "1m"}

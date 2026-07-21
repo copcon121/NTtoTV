@@ -39,6 +39,8 @@ from app.engines.alert_engine import (
     MGANN_FVG_DEFAULT_SWING_SIZE,
     MGANN_FVG_RETEST,
     MGANN_FVG_RETEST_TIMEFRAME,
+    MGANN_BREAK_LS,
+    MGANN_SWEEP,
     MGANN_BIG_TRADE_SWEEP,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
@@ -67,6 +69,7 @@ from app.storage.cache_store import CacheStore
 _SYMBOL = "GC"
 _CANDIDATES = ("GC 08-26", "GC 10-26", "GC 12-26")
 _THRESHOLD_TYPES = frozenset({"volume_delta_threshold", "big_trade_threshold"})
+_PUBLIC_ALERT_TYPES = sorted(ALERT_TYPES - {MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP})
 
 # A single app instance reused across examples; the backing Cache_Store is
 # swapped per example via app.state.contract_state for isolation.
@@ -131,7 +134,8 @@ def _params_for(alert_type: str):
             params["maxZoneAge"] = MGANN_FVG_DEFAULT_MAX_ZONE_AGE
             params["minGapTicks"] = MGANN_FVG_DEFAULT_MIN_GAP_TICKS
             params["retestToleranceTicks"] = MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS
-        elif alert_type == MGANN_BIG_TRADE_SWEEP:
+        elif alert_type == MGANN_BREAK_LS:
+            params["requireBigTrade"] = draw(st.booleans())
             params["bigTradeThreshold"] = draw(_positive_numbers)
             params["timeframe"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME
             params["minVolume"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME
@@ -168,7 +172,7 @@ def _params_for(alert_type: str):
 @st.composite
 def _alert_spec(draw):
     """Generate a valid alert creation body: type, enabled, params."""
-    alert_type = draw(st.sampled_from(sorted(ALERT_TYPES)))
+    alert_type = draw(st.sampled_from(_PUBLIC_ALERT_TYPES))
     enabled = draw(st.booleans())
     params = draw(_params_for(alert_type))
     return {"symbol": _SYMBOL, "type": alert_type, "enabled": enabled, "params": params}

@@ -22,7 +22,7 @@ __all__ = [
 MGANN_FVG_RETEST_DEFAULT_TIMEFRAME = "5m"
 MGANN_FVG_RETEST_TIMEFRAME = MGANN_FVG_RETEST_DEFAULT_TIMEFRAME
 MGANN_FVG_RETEST_TIMEFRAMES = ("1m", "5m")
-MGANN_FVG_DEFAULT_SWING_SIZE = 2
+MGANN_FVG_DEFAULT_SWING_SIZE = 5
 MGANN_FVG_DEFAULT_MAX_ZONE_AGE = 0
 MGANN_FVG_DEFAULT_MIN_GAP_TICKS = 1
 MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS = 0
@@ -264,64 +264,40 @@ class MgannFvgRetestState:
 
     def _collect_pivots(self) -> list[_Pivot]:
         bars = self._bars
-        if len(bars) < self._swing_size + 1:
+        if len(bars) < self._swing_size * 2 + 1:
             return []
 
         pivots: list[_Pivot] = []
-        direction = 0
-        ext_high = bars[0].high
-        ext_high_idx = 0
-        ext_low = bars[0].low
-        ext_low_idx = 0
 
-        for index, bar in enumerate(bars):
-            if bar.high >= ext_high:
-                ext_high = bar.high
-                ext_high_idx = index
-            if bar.low <= ext_low:
-                ext_low = bar.low
-                ext_low_idx = index
+        for index in range(self._swing_size, len(bars) - self._swing_size):
+            candidate = bars[index]
+            left = bars[index - self._swing_size : index]
+            right = bars[index + 1 : index + 1 + self._swing_size]
 
-            previous = bars[index - 1] if index > 0 else None
-            is_inside = (
-                previous is not None
-                and bar.high <= previous.high
-                and bar.low >= previous.low
+            high_pivot = candidate.high > max(bar.high for bar in left) and (
+                candidate.high >= max(bar.high for bar in right)
             )
-            rev_up = not is_inside and self._has_higher_highs(index)
-            rev_down = not is_inside and self._has_lower_lows(index)
+            low_pivot = candidate.low < min(bar.low for bar in left) and (
+                candidate.low <= min(bar.low for bar in right)
+            )
 
-            if direction == 0:
-                if rev_up:
-                    self._push_pivot(pivots, ext_low_idx, "low", index)
-                    direction = 1
-                    ext_high = bar.high
-                    ext_high_idx = index
-                    ext_low = bar.low
-                    ext_low_idx = index
-                elif rev_down:
-                    self._push_pivot(pivots, ext_high_idx, "high", index)
-                    direction = -1
-                    ext_high = bar.high
-                    ext_high_idx = index
-                    ext_low = bar.low
-                    ext_low_idx = index
-                continue
+            previous_kind = pivots[-1].kind if pivots else None
+            if high_pivot and low_pivot:
+                kinds = ("low", "high") if previous_kind == "high" else ("high", "low")
+            elif high_pivot:
+                kinds = ("high",)
+            elif low_pivot:
+                kinds = ("low",)
+            else:
+                kinds = ()
 
-            if direction == 1 and rev_down:
-                self._push_pivot(pivots, ext_high_idx, "high", index)
-                direction = -1
-                ext_high = bar.high
-                ext_high_idx = index
-                ext_low = bar.low
-                ext_low_idx = index
-            elif direction == -1 and rev_up:
-                self._push_pivot(pivots, ext_low_idx, "low", index)
-                direction = 1
-                ext_high = bar.high
-                ext_high_idx = index
-                ext_low = bar.low
-                ext_low_idx = index
+            for kind in kinds:
+                self._push_pivot(
+                    pivots,
+                    index,
+                    kind,
+                    index + self._swing_size,
+                )
 
         return pivots
 
@@ -334,40 +310,24 @@ class MgannFvgRetestState:
     ) -> None:
         if index < 0 or index >= len(self._bars):
             return
+        bar = self._bars[index]
+        pivot = _Pivot(
+            index=index,
+            time=bar.time,
+            price=bar.high if kind == "high" else bar.low,
+            kind=kind,
+            confirmed_index=confirmed_index,
+        )
         if pivots and pivots[-1].index == index:
             return
-        bar = self._bars[index]
-        pivots.append(
-            _Pivot(
-                index=index,
-                time=bar.time,
-                price=bar.high if kind == "high" else bar.low,
-                kind=kind,
-                confirmed_index=confirmed_index,
-            )
-        )
-
-    def _has_higher_highs(self, index: int) -> bool:
-        if index < self._swing_size:
-            return False
-        for offset in range(self._swing_size):
-            if not (
-                self._bars[index - offset].high
-                > self._bars[index - offset - 1].high
+        if pivots and pivots[-1].kind == kind:
+            last = pivots[-1]
+            if (kind == "high" and pivot.price > last.price) or (
+                kind == "low" and pivot.price < last.price
             ):
-                return False
-        return True
-
-    def _has_lower_lows(self, index: int) -> bool:
-        if index < self._swing_size:
-            return False
-        for offset in range(self._swing_size):
-            if not (
-                self._bars[index - offset].low
-                < self._bars[index - offset - 1].low
-            ):
-                return False
-        return True
+                pivots[-1] = pivot
+            return
+        pivots.append(pivot)
 
     @staticmethod
     def _wave_index_for_bar(pivots: list[_Pivot], bar_index: int) -> int:

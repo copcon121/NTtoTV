@@ -510,7 +510,7 @@ describe("ChartContainer", () => {
       <ChartContainer
         symbol="GC"
         contract="GC 08-26"
-        timeframe="1m"
+        timeframe="5m"
         bars={[bar(10)]}
         showMgannSwing
         mgannSwing={settings}
@@ -522,7 +522,7 @@ describe("ChartContainer", () => {
       <ChartContainer
         symbol="GC"
         contract="GC 08-26"
-        timeframe="1m"
+        timeframe="5m"
         bars={[bar(10)]}
         showMgannSwing={false}
         mgannSwing={DEFAULT_MGANN_SWING_SETTINGS}
@@ -536,6 +536,35 @@ describe("ChartContainer", () => {
       DEFAULT_MGANN_SWING_SETTINGS,
     ]);
     expect(port.setCvdVisibleCalls).toEqual([false]);
+  });
+
+  it("suppresses MGannSwing on 1m and restores it on other timeframes", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+
+    const { rerender } = render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        showMgannSwing
+        portFactory={factory}
+      />,
+    );
+
+    rerender(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="3m"
+        bars={[bar(10)]}
+        showMgannSwing
+        portFactory={factory}
+      />,
+    );
+
+    expect(port.setMgannSwingVisibleCalls).toEqual([false, true]);
   });
 
   it("loads FVG Signal Grader colors and toggles their visibility", () => {

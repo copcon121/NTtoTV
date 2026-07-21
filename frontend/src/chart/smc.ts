@@ -127,6 +127,10 @@ interface OrderBlock {
   active: boolean;
 }
 
+interface OrderBlockCandidate extends Omit<OrderBlock, "active"> {
+  promoted: boolean;
+}
+
 interface Fvg {
   top: number;
   bottom: number;
@@ -235,6 +239,7 @@ class LuxSmc {
   readonly swingObs: OrderBlock[] = [];
   readonly internalObs: OrderBlock[] = [];
   readonly fvgs: Fvg[] = [];
+  private readonly swingObStack: OrderBlockCandidate[] = [];
 
   private lastSwingLeg = 0;
   private lastInternalLeg = 0;
@@ -296,7 +301,7 @@ class LuxSmc {
     this.processStructure(this.swingLength, false, barIndex);
     this.processStructure(this.internalLength, true, barIndex);
     this.detectFvgs(barIndex);
-    this.maintainZones(bar.high, bar.low, barIndex);
+    this.maintainZones(bar.high, bar.low, bar.close, barIndex);
     this.detectSweeps(bar.high, bar.low);
 
     return this.state;
@@ -366,6 +371,7 @@ class LuxSmc {
         this.state.prevSwingLow = this.state.swingLow;
         this.state.swingLow = pivot;
         this.state.trailingBottom = candidateLow;
+        this.addSwingOrderBlockCandidate(pivot, 1, barIndex);
       }
     } else {
       const pivot: SwingPoint = {
@@ -392,6 +398,7 @@ class LuxSmc {
         this.state.prevSwingHigh = this.state.swingHigh;
         this.state.swingHigh = pivot;
         this.state.trailingTop = candidateHigh;
+        this.addSwingOrderBlockCandidate(pivot, -1, barIndex);
       }
     }
 
@@ -422,11 +429,8 @@ class LuxSmc {
           if (isChoch) this.state.chochBull = true;
           else this.state.bosBull = true;
         }
-        const originPivot =
-          (isInternal ? this.state.internalLow : this.state.swingLow) ??
-          activeHigh;
-        if (originPivot && (!isInternal || isChoch)) {
-          this.createOrderBlock(originPivot, 1, isInternal);
+        if (!isInternal || isChoch) {
+          this.createOrderBlock(activeHigh, 1, isInternal);
         }
       }
     }
@@ -450,11 +454,8 @@ class LuxSmc {
           if (isChoch) this.state.chochBear = true;
           else this.state.bosBear = true;
         }
-        const originPivot =
-          (isInternal ? this.state.internalHigh : this.state.swingHigh) ??
-          activeLow;
-        if (originPivot && (!isInternal || isChoch)) {
-          this.createOrderBlock(originPivot, -1, isInternal);
+        if (!isInternal || isChoch) {
+          this.createOrderBlock(activeLow, -1, isInternal);
         }
       }
     }
@@ -472,8 +473,6 @@ class LuxSmc {
 
     const rangeHighs = this.highs.slice(bufferStartPos);
     const rangeLows = this.lows.slice(bufferStartPos);
-    const rangeIndices = this.indices.slice(bufferStartPos);
-    const rangeTimestamps = this.timestamps.slice(bufferStartPos);
     if (rangeHighs.length === 0) return;
 
     let obCandlePos = 0;
@@ -485,23 +484,90 @@ class LuxSmc {
       obCandlePos = rangeHighs.indexOf(maxHigh);
     }
 
-    const obBufferPos = bufferStartPos + obCandlePos;
-    const bounds = this.orderBlockBounds(obBufferPos, direction);
-
-    const ob: OrderBlock = {
-      top: bounds.top,
-      bottom: bounds.bottom,
-      barIndex: rangeIndices[obCandlePos],
-      createdBarIndex: this.indices[this.indices.length - 1],
-      timestamp: rangeTimestamps[obCandlePos],
-      type: direction,
-      mitigated: false,
-      active: true,
-    };
+    const ob = this.orderBlockFromBufferCandle(
+      bufferStartPos + obCandlePos,
+      direction,
+      this.indices[this.indices.length - 1],
+    );
+    if (!ob) return;
 
     const target = isInternal ? this.internalObs : this.swingObs;
     target.unshift(ob);
     if (target.length > 20) target.pop();
+    if (!isInternal) {
+      this.addSwingOrderBlockToStack(ob, true);
+    }
+  }
+
+  private addSwingOrderBlockCandidate(
+    pivot: SwingPoint,
+    direction: Direction,
+    createdBarIndex: number,
+  ): void {
+    const candlePos = this.indices.indexOf(pivot.barIndex);
+    if (candlePos < 0) return;
+    const ob = this.orderBlockFromBufferCandle(
+      candlePos,
+      direction,
+      createdBarIndex,
+    );
+    if (!ob) return;
+    this.addSwingOrderBlockToStack(ob, false);
+  }
+
+  private orderBlockFromBufferCandle(
+    candlePos: number,
+    direction: Direction,
+    createdBarIndex: number,
+  ): OrderBlock | undefined {
+    const sourceIndex = this.indices[candlePos];
+    const sourceTimestamp = this.timestamps[candlePos];
+    if (sourceIndex === undefined || sourceTimestamp === undefined) return undefined;
+    const bounds = this.orderBlockBounds(candlePos, direction);
+    return {
+      top: bounds.top,
+      bottom: bounds.bottom,
+      barIndex: sourceIndex,
+      createdBarIndex,
+      timestamp: sourceTimestamp,
+      type: direction,
+      mitigated: false,
+      active: true,
+    };
+  }
+
+  private addSwingOrderBlockToStack(ob: OrderBlock, promoted: boolean): void {
+    const existing = this.swingObStack.find((candidate) =>
+      this.sameOrderBlock(candidate, ob),
+    );
+    if (existing) {
+      if (promoted) existing.promoted = true;
+      if (ob.mitigated) existing.mitigated = true;
+      return;
+    }
+    this.swingObStack.unshift({
+      top: ob.top,
+      bottom: ob.bottom,
+      barIndex: ob.barIndex,
+      createdBarIndex: ob.createdBarIndex,
+      timestamp: ob.timestamp,
+      type: ob.type,
+      mitigated: ob.mitigated,
+      promoted,
+    });
+    if (this.swingObStack.length > 80) this.swingObStack.pop();
+  }
+
+  private sameOrderBlock(
+    left: OrderBlock | OrderBlockCandidate,
+    right: OrderBlock | OrderBlockCandidate,
+  ): boolean {
+    return (
+      left.type === right.type &&
+      left.barIndex === right.barIndex &&
+      left.top === right.top &&
+      left.bottom === right.bottom
+    );
   }
 
   private orderBlockBounds(
@@ -629,9 +695,15 @@ class LuxSmc {
     return averageVolume <= 0 || volume > averageVolume;
   }
 
-  private maintainZones(high: number, low: number, currentIndex: number): void {
-    this.filterOrderBlocks(this.swingObs, high, low, currentIndex, false);
-    this.filterOrderBlocks(this.internalObs, high, low, currentIndex, true);
+  private maintainZones(
+    high: number,
+    low: number,
+    close: number,
+    currentIndex: number,
+  ): void {
+    this.filterOrderBlocks(this.swingObs, high, low, close, currentIndex, false);
+    this.filterOrderBlocks(this.internalObs, high, low, close, currentIndex, true);
+    this.maintainSwingOrderBlockStack(close, currentIndex);
 
     for (let i = this.fvgs.length - 1; i >= 0; i -= 1) {
       const fvg = this.fvgs[i];
@@ -656,6 +728,7 @@ class LuxSmc {
     obs: OrderBlock[],
     high: number,
     low: number,
+    close: number,
     currentIndex: number,
     isInternal: boolean,
   ): void {
@@ -666,20 +739,111 @@ class LuxSmc {
         obs.splice(i, 1);
         continue;
       }
-      if (ob.type === 1 && low < ob.bottom) {
+      const bullishMitigated =
+        ob.type === 1 && (isInternal ? low < ob.bottom : close < ob.bottom);
+      const bearishMitigated =
+        ob.type === -1 && (isInternal ? high > ob.top : close > ob.top);
+      if (bullishMitigated) {
         ob.mitigated = true;
         ob.active = false;
         if (isInternal) this.state.obBullIntMitigated = true;
         else this.state.obBullExtMitigated = true;
         obs.splice(i, 1);
-      } else if (ob.type === -1 && high > ob.top) {
+      } else if (bearishMitigated) {
         ob.mitigated = true;
         ob.active = false;
         if (isInternal) this.state.obBearIntMitigated = true;
         else this.state.obBearExtMitigated = true;
         obs.splice(i, 1);
+      } else {
+        continue;
+      }
+      if (!isInternal) {
+        this.markSwingStackMitigated(ob);
+        this.promoteNextSwingOrderBlock(ob, close, currentIndex);
       }
     }
+  }
+
+  private markSwingStackMitigated(ob: OrderBlock): void {
+    const candidate = this.swingObStack.find((entry) =>
+      this.sameOrderBlock(entry, ob),
+    );
+    if (candidate) {
+      candidate.mitigated = true;
+    }
+  }
+
+  private maintainSwingOrderBlockStack(
+    close: number,
+    currentIndex: number,
+  ): void {
+    for (const candidate of this.swingObStack) {
+      if (candidate.mitigated) continue;
+      if (currentIndex - candidate.createdBarIndex > this.maxZoneAge) {
+        candidate.mitigated = true;
+        continue;
+      }
+      if (
+        (candidate.type === 1 && close < candidate.bottom) ||
+        (candidate.type === -1 && close > candidate.top)
+      ) {
+        candidate.mitigated = true;
+      }
+    }
+  }
+
+  private promoteNextSwingOrderBlock(
+    broken: OrderBlock,
+    close: number,
+    currentIndex: number,
+  ): void {
+    const candidates = this.swingObStack.filter((candidate) =>
+      this.canPromoteSwingOrderBlock(candidate, broken, close, currentIndex),
+    );
+    candidates.sort((a, b) => {
+      if (broken.type === -1) {
+        return a.top - b.top || b.timestamp - a.timestamp;
+      }
+      return b.bottom - a.bottom || b.timestamp - a.timestamp;
+    });
+    const next = candidates[0];
+    if (!next) return;
+    next.promoted = true;
+    const promoted: OrderBlock = {
+      top: next.top,
+      bottom: next.bottom,
+      barIndex: next.barIndex,
+      createdBarIndex: currentIndex,
+      timestamp: next.timestamp,
+      type: next.type,
+      mitigated: false,
+      active: true,
+    };
+    if (!this.swingObs.some((ob) => this.sameOrderBlock(ob, promoted))) {
+      this.swingObs.unshift(promoted);
+      if (this.swingObs.length > 20) this.swingObs.pop();
+    }
+  }
+
+  private canPromoteSwingOrderBlock(
+    candidate: OrderBlockCandidate,
+    broken: OrderBlock,
+    close: number,
+    currentIndex: number,
+  ): boolean {
+    if (
+      candidate.type !== broken.type ||
+      candidate.promoted ||
+      candidate.mitigated ||
+      currentIndex - candidate.createdBarIndex > this.maxZoneAge
+    ) {
+      return false;
+    }
+    if (candidate.type === -1) {
+      return candidate.top > broken.top && close <= candidate.top;
+    }
+    return candidate.bottom < broken.bottom && close >= candidate.bottom;
   }
 
   private detectSweeps(high: number, low: number): void {

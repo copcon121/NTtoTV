@@ -12,6 +12,9 @@
   --mz-ask: #008b8b;
   --mz-poc: #ff00ff;
   --mz-gold: #ffd700;
+  --standalone-safe-top: env(safe-area-inset-top, 0px);
+  --standalone-safe-right: env(safe-area-inset-right, 0px);
+  --standalone-safe-left: env(safe-area-inset-left, 0px);
 }
 
 * {
@@ -1450,13 +1453,19 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 48px;
-  padding: 8px 12px;
+  min-height: calc(48px + var(--standalone-safe-top));
+  padding: calc(8px + var(--standalone-safe-top))
+    calc(12px + var(--standalone-safe-right)) 8px
+    calc(12px + var(--standalone-safe-left));
   background: #f5f5f5;
   border-bottom: 1px solid #d6d6d6;
 }
 
 .footprint-page-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
   color: #111111;
   text-decoration: none;
   border: 1px solid #c9c9c9;
@@ -1608,13 +1617,19 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 48px;
-  padding: 8px 12px;
+  min-height: calc(48px + var(--standalone-safe-top));
+  padding: calc(8px + var(--standalone-safe-top))
+    calc(12px + var(--standalone-safe-right)) 8px
+    calc(12px + var(--standalone-safe-left));
   background: #f5f5f5;
   border-bottom: 1px solid #d6d6d6;
 }
 
 .market-profile-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
   color: #111111;
   text-decoration: none;
   border: 1px solid #c9c9c9;
@@ -1642,6 +1657,12 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.market-profile-drawing-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .market-profile-form label {
@@ -1675,10 +1696,30 @@ body {
   cursor: pointer;
 }
 
+.market-profile-drawing-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  color: #111111;
+  background: #ffffff;
+  border: 1px solid #c9c9c9;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
 .market-profile-segmented button[aria-pressed="true"] {
   color: #ffffff;
   background: #2563eb;
   border-color: #2563eb;
+}
+
+.market-profile-drawing-tools button[aria-pressed="true"] {
+  color: #ffffff;
+  background: #111827;
+  border-color: #111827;
 }
 
 .market-profile-status {
@@ -1700,7 +1741,7 @@ body {
   position: absolute;
   inset: 0;
   background: #ffffff;
-  cursor: grab;
+  cursor: crosshair;
   touch-action: none;
   user-select: none;
 }
@@ -1721,6 +1762,10 @@ body {
   cursor: zoom-in;
 }
 
+.market-profile-canvas-shell.is-draw-rectangle {
+  cursor: crosshair;
+}
+
 .market-profile-canvas-shell canvas {
   display: block;
   width: 100%;
@@ -1731,10 +1776,16 @@ body {
   .footprint-page-toolbar {
     align-items: stretch;
     flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .footprint-page-back {
+    flex: 0 0 auto;
   }
 
   .footprint-page-title {
     flex: 1 1 auto;
+    min-width: 0;
   }
 
   .footprint-page-form {
@@ -1756,11 +1807,17 @@ body {
   .market-profile-toolbar {
     align-items: stretch;
     flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .market-profile-link {
+    flex: 0 0 auto;
   }
 
   .market-profile-title,
   .market-profile-form,
-  .market-profile-segmented {
+  .market-profile-segmented,
+  .market-profile-drawing-tools {
     flex: 1 1 auto;
   }
 

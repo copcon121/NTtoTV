@@ -51,6 +51,7 @@ const Y_SCALE_SENSITIVITY = 0.003;
 
 type MarketProfileTimeframe = Extract<Timeframe, "5m" | "15m">;
 type ProfileMode = "volume" | "delta" | "tpo";
+type MarketProfileDrawingTool = "rectangle";
 
 interface TpoRow {
   price: number;
@@ -91,8 +92,29 @@ interface MarketProfileView {
   yOffset: number;
 }
 
+interface MarketProfileDrawingPoint {
+  x: number;
+  price: number;
+}
+
+interface MarketProfileDrawing {
+  id: string;
+  tool: MarketProfileDrawingTool;
+  start: MarketProfileDrawingPoint;
+  end?: MarketProfileDrawingPoint;
+  preview?: boolean;
+}
+
+interface MarketProfileCrosshair {
+  x: number;
+  y: number;
+}
+
 type MarketProfileDragMode = "pan" | "scale-x" | "scale-y";
-type MarketProfileInteractionMode = MarketProfileDragMode | "pinch";
+type MarketProfileInteractionMode =
+  | MarketProfileDragMode
+  | "pinch"
+  | "draw-rectangle";
 
 interface MarketProfilePointerState {
   pointerId: number;
@@ -120,6 +142,13 @@ interface MarketProfilePinchState {
   view: MarketProfileView;
 }
 
+interface MarketProfileDrawingPlacementState {
+  tool: MarketProfileDrawingTool;
+  pointerId: number;
+  start: MarketProfileDrawingPoint;
+  current: MarketProfileDrawingPoint;
+}
+
 type MarketProfileInteractionState = MarketProfileDragState | MarketProfilePinchState;
 
 const DEFAULT_MARKET_PROFILE_VIEW: MarketProfileView = {
@@ -128,6 +157,18 @@ const DEFAULT_MARKET_PROFILE_VIEW: MarketProfileView = {
   xOffset: 0,
   yOffset: 0,
 };
+
+const MARKET_PROFILE_DRAWING_TOOLS: readonly {
+  type: MarketProfileDrawingTool;
+  label: string;
+  icon: string;
+}[] = [
+  {
+    type: "rectangle",
+    label: "Rectangle",
+    icon: "M4 6 h16 v12 h-16 Z",
+  },
+];
 
 export function MarketProfilePage() {
   const endpoints = useMemo(() => resolveEndpoints(), []);
@@ -140,6 +181,9 @@ export function MarketProfilePage() {
   const [state, setState] = useState<MarketProfileState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeDrawingTool, setActiveDrawingTool] =
+    useState<MarketProfileDrawingTool | null>(null);
+  const [clearDrawingsSignal, setClearDrawingsSignal] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -272,6 +316,55 @@ export function MarketProfilePage() {
             </button>
           ))}
         </div>
+        <div className="market-profile-drawing-tools" aria-label="Drawing tools">
+          {MARKET_PROFILE_DRAWING_TOOLS.map((tool) => {
+            const active = activeDrawingTool === tool.type;
+            return (
+              <button
+                key={tool.type}
+                type="button"
+                title={tool.label}
+                aria-label={tool.label}
+                aria-pressed={active}
+                onClick={() => setActiveDrawingTool(active ? null : tool.type)}
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d={tool.icon} />
+                </svg>
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            title="Clear drawings"
+            aria-label="Clear drawings"
+            onClick={() => setClearDrawingsSignal((value) => value + 1)}
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 6 h18 M8 6 v14 M16 6 v14 M10 6 V4 h4 v2" />
+            </svg>
+          </button>
+        </div>
         <button
           className="market-profile-reload"
           type="button"
@@ -284,7 +377,13 @@ export function MarketProfilePage() {
         </div>
       </header>
       <main className="market-profile-chart">
-        <MarketProfileCanvas data={state} profileMode={profileMode} />
+        <MarketProfileCanvas
+          data={state}
+          profileMode={profileMode}
+          activeTool={activeDrawingTool}
+          clearDrawingsSignal={clearDrawingsSignal}
+          onToolDeselect={() => setActiveDrawingTool(null)}
+        />
       </main>
     </div>
   );
@@ -293,27 +392,68 @@ export function MarketProfilePage() {
 function MarketProfileCanvas({
   data,
   profileMode,
+  activeTool,
+  clearDrawingsSignal,
+  onToolDeselect,
 }: {
   data: MarketProfileState | null;
   profileMode: ProfileMode;
+  activeTool: MarketProfileDrawingTool | null;
+  clearDrawingsSignal: number;
+  onToolDeselect: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dragRef = useRef<MarketProfileInteractionState | null>(null);
+  const drawingPlacementRef = useRef<MarketProfileDrawingPlacementState | null>(null);
   const activePointersRef = useRef<Map<number, MarketProfilePointerState>>(new Map());
   const [hostRef, size] = useElementSize();
   const [view, setView] = useState<MarketProfileView>(DEFAULT_MARKET_PROFILE_VIEW);
   const [interaction, setInteraction] = useState<MarketProfileInteractionMode | null>(null);
+  const [drawings, setDrawings] = useState<MarketProfileDrawing[]>([]);
+  const [drawingPreview, setDrawingPreview] =
+    useState<MarketProfileDrawing | null>(null);
+  const [crosshair, setCrosshair] = useState<MarketProfileCrosshair | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
-    drawMarketProfile(ctx, data, profileMode, size.width, size.height, view);
-  }, [data, profileMode, size.height, size.width, view]);
+    drawMarketProfile(
+      ctx,
+      data,
+      profileMode,
+      size.width,
+      size.height,
+      view,
+      drawings,
+      drawingPreview,
+      crosshair,
+    );
+  }, [
+    crosshair,
+    data,
+    drawingPreview,
+    drawings,
+    profileMode,
+    size.height,
+    size.width,
+    view,
+  ]);
 
   useEffect(() => {
     setView(DEFAULT_MARKET_PROFILE_VIEW);
+    setDrawings([]);
+    setDrawingPreview(null);
+    setCrosshair(null);
+    drawingPlacementRef.current = null;
   }, [data?.from, data?.to]);
+
+  useEffect(() => {
+    setDrawings([]);
+    setDrawingPreview(null);
+    setCrosshair(null);
+    drawingPlacementRef.current = null;
+  }, [clearDrawingsSignal]);
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -326,6 +466,38 @@ function MarketProfileCanvas({
       clientY: event.clientY,
     });
     event.currentTarget.setPointerCapture(event.pointerId);
+    setCrosshair(marketProfileCrosshairFromLocal(localX, localY, size.width, size.height));
+
+    if (activeTool) {
+      const point = marketProfileDrawingPointFromLocal(
+        localX,
+        localY,
+        data,
+        size.width,
+        size.height,
+        view,
+      );
+      if (!point) {
+        event.preventDefault();
+        return;
+      }
+      drawingPlacementRef.current = {
+        tool: activeTool,
+        pointerId: event.pointerId,
+        start: point,
+        current: point,
+      };
+      setDrawingPreview({
+        id: "preview",
+        tool: activeTool,
+        start: point,
+        end: point,
+        preview: true,
+      });
+      setInteraction(`draw-${activeTool}`);
+      event.preventDefault();
+      return;
+    }
 
     if (startPinchGesture(event.currentTarget)) {
       event.preventDefault();
@@ -353,10 +525,42 @@ function MarketProfileCanvas({
   };
 
   const moveDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const localX = event.clientX - rect.left;
+    const localY = event.clientY - rect.top;
+    setCrosshair(
+      marketProfileCrosshairFromLocal(localX, localY, size.width, size.height),
+    );
+
     const pointer = activePointersRef.current.get(event.pointerId);
     if (pointer) {
       pointer.clientX = event.clientX;
       pointer.clientY = event.clientY;
+    }
+
+    const placement = drawingPlacementRef.current;
+    if (placement) {
+      if (placement.pointerId !== event.pointerId) return;
+      const point = marketProfileDrawingPointFromLocal(
+        localX,
+        localY,
+        data,
+        size.width,
+        size.height,
+        view,
+        true,
+      );
+      if (!point) return;
+      placement.current = point;
+      setDrawingPreview({
+        id: "preview",
+        tool: placement.tool,
+        start: placement.start,
+        end: point,
+        preview: true,
+      });
+      event.preventDefault();
+      return;
     }
 
     const drag = dragRef.current;
@@ -421,6 +625,25 @@ function MarketProfileCanvas({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    const placement = drawingPlacementRef.current;
+    if (placement && placement.pointerId === event.pointerId) {
+      if (isMarketProfileRectangleLargeEnough(placement.start, placement.current)) {
+        setDrawings((current) => [
+          ...current,
+          {
+            id: createMarketProfileDrawingId(),
+            tool: placement.tool,
+            start: placement.start,
+            end: placement.current,
+          },
+        ]);
+      }
+      drawingPlacementRef.current = null;
+      setDrawingPreview(null);
+      setInteraction(null);
+      onToolDeselect();
+      return;
+    }
     if (!drag) return;
     if (drag.mode === "pinch") {
       if (drag.pointerIds.includes(event.pointerId)) {
@@ -453,6 +676,11 @@ function MarketProfileCanvas({
     return true;
   };
 
+  const hideCrosshair = () => {
+    if (dragRef.current || drawingPlacementRef.current) return;
+    setCrosshair(null);
+  };
+
   return (
     <div
       ref={hostRef}
@@ -461,6 +689,7 @@ function MarketProfileCanvas({
       onPointerMove={moveDrag}
       onPointerUp={stopDrag}
       onPointerCancel={stopDrag}
+      onPointerLeave={hideCrosshair}
       onDoubleClick={() => setView(DEFAULT_MARKET_PROFILE_VIEW)}
     >
       <canvas
@@ -519,6 +748,9 @@ function drawMarketProfile(
   width: number,
   height: number,
   view: MarketProfileView,
+  drawings: readonly MarketProfileDrawing[] = [],
+  drawingPreview: MarketProfileDrawing | null = null,
+  crosshair: MarketProfileCrosshair | null = null,
 ): void {
   ctx.clearRect(0, 0, width, height);
   const tpoStyle = profileMode === "tpo";
@@ -542,12 +774,14 @@ function drawMarketProfile(
 
   const compressedTime = (time: number) => compressedSessionPosition(data.days, time);
   const xDomain = Math.max(1, data.days.length);
-  const xForTime = (time: number) =>
+  const xForCompressed = (position: number) =>
     plot.left +
-    (compressedTime(time) / xDomain) *
+    (position / xDomain) *
       plotWidth *
       view.xScale +
     view.xOffset;
+  const xForTime = (time: number) =>
+    xForCompressed(compressedTime(time));
   const yForPrice = (price: number) =>
     plot.top +
     ((bounds.max - price) / Math.max(0.000001, bounds.max - bounds.min)) *
@@ -565,6 +799,15 @@ function drawMarketProfile(
     drawLine(ctx, data.bars, xForTime, yForPrice, plot);
   }
   drawOpenMarkers(ctx, data.days, xForTime, yForPrice, tpoStyle);
+  drawMarketProfileDrawings(
+    ctx,
+    drawings,
+    drawingPreview,
+    xForCompressed,
+    yForPrice,
+    tpoStyle,
+  );
+  drawMarketProfileCrosshair(ctx, crosshair, plot, tpoStyle);
   ctx.restore();
   drawAxes(ctx, plot, bounds, data.days, xForTime, yForPrice, tpoStyle);
 }
@@ -959,6 +1202,72 @@ function drawOpenMarkers(
   ctx.restore();
 }
 
+function drawMarketProfileDrawings(
+  ctx: CanvasRenderingContext2D,
+  drawings: readonly MarketProfileDrawing[],
+  preview: MarketProfileDrawing | null,
+  xForPosition: (position: number) => number,
+  yForPrice: (price: number) => number,
+  dark = false,
+): void {
+  const visibleDrawings = preview ? [...drawings, preview] : drawings;
+  if (visibleDrawings.length === 0) return;
+
+  ctx.save();
+  for (const drawing of visibleDrawings) {
+    const stroke = dark ? "#fbbf24" : "#111827";
+    const fill = dark ? "rgba(251, 191, 36, 0.12)" : "rgba(37, 99, 235, 0.10)";
+    ctx.strokeStyle = drawing.preview ? (dark ? "#fde68a" : "#2563eb") : stroke;
+    ctx.fillStyle = fill;
+    ctx.lineWidth = drawing.preview ? 1.25 : 1.6;
+    ctx.setLineDash(drawing.preview ? [6, 4] : []);
+
+    const end = drawing.end ?? drawing.start;
+    const x1 = xForPosition(drawing.start.x);
+    const y1 = yForPrice(drawing.start.price);
+    const x2 = xForPosition(end.x);
+    const y2 = yForPrice(end.price);
+    const left = Math.min(x1, x2);
+    const top = Math.min(y1, y2);
+    const width = Math.abs(x2 - x1);
+    const height = Math.abs(y2 - y1);
+    if (width < 1 || height < 1) continue;
+    ctx.fillRect(left, top, width, height);
+    ctx.strokeRect(left, top, width, height);
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawMarketProfileCrosshair(
+  ctx: CanvasRenderingContext2D,
+  crosshair: MarketProfileCrosshair | null,
+  plot: { left: number; top: number; right: number; bottom: number },
+  dark = false,
+): void {
+  if (!crosshair) return;
+  if (
+    crosshair.x < plot.left ||
+    crosshair.x > plot.right ||
+    crosshair.y < plot.top ||
+    crosshair.y > plot.bottom
+  ) {
+    return;
+  }
+
+  ctx.save();
+  ctx.strokeStyle = dark ? "rgba(255, 255, 255, 0.42)" : "rgba(0, 0, 0, 0.32)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([5, 5]);
+  ctx.beginPath();
+  ctx.moveTo(plot.left, crosshair.y);
+  ctx.lineTo(plot.right, crosshair.y);
+  ctx.moveTo(crosshair.x, plot.top);
+  ctx.lineTo(crosshair.x, plot.bottom);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawAxes(
   ctx: CanvasRenderingContext2D,
   plot: { left: number; top: number; right: number; bottom: number },
@@ -1010,6 +1319,72 @@ function drawEmptyState(ctx: CanvasRenderingContext2D, width: number, height: nu
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText("No market profile data", width / 2, height / 2);
+}
+
+function marketProfileCrosshairFromLocal(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): MarketProfileCrosshair | null {
+  const plot = marketProfilePlot(width, height);
+  if (x < plot.left || x > plot.right || y < plot.top || y > plot.bottom) {
+    return null;
+  }
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+function marketProfileDrawingPointFromLocal(
+  x: number,
+  y: number,
+  data: MarketProfileState | null,
+  width: number,
+  height: number,
+  view: MarketProfileView,
+  clampToPlot = false,
+): MarketProfileDrawingPoint | null {
+  if (!data || data.days.length === 0) return null;
+  const bounds = priceBounds(data);
+  if (!bounds) return null;
+  const plot = marketProfilePlot(width, height);
+  const insidePlot =
+    x >= plot.left &&
+    x <= plot.right &&
+    y >= plot.top &&
+    y <= plot.bottom;
+  if (!insidePlot && !clampToPlot) return null;
+
+  const plotWidth = Math.max(1, plot.right - plot.left);
+  const plotHeight = Math.max(1, plot.bottom - plot.top);
+  const safeX = clampNumber(x, plot.left, plot.right);
+  const safeY = clampNumber(y, plot.top, plot.bottom);
+  const domainX =
+    ((safeX - plot.left - view.xOffset) /
+      Math.max(0.000001, plotWidth * view.xScale)) *
+    Math.max(1, data.days.length);
+  const price =
+    bounds.max -
+    ((safeY - plot.top - view.yOffset) /
+      Math.max(0.000001, plotHeight * view.yScale)) *
+      Math.max(0.000001, bounds.max - bounds.min);
+  return {
+    x: clampNumber(domainX, 0, Math.max(1, data.days.length)),
+    price,
+  };
+}
+
+function isMarketProfileRectangleLargeEnough(
+  start: MarketProfileDrawingPoint,
+  end: MarketProfileDrawingPoint,
+): boolean {
+  return (
+    Math.abs(start.x - end.x) > 0.005 &&
+    Math.abs(start.price - end.price) >= GC_TICK_SIZE * 0.5
+  );
+}
+
+function createMarketProfileDrawingId(): string {
+  return `mp-drawing-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function dragModeForPoint(

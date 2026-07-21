@@ -1109,7 +1109,7 @@ export class ApiClient {
       params.set("limit", String(input.limit));
     }
     const body = await this.getJson<{ signals: AlertSignalRestRow[] }>(
-      `/signals/mgann-big-trade-sweep?${params.toString()}`,
+      `/signals/mgann-break-ls?${params.toString()}`,
     );
     return body.signals;
   }

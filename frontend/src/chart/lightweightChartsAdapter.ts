@@ -91,6 +91,7 @@ import {
 import {
   buildMgannSwingOverlay,
   DEFAULT_MGANN_SWING_SETTINGS,
+  MGANN_SWING_SIZE,
   normalizeMgannSwingSettings,
   type MgannSwingImpulseWave,
   type MgannSwingSettings,
@@ -122,7 +123,7 @@ const FVG_BEAR_COLORS: Record<number, string> = {
   5: "magenta",
 };
 
-const MGANN_SWING_LINE_COLOR = "#9e9e9e";
+const MGANN_SWING_LINE_COLOR = "#ff3b30";
 const MGANN_SWING_BUY_COLOR = "#00c0c0";
 const MGANN_SWING_SELL_COLOR = "#c00000";
 const MGANN_SWING_DELTA_UP_COLOR = "#004080";
@@ -233,12 +234,16 @@ const DEFAULT_DELTA_COLORS: DeltaColors = {
 };
 
 const MZ_FOOTPRINT_COLORS = {
-  chartBg: "#101010",
-  candleUp: "#008000",
-  candleDown: "#8b0000",
+  chartBg: "#d3d3d3",
+  candleUp: "#ffffff",
+  candleDown: "#666666",
+  candleWick: "#6f6f6f",
   bid: "#fa8072",
   ask: "#008b8b",
 };
+const BAR_COUNTDOWN_BACKGROUND_COLOR = "#1f1f1f";
+const BAR_COUNTDOWN_TEXT_COLOR = "#ffffff";
+const CHART_GRID_VISIBLE = false;
 const VOLUME_UP_COLOR = "rgba(38, 166, 154, 0.50)";
 const VOLUME_DOWN_COLOR = "rgba(239, 83, 80, 0.50)";
 const WAVE_DELTA_TRANSPARENT_LINE_COLOR = "rgba(0, 0, 0, 0)";
@@ -251,7 +256,7 @@ const WAVE_DELTA_MBOX_DIV_UP_BORDER = "rgba(150, 80, 220, 1)";
 const WAVE_DELTA_MBOX_DIV_DOWN_FILL = "rgba(120, 70, 190, 0.45)";
 const WAVE_DELTA_MBOX_DIV_DOWN_BORDER = "rgba(120, 70, 190, 1)";
 const WAVE_DELTA_MBOX_KEEP = 500;
-const DEFAULT_WAVE_DELTA_SWING_SIZE = 2;
+const DEFAULT_WAVE_DELTA_SWING_SIZE = MGANN_SWING_SIZE;
 const DIVERGENCE_PIVOT_LEFT = 2;
 const DIVERGENCE_PIVOT_RIGHT = 2;
 const DIVERGENCE_MIN_PIVOT_SPACING = 3;
@@ -1081,8 +1086,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         textColor: palette.text,
       },
       grid: {
-        vertLines: { color: palette.verticalGrid },
-        horzLines: { color: palette.grid },
+        vertLines: { color: palette.verticalGrid, visible: CHART_GRID_VISIBLE },
+        horzLines: { color: palette.grid, visible: CHART_GRID_VISIBLE },
       },
       localization: {
         timeFormatter: (time: Time) =>
@@ -1108,12 +1113,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     });
 
     this.candleSeries = this.chart.addSeries(CandlestickSeries, {
-      upColor: "transparent",
+      upColor: MZ_FOOTPRINT_COLORS.candleUp,
       downColor: MZ_FOOTPRINT_COLORS.candleDown,
-      borderUpColor: MZ_FOOTPRINT_COLORS.candleUp,
-      borderDownColor: MZ_FOOTPRINT_COLORS.candleDown,
-      wickUpColor: MZ_FOOTPRINT_COLORS.candleUp,
-      wickDownColor: MZ_FOOTPRINT_COLORS.candleDown,
+      borderUpColor: MZ_FOOTPRINT_COLORS.candleWick,
+      borderDownColor: MZ_FOOTPRINT_COLORS.candleWick,
+      wickUpColor: MZ_FOOTPRINT_COLORS.candleWick,
+      wickDownColor: MZ_FOOTPRINT_COLORS.candleWick,
       // Current (last) price line: a light dashed line like the alert lines.
       priceLineVisible: true,
       priceLineSource: PriceLineSource.LastBar,
@@ -1354,8 +1359,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         textColor: palette.text,
       },
       grid: {
-        vertLines: { color: palette.verticalGrid },
-        horzLines: { color: palette.grid },
+        vertLines: { color: palette.verticalGrid, visible: CHART_GRID_VISIBLE },
+        horzLines: { color: palette.grid, visible: CHART_GRID_VISIBLE },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
@@ -1741,9 +1746,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.barCountdownElement.style.top = `${Math.round(top)}px`;
     this.barCountdownElement.style.width = `${Math.round(scaleWidth)}px`;
     this.barCountdownElement.style.backgroundColor =
-      bar.close >= bar.open
-        ? MZ_FOOTPRINT_COLORS.candleUp
-        : MZ_FOOTPRINT_COLORS.candleDown;
+      BAR_COUNTDOWN_BACKGROUND_COLOR;
+    this.barCountdownElement.style.color = BAR_COUNTDOWN_TEXT_COLOR;
     this.barCountdownElement.hidden = false;
   }
 
@@ -2665,7 +2669,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         color: smcMarkerColor(marker, markerTextColor),
         id: marker.id,
         text: marker.label,
-        size: marker.scope === "internal" ? 0.85 : 1,
+        size: marker.kind === "swing_label" ? 0 : marker.scope === "internal" ? 0.85 : 1,
       }));
     this.smcMarkers.setMarkers(markers);
 

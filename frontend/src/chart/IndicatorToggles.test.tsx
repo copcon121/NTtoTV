@@ -174,6 +174,36 @@ describe("IndicatorToggles", () => {
     });
   });
 
+  it("can disable MGannSwing independently", () => {
+    const onMgannSwing = vi.fn();
+    render(
+      <IndicatorToggles
+        mgannSwing
+        mgannSwingDisabled
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        onMgannSwingChange={onMgannSwing}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    expect(screen.getByLabelText("MGannSwing")).toBeDisabled();
+    expect(screen.getByLabelText("MGannSwing settings")).toBeDisabled();
+    fireEvent.click(screen.getByLabelText("MGannSwing"));
+    fireEvent.click(screen.getByLabelText("MGannSwing settings"));
+
+    expect(onMgannSwing).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("MGannSwing Wave Delta")).not.toBeInTheDocument();
+  });
+
   it("edits Volume Profile display settings", () => {
     const onWidth = vi.fn();
     const onDevelopingPoc = vi.fn();

@@ -1,5 +1,7 @@
 from app.engines.alert_engine import (
+    MGANN_BREAK_LS,
     MGANN_BIG_TRADE_SWEEP,
+    MGANN_SWEEP,
     Alert,
     AlertEngine,
     MarketContext,
@@ -45,26 +47,32 @@ def _big_trade_ctx(index: int, volume: int, price: float = 104.5) -> MarketConte
     )
 
 
-def _engine() -> AlertEngine:
+def _engine(
+    *,
+    require_big_trade: bool = False,
+    alert_type: str = MGANN_BREAK_LS,
+    confirmation_bars: int = 2,
+) -> AlertEngine:
     engine = AlertEngine()
     engine.upsert(
         Alert(
-            id="mgann-sweep",
+            id="mgann-break",
             symbol=_SYMBOL,
-            type=MGANN_BIG_TRADE_SWEEP,
+            type=alert_type,
             params={
+                "requireBigTrade": require_big_trade,
                 "bigTradeThreshold": 70,
                 "timeframe": "1m",
                 "minVolume": 0,
-                "volumeLookback": 20,
+                "volumeLookback": 2,
                 "volumeMultiplier": 2,
                 "minSpreadTicks": 0,
-                "spreadLookback": 20,
+                "spreadLookback": 2,
                 "spreadMultiplier": 2,
                 "swingSize": 1,
                 "pivotLookbackBars": 20,
-                "minPivotCuts": 2,
-                "confirmationBars": 2,
+                "minPivotCuts": 1,
+                "confirmationBars": confirmation_bars,
                 "breakTicks": 0,
                 "repeat": True,
             },
@@ -73,123 +81,158 @@ def _engine() -> AlertEngine:
     return engine
 
 
-_WARMUP_BARS = [
-    (99.5, 100.0, 98.0, 99.0, 100),
-    (99.0, 103.6, 98.5, 103.2, 100),
-    (103.2, 103.3, 98.0, 99.5, 100),
-    (99.5, 100.0, 97.5, 98.5, 100),
-    (98.5, 103.0, 98.0, 102.5, 100),
-    (102.5, 104.0, 101.0, 103.5, 100),
-    (103.5, 103.0, 99.0, 100.0, 100),
-    (100.0, 101.0, 98.2, 99.0, 100),
+def _feed(engine: AlertEngine, bars: list[tuple[float, float, float, float, int]]):
+    events = []
+    for index, bar in enumerate(bars):
+        events.extend(engine.evaluate(_bar_ctx(index, *bar)))
+    return events
+
+
+_BULLISH_CHOCH_SETUP = [
+    (100.0, 100.2, 99.5, 100.0, 100),
+    (100.0, 101.0, 98.5, 99.0, 100),
+    (99.0, 99.5, 97.0, 98.0, 100),
+    (98.0, 100.0, 97.5, 98.8, 100),
+    (98.8, 99.0, 96.0, 96.5, 100),
 ]
 
-_FAR_HIGH_WARMUP_BARS = [
-    (99.5, 100.0, 98.0, 99.0, 100),
-    (99.0, 102.0, 98.5, 101.5, 100),
-    (101.5, 101.8, 98.0, 99.5, 100),
-    (99.5, 100.0, 97.5, 98.5, 100),
-    (98.5, 103.0, 98.0, 102.5, 100),
-    (102.5, 104.0, 101.0, 103.5, 100),
-    (103.5, 103.0, 99.0, 100.0, 100),
-    (100.0, 101.0, 98.2, 99.0, 100),
-]
-
-_NO_HIGH_WICK_WARMUP_BARS = [
-    (99.5, 100.0, 98.0, 99.0, 100),
-    (99.0, 103.6, 98.5, 103.55, 100),
-    (103.2, 103.3, 98.0, 99.5, 100),
-    (99.5, 100.0, 97.5, 98.5, 100),
-    (98.5, 103.0, 98.0, 102.5, 100),
-    (102.5, 104.0, 101.0, 103.5, 100),
-    (103.5, 103.0, 99.0, 100.0, 100),
-    (100.0, 101.0, 98.2, 99.0, 100),
+_BEARISH_CHOCH_SETUP = [
+    (100.0, 100.5, 99.0, 100.0, 100),
+    (100.0, 101.5, 98.0, 101.0, 100),
+    (101.0, 103.0, 100.0, 102.0, 100),
+    (102.0, 102.5, 100.5, 101.8, 100),
+    (101.8, 104.0, 101.5, 103.5, 100),
 ]
 
 
-def _feed_warmup(
-    engine: AlertEngine,
-    bars: list[tuple[float, float, float, float, int]] | None = None,
-) -> None:
-    for index, bar in enumerate(bars or _WARMUP_BARS):
-        assert engine.evaluate(_bar_ctx(index, *bar)) == []
-
-
-def test_mgann_big_trade_sweep_fires_on_bar_that_breaks_near_equal_high_zone():
+def test_mgann_break_ls_fires_break_l_on_internal_choch_up():
     engine = _engine()
-    _feed_warmup(engine)
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
 
-    assert engine.evaluate(_big_trade_ctx(8, 80, price=104.8)) == []
-    events = engine.evaluate(_bar_ctx(8, 99.0, 105.0, 97.0, 103.0, 500))
+    events = engine.evaluate(_bar_ctx(5, 96.5, 102.5, 96.0, 102.2, 500))
 
-    assert [event.alert_id for event in events] == ["mgann-sweep"]
-    assert events[0].alert_type == MGANN_BIG_TRADE_SWEEP
-    assert events[0].time == 8 * _STEP
-    assert events[0].price == 105.0
+    assert [event.alert_id for event in events] == ["mgann-break"]
+    assert events[0].alert_type == MGANN_BREAK_LS
+    assert events[0].time == 5 * _STEP
     assert events[0].direction == 1
-    assert "mGann highs breakout 2 pivots" in events[0].message
+    assert "Break L internal CHoCH" in events[0].message
+
+
+def test_mgann_break_ls_fires_break_s_on_internal_choch_down():
+    engine = _engine()
+    assert _feed(engine, _BEARISH_CHOCH_SETUP) == []
+
+    events = engine.evaluate(_bar_ctx(5, 103.5, 104.0, 97.0, 97.5, 500))
+
+    assert [event.alert_id for event in events] == ["mgann-break"]
+    assert events[0].alert_type == MGANN_BREAK_LS
+    assert events[0].time == 5 * _STEP
+    assert events[0].direction == -1
+    assert "Break S internal CHoCH" in events[0].message
+
+
+def test_mgann_break_ls_same_direction_bos_can_fire_until_opposite_choch():
+    engine = _engine()
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+    assert engine.evaluate(_bar_ctx(5, 96.5, 102.5, 96.0, 102.2, 500))
+    assert engine.evaluate(_bar_ctx(6, 102.2, 103.0, 101.0, 101.5, 100)) == []
+    assert engine.evaluate(_bar_ctx(7, 101.5, 102.5, 101.0, 101.8, 100)) == []
+
+    events = engine.evaluate(_bar_ctx(8, 101.8, 110.0, 101.5, 109.0, 500))
+
+    assert [event.alert_id for event in events] == ["mgann-break"]
+    assert events[0].direction == 1
+    assert "Break L internal BOS" in events[0].message
+
+
+def test_mgann_break_ls_requires_close_beyond_pivot_not_wick_only():
+    engine = _engine()
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+
+    events = engine.evaluate(_bar_ctx(5, 96.5, 102.5, 96.0, 99.8, 500))
+
+    assert events == []
+
+
+def test_mgann_break_ls_can_fire_on_next_two_bars_after_break_bar_fails_filters():
+    engine = _engine()
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+    assert engine.evaluate(_bar_ctx(5, 101.1, 106.0, 96.0, 101.2, 500)) == []
+
+    events = engine.evaluate(_bar_ctx(6, 101.2, 104.2, 101.0, 104.0, 700))
+
+    assert [event.alert_id for event in events] == ["mgann-break"]
+    assert events[0].time == 6 * _STEP
+    assert events[0].direction == 1
+
+
+def test_mgann_break_ls_candidate_expires_after_confirmation_window():
+    engine = _engine(confirmation_bars=1)
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+    assert engine.evaluate(_bar_ctx(5, 101.1, 106.0, 96.0, 101.2, 500)) == []
+    assert engine.evaluate(_bar_ctx(6, 101.2, 106.0, 101.0, 101.3, 500)) == []
+
+    events = engine.evaluate(_bar_ctx(7, 101.3, 103.0, 101.0, 102.8, 500))
+
+    assert events == []
+
+
+def test_mgann_break_ls_rejects_doji_and_strong_upper_wick_for_l():
+    engine = _engine()
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+    assert engine.evaluate(_bar_ctx(5, 101.0, 106.0, 96.0, 101.2, 500)) == []
+
+    engine = _engine()
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+    events = engine.evaluate(_bar_ctx(5, 96.5, 110.0, 96.0, 102.2, 500))
+
+    assert events == []
+
+
+def test_mgann_break_ls_rejects_strong_lower_wick_for_s():
+    engine = _engine()
+    assert _feed(engine, _BEARISH_CHOCH_SETUP) == []
+
+    events = engine.evaluate(_bar_ctx(5, 103.5, 104.0, 90.0, 97.5, 500))
+
+    assert events == []
+
+
+def test_mgann_break_ls_uses_body_spread_for_spread_multiplier():
+    engine = _engine()
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+
+    events = engine.evaluate(_bar_ctx(5, 99.0, 101.0, 98.0, 100.5, 500))
+
+    assert events == []
+
+
+def test_mgann_break_ls_bigtrade_is_optional_gate():
+    engine = _engine(require_big_trade=True)
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+    assert engine.evaluate(_bar_ctx(5, 96.5, 102.5, 96.0, 102.2, 500)) == []
+
+    engine = _engine(require_big_trade=True)
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+    assert engine.evaluate(_big_trade_ctx(5, 70, price=102.0)) == []
+    assert engine.evaluate(_bar_ctx(5, 96.5, 102.5, 96.0, 102.2, 500)) == []
+
+    engine = _engine(require_big_trade=True)
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+    assert engine.evaluate(_big_trade_ctx(5, 80, price=102.0)) == []
+    events = engine.evaluate(_bar_ctx(5, 96.5, 102.5, 96.0, 102.2, 500))
+
+    assert [event.alert_id for event in events] == ["mgann-break"]
     assert "BigTrade 80 > 70" in events[0].message
 
 
-def test_mgann_big_trade_sweep_ignores_highs_outside_equal_zone_tolerance():
-    engine = _engine()
-    _feed_warmup(engine, _FAR_HIGH_WARMUP_BARS)
+def test_legacy_mgann_sweep_aliases_map_to_break_ls_bigtrade_option():
+    engine = _engine(alert_type=MGANN_SWEEP)
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+    events = engine.evaluate(_bar_ctx(5, 96.5, 102.5, 96.0, 102.2, 500))
+    assert events[0].alert_type == MGANN_BREAK_LS
+    assert "BigTrade" not in events[0].message
 
-    assert engine.evaluate(_big_trade_ctx(8, 80, price=104.8)) == []
-    events = engine.evaluate(_bar_ctx(8, 99.0, 105.0, 97.0, 103.0, 500))
-
-    assert events == []
-
-
-def test_mgann_big_trade_sweep_requires_rejection_wicks_on_zone_pivots():
-    engine = _engine()
-    _feed_warmup(engine, _NO_HIGH_WICK_WARMUP_BARS)
-
-    assert engine.evaluate(_big_trade_ctx(8, 80, price=104.8)) == []
-    events = engine.evaluate(_bar_ctx(8, 99.0, 105.0, 97.0, 103.0, 500))
-
-    assert events == []
-
-
-def test_mgann_big_trade_sweep_can_fire_on_next_bar_after_sweep():
-    engine = _engine()
-    _feed_warmup(engine)
-
-    assert engine.evaluate(_bar_ctx(8, 99.0, 105.0, 98.0, 103.0, 500)) == []
-    assert engine.evaluate(_big_trade_ctx(9, 90, price=102.5)) == []
-    events = engine.evaluate(_bar_ctx(9, 103.0, 104.0, 95.0, 103.5, 450))
-
-    assert [event.alert_id for event in events] == ["mgann-sweep"]
-    assert events[0].time == 9 * _STEP
-    assert events[0].direction == 1
-
-def test_mgann_big_trade_sweep_fires_on_bearish_bar_that_cuts_two_prior_lows():
-    engine = _engine()
-    _feed_warmup(engine)
-
-    assert engine.evaluate(_big_trade_ctx(8, 80, price=97.2)) == []
-    events = engine.evaluate(_bar_ctx(8, 100.0, 105.0, 97.0, 97.5, 500))
-
-    assert [event.alert_id for event in events] == ["mgann-sweep"]
-    assert events[0].alert_type == MGANN_BIG_TRADE_SWEEP
-    assert events[0].time == 8 * _STEP
-    assert events[0].price == 97.0
-    assert events[0].direction == -1
-    assert "mGann lows breakout 2 pivots" in events[0].message
-
-
-def test_mgann_big_trade_sweep_requires_big_trade_and_two_pivot_cuts():
-    engine = _engine()
-    _feed_warmup(engine)
-
-    assert engine.evaluate(_bar_ctx(8, 99.0, 105.0, 98.0, 103.0, 500)) == []
-
-    engine = _engine()
-    _feed_warmup(engine)
-    assert engine.evaluate(_big_trade_ctx(8, 70, price=104.8)) == []
-    assert engine.evaluate(_bar_ctx(8, 99.0, 105.0, 98.0, 103.0, 500)) == []
-
-    engine = _engine()
-    _feed_warmup(engine)
-    assert engine.evaluate(_big_trade_ctx(8, 90, price=102.5)) == []
-    assert engine.evaluate(_bar_ctx(8, 99.0, 103.0, 98.0, 102.5, 500)) == []
+    engine = _engine(alert_type=MGANN_BIG_TRADE_SWEEP)
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+    assert engine.evaluate(_bar_ctx(5, 96.5, 102.5, 96.0, 102.2, 500)) == []

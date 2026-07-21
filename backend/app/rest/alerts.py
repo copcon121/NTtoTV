@@ -32,6 +32,8 @@ from ..engines.alert_engine import (
     MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
     MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
     MGANN_FVG_DEFAULT_SWING_SIZE,
+    MGANN_BREAK_LS,
+    MGANN_SWEEP,
     MGANN_BIG_TRADE_SWEEP,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
@@ -80,12 +82,14 @@ def get_cache(
 
 def _alert_to_dict(rec: AlertRecord) -> dict[str, Any]:
     """Serialize an :class:`AlertRecord` to the documented alert wire shape."""
+    alert_type = _canonical_alert_type(rec.type)
+    params = _canonical_alert_params(rec.type, rec.params)
     return {
         "id": rec.id,
         "profileId": rec.profile_id,
         "symbol": rec.symbol,
-        "type": rec.type,
-        "params": rec.params,
+        "type": alert_type,
+        "params": params,
         "enabled": rec.enabled,
     }
 
@@ -111,6 +115,21 @@ def _normalize_profile_id(value: Any) -> str:
     if not value:
         raise validation_error("'profileId' must be a non-empty string", field="profileId")
     return value
+
+
+def _canonical_alert_type(alert_type: str) -> str:
+    if alert_type in (MGANN_BREAK_LS, MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP):
+        return MGANN_BREAK_LS
+    return alert_type
+
+
+def _canonical_alert_params(alert_type: str, params: dict[str, Any]) -> dict[str, Any]:
+    out = dict(params)
+    if alert_type == MGANN_BIG_TRADE_SWEEP:
+        out["requireBigTrade"] = True
+    elif alert_type == MGANN_SWEEP:
+        out["requireBigTrade"] = False
+    return out
 
 
 def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
@@ -178,20 +197,29 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 f"'timeframe' must be one of: {allowed}",
                 field="timeframe",
             )
-        for key in (
-            "swingSize",
-            "maxZoneAge",
-            "minGapTicks",
-            "retestToleranceTicks",
-        ):
+        _validate_optional_positive_number(params, "swingSize")
+        for key in ("maxZoneAge", "minGapTicks", "retestToleranceTicks"):
             _validate_optional_nonnegative_number(params, key)
         params["timeframe"] = timeframe
-        params["swingSize"] = MGANN_FVG_DEFAULT_SWING_SIZE
+        params["swingSize"] = _normalize_mgann_swing_size(
+            params,
+            MGANN_FVG_DEFAULT_SWING_SIZE,
+        )
         params["maxZoneAge"] = MGANN_FVG_DEFAULT_MAX_ZONE_AGE
         params["minGapTicks"] = MGANN_FVG_DEFAULT_MIN_GAP_TICKS
         params["retestToleranceTicks"] = MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS
-    elif alert_type == MGANN_BIG_TRADE_SWEEP:
+    elif alert_type in (MGANN_BREAK_LS, MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP):
         params.pop("direction", None)
+        require_big_trade = params.get("requireBigTrade", False)
+        if alert_type == MGANN_BIG_TRADE_SWEEP:
+            require_big_trade = True
+        elif alert_type == MGANN_SWEEP:
+            require_big_trade = False
+        if not isinstance(require_big_trade, bool):
+            raise validation_error(
+                "'requireBigTrade' must be a boolean",
+                field="requireBigTrade",
+            )
         threshold = params.get(
             "bigTradeThreshold",
             MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
@@ -219,6 +247,8 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 f"'timeframe' must be one of: {allowed}",
                 field="timeframe",
             )
+        params["requireBigTrade"] = require_big_trade
+        params["bigTradeThreshold"] = threshold
         for key in (
             "volumeLookback",
             "spreadLookback",
@@ -238,7 +268,6 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
             _validate_optional_nonnegative_number(params, key)
         for key in ("volumeMultiplier", "spreadMultiplier"):
             _validate_optional_positive_number(params, key)
-        params["bigTradeThreshold"] = threshold
         params["timeframe"] = timeframe
         params["minVolume"] = params.get(
             "minVolume",
@@ -264,8 +293,8 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
             "spreadMultiplier",
             MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
         )
-        params["swingSize"] = params.get(
-            "swingSize",
+        params["swingSize"] = _normalize_mgann_swing_size(
+            params,
             MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
         )
         params["pivotLookbackBars"] = params.get(
@@ -301,6 +330,15 @@ def _validate_repeat_param(params: dict[str, Any]) -> dict[str, Any]:
     if repeat is not None and not isinstance(repeat, bool):
         raise validation_error("'repeat' must be a boolean", field="repeat")
     return params
+
+
+def _normalize_mgann_swing_size(params: dict[str, Any], default: int) -> Any:
+    raw = params.get("swingSize", default)
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return default if parsed == 2 else raw
 
 
 def _validate_optional_positive_number(params: dict[str, Any], key: str) -> None:
@@ -367,6 +405,7 @@ async def create_alert(
             f"Unknown or missing alert 'type' {alert_type!r}", field="type"
         )
     params = _validate_params(alert_type, params)
+    alert_type = _canonical_alert_type(alert_type)
 
     now = now_ms()
     rec = AlertRecord(
@@ -417,6 +456,7 @@ async def update_alert(
         existing.enabled = enabled
     if "params" in body:
         existing.params = _validate_params(existing.type, body["params"])
+        existing.type = _canonical_alert_type(existing.type)
 
     existing.updated_at = now_ms()
     cache.upsert_alert(existing)

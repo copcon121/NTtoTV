@@ -162,14 +162,14 @@ def test_mgann_fvg_retest_waits_for_confirmed_retest_swing():
             id="mgann",
             symbol="GC",
             type="mgann_fvg_retest",
-            params={"repeat": True},
+            params={"repeat": True, "swingSize": 1},
         )
     )
 
     fired_before_confirmation = []
-    for index, bar in enumerate(_MGANN_RETEST_BARS[:7]):
+    for index, bar in enumerate(_MGANN_RETEST_BARS[:14]):
         fired_before_confirmation.extend(engine.evaluate(_m5_bar_ctx(index, *bar)))
-    fired_on_confirmation = engine.evaluate(_m5_bar_ctx(7, *_MGANN_RETEST_BARS[7]))
+    fired_on_confirmation = engine.evaluate(_m5_bar_ctx(14, *_MGANN_RETEST_BARS[14]))
 
     assert fired_before_confirmation == []
     assert [event.alert_id for event in fired_on_confirmation] == ["mgann"]
@@ -203,12 +203,12 @@ def test_mgann_fvg_retest_can_run_on_m1_timeframe():
             id="mgann",
             symbol="GC",
             type="mgann_fvg_retest",
-            params={"timeframe": "1m", "repeat": True},
+            params={"timeframe": "1m", "repeat": True, "swingSize": 1},
         )
     )
 
     fired = []
-    for index, bar in enumerate(_MGANN_RETEST_BARS[:8]):
+    for index, bar in enumerate(_MGANN_RETEST_BARS[:15]):
         fired.extend(engine.evaluate(_m1_bar_ctx(index, *bar)))
 
     assert [event.alert_id for event in fired] == ["mgann"]

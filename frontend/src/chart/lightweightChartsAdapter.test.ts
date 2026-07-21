@@ -111,7 +111,7 @@ describe("lightweightChartsAdapter wave delta overlay", () => {
     });
   });
 
-  it("builds hidden wave delta scale data from the MGannSwing swing-2 model", () => {
+  it("builds hidden wave delta scale data from the MGannSwing internal-5 model", () => {
     const bars = [
       bar(1, 10, 10, 9, 9.5),
       bar(2, 9.5, 11, 9.4, 10.8),
@@ -135,27 +135,42 @@ describe("lightweightChartsAdapter wave delta overlay", () => {
 
     const values = buildWaveDeltaLineData(bars, deltas).map((point) => point.value);
 
-    expect(values).toEqual([5, 6, 13, -8, -17]);
+    expect(values).toEqual([5, 11, 18, 10, 1]);
   });
 
   it("builds MBox wave delta segments from MGann pivots", () => {
     const bars = [
-      bar(1_000, 10, 10, 9, 9.5),
-      bar(2_000, 9.5, 11, 9.4, 10.8),
-      bar(3_000, 10.8, 12, 10, 11.7),
-      bar(4_000, 11.7, 11.8, 9, 9.2),
-      bar(5_000, 9.2, 11, 8, 8.4),
+      bar(0, 10, 10, 10, 10),
+      bar(1_000, 10.75, 11, 10.5, 10.75),
+      bar(2_000, 11.5, 12, 11, 11.5),
+      bar(3_000, 12.5, 13, 12, 12.5),
+      bar(4_000, 12, 12.5, 11.5, 12),
+      bar(5_000, 11.25, 12, 10.5, 11.25),
+      bar(6_000, 10.25, 11, 9.5, 10.25),
+      bar(7_000, 11.25, 12, 10.5, 11.25),
+      bar(8_000, 12.5, 13.5, 11.5, 12.5),
+      bar(9_000, 13, 14, 12, 13),
+      bar(10_000, 13.5, 14.5, 12.5, 13.5),
+      bar(11_000, 12.75, 14, 11.5, 12.75),
+      bar(12_000, 11.75, 13, 10.5, 11.75),
+      bar(13_000, 10.5, 12, 9, 10.5),
+      bar(14_000, 9.75, 11, 8.5, 9.75),
+      bar(15_000, 9.5, 10, 9, 9.5),
+      bar(16_000, 11, 12, 10, 11),
+      bar(17_000, 12.25, 13.5, 11, 12.25),
+      bar(18_000, 11, 12, 10, 11),
+      bar(19_000, 10, 11, 9, 10),
     ];
     const deltas = new Map(
-      [5, 6, 7, -8, -9].map((closeDelta, index) => [
-        bars[index].time,
+      bars.map((bar) => [
+        bar.time,
         {
-          time: bars[index].time,
-          delta: closeDelta,
-          deltaHigh: Math.max(0, closeDelta),
-          deltaLow: Math.min(0, closeDelta),
-          openDelta: closeDelta,
-          closeDelta,
+          time: bar.time,
+          delta: 1,
+          deltaHigh: 1,
+          deltaLow: 0,
+          openDelta: 1,
+          closeDelta: 1,
         },
       ]),
     );
@@ -172,18 +187,18 @@ describe("lightweightChartsAdapter wave delta overlay", () => {
       })),
     ).toEqual([
       {
-        startTime: 1,
-        endTime: 3,
-        value: 13,
+        startTime: 6,
+        endTime: 10,
+        value: 4,
         direction: 1,
         fillColor: "rgba(90, 130, 220, 0.45)",
       },
       {
-        startTime: 3,
-        endTime: 5,
-        value: -17,
+        startTime: 10,
+        endTime: 14,
+        value: 4,
         direction: -1,
-        fillColor: "rgba(230, 140, 140, 0.45)",
+        fillColor: "rgba(120, 70, 190, 0.45)",
       },
     ]);
   });
@@ -226,9 +241,9 @@ describe("lightweightChartsAdapter wave delta overlay", () => {
       expect.objectContaining({
         direction: -1,
         pricePivots: [
-          expect.objectContaining({ time: 3, price: 12, waveValue: 30 }),
-          expect.objectContaining({ time: 7, price: 14, waveValue: 5 }),
-          expect.objectContaining({ time: 11, price: 16, waveValue: -5 }),
+          expect.objectContaining({ time: 3, price: 12, waveValue: 60 }),
+          expect.objectContaining({ time: 7, price: 14, waveValue: 30 }),
+          expect.objectContaining({ time: 11, price: 16, waveValue: -10 }),
         ],
       }),
     ]);

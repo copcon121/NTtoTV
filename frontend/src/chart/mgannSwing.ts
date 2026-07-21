@@ -1,6 +1,6 @@
 import { type Bar } from "../cache/types";
 
-export const MGANN_SWING_SIZE = 2;
+export const MGANN_SWING_SIZE = 5;
 export const MGANN_IMPULSE_TICK_SIZE = 0.1;
 
 export interface MgannSwingSettings {
@@ -163,192 +163,44 @@ function volumeDeltaValue(point: MgannSwingDeltaPoint | undefined): number {
   return Number.isFinite(point.delta) ? point.delta ?? 0 : 0;
 }
 
-function hasHigherHighs(bars: readonly Bar[], index: number): boolean {
-  if (index < MGANN_SWING_SIZE) return false;
-  for (let j = 0; j < MGANN_SWING_SIZE; j += 1) {
-    if (!(bars[index - j].high > bars[index - j - 1].high)) return false;
+function isMoreExtremePivot(
+  candidate: MgannSwingPivot,
+  current: MgannSwingPivot,
+): boolean {
+  if (candidate.kind === "high") {
+    return candidate.price > current.price;
   }
-  return true;
+  return candidate.price < current.price;
 }
 
-function hasLowerLows(bars: readonly Bar[], index: number): boolean {
-  if (index < MGANN_SWING_SIZE) return false;
-  for (let j = 0; j < MGANN_SWING_SIZE; j += 1) {
-    if (!(bars[index - j].low < bars[index - j - 1].low)) return false;
-  }
-  return true;
-}
-
-function pushPivot(
+function appendConfirmedPivot(
   pivots: MgannSwingPivot[],
+  pivot: MgannSwingPivot,
+): void {
+  const last = pivots[pivots.length - 1];
+  if (last === undefined) {
+    pivots.push(pivot);
+    return;
+  }
+  if (last.index === pivot.index) {
+    return;
+  }
+  if (last.kind === pivot.kind) {
+    if (isMoreExtremePivot(pivot, last)) {
+      pivots[pivots.length - 1] = pivot;
+    }
+    return;
+  }
+  pivots.push(pivot);
+}
+
+function confirmedPivot(
   bars: readonly Bar[],
   index: number,
   kind: MgannSwingPivotKind,
-): void {
-  if (index < 0 || index >= bars.length) return;
-  const last = pivots[pivots.length - 1];
-  if (last?.index === index) return;
-
-  const bar = bars[index];
-  pivots.push({
-    index,
-    time: bar.time,
-    price: kind === "high" ? bar.high : bar.low,
-    kind,
-  });
-}
-
-function collectPivots(bars: readonly Bar[]): MgannSwingPivot[] {
-  if (bars.length < MGANN_SWING_SIZE + 1) return [];
-
-  const pivots: MgannSwingPivot[] = [];
-  let dir = 0;
-  let extHigh = Number.NaN;
-  let extHighIdx = -1;
-  let extLow = Number.NaN;
-  let extLowIdx = -1;
-
-  for (let index = 0; index < bars.length; index += 1) {
-    const bar = bars[index];
-    if (index === 0) {
-      extHigh = bar.high;
-      extHighIdx = index;
-      extLow = bar.low;
-      extLowIdx = index;
-    }
-
-    if (!Number.isFinite(extHigh) || bar.high >= extHigh) {
-      extHigh = bar.high;
-      extHighIdx = index;
-    }
-    if (!Number.isFinite(extLow) || bar.low <= extLow) {
-      extLow = bar.low;
-      extLowIdx = index;
-    }
-
-    const previous = bars[index - 1];
-    const isInside =
-      previous !== undefined &&
-      bar.high <= previous.high &&
-      bar.low >= previous.low;
-    const revUp = !isInside && hasHigherHighs(bars, index);
-    const revDown = !isInside && hasLowerLows(bars, index);
-
-    if (dir === 0) {
-      if (revUp) {
-        pushPivot(pivots, bars, extLowIdx, "low");
-        dir = 1;
-        extHigh = bar.high;
-        extHighIdx = index;
-        extLow = bar.low;
-        extLowIdx = index;
-      } else if (revDown) {
-        pushPivot(pivots, bars, extHighIdx, "high");
-        dir = -1;
-        extHigh = bar.high;
-        extHighIdx = index;
-        extLow = bar.low;
-        extLowIdx = index;
-      }
-      continue;
-    }
-
-    if (dir === 1 && revDown) {
-      pushPivot(pivots, bars, extHighIdx, "high");
-      dir = -1;
-      extHigh = bar.high;
-      extHighIdx = index;
-      extLow = bar.low;
-      extLowIdx = index;
-    } else if (dir === -1 && revUp) {
-      pushPivot(pivots, bars, extLowIdx, "low");
-      dir = 1;
-      extHigh = bar.high;
-      extHighIdx = index;
-      extLow = bar.low;
-      extLowIdx = index;
-    }
-  }
-
-  return pivots;
-}
-
-function refinePivotsToSegmentExtremes(
-  bars: readonly Bar[],
-  pivots: readonly MgannSwingPivot[],
-): MgannSwingPivot[] {
-  if (pivots.length < 3) return [...pivots];
-
-  const refined: MgannSwingPivot[] = [];
-  for (let pivotIndex = 0; pivotIndex < pivots.length; pivotIndex += 1) {
-    const pivot = pivots[pivotIndex];
-    if (pivot === undefined) continue;
-    if (pivotIndex === 0 || pivotIndex === pivots.length - 1) {
-      refined.push(pivot);
-      continue;
-    }
-
-    const previous = refined[refined.length - 1];
-    const next = pivots[pivotIndex + 1];
-    if (previous === undefined || next === undefined) {
-      refined.push(pivot);
-      continue;
-    }
-
-    const originalPrevious = pivots[pivotIndex - 1];
-    if (originalPrevious === undefined) {
-      refined.push(pivot);
-      continue;
-    }
-    const from = Math.max(previous.index + 1, originalPrevious.index + 1);
-    const to = Math.min(next.index - 1, bars.length - 1);
-    if (from > to) {
-      refined.push(pivot);
-      continue;
-    }
-
-    const first = bars[from];
-    if (first === undefined) {
-      refined.push(pivot);
-      continue;
-    }
-    let bestIndex = from;
-    let bestPrice = pivot.kind === "high" ? first.high : first.low;
-    for (let index = from; index <= to; index += 1) {
-      const bar = bars[index];
-      if (bar === undefined) continue;
-      if (pivot.kind === "high" && bar.high >= bestPrice) {
-        bestPrice = bar.high;
-        bestIndex = index;
-      } else if (pivot.kind === "low" && bar.low <= bestPrice) {
-        bestPrice = bar.low;
-        bestIndex = index;
-      }
-    }
-
-    refined.push({
-      index: bestIndex,
-      time: bars[bestIndex]?.time ?? pivot.time,
-      price: bestPrice,
-      kind: pivot.kind,
-    });
-  }
-
-  return refined;
-}
-
-function livePivotFromLastConfirmed(
-  bars: readonly Bar[],
-  pivots: readonly MgannSwingPivot[],
 ): MgannSwingPivot | undefined {
-  const start = pivots[pivots.length - 1];
-  if (start === undefined) return undefined;
-
-  const index = bars.length - 1;
-  if (index <= start.index) return undefined;
-
+  if (index < 0 || index >= bars.length) return undefined;
   const bar = bars[index];
-  const kind: MgannSwingPivotKind = start.kind === "low" ? "high" : "low";
   return {
     index,
     time: bar.time,
@@ -357,12 +209,46 @@ function livePivotFromLastConfirmed(
   };
 }
 
-function pivotsWithLiveLeg(
-  bars: readonly Bar[],
-  pivots: readonly MgannSwingPivot[],
-): MgannSwingPivot[] {
-  const live = livePivotFromLastConfirmed(bars, pivots);
-  return live === undefined ? [...pivots] : [...pivots, live];
+function collectPivots(bars: readonly Bar[]): MgannSwingPivot[] {
+  const length = MGANN_SWING_SIZE;
+  if (bars.length < length * 2 + 1) return [];
+
+  const pivots: MgannSwingPivot[] = [];
+
+  for (let index = length; index < bars.length - length; index += 1) {
+    const candidate = bars[index];
+    if (candidate === undefined) continue;
+
+    const left = bars.slice(index - length, index);
+    const right = bars.slice(index + 1, index + 1 + length);
+    const leftHigh = Math.max(...left.map((bar) => bar.high));
+    const rightHigh = Math.max(...right.map((bar) => bar.high));
+    const leftLow = Math.min(...left.map((bar) => bar.low));
+    const rightLow = Math.min(...right.map((bar) => bar.low));
+
+    const highPivot = candidate.high > leftHigh && candidate.high >= rightHigh;
+    const lowPivot = candidate.low < leftLow && candidate.low <= rightLow;
+
+    const previousKind = pivots[pivots.length - 1]?.kind;
+    const kinds: MgannSwingPivotKind[] =
+      highPivot && lowPivot
+        ? previousKind === "high"
+          ? ["low", "high"]
+          : ["high", "low"]
+        : highPivot
+          ? ["high"]
+          : lowPivot
+            ? ["low"]
+            : [];
+
+    for (const kind of kinds) {
+      const pivot = confirmedPivot(bars, index, kind);
+      if (pivot !== undefined) appendConfirmedPivot(pivots, pivot);
+    }
+  }
+
+
+  return pivots;
 }
 
 function waveDeltaBetween(
@@ -849,10 +735,8 @@ export function buildMgannSwingOverlay(
   settings?: Partial<MgannSwingSettings>,
 ): MgannSwingOverlay {
   const normalized = normalizeMgannSwingSettings(settings);
-  const pivots = refinePivotsToSegmentExtremes(bars, collectPivots(bars));
-  const displayPivots = pivotsWithLiveLeg(bars, pivots);
+  const pivots = collectPivots(bars);
   const waves = buildWaves(bars, deltaByTime, pivots);
-  const displayWaves = buildWaves(bars, deltaByTime, displayPivots);
   const impulseWaves = buildImpulseWaves(bars, pivots, waves, normalized);
   const smartContext = normalized.smartFilter
     ? {
@@ -861,15 +745,15 @@ export function buildMgannSwingOverlay(
       }
     : undefined;
   return {
-    line: displayPivots.map((pivot) => ({ time: pivot.time, value: pivot.price })),
+    line: pivots.map((pivot) => ({ time: pivot.time, value: pivot.price })),
     signals: buildSignals(bars, pivots, waves, smartContext),
     waveDeltaLabels: buildWaveDeltaLabels(
-      displayWaves,
+      waves,
       impulseWaves,
       normalized.waveDeltaNumbersImpulseOnly,
     ),
-    waveDeltaBoxes: buildWaveDeltaBoxes(displayWaves),
-    waveDeltaValues: buildWaveDeltaValues(bars, deltaByTime, displayPivots),
+    waveDeltaBoxes: buildWaveDeltaBoxes(waves),
+    waveDeltaValues: buildWaveDeltaValues(bars, deltaByTime, pivots),
     impulseWaves,
   };
 }

@@ -15,6 +15,8 @@ export type AlertType =
   | "stacked_imbalance"
   | "smc_external_break_big_trade"
   | "mgann_fvg_retest"
+  | "mgann_break_ls"
+  | "mgann_sweep"
   | "mgann_big_trade_sweep";
 
 /** An alert definition as returned by `GET /api/alerts`. */

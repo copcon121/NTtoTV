@@ -131,6 +131,7 @@ export interface IndicatorTogglesProps {
   outsideBar?: OutsideBarSettings;
   footprintSettings: FootprintSettings;
   bigTradeSettings?: BigTradeSettings;
+  mgannSwingDisabled?: boolean;
   footprintDisabled?: boolean;
   fvgGraderDisabled?: boolean;
   bigTradeDisabled?: boolean;
@@ -182,7 +183,9 @@ function IndicatorRow({ label, checked, disabled = false, onChange, trailing }: 
           checked={checked}
           disabled={disabled}
           aria-label={label}
-          onChange={(event) => onChange(event.currentTarget.checked)}
+          onChange={(event) => {
+            if (!disabled) onChange(event.currentTarget.checked);
+          }}
         />
         <span>{label}</span>
       </label>
@@ -208,6 +211,7 @@ export function IndicatorToggles({
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
   footprintSettings,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
+  mgannSwingDisabled = false,
   footprintDisabled = false,
   fvgGraderDisabled = false,
   bigTradeDisabled = false,
@@ -386,6 +390,12 @@ export function IndicatorToggles({
   }, [mgannSwingConfig.impulseBreakTicks]);
 
   useEffect(() => {
+    if (mgannSwingDisabled) {
+      setMgannSwingSettingsOpen(false);
+    }
+  }, [mgannSwingDisabled]);
+
+  useEffect(() => {
     setVaPercentDraft(String(footprintSettings.vaPercent));
   }, [footprintSettings.vaPercent]);
 
@@ -445,7 +455,7 @@ export function IndicatorToggles({
     (volume ? 1 : 0) +
     (volumeDelta ? 1 : 0) +
     (dailyVolumeProfile ? 1 : 0) +
-    (mgannSwing ? 1 : 0) +
+    (mgannSwing && !mgannSwingDisabled ? 1 : 0) +
     (combinedIndicatorActive ? 1 : 0) +
     (footprint ? 1 : 0) +
     (fvgGrader ? 1 : 0) +
@@ -772,6 +782,7 @@ export function IndicatorToggles({
           <IndicatorRow
             label="MGannSwing"
             checked={mgannSwing}
+            disabled={mgannSwingDisabled}
             onChange={onMgannSwingChange}
             trailing={
               <button
@@ -779,13 +790,14 @@ export function IndicatorToggles({
                 className="indicator-gear"
                 aria-label="MGannSwing settings"
                 aria-expanded={mgannSwingSettingsOpen}
+                disabled={mgannSwingDisabled}
                 onClick={() => setMgannSwingSettingsOpen((v) => !v)}
               >
                 ...
               </button>
             }
           />
-          {mgannSwingSettingsOpen && (
+          {mgannSwingSettingsOpen && !mgannSwingDisabled && (
             <div className="ema-settings" aria-label="MGannSwing settings panel">
               <label className="fp-toggle-label">
                 <input

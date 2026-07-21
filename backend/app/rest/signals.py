@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from ..engines.alert_engine import MGANN_BIG_TRADE_SWEEP
+from ..engines.alert_engine import MGANN_BREAK_LS, MGANN_BIG_TRADE_SWEEP, MGANN_SWEEP
 from ..engines.mgann_big_trade_sweep import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
@@ -39,6 +39,45 @@ DEFAULT_SIGNAL_WARMUP_BARS = 500
 MGANN_SWEEP_SIGNAL_BAR_CAP = 1_000
 _M1_MS = 60_000
 
+@router.get("/signals/mgann-break-ls")
+async def mgann_break_ls_signals(
+    symbol: str = Query("GC", description="User-facing symbol, e.g. 'GC'"),
+    contract: str | None = Query(
+        None,
+        description="Chart cache contract. Defaults to the logical chart alias.",
+    ),
+    tf: str = Query("1m", description="Timeframe. v1 supports 1m only."),
+    profile_id: str = Query("default", alias="profileId"),
+    frm: int | None = Query(
+        None, alias="from", description="Inclusive start Canonical_Timestamp (ms)"
+    ),
+    to: int | None = Query(
+        None, description="Inclusive end Canonical_Timestamp (ms)"
+    ),
+    limit: int = Query(DEFAULT_SIGNAL_LIMIT, description="Max signals returned"),
+    warmup_bars: int = Query(
+        DEFAULT_SIGNAL_WARMUP_BARS,
+        alias="warmupBars",
+        description="Bars before the requested range used to warm the detector",
+    ),
+    state: ContractStateStore = Depends(get_contract_state),
+    cache: CacheStore = Depends(get_cache),
+) -> dict[str, Any]:
+    """Return historical mGann Break L/S markers for enabled profile alerts."""
+    return await _mgann_break_ls_response(
+        symbol=symbol,
+        contract=contract,
+        tf=tf,
+        profile_id=profile_id,
+        frm=frm,
+        to=to,
+        limit=limit,
+        warmup_bars=warmup_bars,
+        state=state,
+        cache=cache,
+    )
+
+
 @router.get("/signals/mgann-big-trade-sweep")
 async def mgann_big_trade_sweep_signals(
     symbol: str = Query("GC", description="User-facing symbol, e.g. 'GC'"),
@@ -63,11 +102,38 @@ async def mgann_big_trade_sweep_signals(
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
-    """Return historical mGann BigTrade sweep markers for enabled profile alerts."""
+    """Legacy alias for historical mGann Break L/S markers."""
+    return await _mgann_break_ls_response(
+        symbol=symbol,
+        contract=contract,
+        tf=tf,
+        profile_id=profile_id,
+        frm=frm,
+        to=to,
+        limit=limit,
+        warmup_bars=warmup_bars,
+        state=state,
+        cache=cache,
+    )
+
+
+async def _mgann_break_ls_response(
+    *,
+    symbol: str,
+    contract: str | None,
+    tf: str,
+    profile_id: str,
+    frm: int | None,
+    to: int | None,
+    limit: int,
+    warmup_bars: int,
+    state: ContractStateStore,
+    cache: CacheStore,
+) -> dict[str, Any]:
     if not state.is_known_symbol(symbol):
         raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
     if tf != "1m":
-        raise not_found("mGann sweep signals currently support tf='1m'", field="tf")
+        raise not_found("mGann Break L/S signals currently support tf='1m'", field="tf")
     if frm is not None and to is not None and frm > to:
         raise bad_request("'from' must be less than or equal to 'to'", field="from")
     if limit < 1:
@@ -99,7 +165,7 @@ async def mgann_big_trade_sweep_signals(
         "symbol": symbol,
         "contract": resolved_contract,
         "tf": tf,
-        "source": "mgann-big-trade-sweep-engine",
+        "source": "mgann-break-ls-engine",
         "signals": signals,
     }
 
@@ -117,7 +183,8 @@ def _load_mgann_sweep_signals(
     alerts = [
         alert
         for alert in cache.read_alerts(symbol=symbol, profile_id=profile_id)
-        if alert.enabled and alert.type == MGANN_BIG_TRADE_SWEEP
+        if alert.enabled
+        and alert.type in (MGANN_BREAK_LS, MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP)
     ]
     if not alerts:
         return []
@@ -246,7 +313,7 @@ def _mgann_sweep_state_from_alert(alert: AlertRecord) -> MgannBigTradeSweepState
             params.get("spreadMultiplier"),
             MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
         ),
-        swing_size=_positive_int_param(
+        swing_size=_mgann_swing_size_param(
             params.get("swingSize"),
             MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
         ),
@@ -266,7 +333,16 @@ def _mgann_sweep_state_from_alert(alert: AlertRecord) -> MgannBigTradeSweepState
             params.get("breakTicks"),
             MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
         ),
+        require_big_trade=_mgann_break_requires_big_trade(alert),
     )
+
+
+def _mgann_break_requires_big_trade(alert: AlertRecord) -> bool:
+    if alert.type == MGANN_BIG_TRADE_SWEEP:
+        return True
+    if alert.type == MGANN_SWEEP:
+        return False
+    return alert.params.get("requireBigTrade") is True
 
 def _normalize_profile_id(value: str) -> str:
     value = value.strip()
@@ -280,6 +356,12 @@ def _positive_int_param(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _mgann_swing_size_param(value: Any, default: int) -> int:
+    parsed = _positive_int_param(value, default)
+    return default if parsed == 2 else parsed
+
 
 def _nonnegative_int_param(value: Any, default: int) -> int:
     if isinstance(value, bool):

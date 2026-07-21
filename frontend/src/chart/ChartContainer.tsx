@@ -254,7 +254,7 @@ export interface ChartContainerProps {
   smcAiSignals?: readonly SmcAiSignalMarker[];
   /** Alert level lines to draw on the candle price scale (Req 16.5). */
   alertLines?: readonly AlertLine[];
-  /** Discrete alert signal arrows, e.g. mGann BigTrade sweeps. */
+  /** Discrete alert signal arrows, e.g. mGann Break L/S markers. */
   alertSignals?: readonly AlertSignalMarker[];
   /** Live order entry/SL/TP levels to draw on the candle price scale. */
   orderLines?: readonly OrderLine[];
@@ -280,7 +280,7 @@ export interface ChartContainerProps {
   showVolumeDelta?: boolean;
   /** Show current wave delta as an MBox histogram at the bottom of the chart. */
   showCvd?: boolean;
-  /** Show MGannSwing price swingline/signals. */
+  /** Show MGannSwing price swingline/signals. MGannSwing is hidden on M1. */
   showMgannSwing?: boolean;
   /** MGannSwing sub-settings. */
   mgannSwing?: Partial<MgannSwingSettings>;
@@ -445,7 +445,7 @@ export function ChartContainer({
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
   smc,
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
-  chartBackgroundColor = "#101010",
+  chartBackgroundColor = "#d3d3d3",
   timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES,
   socket,
   options,
@@ -479,6 +479,7 @@ export function ChartContainer({
   const portRef = useRef<DisposableChartPort | null>(null);
   const controllerRef = useRef<ChartSeriesController | null>(null);
   const drawingManagerRef = useRef<DrawingManager | null>(null);
+  const showMgannSwingForTimeframe = showMgannSwing && timeframe !== "1m";
   const smcThrottleRef = useRef<number | undefined>(undefined);
   const [footprintViewport, setFootprintViewport] =
     useState<FootprintViewport | null>(null);
@@ -793,8 +794,8 @@ export function ChartContainer({
   }, [sessionVolumeProfile]);
 
   useEffect(() => {
-    portRef.current?.setMgannSwingVisible?.(showMgannSwing);
-  }, [showMgannSwing]);
+    portRef.current?.setMgannSwingVisible?.(showMgannSwingForTimeframe);
+  }, [showMgannSwingForTimeframe]);
 
   useEffect(() => {
     portRef.current?.setMgannSwingSettings?.(
