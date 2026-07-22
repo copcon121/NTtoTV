@@ -32,11 +32,6 @@ export interface AlertPanelProps {
   onToggle?: (id: string, enabled: boolean) => void;
   /** Delete an alert (parent persists via DELETE). */
   onDelete?: (id: string) => void;
-  /** Update editable alert params (parent persists via PATCH). */
-  onUpdateParams?: (
-    id: string,
-    params: Record<string, number | string | boolean>,
-  ) => void;
   /** Create an alert (parent persists via POST). */
   onCreate?: (input: {
     type: AlertType;
@@ -96,9 +91,6 @@ const MGANN_SWEEP_PIVOT_LOOKBACK_BARS = 120;
 const MGANN_SWEEP_MIN_PIVOT_CUTS = 2;
 const MGANN_SWEEP_CONFIRMATION_BARS = 2;
 const MGANN_SWEEP_BREAK_TICKS = 0;
-const MGANN_BREAK_HISTORY_SIGNAL_LIMIT_DEFAULT = "500";
-const MGANN_BREAK_HISTORY_SIGNAL_LIMIT_MIN = 50;
-const MGANN_BREAK_HISTORY_SIGNAL_LIMIT_MAX = 5000;
 
 function defaultPlaySound(): void {
   // Best-effort: a short beep via the Web Audio API when available. Wrapped so
@@ -154,17 +146,6 @@ function mgannBreakRequiresBigTrade(alert: Alert): boolean {
   return alert.params.requireBigTrade === true;
 }
 
-function normalizeMgannBreakHistorySignalLimit(value: unknown): number {
-  const parsed = Math.round(Number(value));
-  if (!Number.isFinite(parsed)) {
-    return Number(MGANN_BREAK_HISTORY_SIGNAL_LIMIT_DEFAULT);
-  }
-  return Math.min(
-    MGANN_BREAK_HISTORY_SIGNAL_LIMIT_MAX,
-    Math.max(MGANN_BREAK_HISTORY_SIGNAL_LIMIT_MIN, parsed),
-  );
-}
-
 function alertInputLabel(type: AlertType): string {
   if (isLevelAlertType(type)) return "Alert level";
   if (isSmcAlertType(type)) return "BigTrade threshold";
@@ -199,18 +180,11 @@ function alertDescription(alert: Alert): string {
     const bigTrade = mgannBreakRequiresBigTrade(alert)
       ? `, BT > ${String(alert.params.bigTradeThreshold)}`
       : "";
-    const historySignalLimit = normalizeMgannBreakHistorySignalLimit(
-      alert.params.historySignalLimit,
-    );
-    const history =
-      historySignalLimit === Number(MGANN_BREAK_HISTORY_SIGNAL_LIMIT_DEFAULT)
-        ? ""
-        : `, hist ${String(historySignalLimit)}`;
     return `mGann Break L/S${bigTrade}, vol x${String(
       alert.params.volumeMultiplier ?? MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT,
     )}, spread x${String(
       alert.params.spreadMultiplier ?? MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT,
-    )}${history}${repeat}`;
+    )}${repeat}`;
   }
   return [
     alert.type,
@@ -220,63 +194,11 @@ function alertDescription(alert: Alert): string {
   ].join("");
 }
 
-function MgannBreakHistoryLimitEditor({
-  alert,
-  onUpdateParams,
-}: {
-  alert: Alert;
-  onUpdateParams?: (
-    id: string,
-    params: Record<string, number | string | boolean>,
-  ) => void;
-}) {
-  const current = normalizeMgannBreakHistorySignalLimit(
-    alert.params.historySignalLimit,
-  );
-  const [draft, setDraft] = useState(String(current));
-
-  useEffect(() => {
-    setDraft(String(current));
-  }, [current]);
-
-  const commit = () => {
-    const historySignalLimit = normalizeMgannBreakHistorySignalLimit(draft);
-    setDraft(String(historySignalLimit));
-    onUpdateParams?.(alert.id, {
-      ...alert.params,
-      historySignalLimit,
-    });
-  };
-
-  return (
-    <label className="alert-param alert-history-limit">
-      <span>History</span>
-      <input
-        type="number"
-        min={MGANN_BREAK_HISTORY_SIGNAL_LIMIT_MIN}
-        max={MGANN_BREAK_HISTORY_SIGNAL_LIMIT_MAX}
-        step={50}
-        aria-label={`mGann Break L/S history limit ${alert.id}`}
-        value={draft}
-        onChange={(e) => setDraft(e.currentTarget.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            commit();
-            e.currentTarget.blur();
-          }
-        }}
-      />
-    </label>
-  );
-}
-
 export function AlertPanel({
   alerts,
   lastEvent,
   onToggle,
   onDelete,
-  onUpdateParams,
   onCreate,
   telegram,
   onTelegramSave,
@@ -306,8 +228,6 @@ export function AlertPanel({
     useState(MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT);
   const [newMgannSweepSpreadMultiplier, setNewMgannSweepSpreadMultiplier] =
     useState(MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT);
-  const [newMgannBreakHistorySignalLimit, setNewMgannBreakHistorySignalLimit] =
-    useState(MGANN_BREAK_HISTORY_SIGNAL_LIMIT_DEFAULT);
   const [telegramEnabled, setTelegramEnabled] = useState(false);
   const [telegramToken, setTelegramToken] = useState("");
   const [telegramChatId, setTelegramChatId] = useState("");
@@ -364,9 +284,6 @@ export function AlertPanel({
       setNewValue((value) => value || MGANN_SWEEP_BIG_TRADE_DEFAULT);
       setNewMgannSweepVolumeMultiplier(MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT);
       setNewMgannSweepSpreadMultiplier(MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT);
-      setNewMgannBreakHistorySignalLimit(
-        MGANN_BREAK_HISTORY_SIGNAL_LIMIT_DEFAULT,
-      );
       setNewRepeat(true);
     }
   };
@@ -392,14 +309,10 @@ export function AlertPanel({
       );
       const volumeMultiplier = Number(newMgannSweepVolumeMultiplier);
       const spreadMultiplier = Number(newMgannSweepSpreadMultiplier);
-      const historySignalLimit = normalizeMgannBreakHistorySignalLimit(
-        newMgannBreakHistorySignalLimit,
-      );
       if (
         !Number.isFinite(bigTradeThreshold) ||
         !Number.isFinite(volumeMultiplier) ||
-        !Number.isFinite(spreadMultiplier) ||
-        !Number.isFinite(historySignalLimit)
+        !Number.isFinite(spreadMultiplier)
       ) {
         return;
       }
@@ -420,7 +333,6 @@ export function AlertPanel({
           minPivotCuts: MGANN_SWEEP_MIN_PIVOT_CUTS,
           confirmationBars: MGANN_SWEEP_CONFIRMATION_BARS,
           breakTicks: MGANN_SWEEP_BREAK_TICKS,
-          historySignalLimit,
           repeat: newRepeat,
         },
       });
@@ -583,21 +495,6 @@ export function AlertPanel({
                 }
               />
             </label>
-            <label className="alert-param">
-              <span>History</span>
-              <input
-                type="number"
-                min={MGANN_BREAK_HISTORY_SIGNAL_LIMIT_MIN}
-                max={MGANN_BREAK_HISTORY_SIGNAL_LIMIT_MAX}
-                step={50}
-                aria-label="mGann Break L/S history limit"
-                placeholder={MGANN_BREAK_HISTORY_SIGNAL_LIMIT_DEFAULT}
-                value={newMgannBreakHistorySignalLimit}
-                onChange={(e) =>
-                  setNewMgannBreakHistorySignalLimit(e.target.value)
-                }
-              />
-            </label>
           </>
         )}
         {showRepeat && (
@@ -618,12 +515,6 @@ export function AlertPanel({
         {alerts.map((alert) => (
           <li key={alert.id} className="alert-line" data-testid={`alert-${alert.id}`}>
             <span className="alert-desc">{alertDescription(alert)}</span>
-            {isMgannBreakType(alert.type) && (
-              <MgannBreakHistoryLimitEditor
-                alert={alert}
-                onUpdateParams={onUpdateParams}
-              />
-            )}
             <label className="alert-toggle">
               <input
                 type="checkbox"

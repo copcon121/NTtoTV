@@ -176,9 +176,9 @@ def test_rest_alerts_accept_and_normalize_mgann_break_ls_params(
             body = created.json()
             assert body["type"] == MGANN_BREAK_LS
             assert "direction" not in body["params"]
+            assert "historySignalLimit" not in body["params"]
             assert body["params"]["requireBigTrade"] is True
             assert body["params"]["bigTradeThreshold"] == 70
-            assert body["params"]["historySignalLimit"] == 2500
             assert body["params"]["timeframe"] == MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME
             assert (
                 body["params"]["volumeLookback"]

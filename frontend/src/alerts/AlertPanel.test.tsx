@@ -143,25 +143,6 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(onToggle).toHaveBeenCalledWith("a_2", true);
   });
 
-  it("updates an existing mGann Break L/S alert history limit", () => {
-    const onUpdateParams = vi.fn();
-    render(<AlertPanel alerts={alerts} onUpdateParams={onUpdateParams} />);
-
-    const line = screen.getByTestId("alert-a_6");
-    const input = within(line).getByLabelText(
-      "mGann Break L/S history limit a_6",
-    );
-    expect(input).toHaveValue(500);
-
-    fireEvent.change(input, { target: { value: "2500" } });
-    fireEvent.blur(input);
-
-    expect(onUpdateParams).toHaveBeenCalledWith("a_6", {
-      ...alerts[4].params,
-      historySignalLimit: 2500,
-    });
-  });
-
   it("raises onDelete when an alert is deleted", () => {
     const onDelete = vi.fn();
     render(<AlertPanel alerts={alerts} onDelete={onDelete} />);
@@ -290,7 +271,9 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(screen.queryByLabelText("mGann break direction")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Volume multiplier")).toHaveValue(2);
     expect(screen.getByLabelText("Spread multiplier")).toHaveValue(2);
-    expect(screen.getByLabelText("mGann Break L/S history limit")).toHaveValue(500);
+    expect(
+      screen.queryByLabelText("mGann Break L/S history limit"),
+    ).not.toBeInTheDocument();
     expect(screen.getByLabelText("Repeat alert")).toBeChecked();
 
     fireEvent.change(screen.getByLabelText("BigTrade threshold"), {
@@ -301,9 +284,6 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     });
     fireEvent.change(screen.getByLabelText("Spread multiplier"), {
       target: { value: "2.2" },
-    });
-    fireEvent.change(screen.getByLabelText("mGann Break L/S history limit"), {
-      target: { value: "2500" },
     });
     fireEvent.click(screen.getByText("Add"));
 
@@ -324,7 +304,6 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
         minPivotCuts: 2,
         confirmationBars: 2,
         breakTicks: 0,
-        historySignalLimit: 2500,
         repeat: true,
       },
     });
@@ -344,7 +323,9 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(screen.getByText("Spread x")).toBeInTheDocument();
     expect(screen.getByLabelText("Volume multiplier")).toHaveValue(2);
     expect(screen.getByLabelText("Spread multiplier")).toHaveValue(2);
-    expect(screen.getByLabelText("mGann Break L/S history limit")).toHaveValue(500);
+    expect(
+      screen.queryByLabelText("mGann Break L/S history limit"),
+    ).not.toBeInTheDocument();
     expect(screen.getByLabelText("Repeat alert")).toBeChecked();
 
     fireEvent.change(screen.getByLabelText("Volume multiplier"), {
@@ -372,7 +353,6 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
         minPivotCuts: 2,
         confirmationBars: 2,
         breakTicks: 0,
-        historySignalLimit: 500,
         repeat: true,
       },
     });

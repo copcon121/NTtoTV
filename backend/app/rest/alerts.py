@@ -210,6 +210,7 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         params["retestToleranceTicks"] = MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS
     elif alert_type in (MGANN_BREAK_LS, MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP):
         params.pop("direction", None)
+        params.pop("historySignalLimit", None)
         require_big_trade = params.get("requireBigTrade", False)
         if alert_type == MGANN_BIG_TRADE_SWEEP:
             require_big_trade = True
@@ -255,7 +256,6 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
             "swingSize",
             "pivotLookbackBars",
             "minPivotCuts",
-            "historySignalLimit",
         ):
             _validate_optional_positive_number(params, key)
         for key in (
