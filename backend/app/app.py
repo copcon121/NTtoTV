@@ -24,6 +24,7 @@ from .ingest.endpoint import router as nt_router
 from .registry.endpoint import router as chart_router
 from .rest.alerts import router as alerts_router
 from .rest.auth import router as auth_router
+from .rest.bookmap import router as bookmap_router
 from .rest.mt5 import router as mt5_router
 from .rest.errors import install_error_handlers
 from .rest.notifications import router as notifications_router
@@ -86,6 +87,7 @@ def create_app(*, lifespan: bool = True) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(alerts_router)
     app.include_router(notifications_router)
+    app.include_router(bookmap_router)
     app.include_router(mt5_router)
     app.include_router(orders_router)
     app.include_router(profiles_router)

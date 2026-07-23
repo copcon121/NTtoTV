@@ -10,6 +10,8 @@ import {
   TIMEFRAME_SUBSCRIBED_EVENTS,
   appShellClassName,
   bigTradesEnabledForTimeframe,
+  bookmapSiEventToSignalMarker,
+  bookmapSiMarkerVisible,
   buildChartLimitOrderDraft,
   drawingVisibleOnTimeframe,
   mergeVisibleDrawingState,
@@ -24,6 +26,7 @@ import {
   visibleDrawingsForTimeframe,
 } from "./LiveApp";
 import {
+  DEFAULT_BOOKMAP_SIGNAL_SETTINGS,
   DEFAULT_EMA_SETTINGS,
   DEFAULT_FOOTPRINT_SETTINGS,
 } from "./chart/IndicatorToggles";
@@ -319,6 +322,7 @@ describe("live chart series identity", () => {
     ]);
     expect(GLOBAL_SUBSCRIBED_EVENTS).toEqual([
       "quote_update",
+      "bookmap_si_event",
       "alert_event",
       "order_update",
       "position_update",
@@ -329,6 +333,63 @@ describe("live chart series identity", () => {
     ]);
     expect(BIG_TRADE_SUBSCRIBED_EVENTS).toEqual(["big_trade"]);
     expect(FOOTPRINT_SUBSCRIBED_EVENTS).toEqual(["footprint_update"]);
+  });
+
+  it("filters Bookmap STOP and ICE markers with strict default thresholds", () => {
+    const baseEvent = {
+      type: "bookmap_si_event" as const,
+      symbol: "GC",
+      contract: "GC",
+      alias: "GC",
+      provider: "dxFeed",
+      source: "bookmap" as const,
+      eventType: "ADD",
+      time: 1_753_200_000_000,
+      price: 3_350,
+      rawPrice: 335_000,
+      size: 1,
+      rawSize: 1,
+      rawTotalSize: 51,
+      isBid: true,
+    };
+    const stopMarker = bookmapSiEventToSignalMarker({
+      ...baseEvent,
+      eventKind: "stop",
+      totalSize: 51,
+    });
+    const iceMarker = bookmapSiEventToSignalMarker({
+      ...baseEvent,
+      eventKind: "iceberg",
+      totalSize: 11,
+    });
+    if (stopMarker === undefined || iceMarker === undefined) {
+      throw new Error("expected Bookmap markers");
+    }
+
+    expect(bookmapSiMarkerVisible(stopMarker, DEFAULT_BOOKMAP_SIGNAL_SETTINGS)).toBe(
+      true,
+    );
+    expect(
+      bookmapSiMarkerVisible(
+        { ...stopMarker, displaySize: 50 },
+        DEFAULT_BOOKMAP_SIGNAL_SETTINGS,
+      ),
+    ).toBe(false);
+    expect(bookmapSiMarkerVisible(iceMarker, DEFAULT_BOOKMAP_SIGNAL_SETTINGS)).toBe(
+      true,
+    );
+    expect(
+      bookmapSiMarkerVisible(
+        { ...iceMarker, displaySize: 10 },
+        DEFAULT_BOOKMAP_SIGNAL_SETTINGS,
+      ),
+    ).toBe(false);
+    expect(
+      bookmapSiMarkerVisible(stopMarker, {
+        ...DEFAULT_BOOKMAP_SIGNAL_SETTINGS,
+        showStops: false,
+      }),
+    ).toBe(false);
   });
 
   it("shows drawings on their source timeframe and lower timeframes only", () => {

@@ -47,6 +47,7 @@ from ..models.messages import (
     AlertEvent,
     BarUpdate,
     BigTrade,
+    BookmapSiEvent,
     ChartStatusEvent,
     EventType,
     FootprintUpdate,
@@ -110,6 +111,7 @@ OutboundMessage = (
     | FootprintUpdate
     | FvgSignalUpdate
     | BigTrade
+    | BookmapSiEvent
     | AlertEvent
     | ChartStatusEvent
     | Ping
@@ -176,6 +178,17 @@ def coalescing_subkey(payload: Mapping[str, Any]) -> Hashable:
             payload["time"],
             payload["price"],
             payload["side"],
+        )
+    if t == "bookmap_si_event":
+        return (
+            "bookmap_si_event",
+            payload.get("alias"),
+            payload.get("eventKind"),
+            payload.get("eventType"),
+            payload.get("orderId"),
+            payload["time"],
+            payload.get("rawPrice"),
+            payload.get("rawSize"),
         )
     if t == "alert_event":
         return ("alert_event", payload["alertId"], payload["time"])

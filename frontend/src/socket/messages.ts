@@ -23,6 +23,7 @@ export type ChartEventType =
   | "footprint_update"
   | "fvg_signal_update"
   | "big_trade"
+  | "bookmap_si_event"
   | "alert_event"
   | "order_update"
   | "position_update"
@@ -192,6 +193,29 @@ export interface BigTradeMessage {
   side: Side;
 }
 
+export type BookmapSiEventKind = "iceberg" | "stop" | string;
+
+export interface BookmapSiEventMessage {
+  type: "bookmap_si_event";
+  symbol: string;
+  contract: string;
+  alias: string;
+  provider: string;
+  source: "bookmap" | string;
+  eventKind: BookmapSiEventKind;
+  eventType: string;
+  time: number;
+  timeNanos?: number;
+  price: number;
+  rawPrice: number;
+  size: number;
+  rawSize: number;
+  totalSize: number;
+  rawTotalSize: number;
+  isBid: boolean;
+  orderId?: string;
+}
+
 /** Alert firing event (Req 5.2, 17.2). */
 export interface AlertEventMessage {
   type: "alert_event";
@@ -343,6 +367,7 @@ export type InboundMessage =
   | FootprintUpdateMessage
   | FvgSignalUpdateMessage
   | BigTradeMessage
+  | BookmapSiEventMessage
   | AlertEventMessage
   | OrderUpdateMessage
   | PositionUpdateMessage

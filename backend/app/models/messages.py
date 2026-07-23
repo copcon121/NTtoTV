@@ -25,8 +25,9 @@ Channels:
   (``ControlCommand``).
 * ``/ws/chart`` client -> Backend: ``subscribe``, ``unsubscribe``, ``pong``.
 * ``/ws/chart`` Backend -> client: ``bar_update``, ``quote_update``,
-  ``volume_delta_update``, ``footprint_update``, ``fvg_signal_update``, ``big_trade``,
-  ``alert_event``, ``status`` (``ChartStatusEvent``), ``ping``.
+  ``volume_delta_update``, ``footprint_update``, ``fvg_signal_update``,
+  ``big_trade``, ``bookmap_si_event``, ``alert_event``, ``status``
+  (``ChartStatusEvent``), ``ping``.
 
 (Requirements 1.1, 1.2, 5.2)
 """
@@ -69,6 +70,7 @@ __all__ = [
     "FootprintUpdate",
     "FvgSignalUpdate",
     "BigTrade",
+    "BookmapSiEvent",
     "AlertEvent",
     "ChartStatusEvent",
     "Ping",
@@ -123,6 +125,7 @@ class EventType(str, Enum):
     FOOTPRINT_UPDATE = "footprint_update"
     FVG_SIGNAL_UPDATE = "fvg_signal_update"
     BIG_TRADE = "big_trade"
+    BOOKMAP_SI_EVENT = "bookmap_si_event"
     ALERT_EVENT = "alert_event"
     ORDER_UPDATE = "order_update"
     POSITION_UPDATE = "position_update"
@@ -800,6 +803,83 @@ class BigTrade:
             price=float(data["price"]),
             volume=int(data["volume"]),
             side=Side(data["side"]),
+        )
+
+
+@dataclass(slots=True)
+class BookmapSiEvent:
+    """Bookmap Stops/Icebergs On-Chart event (Backend -> client)."""
+
+    type: ClassVar[str] = "bookmap_si_event"
+
+    symbol: str
+    contract: str
+    alias: str
+    time: CanonicalTimestamp
+    price: float
+    raw_price: int
+    size: float
+    raw_size: int
+    total_size: float
+    raw_total_size: int
+    event_kind: str
+    event_type: str
+    is_bid: bool
+    provider: str = "velox.indicators.sionchart.SitIndicator"
+    source: str = "bookmap"
+    order_id: str | None = None
+    time_nanos: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "type": self.type,
+            "symbol": self.symbol,
+            "contract": self.contract,
+            "alias": self.alias,
+            "provider": self.provider,
+            "source": self.source,
+            "eventKind": self.event_kind,
+            "eventType": self.event_type,
+            "time": self.time,
+            "price": self.price,
+            "rawPrice": self.raw_price,
+            "size": self.size,
+            "rawSize": self.raw_size,
+            "totalSize": self.total_size,
+            "rawTotalSize": self.raw_total_size,
+            "isBid": self.is_bid,
+        }
+        if self.order_id is not None:
+            out["orderId"] = self.order_id
+        if self.time_nanos is not None:
+            out["timeNanos"] = self.time_nanos
+        return out
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "BookmapSiEvent":
+        _expect_type(data, cls.type)
+        raw_order_id = data.get("orderId")
+        raw_time_nanos = data.get("timeNanos")
+        return cls(
+            symbol=str(data["symbol"]),
+            contract=str(data["contract"]),
+            alias=str(data["alias"]),
+            time=int(data["time"]),
+            price=float(data["price"]),
+            raw_price=int(data["rawPrice"]),
+            size=float(data["size"]),
+            raw_size=int(data["rawSize"]),
+            total_size=float(data["totalSize"]),
+            raw_total_size=int(data["rawTotalSize"]),
+            event_kind=str(data["eventKind"]),
+            event_type=str(data["eventType"]),
+            is_bid=bool(data["isBid"]),
+            provider=str(
+                data.get("provider", "velox.indicators.sionchart.SitIndicator")
+            ),
+            source=str(data.get("source", "bookmap")),
+            order_id=None if raw_order_id is None else str(raw_order_id),
+            time_nanos=None if raw_time_nanos is None else int(raw_time_nanos),
         )
 
 

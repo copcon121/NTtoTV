@@ -1,5 +1,6 @@
 import type {
   BigTradeSettings,
+  BookmapSignalSettings,
   EmaSettings,
   FootprintSettings,
 } from "../chart/IndicatorToggles";
@@ -42,6 +43,8 @@ export interface ChartProfilePayload {
   /** Optional maximum number of FVG Grader signals to fetch/display on M1. */
   fvgSignalLimit?: number;
   showBigTrades: boolean;
+  /** Optional Bookmap STOP/ICE visibility and size thresholds. */
+  bookmapSignalSettings?: BookmapSignalSettings;
   ema: EmaSettings;
   smc: SmcSettings;
   outsideBar?: OutsideBarSettings;

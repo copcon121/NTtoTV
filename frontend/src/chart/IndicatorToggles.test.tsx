@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   IndicatorToggles,
+  DEFAULT_BOOKMAP_SIGNAL_SETTINGS,
   type EmaSettings,
   DEFAULT_BIG_TRADE_SETTINGS,
   DEFAULT_EMA_SETTINGS,
@@ -316,6 +317,55 @@ describe("IndicatorToggles", () => {
     });
 
     expect(onLimit).toHaveBeenCalledWith(150);
+  });
+
+  it("toggles STOP and ICE markers and edits their display thresholds", () => {
+    const onBookmapSignals = vi.fn();
+    render(
+      <IndicatorToggles
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        bookmapSignals={DEFAULT_BOOKMAP_SIGNAL_SETTINGS}
+        onBookmapSignalsChange={onBookmapSignals}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    fireEvent.click(screen.getByLabelText("STOP"));
+    fireEvent.click(screen.getByLabelText("ICE"));
+    const stopThreshold = screen.getByLabelText("STOP display threshold");
+    const iceThreshold = screen.getByLabelText("ICE display threshold");
+    expect(stopThreshold).toHaveValue(50);
+    expect(iceThreshold).toHaveValue(10);
+    fireEvent.change(stopThreshold, { target: { value: "75" } });
+    fireEvent.blur(stopThreshold);
+    fireEvent.change(iceThreshold, { target: { value: "20" } });
+    fireEvent.blur(iceThreshold);
+
+    expect(onBookmapSignals).toHaveBeenCalledWith({
+      ...DEFAULT_BOOKMAP_SIGNAL_SETTINGS,
+      showStops: false,
+    });
+    expect(onBookmapSignals).toHaveBeenCalledWith({
+      ...DEFAULT_BOOKMAP_SIGNAL_SETTINGS,
+      showIcebergs: false,
+    });
+    expect(onBookmapSignals).toHaveBeenCalledWith({
+      ...DEFAULT_BOOKMAP_SIGNAL_SETTINGS,
+      stopThreshold: 75,
+    });
+    expect(onBookmapSignals).toHaveBeenCalledWith({
+      ...DEFAULT_BOOKMAP_SIGNAL_SETTINGS,
+      icebergThreshold: 20,
+    });
   });
 
   it("can disable BigTrade independently", () => {

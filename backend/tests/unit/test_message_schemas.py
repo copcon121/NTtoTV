@@ -27,6 +27,7 @@ from app.models.messages import (
     AlertEvent,
     BarUpdate,
     BigTrade,
+    BookmapSiEvent,
     ChartStatusEvent,
     ControlAction,
     ControlCommand,
@@ -272,6 +273,7 @@ def test_subscribe_round_trips_with_all_event_types():
             EventType.VOLUME_DELTA_UPDATE,
             EventType.FOOTPRINT_UPDATE,
             EventType.BIG_TRADE,
+            EventType.BOOKMAP_SI_EVENT,
             EventType.ALERT_EVENT,
             EventType.STATUS,
         ],
@@ -290,6 +292,7 @@ def test_subscribe_wire_shape_matches_design():
             EventType.VOLUME_DELTA_UPDATE,
             EventType.FOOTPRINT_UPDATE,
             EventType.BIG_TRADE,
+            EventType.BOOKMAP_SI_EVENT,
             EventType.ALERT_EVENT,
             EventType.STATUS,
         ],
@@ -304,6 +307,7 @@ def test_subscribe_wire_shape_matches_design():
             "volume_delta_update",
             "footprint_update",
             "big_trade",
+            "bookmap_si_event",
             "alert_event",
             "status",
         ],
@@ -677,6 +681,75 @@ def test_big_trade_wire_shape_matches_design():
         "volume": 65,
         "side": "buy",
     }
+
+
+# ===========================================================================
+# /ws/chart backend -> client: bookmap_si_event
+# ===========================================================================
+
+
+@pytest.mark.unit
+def test_bookmap_si_event_round_trips():
+    event = BookmapSiEvent(
+        symbol="GC",
+        contract="GC",
+        alias="GCQ6@RITHMIC",
+        provider="velox.indicators.sionchart.SitIndicator",
+        source="bookmap",
+        event_kind="iceberg",
+        event_type="DETECTION",
+        time=1730313600123,
+        price=2345.6,
+        raw_price=23456,
+        size=12.0,
+        raw_size=12,
+        total_size=47.0,
+        raw_total_size=47,
+        is_bid=True,
+        order_id="abc-123",
+        time_nanos=1_730_313_600_123_000_000,
+    )
+    assert BookmapSiEvent.from_dict(event.to_dict()) == event
+
+
+@pytest.mark.unit
+def test_bookmap_si_event_wire_shape_matches_bridge_payload():
+    event = BookmapSiEvent(
+        symbol="GC",
+        contract="GC",
+        alias="GCQ6@RITHMIC",
+        time=1730313600123,
+        price=2345.6,
+        raw_price=23456,
+        size=12.0,
+        raw_size=12,
+        total_size=47.0,
+        raw_total_size=47,
+        event_kind="stop",
+        event_type="STOP",
+        is_bid=False,
+        time_nanos=1_730_313_600_123_000_000,
+    )
+    assert event.to_dict() == {
+        "type": "bookmap_si_event",
+        "symbol": "GC",
+        "contract": "GC",
+        "alias": "GCQ6@RITHMIC",
+        "provider": "velox.indicators.sionchart.SitIndicator",
+        "source": "bookmap",
+        "eventKind": "stop",
+        "eventType": "STOP",
+        "time": 1730313600123,
+        "timeNanos": 1_730_313_600_123_000_000,
+        "price": 2345.6,
+        "rawPrice": 23456,
+        "size": 12.0,
+        "rawSize": 12,
+        "totalSize": 47.0,
+        "rawTotalSize": 47,
+        "isBid": False,
+    }
+    assert EventType.BOOKMAP_SI_EVENT.value == "bookmap_si_event"
 
 
 # ===========================================================================

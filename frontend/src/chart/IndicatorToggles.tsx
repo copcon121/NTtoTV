@@ -89,6 +89,13 @@ export interface BigTradeSettings {
   sessionMinVolumes?: BigTradeSessionMinVolumes;
 }
 
+export interface BookmapSignalSettings {
+  showStops: boolean;
+  stopThreshold: number;
+  showIcebergs: boolean;
+  icebergThreshold: number;
+}
+
 export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
   showVA: false,
   vaPercent: 70,
@@ -107,6 +114,13 @@ export const DEFAULT_BIG_TRADE_SETTINGS: BigTradeSettings = {
   soundEnabled: false,
   sessionMinVolumes: DEFAULT_BIG_TRADE_SESSION_MIN_VOLUMES,
 };
+export const DEFAULT_BOOKMAP_SIGNAL_SETTINGS: BookmapSignalSettings = {
+  showStops: true,
+  stopThreshold: 50,
+  showIcebergs: true,
+  icebergThreshold: 10,
+};
+const MAX_BOOKMAP_SIGNAL_THRESHOLD = 1_000_000;
 export const DEFAULT_FVG_SIGNAL_LIMIT = 100;
 export const MIN_FVG_SIGNAL_LIMIT = 25;
 export const MAX_FVG_SIGNAL_LIMIT = 2000;
@@ -115,6 +129,29 @@ export function normalizeFvgSignalLimit(value: unknown): number {
   const parsed = Math.round(Number(value));
   if (!Number.isFinite(parsed)) return DEFAULT_FVG_SIGNAL_LIMIT;
   return Math.min(MAX_FVG_SIGNAL_LIMIT, Math.max(MIN_FVG_SIGNAL_LIMIT, parsed));
+}
+
+export function normalizeBookmapSignalSettings(
+  input?: Partial<BookmapSignalSettings> | null,
+): BookmapSignalSettings {
+  const threshold = (value: unknown, fallback: number) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(MAX_BOOKMAP_SIGNAL_THRESHOLD, Math.max(0, parsed));
+  };
+  return {
+    showStops: input?.showStops ?? DEFAULT_BOOKMAP_SIGNAL_SETTINGS.showStops,
+    stopThreshold: threshold(
+      input?.stopThreshold,
+      DEFAULT_BOOKMAP_SIGNAL_SETTINGS.stopThreshold,
+    ),
+    showIcebergs:
+      input?.showIcebergs ?? DEFAULT_BOOKMAP_SIGNAL_SETTINGS.showIcebergs,
+    icebergThreshold: threshold(
+      input?.icebergThreshold,
+      DEFAULT_BOOKMAP_SIGNAL_SETTINGS.icebergThreshold,
+    ),
+  };
 }
 
 export interface IndicatorTogglesProps {
@@ -131,10 +168,12 @@ export interface IndicatorTogglesProps {
   outsideBar?: OutsideBarSettings;
   footprintSettings: FootprintSettings;
   bigTradeSettings?: BigTradeSettings;
+  bookmapSignals?: BookmapSignalSettings;
   mgannSwingDisabled?: boolean;
   footprintDisabled?: boolean;
   fvgGraderDisabled?: boolean;
   bigTradeDisabled?: boolean;
+  bookmapSignalsDisabled?: boolean;
   onVolumeChange?: (enabled: boolean) => void;
   onVolumeDeltaChange?: (enabled: boolean) => void;
   onMgannSwingChange?: (enabled: boolean) => void;
@@ -154,6 +193,7 @@ export interface IndicatorTogglesProps {
   onOutsideBarChange?: (next: OutsideBarSettings) => void;
   onFootprintSettingsChange: (next: FootprintSettings) => void;
   onBigTradeSettingsChange?: (next: BigTradeSettings) => void;
+  onBookmapSignalsChange?: (next: BookmapSignalSettings) => void;
 }
 
 /** A few common EMA colors for the swatch row. */
@@ -211,10 +251,12 @@ export function IndicatorToggles({
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
   footprintSettings,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
+  bookmapSignals,
   mgannSwingDisabled = false,
   footprintDisabled = false,
   fvgGraderDisabled = false,
   bigTradeDisabled = false,
+  bookmapSignalsDisabled = false,
   onVolumeChange = () => {},
   onVolumeDeltaChange = () => {},
   onMgannSwingChange = () => {},
@@ -231,10 +273,12 @@ export function IndicatorToggles({
   onOutsideBarChange = () => {},
   onFootprintSettingsChange,
   onBigTradeSettingsChange = () => {},
+  onBookmapSignalsChange = () => {},
 }: IndicatorTogglesProps) {
   const outsideBarConfig = normalizeOutsideBarSettings(outsideBar);
   const mgannSwingConfig = normalizeMgannSwingSettings(mgannSwingSettings);
   const outsideBarDeltaFilter = outsideBarConfig.deltaFilter;
+  const bookmapSignalConfig = normalizeBookmapSignalSettings(bookmapSignals);
   const [open, setOpen] = useState(false);
   const [combinedSettingsOpen, setCombinedSettingsOpen] = useState(false);
   const [dailyVolumeProfileSettingsOpen, setDailyVolumeProfileSettingsOpen] =
@@ -277,6 +321,12 @@ export function IndicatorToggles({
     };
   });
   const [btLimitDraft, setBtLimitDraft] = useState(String(bigTradeSettings.maxVisible));
+  const [stopThresholdDraft, setStopThresholdDraft] = useState(
+    String(bookmapSignalConfig.stopThreshold),
+  );
+  const [icebergThresholdDraft, setIcebergThresholdDraft] = useState(
+    String(bookmapSignalConfig.icebergThreshold),
+  );
   const [obLookbackDraft, setObLookbackDraft] = useState(
     String(outsideBarDeltaFilter.lookbackBars),
   );
@@ -370,6 +420,14 @@ export function IndicatorToggles({
   }, [bigTradeSettings.maxVisible]);
 
   useEffect(() => {
+    setStopThresholdDraft(String(bookmapSignalConfig.stopThreshold));
+  }, [bookmapSignalConfig.stopThreshold]);
+
+  useEffect(() => {
+    setIcebergThresholdDraft(String(bookmapSignalConfig.icebergThreshold));
+  }, [bookmapSignalConfig.icebergThreshold]);
+
+  useEffect(() => {
     setObLookbackDraft(String(outsideBarDeltaFilter.lookbackBars));
   }, [outsideBarDeltaFilter.lookbackBars]);
 
@@ -460,6 +518,8 @@ export function IndicatorToggles({
     (footprint ? 1 : 0) +
     (fvgGrader ? 1 : 0) +
     (bigTrades ? 1 : 0) +
+    (bookmapSignals?.showStops && !bookmapSignalsDisabled ? 1 : 0) +
+    (bookmapSignals?.showIcebergs && !bookmapSignalsDisabled ? 1 : 0) +
     (smc.enabled ? 1 : 0);
   const normalizedDailyVolumeProfileWidth =
     normalizeSessionVolumeProfileWidth(dailyVolumeProfileWidth);
@@ -674,6 +734,27 @@ export function IndicatorToggles({
       onBigTradeSettingsChange({ ...bigTradeSettings, maxVisible: parsed });
     } else {
       setBtLimitDraft(String(bigTradeSettings.maxVisible));
+    }
+  };
+
+  const commitBookmapThreshold = (kind: "stop" | "iceberg") => {
+    const draft = kind === "stop" ? stopThresholdDraft : icebergThresholdDraft;
+    const parsed = Number(draft);
+    if (
+      Number.isFinite(parsed) &&
+      parsed >= 0 &&
+      parsed <= MAX_BOOKMAP_SIGNAL_THRESHOLD
+    ) {
+      onBookmapSignalsChange({
+        ...bookmapSignalConfig,
+        [kind === "stop" ? "stopThreshold" : "icebergThreshold"]: parsed,
+      });
+      return;
+    }
+    if (kind === "stop") {
+      setStopThresholdDraft(String(bookmapSignalConfig.stopThreshold));
+    } else {
+      setIcebergThresholdDraft(String(bookmapSignalConfig.icebergThreshold));
     }
   };
 
@@ -1645,6 +1726,74 @@ export function IndicatorToggles({
                 </label>
               </div>
             </div>
+          )}
+          {bookmapSignals !== undefined && (
+            <>
+              <IndicatorRow
+                label="STOP"
+                checked={bookmapSignalConfig.showStops}
+                disabled={bookmapSignalsDisabled}
+                onChange={(showStops) =>
+                  onBookmapSignalsChange({ ...bookmapSignalConfig, showStops })
+                }
+                trailing={
+                  <div className="indicator-threshold-control">
+                    <span aria-hidden="true">&gt;</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={MAX_BOOKMAP_SIGNAL_THRESHOLD}
+                      step={1}
+                      disabled={bookmapSignalsDisabled}
+                      aria-label="STOP display threshold"
+                      value={stopThresholdDraft}
+                      onChange={(event) =>
+                        setStopThresholdDraft(event.currentTarget.value)
+                      }
+                      onBlur={() => commitBookmapThreshold("stop")}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          commitBookmapThreshold("stop");
+                          event.currentTarget.blur();
+                        }
+                      }}
+                    />
+                  </div>
+                }
+              />
+              <IndicatorRow
+                label="ICE"
+                checked={bookmapSignalConfig.showIcebergs}
+                disabled={bookmapSignalsDisabled}
+                onChange={(showIcebergs) =>
+                  onBookmapSignalsChange({ ...bookmapSignalConfig, showIcebergs })
+                }
+                trailing={
+                  <div className="indicator-threshold-control">
+                    <span aria-hidden="true">&gt;</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={MAX_BOOKMAP_SIGNAL_THRESHOLD}
+                      step={1}
+                      disabled={bookmapSignalsDisabled}
+                      aria-label="ICE display threshold"
+                      value={icebergThresholdDraft}
+                      onChange={(event) =>
+                        setIcebergThresholdDraft(event.currentTarget.value)
+                      }
+                      onBlur={() => commitBookmapThreshold("iceberg")}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          commitBookmapThreshold("iceberg");
+                          event.currentTarget.blur();
+                        }
+                      }}
+                    />
+                  </div>
+                }
+              />
+            </>
           )}
           <IndicatorRow
             label="BigTrade"
