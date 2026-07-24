@@ -6,11 +6,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.app import create_app
-from app.config import Settings
+from app.config import Settings, settings as default_settings
 from app.engines.basis_engine import BasisEngine
 from app.models.mt5 import Mt5AccountInfo, Mt5OrderResult, Mt5SymbolInfo, Mt5Tick
 from app.models.orders import OrderKind, OrderRecord
 from app.models.timestamp import now_ms
+from app.mt5.manager import Mt5Manager
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
 
@@ -153,16 +154,28 @@ class _PositionTrackingBackend(_StrictSymbolBackend):
 
 @pytest.fixture()
 def client(tmp_path):
-    settings = Settings(data_dir=tmp_path)
+    settings = Settings(
+        data_dir=tmp_path,
+        mt5_backend="fake",
+        credential_key="fake-local-development-key",
+    )
     cache = CacheStore(tmp_path / "app.sqlite")
     app = create_app(lifespan=False)
     app.state.contract_state = ContractStateStore(cache, settings=settings)
     app.state.basis_engine = BasisEngine(settings=settings)
+    app.state.mt5_manager = Mt5Manager(settings=settings)
     try:
         with TestClient(app) as c:
             yield c
     finally:
         cache.close()
+
+
+def _registration(username: str, password: str) -> dict[str, str]:
+    payload = {"username": username, "password": password}
+    if default_settings.invite_code:
+        payload["inviteCode"] = default_settings.invite_code
+    return payload
 
 
 def _login_and_connect(client: TestClient) -> None:
@@ -256,7 +269,7 @@ def test_two_users_place_orders_with_their_own_mt5_logins(client: TestClient):
     client.app.state.mt5_manager = _Manager(backend)
 
     assert client.post(
-        "/api/auth/register", json={"username": "alice", "password": "pw"}
+        "/api/auth/register", json=_registration("alice", "pw")
     ).status_code == 200
     assert client.post(
         "/api/mt5/connect",
@@ -285,7 +298,7 @@ def test_two_users_place_orders_with_their_own_mt5_logins(client: TestClient):
 
     assert client.post("/api/auth/logout").status_code == 200
     assert client.post(
-        "/api/auth/register", json={"username": "bob", "password": "pw"}
+        "/api/auth/register", json=_registration("bob", "pw")
     ).status_code == 200
     assert client.post(
         "/api/mt5/connect",
@@ -479,7 +492,7 @@ def test_orders_require_auth(client: TestClient):
 @pytest.mark.integration
 def test_orders_require_mt5_account(client: TestClient):
     assert client.post(
-        "/api/auth/register", json={"username": "local", "password": "local"}
+        "/api/auth/register", json=_registration("local", "local")
     ).status_code == 200
     resp = client.post(
         "/api/orders",

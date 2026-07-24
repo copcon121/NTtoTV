@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Iterator
 
 from ..config import settings
-from ..models import NormalizedQuote, NormalizedTrade, from_canonical_ms
+from ..models import NormalizedQuote, NormalizedTrade, Side, from_canonical_ms
 from .connection import DEFAULT_BUSY_TIMEOUT_MS, SingleWriter, connect, connect_reader
 
 __all__ = [
@@ -123,6 +123,30 @@ def trade_event_key(
     )
 
 
+def _stored_trade_event_key(t: NormalizedTrade) -> str:
+    legacy = trade_event_key(
+        t.sequence,
+        t.time,
+        t.price,
+        t.volume,
+        t.bid,
+        t.ask,
+        t.best_bid,
+        t.best_ask,
+        t.time_ticks,
+    )
+    if t.source == "nt":
+        return legacy
+    return _event_key(
+        "trade-source",
+        t.source,
+        legacy,
+        t.source_time_nanos,
+        t.aggressor_order_id,
+        t.passive_order_id,
+    )
+
+
 def quote_event_key(
     sequence: int,
     time: int,
@@ -148,7 +172,16 @@ CREATE TABLE IF NOT EXISTS ticks (
     best_bid   REAL,
     best_ask   REAL,
     time_ticks INTEGER,
+    source     TEXT    NOT NULL DEFAULT 'nt',
+    source_time_nanos INTEGER,
+    bridge_time INTEGER,
+    received_at INTEGER,
     side       TEXT,
+    aggressor_order_id TEXT,
+    passive_order_id TEXT,
+    execution_start INTEGER NOT NULL DEFAULT 0,
+    execution_end INTEGER NOT NULL DEFAULT 0,
+    otc INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (event_key)
 );
 CREATE INDEX IF NOT EXISTS idx_ticks_time ON ticks(time);
@@ -170,13 +203,21 @@ CREATE INDEX IF NOT EXISTS idx_quotes_sequence ON quotes(sequence);
 
 _INSERT_TRADE_SQL = (
     "INSERT INTO ticks "
-    "(event_key, sequence, time, price, volume, bid, ask, best_bid, best_ask, time_ticks, side) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) "
+    "(event_key, sequence, time, price, volume, bid, ask, best_bid, best_ask, "
+    "time_ticks, source, source_time_nanos, bridge_time, received_at, side, "
+    "aggressor_order_id, passive_order_id, execution_start, execution_end, otc) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
     "ON CONFLICT(event_key) DO UPDATE SET "
     "sequence=excluded.sequence, time=excluded.time, price=excluded.price, "
     "volume=excluded.volume, bid=excluded.bid, ask=excluded.ask, "
     "best_bid=excluded.best_bid, best_ask=excluded.best_ask, "
-    "time_ticks=excluded.time_ticks, side=excluded.side"
+    "time_ticks=excluded.time_ticks, source=excluded.source, "
+    "source_time_nanos=excluded.source_time_nanos, bridge_time=excluded.bridge_time, "
+    "received_at=excluded.received_at, side=excluded.side, "
+    "aggressor_order_id=excluded.aggressor_order_id, "
+    "passive_order_id=excluded.passive_order_id, "
+    "execution_start=excluded.execution_start, execution_end=excluded.execution_end, "
+    "otc=excluded.otc"
 )
 
 _INSERT_QUOTE_SQL = (
@@ -277,17 +318,7 @@ class TickStore:
     @staticmethod
     def _trade_params(t: NormalizedTrade) -> tuple[object, ...]:
         return (
-            trade_event_key(
-                t.sequence,
-                t.time,
-                t.price,
-                t.volume,
-                t.bid,
-                t.ask,
-                t.best_bid,
-                t.best_ask,
-                t.time_ticks,
-            ),
+            _stored_trade_event_key(t),
             t.sequence,
             t.time,
             t.price,
@@ -297,6 +328,16 @@ class TickStore:
             t.best_bid,
             t.best_ask,
             t.time_ticks,
+            t.source,
+            t.source_time_nanos,
+            t.bridge_time,
+            t.received_at,
+            None if t.side is None else t.side.value,
+            t.aggressor_order_id,
+            t.passive_order_id,
+            int(t.execution_start),
+            int(t.execution_end),
+            int(t.otc),
         )
 
     @staticmethod
@@ -321,7 +362,7 @@ class TickStore:
     # -- reads ----------------------------------------------------------------
 
     def read_range(
-        self, contract: str, frm: int, to: int
+        self, contract: str, frm: int, to: int, *, source: str | None = "nt"
     ) -> Iterator[NormalizedTrade]:
         """Yield recorded trades for ``contract`` in ``[frm, to]`` (inclusive).
 
@@ -351,12 +392,58 @@ class TickStore:
                     if "time_ticks" in tick_columns
                     else "NULL AS time_ticks"
                 )
+                optional = {
+                    "source": "source" if "source" in tick_columns else "'nt' AS source",
+                    "source_time_nanos": (
+                        "source_time_nanos"
+                        if "source_time_nanos" in tick_columns
+                        else "NULL AS source_time_nanos"
+                    ),
+                    "bridge_time": (
+                        "bridge_time" if "bridge_time" in tick_columns else "NULL AS bridge_time"
+                    ),
+                    "received_at": (
+                        "received_at" if "received_at" in tick_columns else "NULL AS received_at"
+                    ),
+                    "side": "side" if "side" in tick_columns else "NULL AS side",
+                    "aggressor_order_id": (
+                        "aggressor_order_id"
+                        if "aggressor_order_id" in tick_columns
+                        else "NULL AS aggressor_order_id"
+                    ),
+                    "passive_order_id": (
+                        "passive_order_id"
+                        if "passive_order_id" in tick_columns
+                        else "NULL AS passive_order_id"
+                    ),
+                    "execution_start": (
+                        "execution_start"
+                        if "execution_start" in tick_columns
+                        else "0 AS execution_start"
+                    ),
+                    "execution_end": (
+                        "execution_end"
+                        if "execution_end" in tick_columns
+                        else "0 AS execution_end"
+                    ),
+                    "otc": "otc" if "otc" in tick_columns else "0 AS otc",
+                }
+                has_source = "source" in tick_columns
+                if source is not None and not has_source and source != "nt":
+                    continue
+                source_clause = "" if source is None or not has_source else " AND source = ?"
+                params: tuple[object, ...] = (
+                    (frm, to)
+                    if source is None or not has_source
+                    else (frm, to, source)
+                )
                 rows = conn.execute(
                     "SELECT sequence, time, price, volume, bid, ask, "
-                    f"best_bid, best_ask, {time_ticks_expr} FROM ticks "
-                    "WHERE time BETWEEN ? AND ? "
+                    f"best_bid, best_ask, {time_ticks_expr}, "
+                    f"{', '.join(optional.values())} FROM ticks "
+                    f"WHERE time BETWEEN ? AND ?{source_clause} "
                     "ORDER BY time ASC, sequence ASC, event_key ASC",
-                    (frm, to),
+                    params,
                 ).fetchall()
             finally:
                 conn.close()
@@ -373,6 +460,16 @@ class TickStore:
                     best_ask=row["best_ask"],
                     sequence=row["sequence"],
                     time_ticks=row["time_ticks"],
+                    source=row["source"],
+                    source_time_nanos=row["source_time_nanos"],
+                    bridge_time=row["bridge_time"],
+                    received_at=row["received_at"],
+                    side=None if row["side"] is None else Side(row["side"]),
+                    aggressor_order_id=row["aggressor_order_id"],
+                    passive_order_id=row["passive_order_id"],
+                    execution_start=bool(row["execution_start"]),
+                    execution_end=bool(row["execution_end"]),
+                    otc=bool(row["otc"]),
                 )
 
     def read_quotes(
@@ -558,6 +655,7 @@ class TickStore:
             writer.executescript(TICK_SHARD_SCHEMA)
             self._migrate_legacy_sequence_primary_keys(writer)
             self._migrate_tick_time_ticks(writer)
+            self._migrate_tick_source_fields(writer)
             self._writers[path] = writer
             return writer
 
@@ -643,6 +741,28 @@ class TickStore:
             columns = self._table_columns(conn, "ticks")
             if "time_ticks" not in columns:
                 conn.execute("ALTER TABLE ticks ADD COLUMN time_ticks INTEGER")
+
+        writer.write(op)
+
+    def _migrate_tick_source_fields(self, writer: SingleWriter) -> None:
+        columns = {
+            "source": "TEXT NOT NULL DEFAULT 'nt'",
+            "source_time_nanos": "INTEGER",
+            "bridge_time": "INTEGER",
+            "received_at": "INTEGER",
+            "aggressor_order_id": "TEXT",
+            "passive_order_id": "TEXT",
+            "execution_start": "INTEGER NOT NULL DEFAULT 0",
+            "execution_end": "INTEGER NOT NULL DEFAULT 0",
+            "otc": "INTEGER NOT NULL DEFAULT 0",
+        }
+
+        def op(conn) -> None:
+            existing = self._table_columns(conn, "ticks")
+            for name, ddl in columns.items():
+                if name not in existing:
+                    conn.execute(f"ALTER TABLE ticks ADD COLUMN {name} {ddl}")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ticks_source_time ON ticks(source, time)")
 
         writer.write(op)
 

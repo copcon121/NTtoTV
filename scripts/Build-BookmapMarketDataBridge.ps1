@@ -47,6 +47,7 @@ foreach ($target in @($classes, $testClasses)) {
 $sourceRoot = Join-Path $resolvedBridgeRoot "src\main\java\com\nttotv\bookmap"
 $sources = @(
     Join-Path $sourceRoot "BookmapFootprintAccumulator.java"
+    Join-Path $sourceRoot "BookmapWebSocketSender.java"
     Join-Path $sourceRoot "BookmapMarketDataBridge.java"
 )
 foreach ($source in $sources) {
@@ -62,12 +63,18 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if (!$SkipTests) {
-    $testSource = Join-Path $resolvedBridgeRoot "src\test\java\com\nttotv\bookmap\BookmapFootprintAccumulatorTest.java"
-    if (!(Test-Path -LiteralPath $testSource)) {
-        throw "Market-data bridge test source not found: $testSource"
+    $testRoot = Join-Path $resolvedBridgeRoot "src\test\java\com\nttotv\bookmap"
+    $testSources = @(
+        Join-Path $testRoot "BookmapFootprintAccumulatorTest.java"
+        Join-Path $testRoot "BookmapWebSocketSenderTest.java"
+    )
+    foreach ($testSource in $testSources) {
+        if (!(Test-Path -LiteralPath $testSource)) {
+            throw "Market-data bridge test source not found: $testSource"
+        }
     }
     $testClasspath = @($classes, $bookmapApi, $bookmapSimplifiedApi) -join ";"
-    & $javac -encoding UTF-8 -source 17 -target 17 -classpath $testClasspath -d $testClasses $testSource
+    & $javac -encoding UTF-8 -source 17 -target 17 -classpath $testClasspath -d $testClasses $testSources
     if ($LASTEXITCODE -ne 0) {
         throw "test javac failed with exit code $LASTEXITCODE"
     }
@@ -76,10 +83,14 @@ if (!$SkipTests) {
     if ($LASTEXITCODE -ne 0) {
         throw "market-data bridge tests failed with exit code $LASTEXITCODE"
     }
+    & $java -classpath $runClasspath com.nttotv.bookmap.BookmapWebSocketSenderTest
+    if ($LASTEXITCODE -ne 0) {
+        throw "market-data websocket tests failed with exit code $LASTEXITCODE"
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputJar)) {
-    $outJar = Join-Path $build "NTtoTV-Bookmap-Market-Data-Shadow.jar"
+    $outJar = Join-Path $build "NTtoTV-Bookmap-Market-Data-Live.jar"
 } elseif ([IO.Path]::IsPathRooted($OutputJar)) {
     $outJar = $OutputJar
 } else {

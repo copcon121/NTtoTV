@@ -58,6 +58,16 @@ class NormalizedTrade:
     best_ask: float | None
     sequence: int
     time_ticks: int | None = None
+    source: str = "nt"
+    source_time_nanos: int | None = None
+    bridge_time: int | None = None
+    received_at: int | None = None
+    side: Side | None = None
+    aggressor_order_id: str | None = None
+    passive_order_id: str | None = None
+    execution_start: bool = False
+    execution_end: bool = False
+    otc: bool = False
 
 
 @dataclass(slots=True)
@@ -76,3 +86,6 @@ class NormalizedQuote:
     bid_size: int
     ask_size: int
     sequence: int
+    source: str = "nt"
+    bridge_time: int | None = None
+    received_at: int | None = None

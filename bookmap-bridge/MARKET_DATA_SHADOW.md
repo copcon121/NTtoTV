@@ -1,7 +1,9 @@
-# Bookmap Market Data Shadow
+# Bookmap Market Data Live Bridge
 
-This bridge is independent from the in-progress Stops/Icebergs bridge. It does
-not POST to the backend and does not write to the production chart cache.
+The bridge streams Bookmap trades, one-second heartbeats, and one-minute bar
+snapshots to the loopback-only `/ws/bookmap` backend endpoint. The backend
+defaults to NT as the preferred source, so the bridge can run in shadow before
+Bookmap is enabled as primary.
 
 ## Data captured
 
@@ -31,12 +33,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Build-BookmapMarketD
 Output:
 
 ```text
-bookmap-bridge\build\market-data\NTtoTV-Bookmap-Market-Data-Shadow.jar
+bookmap-bridge\build\market-data\NTtoTV-Bookmap-Market-Data-Live.jar
 ```
 
 Load that JAR through Bookmap's add-on manager and attach
-`NTtoTV Bookmap Market Data Shadow` to `GCQ6.COMEX@RITHMIC`. This does not
-replace or modify the SI add-on.
+`NTtoTV Bookmap Market Data Live` to `GCQ6.COMEX@RITHMIC`.
 
 ## Export location
 

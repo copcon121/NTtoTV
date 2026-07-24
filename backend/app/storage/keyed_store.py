@@ -46,15 +46,16 @@ __all__ = ["KeyedStore"]
 
 _UPSERT_BAR = """
 INSERT INTO bars
-    (symbol, contract, timeframe, time, open, high, low, close, volume, closed)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (symbol, contract, timeframe, time, open, high, low, close, volume, closed, source)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(symbol, contract, timeframe, time) DO UPDATE SET
     open=excluded.open,
     high=excluded.high,
     low=excluded.low,
     close=excluded.close,
     volume=excluded.volume,
-    closed=excluded.closed
+    closed=excluded.closed,
+    source=excluded.source
 """
 
 _UPSERT_VOLUME_DELTA = """
@@ -121,11 +122,12 @@ ON CONFLICT(symbol, contract, timeframe, time) DO UPDATE SET
 
 _UPSERT_BIG_TRADE = """
 INSERT INTO big_trades
-    (symbol, contract, time, price, volume, side, trade_id)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(symbol, contract, time, side, trade_id) DO UPDATE SET
+    (symbol, contract, time, price, volume, side, trade_id, source)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, contract, time, side, source, trade_id) DO UPDATE SET
     price=excluded.price,
-    volume=excluded.volume
+    volume=excluded.volume,
+    source=excluded.source
 """
 
 _FOOTPRINT_BAR_COLUMNS = (
@@ -254,7 +256,7 @@ class KeyedStore:
             table="bars",
             columns=(
                 "symbol, contract, timeframe, time, open, high, low, "
-                "close, volume, closed"
+                "close, volume, closed, source"
             ),
             symbol=symbol,
             contract=contract,
@@ -275,6 +277,7 @@ class KeyedStore:
                 close=r["close"],
                 volume=r["volume"],
                 closed=bool(r["closed"]),
+                source=r["source"],
             )
             for r in rows
         ]
@@ -572,16 +575,31 @@ class KeyedStore:
         frm: int,
         to: int,
         recs: Iterable[BigTradeRecord],
+        *,
+        source: str | None = None,
     ) -> None:
-        """Replace one big-trade time range with rebuilt rows atomically."""
+        """Replace a time range, optionally scoped to one market-data source."""
         rows = [_big_trade_params(r) for r in recs]
 
         def op(conn):
-            conn.execute(
-                "DELETE FROM big_trades "
-                "WHERE symbol = ? AND contract = ? AND time BETWEEN ? AND ?",
-                (symbol, contract, int(frm), int(to)),
-            )
+            if source is None:
+                conn.execute(
+                    "DELETE FROM big_trades "
+                    "WHERE symbol = ? AND contract = ? AND time BETWEEN ? AND ?",
+                    (symbol, contract, int(frm), int(to)),
+                )
+            elif source == "nt":
+                conn.execute(
+                    "DELETE FROM big_trades WHERE symbol = ? AND contract = ? "
+                    "AND time BETWEEN ? AND ? AND source IN ('nt', 'legacy')",
+                    (symbol, contract, int(frm), int(to)),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM big_trades WHERE symbol = ? AND contract = ? "
+                    "AND time BETWEEN ? AND ? AND source = ?",
+                    (symbol, contract, int(frm), int(to), source),
+                )
             if rows:
                 conn.executemany(_UPSERT_BIG_TRADE, rows)
 
@@ -598,7 +616,7 @@ class KeyedStore:
         """Read big trades for ``(symbol, contract)`` over ``[frm, to]``.
 
         Big trades have no timeframe. Results are ascending by
-        ``(time, trade_id, side)``; ``limit`` returns the most recent rows.
+        ``(time, trade_id, side, source)``; ``limit`` returns the most recent rows.
         (Req 8.3, 18.7)
         """
         where = "WHERE symbol = ? AND contract = ?"
@@ -608,18 +626,18 @@ class KeyedStore:
             where = f"{where} {clause}"
             params.extend(bounds)
 
-        columns = "symbol, contract, time, price, volume, side, trade_id"
+        columns = "symbol, contract, time, price, volume, side, trade_id, source"
         if limit is not None:
             sql = (
                 f"SELECT {columns} FROM big_trades {where} "
-                "ORDER BY time DESC, trade_id DESC, side DESC LIMIT ?"
+                "ORDER BY time DESC, trade_id DESC, side DESC, source DESC LIMIT ?"
             )
             params.append(int(limit))
             reverse = True
         else:
             sql = (
                 f"SELECT {columns} FROM big_trades {where} "
-                "ORDER BY time ASC, trade_id ASC, side ASC"
+                "ORDER BY time ASC, trade_id ASC, side ASC, source ASC"
             )
             reverse = False
 
@@ -639,6 +657,7 @@ class KeyedStore:
                 volume=r["volume"],
                 side=Side(r["side"]),
                 trade_id=r["trade_id"],
+                source=r["source"],
             )
             for r in rows
         ]
@@ -754,6 +773,7 @@ def _bar_params(b: BarRecord) -> tuple[object, ...]:
         b.close,
         b.volume,
         1 if b.closed else 0,
+        b.source,
     )
 
 
@@ -833,4 +853,5 @@ def _big_trade_params(r: BigTradeRecord) -> tuple[object, ...]:
         r.volume,
         r.side.value,
         int(r.trade_id),
+        r.source,
     )

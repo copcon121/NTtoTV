@@ -3,7 +3,7 @@
   "backendHost": "127.0.0.1",
   "backendPort": 8000,
   "backendPath": "/ws/nt",
-  "outboundQueueCapacity": 200000,
-  "dropOnOverflow": false,
+  "outboundQueueCapacity": 20000,
+  "dropOnOverflow": true,
   "manualContractOverride": "GC 08-26"
 }

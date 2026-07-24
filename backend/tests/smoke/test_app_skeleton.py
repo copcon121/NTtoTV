@@ -25,10 +25,12 @@ def test_expected_routes_registered():
     paths = {getattr(r, "path", None) for r in app.routes}
 
     assert "/api/health" in paths
+    assert "/api/market-data/status" in paths
     assert "/api/analyst/latest" in paths
     assert "/api/analyst/poi-events" in paths
     assert "/api/analyst/poi-state" in paths
     assert "/ws/nt" in paths
+    assert "/ws/bookmap" in paths
     assert "/ws/chart" in paths
 
 
@@ -54,7 +56,9 @@ def test_analyst_scanner_disabled_by_default(tmp_path):
     from app.config import Settings
     from app.runtime import AppRuntime
 
-    runtime = AppRuntime(settings=Settings(data_dir=tmp_path))
+    runtime = AppRuntime(
+        settings=Settings(data_dir=tmp_path, analyst_enabled=False)
+    )
     try:
         assert runtime.analyst_store is None
         assert runtime.poi_scanner is None

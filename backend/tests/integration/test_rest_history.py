@@ -10,6 +10,8 @@ TestClient against a temporary Cache_Store and Tick_Store.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -113,6 +115,7 @@ def test_history_cache_hit_returns_source_cache(env):
         "low",
         "close",
         "volume",
+        "source",
     }
 
 
@@ -181,6 +184,7 @@ def test_history_cache_miss_rebuilds_from_ticks(env):
     assert first["low"] == 2344.0
     assert first["close"] == 2344.0
     assert first["volume"] == 10
+    assert first["source"] == "nt"
     # Second bucket has a single tick.
     assert bars[1] == {
         "time": bucket1,
@@ -189,7 +193,67 @@ def test_history_cache_miss_rebuilds_from_ticks(env):
         "low": 2347.0,
         "close": 2347.0,
         "volume": 4,
+        "source": "nt",
     }
+
+
+@pytest.mark.integration
+def test_history_alias_rebuild_uses_active_bookmap_source_only(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path,
+        supported_symbols=(_SYMBOL,),
+        gc_candidate_contracts=_CANDIDATES,
+    )
+    cache = CacheStore(tmp_path / "app.sqlite")
+    state = ContractStateStore(cache, settings=settings)
+    tick_store = TickStore(tmp_path / "ticks")
+    status = SimpleNamespace(active_source="bookmap", preferred_source="bookmap")
+    pipeline = SimpleNamespace(market_data_status_message=lambda: status)
+    app = create_app(lifespan=False)
+    app.state.contract_state = state
+    app.state.tick_store = tick_store
+    app.state.runtime = SimpleNamespace(pipeline=pipeline)
+    try:
+        tick_store.record_trade(
+            _trade(_BASE_MS + 1_000, price=2300.0, volume=99, seq=1)
+        )
+        tick_store.record_trade(
+            NormalizedTrade(
+                symbol=_SYMBOL,
+                contract=_ACTIVE,
+                time=_BASE_MS + 1_000,
+                price=2400.0,
+                volume=7,
+                bid=None,
+                ask=None,
+                best_bid=None,
+                best_ask=None,
+                sequence=1,
+                source="bookmap",
+                source_time_nanos=(_BASE_MS + 1_000) * 1_000_000,
+                received_at=_BASE_MS + 1_005,
+            )
+        )
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/history",
+                params={
+                    "symbol": _SYMBOL,
+                    "contract": _SYMBOL,
+                    "tf": "1m",
+                    "from": _BASE_MS,
+                    "to": _BASE_MS + _MINUTE_MS,
+                },
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["contract"] == _SYMBOL
+        assert [(bar["close"], bar["volume"], bar["source"]) for bar in body["bars"]] == [
+            (2400.0, 7, "bookmap")
+        ]
+    finally:
+        tick_store.close()
+        cache.close()
 
 
 @pytest.mark.integration

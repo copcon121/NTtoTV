@@ -293,19 +293,34 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
     internal sealed class GcBridgeRuntime : IDisposable
     {
         private const string Symbol = "GC";
+        private const long MaxFrameAgeMs = 2000;
+
+        private sealed class QueuedFrame
+        {
+            public readonly string Json;
+            public readonly long EnqueuedAt;
+
+            public QueuedFrame(string json, long enqueuedAt)
+            {
+                Json = json;
+                EnqueuedAt = enqueuedAt;
+            }
+        }
 
         private readonly GcBridgeConfig config;
         private readonly Action<string> log;
         private readonly Uri backendUri;
 
         // Outbound frame queue (string JSON), drained by the sender loop.
-        private readonly BlockingCollection<string> outbound;
+        private readonly BlockingCollection<QueuedFrame> outbound;
 
         // Per-stream monotonic sequence counters keyed by "contract|channel".
         private readonly Dictionary<string, long> sequences = new Dictionary<string, long>(StringComparer.Ordinal);
         private readonly object seqGate = new object();
         private readonly object overflowLogGate = new object();
         private long droppedFrames;
+        private long droppedStaleFrames;
+        private bool connectedOnce;
         private DateTime lastOverflowLogUtc = DateTime.MinValue;
 
         // Per-contract last-known quote snapshot.
@@ -337,7 +352,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             this.config = config;
             this.log = log != null ? log : delegate { };
             this.backendUri = config.BuildUri();
-            this.outbound = new BlockingCollection<string>(config.OutboundQueueCapacity);
+            this.outbound = new BlockingCollection<QueuedFrame>(config.OutboundQueueCapacity);
         }
 
         public void Start()
@@ -448,7 +463,10 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 {
                     long now = ToUnixMs(DateTime.UtcNow);
                     TryEnqueue("{\"type\":\"heartbeat\",\"time\":" +
-                        now.ToString(CultureInfo.InvariantCulture) + "}");
+                        now.ToString(CultureInfo.InvariantCulture) +
+                        ",\"queueDepth\":" + outbound.Count.ToString(CultureInfo.InvariantCulture) +
+                        ",\"droppedOverflow\":" + Interlocked.Read(ref droppedFrames).ToString(CultureInfo.InvariantCulture) +
+                        ",\"droppedStale\":" + Interlocked.Read(ref droppedStaleFrames).ToString(CultureInfo.InvariantCulture) + "}");
                 }
             }
         }
@@ -662,6 +680,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 Str(sb, "contract", contract); sb.Append(',');
                 Num(sb, "time", timeMs); sb.Append(',');
                 Num(sb, "timeTicks", timeTicks); sb.Append(',');
+                Num(sb, "bridgeTime", ToUnixMs(DateTime.UtcNow)); sb.Append(',');
                 Dbl(sb, "price", price); sb.Append(',');
                 Num(sb, "volume", volume); sb.Append(',');
                 NullableDbl(sb, "bid", bid); sb.Append(',');
@@ -687,6 +706,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 Str(sb, "symbol", Symbol); sb.Append(',');
                 Str(sb, "contract", contract); sb.Append(',');
                 Num(sb, "time", timeMs); sb.Append(',');
+                Num(sb, "bridgeTime", ToUnixMs(DateTime.UtcNow)); sb.Append(',');
                 Dbl(sb, "bid", snap.Bid.Value); sb.Append(',');
                 Dbl(sb, "ask", snap.Ask.Value); sb.Append(',');
                 Num(sb, "bidSize", snap.BidSize); sb.Append(',');
@@ -819,13 +839,14 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
 
         private void TryEnqueue(string frame)
         {
+            QueuedFrame queued = new QueuedFrame(frame, ToUnixMs(DateTime.UtcNow));
             if (!config.DropOnOverflow)
             {
                 // Capture mode: backpressure playback rather than lose frames.
                 // This can slow/freeze Playback if the backend is not draining.
                 try
                 {
-                    outbound.Add(frame);
+                    outbound.Add(queued);
                 }
                 catch (InvalidOperationException)
                 {
@@ -836,12 +857,12 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
 
             // Live/default mode: non-blocking add; drop on overflow rather than
             // block the NT thread.
-            if (!outbound.TryAdd(frame))
+            if (!outbound.TryAdd(queued))
             {
                 // Backpressure: discard oldest to keep the freshest tape moving.
-                string discarded;
+                QueuedFrame discarded;
                 outbound.TryTake(out discarded);
-                outbound.TryAdd(frame);
+                outbound.TryAdd(queued);
                 long dropped = Interlocked.Increment(ref droppedFrames);
                 DateTime now = DateTime.UtcNow;
                 lock (overflowLogGate)
@@ -862,7 +883,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
         private async Task SenderLoopAsync(CancellationToken token)
         {
             int attempt = 0;
-            string pendingFrame = null;
+            QueuedFrame pendingFrame = null;
             while (!token.IsCancellationRequested)
             {
                 TimeSpan? reconnectDelay = null;
@@ -876,7 +897,14 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                         if (pendingFrame == null)
                             pendingFrame = outbound.Take(token);
 
-                        byte[] bytes = Encoding.UTF8.GetBytes(pendingFrame);
+                        if (ToUnixMs(DateTime.UtcNow) - pendingFrame.EnqueuedAt > MaxFrameAgeMs)
+                        {
+                            Interlocked.Increment(ref droppedStaleFrames);
+                            pendingFrame = null;
+                            continue;
+                        }
+
+                        byte[] bytes = Encoding.UTF8.GetBytes(pendingFrame.Json);
                         await socket.SendAsync(
                             new ArraySegment<byte>(bytes),
                             WebSocketMessageType.Text, true, token).ConfigureAwait(false);
@@ -894,6 +922,9 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
                 }
                 catch (Exception ex)
                 {
+                    if (pendingFrame != null)
+                        Interlocked.Increment(ref droppedStaleFrames);
+                    pendingFrame = null;
                     connected = false;
                     CloseQuietly();
                     reconnectDelay = FibonacciDelay(attempt++);
@@ -923,6 +954,16 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
             CloseQuietly();
             socket = new ClientWebSocket();
             await socket.ConnectAsync(backendUri, token).ConfigureAwait(false);
+            if (connectedOnce)
+            {
+                QueuedFrame stale;
+                long cleared = 0;
+                while (outbound.TryTake(out stale))
+                    cleared += 1;
+                if (cleared > 0)
+                    Interlocked.Add(ref droppedStaleFrames, cleared);
+            }
+            connectedOnce = true;
             connected = true;
             log("connected to " + backendUri);
         }

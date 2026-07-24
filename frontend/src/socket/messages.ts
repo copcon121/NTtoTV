@@ -23,7 +23,7 @@ export type ChartEventType =
   | "footprint_update"
   | "fvg_signal_update"
   | "big_trade"
-  | "bookmap_si_event"
+  | "market_data_status"
   | "alert_event"
   | "order_update"
   | "position_update"
@@ -93,6 +93,7 @@ export interface BarUpdateMessage {
   tf: Timeframe;
   bar: Bar;
   closed: boolean;
+  source?: string;
 }
 
 /** Top-of-book quote update (Req 5.2). */
@@ -191,29 +192,32 @@ export interface BigTradeMessage {
   price: number;
   volume: number;
   side: Side;
+  source?: string;
 }
 
-export type BookmapSiEventKind = "iceberg" | "stop" | string;
+export interface MarketDataSourceStatus {
+  connected: boolean;
+  eligible: boolean;
+  contract?: string | null;
+  heartbeatAgeMs?: number | null;
+  queueDepth: number;
+  droppedStale: number;
+  droppedOverflow: number;
+  sequenceGaps: number;
+  eventLagMs: { last?: number | null; p50?: number | null; p95?: number | null };
+  transportLagMs: { last?: number | null; p50?: number | null; p95?: number | null };
+  barCloseLagMs: { p50?: number | null; p95?: number | null };
+}
 
-export interface BookmapSiEventMessage {
-  type: "bookmap_si_event";
+export interface MarketDataStatusMessage {
+  type: "market_data_status";
   symbol: string;
-  contract: string;
-  alias: string;
-  provider: string;
-  source: "bookmap" | string;
-  eventKind: BookmapSiEventKind;
-  eventType: string;
   time: number;
-  timeNanos?: number;
-  price: number;
-  rawPrice: number;
-  size: number;
-  rawSize: number;
-  totalSize: number;
-  rawTotalSize: number;
-  isBid: boolean;
-  orderId?: string;
+  activeSource?: "bookmap" | "nt" | null;
+  preferredSource: "bookmap" | "nt" | string;
+  switchedAt?: number | null;
+  reason?: string | null;
+  sources: Record<string, MarketDataSourceStatus>;
 }
 
 /** Alert firing event (Req 5.2, 17.2). */
@@ -367,7 +371,7 @@ export type InboundMessage =
   | FootprintUpdateMessage
   | FvgSignalUpdateMessage
   | BigTradeMessage
-  | BookmapSiEventMessage
+  | MarketDataStatusMessage
   | AlertEventMessage
   | OrderUpdateMessage
   | PositionUpdateMessage

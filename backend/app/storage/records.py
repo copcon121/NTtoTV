@@ -53,6 +53,7 @@ class BarRecord:
     close: float
     volume: int
     closed: bool = False
+    source: str = "legacy"
 
 
 @dataclass(slots=True)
@@ -158,6 +159,7 @@ class BigTradeRecord:
     volume: int
     side: Side
     trade_id: int = 0
+    source: str = "legacy"
 
 
 @dataclass(slots=True)

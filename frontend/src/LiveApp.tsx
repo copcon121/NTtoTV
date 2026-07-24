@@ -25,18 +25,15 @@ import { ChartContainer, type OrderControl } from "./chart/ChartContainer";
 import { DrawingToolbar } from "./chart/DrawingToolbar";
 import {
   IndicatorToggles,
-  DEFAULT_BOOKMAP_SIGNAL_SETTINGS,
   DEFAULT_BIG_TRADE_SETTINGS,
   DEFAULT_EMA_SETTINGS,
   DEFAULT_FVG_SIGNAL_LIMIT,
   DEFAULT_FOOTPRINT_SETTINGS,
   normalizeEmaSettings,
-  normalizeBookmapSignalSettings,
   normalizeFvgSignalLimit,
 } from "./chart/IndicatorToggles";
 import type {
   BigTradeSettings,
-  BookmapSignalSettings,
   EmaSettings,
   FootprintSettings,
 } from "./chart/IndicatorToggles";
@@ -94,9 +91,9 @@ import { ChartSocket } from "./socket/ChartSocket";
 import {
   type AccountPositionUpdate,
   type AlertEventMessage,
-  type BookmapSiEventMessage,
   type ChartEventType,
   type FvgSignalUpdateMessage,
+  type MarketDataStatusMessage,
   type TradingAccount,
   type TradingOrder,
   type TradingPosition,
@@ -177,7 +174,7 @@ const TIMEFRAME_RANK: Record<Timeframe, number> = {
 };
 export const GLOBAL_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "quote_update",
-  "bookmap_si_event",
+  "market_data_status",
   "alert_event",
   "order_update",
   "position_update",
@@ -200,7 +197,6 @@ const EMPTY_VOLUME_DELTA: readonly VolumeDeltaDatum[] = [];
 const EMPTY_BIG_TRADES: readonly BigTradeMarker[] = [];
 const EMPTY_SMC_AI_SIGNALS: readonly SmcAiSignalMarker[] = [];
 const EMPTY_ALERT_SIGNAL_MARKERS: readonly AlertSignalMarker[] = [];
-const MAX_BOOKMAP_SI_MARKERS = 200;
 const EMPTY_FOOTPRINT_BARS: ReadonlyMap<number, FootprintBar> = new Map();
 const EMPTY_FVG_SIGNALS: ReadonlyMap<number, FvgSignalUpdateMessage> = new Map();
 const DEFERRED_INDICATOR_LOAD_MS = 75;
@@ -341,69 +337,6 @@ function alertEventToSignalMarker(
     direction,
     text: direction > 0 ? "Break L" : "Break S",
   };
-}
-
-export interface BookmapSiSignalMarker extends AlertSignalMarker {
-  bookmapKind: "stop" | "iceberg";
-  displaySize: number;
-}
-
-export function bookmapSiEventToSignalMarker(
-  event: BookmapSiEventMessage,
-): BookmapSiSignalMarker | undefined {
-  if (event.symbol !== SYMBOL || !Number.isFinite(event.price)) {
-    return undefined;
-  }
-  const normalizedKind = event.eventKind.trim().toLowerCase();
-  const bookmapKind = normalizedKind.startsWith("stop")
-    ? "stop"
-    : normalizedKind.startsWith("ice")
-      ? "iceberg"
-      : undefined;
-  if (bookmapKind === undefined) {
-    return undefined;
-  }
-  const direction: 1 | -1 = event.isBid ? 1 : -1;
-  const kind = bookmapKind === "stop" ? "STOP" : "ICE";
-  const isThresholdAlert =
-    event.eventType.toUpperCase() === "ALERT" ||
-    event.source.toLowerCase().includes("alert") ||
-    event.source.toLowerCase().includes("log");
-  const displaySize =
-    !isThresholdAlert && Number.isFinite(event.totalSize)
-      ? event.totalSize
-      : event.size;
-  if (!Number.isFinite(displaySize)) {
-    return undefined;
-  }
-  const roundedSize = Math.round(displaySize);
-  const sizeText =
-    Number.isFinite(displaySize) && Math.abs(displaySize - roundedSize) < 0.001
-      ? String(roundedSize)
-      : displaySize.toFixed(1);
-  const sideText = event.isBid ? "B" : "S";
-  const idBase =
-    event.orderId ??
-    `${event.alias}:${event.eventKind}:${event.eventType}:${event.rawPrice}:${event.rawSize}`;
-  return {
-    id: `bookmap:${idBase}:${event.time}:${direction}`,
-    time: event.time,
-    price: event.price,
-    direction,
-    text: `${kind} ${sideText}${isThresholdAlert ? ">=" : " "}${sizeText}`,
-    bookmapKind,
-    displaySize,
-  };
-}
-
-export function bookmapSiMarkerVisible(
-  marker: BookmapSiSignalMarker,
-  settings: Partial<BookmapSignalSettings>,
-): boolean {
-  const normalized = normalizeBookmapSignalSettings(settings);
-  return marker.bookmapKind === "stop"
-    ? normalized.showStops && marker.displaySize > normalized.stopThreshold
-    : normalized.showIcebergs && marker.displaySize > normalized.icebergThreshold;
 }
 
 function alertSignalRowToMarker(
@@ -1855,9 +1788,8 @@ export function LiveApp() {
   const [alertSignalMarkers, setAlertSignalMarkers] = useState<
     readonly AlertSignalMarker[]
   >([]);
-  const [bookmapSiSignalMarkers, setBookmapSiSignalMarkers] = useState<
-    readonly BookmapSiSignalMarker[]
-  >([]);
+  const [marketDataStatus, setMarketDataStatus] =
+    useState<MarketDataStatusMessage>();
   const [showVolume, setShowVolume] = useState(true);
   const [showDailyVolumeProfile, setShowDailyVolumeProfile] = useState(false);
   const [dailyVolumeProfileWidth, setDailyVolumeProfileWidth] = useState(
@@ -1882,10 +1814,6 @@ export function LiveApp() {
   const [showFvgGrader, setShowFvgGrader] = useState(true);
   const [fvgSignalLimit, setFvgSignalLimit] = useState(DEFAULT_FVG_SIGNAL_LIMIT);
   const [showBigTrades, setShowBigTrades] = useState(true);
-  const [bookmapSignalSettings, setBookmapSignalSettings] =
-    useState<BookmapSignalSettings>(() => ({
-      ...DEFAULT_BOOKMAP_SIGNAL_SETTINGS,
-    }));
   const [ema, setEma] = useState<EmaSettings>(() => ({ ...DEFAULT_EMA_SETTINGS }));
   const [smc, setSmc] = useState<SmcSettings>(() => ({ ...DEFAULT_SMC_SETTINGS }));
   const [outsideBar, setOutsideBar] = useState<OutsideBarSettings>(() => ({
@@ -2037,7 +1965,6 @@ export function LiveApp() {
       showFvgGrader,
       fvgSignalLimit,
       showBigTrades,
-      bookmapSignalSettings: { ...bookmapSignalSettings },
       ema: { ...ema },
       smc: { ...smc },
       outsideBar: { ...outsideBar },
@@ -2050,7 +1977,6 @@ export function LiveApp() {
     }),
     [
       bigTradeSettings,
-      bookmapSignalSettings,
       chartBackgroundColor,
       dailyVolumeProfileWidth,
       drawings,
@@ -2587,12 +2513,8 @@ export function LiveApp() {
         }
       }
     });
-    const offBookmapSi = socket.on("bookmap_si_event", (msg) => {
-      const marker = bookmapSiEventToSignalMarker(msg);
-      if (marker === undefined) return;
-      setBookmapSiSignalMarkers((prev) =>
-        mergeAlertSignalMarker(prev, marker).slice(-MAX_BOOKMAP_SI_MARKERS),
-      );
+    const offMarketDataStatus = socket.on("market_data_status", (msg) => {
+      setMarketDataStatus(msg);
     });
     const offOrder = socket.on("order_update", (msg) => {
       setOrders((prev) => {
@@ -2615,7 +2537,7 @@ export function LiveApp() {
       offClose();
       offStatus();
       offAlert();
-      offBookmapSi();
+      offMarketDataStatus();
       offOrder();
       offAccount();
       socket.close();
@@ -4109,9 +4031,6 @@ export function LiveApp() {
     setShowFvgGrader(payload.showFvgGrader !== false);
     setFvgSignalLimit(normalizeFvgSignalLimit(payload.fvgSignalLimit));
     setShowBigTrades(payload.showBigTrades !== false);
-    setBookmapSignalSettings(
-      normalizeBookmapSignalSettings(payload.bookmapSignalSettings),
-    );
     setEma(normalizeEmaSettings(payload.ema));
     setSmc({ ...DEFAULT_SMC_SETTINGS, ...(payload.smc ?? {}) });
     setOutsideBar(
@@ -4436,15 +4355,10 @@ export function LiveApp() {
       if (!hasLoadedCurrentSeries || timeframe !== "1m") {
         return EMPTY_ALERT_SIGNAL_MARKERS;
       }
-      const visibleBookmapSignals = bookmapSiSignalMarkers.filter((marker) =>
-        bookmapSiMarkerVisible(marker, bookmapSignalSettings),
-      );
-      return [...alertSignalMarkers, ...visibleBookmapSignals];
+      return alertSignalMarkers;
     },
     [
       alertSignalMarkers,
-      bookmapSiSignalMarkers,
-      bookmapSignalSettings,
       hasLoadedCurrentSeries,
       timeframe,
     ],
@@ -4524,6 +4438,30 @@ export function LiveApp() {
     });
   }, [api, lastAlert, profileId, telegramConfig.enabled, telegramConfig.sendScreenshot]);
 
+  const activeMarketSource = marketDataStatus?.activeSource ?? undefined;
+  const activeSourceStatus =
+    activeMarketSource === undefined
+      ? undefined
+      : marketDataStatus?.sources[activeMarketSource];
+  const activeSourceLag = activeSourceStatus?.eventLagMs.last;
+  const sourceName =
+    activeMarketSource === "bookmap"
+      ? "Bookmap"
+      : activeMarketSource === "nt"
+        ? marketDataStatus?.preferredSource === "bookmap"
+          ? "NT fallback"
+          : "NT"
+        : undefined;
+  const marketStatusLabel =
+    sourceName === undefined
+      ? undefined
+      : activeSourceLag === null || activeSourceLag === undefined
+        ? sourceName
+        : `${sourceName} · ${Math.round(activeSourceLag)} ms`;
+  const marketStatusReason = marketDataStatus
+    ? `${marketDataStatus.reason ?? "live"}; Bookmap p95 ${marketDataStatus.sources.bookmap?.eventLagMs.p95 ?? "-"} ms; NT p95 ${marketDataStatus.sources.nt?.eventLagMs.p95 ?? "-"} ms`
+    : undefined;
+
   return (
     <div className={appShellClassName(chartFocusMode)}>
       <Toolbar>
@@ -4547,12 +4485,10 @@ export function LiveApp() {
           outsideBar={effectiveOutsideBar}
           footprintSettings={footprintSettings}
           bigTradeSettings={bigTradeSettings}
-          bookmapSignals={bookmapSignalSettings}
           mgannSwingDisabled={mgannSwingDisabled}
           footprintDisabled={timeframe !== "1m"}
           fvgGraderDisabled={timeframe !== "1m"}
           bigTradeDisabled={!bigTradeOverlayEnabled}
-          bookmapSignalsDisabled={timeframe !== "1m"}
           dailyVolumeProfile={showDailyVolumeProfile}
           dailyVolumeProfileWidth={dailyVolumeProfileWidth}
           dailyVolumeProfileDevelopingPoc={showDailyVolumeProfileDevelopingPoc}
@@ -4574,7 +4510,6 @@ export function LiveApp() {
           onOutsideBarChange={setOutsideBar}
           onFootprintSettingsChange={setFootprintSettings}
           onBigTradeSettingsChange={setBigTradeSettings}
-          onBookmapSignalsChange={setBookmapSignalSettings}
         />
         <div className="account-toolbar" aria-label="Account controls">
           {authUser ? (
@@ -4664,7 +4599,11 @@ export function LiveApp() {
           offsetMinutes={timezoneOffsetMinutes}
           onChange={setTimezoneOffsetMinutes}
         />
-        <StatusIndicator state={connection} />
+        <StatusIndicator
+          state={connection}
+          label={connection === "disconnected" ? undefined : marketStatusLabel}
+          reason={connection === "disconnected" ? undefined : marketStatusReason}
+        />
       </Toolbar>
       <main className="chart-area">
         <DrawingToolbar

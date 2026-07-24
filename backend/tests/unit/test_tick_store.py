@@ -14,7 +14,13 @@ from pathlib import Path
 
 import pytest
 
-from app.models import NormalizedQuote, NormalizedTrade, from_canonical_ms, to_canonical_ms
+from app.models import (
+    NormalizedQuote,
+    NormalizedTrade,
+    Side,
+    from_canonical_ms,
+    to_canonical_ms,
+)
 from app.storage import TickStore, sanitize_contract
 from app.storage.tick_store import SYMBOL, trade_event_key
 
@@ -333,6 +339,55 @@ def test_read_range_respects_inclusive_bounds(store: TickStore):
 
     out = list(store.read_range(contract, _ms(2026, 8, 1, 12), _ms(2026, 8, 1, 18)))
     assert [r.sequence for r in out] == [2, 3]
+
+
+@pytest.mark.unit
+def test_raw_trades_are_isolated_by_source_and_preserve_bookmap_metadata(
+    store: TickStore,
+):
+    contract = "GC 08-26"
+    time_ms = _ms(2026, 8, 1, 12)
+    nt = _trade(contract, time_ms, sequence=1, volume=3)
+    bookmap = NormalizedTrade(
+        symbol="GC",
+        contract=contract,
+        time=time_ms,
+        price=2345.6,
+        volume=7,
+        bid=None,
+        ask=None,
+        best_bid=None,
+        best_ask=None,
+        sequence=1,
+        source="bookmap",
+        source_time_nanos=time_ms * 1_000_000 + 123,
+        bridge_time=time_ms + 5,
+        received_at=time_ms + 8,
+        side=Side.BUY,
+        aggressor_order_id="aggr-1",
+        passive_order_id="passive-1",
+        execution_start=True,
+        otc=True,
+    )
+    store.record_trade(nt)
+    store.record_trade(bookmap)
+
+    assert [trade.source for trade in store.read_range(contract, time_ms, time_ms)] == [
+        "nt"
+    ]
+    bookmap_rows = list(
+        store.read_range(contract, time_ms, time_ms, source="bookmap")
+    )
+    assert len(bookmap_rows) == 1
+    assert bookmap_rows[0].volume == 7
+    assert bookmap_rows[0].source_time_nanos == bookmap.source_time_nanos
+    assert bookmap_rows[0].side is Side.BUY
+    assert bookmap_rows[0].aggressor_order_id == "aggr-1"
+    assert bookmap_rows[0].execution_start is True
+    assert bookmap_rows[0].otc is True
+
+    combined = list(store.read_range(contract, time_ms, time_ms, source=None))
+    assert {trade.source for trade in combined} == {"nt", "bookmap"}
 
 
 @pytest.mark.unit

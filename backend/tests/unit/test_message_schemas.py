@@ -27,7 +27,6 @@ from app.models.messages import (
     AlertEvent,
     BarUpdate,
     BigTrade,
-    BookmapSiEvent,
     ChartStatusEvent,
     ControlAction,
     ControlCommand,
@@ -36,6 +35,7 @@ from app.models.messages import (
     FootprintUpdate,
     FvgSignalUpdate,
     ImbalanceSide,
+    MarketDataStatus,
     NTStatusEvent,
     OHLCVBar,
     Ping,
@@ -273,7 +273,7 @@ def test_subscribe_round_trips_with_all_event_types():
             EventType.VOLUME_DELTA_UPDATE,
             EventType.FOOTPRINT_UPDATE,
             EventType.BIG_TRADE,
-            EventType.BOOKMAP_SI_EVENT,
+            EventType.MARKET_DATA_STATUS,
             EventType.ALERT_EVENT,
             EventType.STATUS,
         ],
@@ -292,7 +292,7 @@ def test_subscribe_wire_shape_matches_design():
             EventType.VOLUME_DELTA_UPDATE,
             EventType.FOOTPRINT_UPDATE,
             EventType.BIG_TRADE,
-            EventType.BOOKMAP_SI_EVENT,
+            EventType.MARKET_DATA_STATUS,
             EventType.ALERT_EVENT,
             EventType.STATUS,
         ],
@@ -307,7 +307,7 @@ def test_subscribe_wire_shape_matches_design():
             "volume_delta_update",
             "footprint_update",
             "big_trade",
-            "bookmap_si_event",
+            "market_data_status",
             "alert_event",
             "status",
         ],
@@ -337,6 +337,35 @@ def test_unsubscribe_wire_shape_matches_design():
         "symbol": "GC",
         "events": ["footprint_update"],
     }
+
+
+@pytest.mark.unit
+def test_subscriptions_ignore_removed_bookmap_si_event_from_old_tabs():
+    subscribe = Subscribe.from_dict(
+        {
+            "type": "subscribe",
+            "symbol": "GC",
+            "events": ["bar_update", "bookmap_si_event", "status"],
+        }
+    )
+    unsubscribe = Unsubscribe.from_dict(
+        {
+            "type": "unsubscribe",
+            "symbol": "GC",
+            "events": ["bookmap_si_event", "footprint_update"],
+        }
+    )
+
+    assert subscribe.events == [EventType.BAR_UPDATE, EventType.STATUS]
+    assert unsubscribe.events == [EventType.FOOTPRINT_UPDATE]
+
+
+@pytest.mark.unit
+def test_subscriptions_still_reject_other_unknown_events():
+    with pytest.raises(ValueError):
+        Subscribe.from_dict(
+            {"type": "subscribe", "symbol": "GC", "events": ["unknown_event"]}
+        )
 
 
 @pytest.mark.unit
@@ -684,72 +713,46 @@ def test_big_trade_wire_shape_matches_design():
 
 
 # ===========================================================================
-# /ws/chart backend -> client: bookmap_si_event
+# /ws/chart backend -> client: market_data_status
 # ===========================================================================
 
 
 @pytest.mark.unit
-def test_bookmap_si_event_round_trips():
-    event = BookmapSiEvent(
+def test_market_data_status_round_trips():
+    event = MarketDataStatus(
         symbol="GC",
-        contract="GC",
-        alias="GCQ6@RITHMIC",
-        provider="velox.indicators.sionchart.SitIndicator",
-        source="bookmap",
-        event_kind="iceberg",
-        event_type="DETECTION",
         time=1730313600123,
-        price=2345.6,
-        raw_price=23456,
-        size=12.0,
-        raw_size=12,
-        total_size=47.0,
-        raw_total_size=47,
-        is_bid=True,
-        order_id="abc-123",
-        time_nanos=1_730_313_600_123_000_000,
+        active_source="bookmap",
+        preferred_source="nt",
+        switched_at=1730313600000,
+        reason="bookmap_healthy",
+        sources={"bookmap": {"connected": True, "heartbeatAgeMs": 42}},
     )
-    assert BookmapSiEvent.from_dict(event.to_dict()) == event
+    assert MarketDataStatus.from_dict(event.to_dict()) == event
 
 
 @pytest.mark.unit
-def test_bookmap_si_event_wire_shape_matches_bridge_payload():
-    event = BookmapSiEvent(
+def test_market_data_status_wire_shape():
+    event = MarketDataStatus(
         symbol="GC",
-        contract="GC",
-        alias="GCQ6@RITHMIC",
         time=1730313600123,
-        price=2345.6,
-        raw_price=23456,
-        size=12.0,
-        raw_size=12,
-        total_size=47.0,
-        raw_total_size=47,
-        event_kind="stop",
-        event_type="STOP",
-        is_bid=False,
-        time_nanos=1_730_313_600_123_000_000,
+        active_source="bookmap",
+        preferred_source="nt",
+        switched_at=None,
+        reason=None,
+        sources={"nt": {"connected": True}},
     )
     assert event.to_dict() == {
-        "type": "bookmap_si_event",
+        "type": "market_data_status",
         "symbol": "GC",
-        "contract": "GC",
-        "alias": "GCQ6@RITHMIC",
-        "provider": "velox.indicators.sionchart.SitIndicator",
-        "source": "bookmap",
-        "eventKind": "stop",
-        "eventType": "STOP",
         "time": 1730313600123,
-        "timeNanos": 1_730_313_600_123_000_000,
-        "price": 2345.6,
-        "rawPrice": 23456,
-        "size": 12.0,
-        "rawSize": 12,
-        "totalSize": 47.0,
-        "rawTotalSize": 47,
-        "isBid": False,
+        "activeSource": "bookmap",
+        "preferredSource": "nt",
+        "switchedAt": None,
+        "reason": None,
+        "sources": {"nt": {"connected": True}},
     }
-    assert EventType.BOOKMAP_SI_EVENT.value == "bookmap_si_event"
+    assert EventType.MARKET_DATA_STATUS.value == "market_data_status"
 
 
 # ===========================================================================

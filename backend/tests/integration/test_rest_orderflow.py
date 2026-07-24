@@ -450,6 +450,7 @@ def test_big_trades_rebuilds_from_ticks_when_raw_ticks_exist(env):
             "price": 100.1,
             "volume": 35,
             "side": "buy",
+            "source": "nt",
         }
     ]
     refreshed = cache.read_big_trades(_SYMBOL, _ACTIVE, _BASE_MS, _BASE_MS + 2_000)

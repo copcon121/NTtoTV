@@ -26,7 +26,7 @@ Channels:
 * ``/ws/chart`` client -> Backend: ``subscribe``, ``unsubscribe``, ``pong``.
 * ``/ws/chart`` Backend -> client: ``bar_update``, ``quote_update``,
   ``volume_delta_update``, ``footprint_update``, ``fvg_signal_update``,
-  ``big_trade``, ``bookmap_si_event``, ``alert_event``, ``status``
+  ``big_trade``, ``market_data_status``, ``alert_event``, ``status``
   (``ChartStatusEvent``), ``ping``.
 
 (Requirements 1.1, 1.2, 5.2)
@@ -70,7 +70,7 @@ __all__ = [
     "FootprintUpdate",
     "FvgSignalUpdate",
     "BigTrade",
-    "BookmapSiEvent",
+    "MarketDataStatus",
     "AlertEvent",
     "ChartStatusEvent",
     "Ping",
@@ -125,7 +125,7 @@ class EventType(str, Enum):
     FOOTPRINT_UPDATE = "footprint_update"
     FVG_SIGNAL_UPDATE = "fvg_signal_update"
     BIG_TRADE = "big_trade"
-    BOOKMAP_SI_EVENT = "bookmap_si_event"
+    MARKET_DATA_STATUS = "market_data_status"
     ALERT_EVENT = "alert_event"
     ORDER_UPDATE = "order_update"
     POSITION_UPDATE = "position_update"
@@ -137,6 +137,14 @@ class EventType(str, Enum):
 
     def __str__(self) -> str:  # pragma: no cover - cosmetic
         return self.value
+
+
+_LEGACY_IGNORED_CHART_EVENTS = frozenset({"bookmap_si_event"})
+
+
+def _decode_chart_event_types(values: Any) -> list[EventType]:
+    """Ignore removed SI events while old browser tabs migrate to the new bundle."""
+    return [EventType(value) for value in values if value not in _LEGACY_IGNORED_CHART_EVENTS]
 
 
 # ---------------------------------------------------------------------------
@@ -177,12 +185,31 @@ def trade_to_dict(trade: NormalizedTrade) -> dict[str, Any]:
     }
     if trade.time_ticks is not None:
         payload["timeTicks"] = trade.time_ticks
+    if trade.source != "nt":
+        payload["source"] = trade.source
+    if trade.source_time_nanos is not None:
+        payload["sourceTimeNanos"] = trade.source_time_nanos
+    if trade.bridge_time is not None:
+        payload["bridgeTime"] = trade.bridge_time
+    if trade.side is not None:
+        payload["side"] = trade.side.value
+    if trade.aggressor_order_id is not None:
+        payload["aggressorOrderId"] = trade.aggressor_order_id
+    if trade.passive_order_id is not None:
+        payload["passiveOrderId"] = trade.passive_order_id
+    if trade.execution_start:
+        payload["executionStart"] = True
+    if trade.execution_end:
+        payload["executionEnd"] = True
+    if trade.otc:
+        payload["otc"] = True
     return payload
 
 
 def trade_from_dict(data: dict[str, Any]) -> NormalizedTrade:
     """Deserialize a `trade` message into a ``NormalizedTrade``. (Req 1.1)"""
     _expect_type(data, "trade")
+    raw_side = data.get("side")
     return NormalizedTrade(
         symbol=data["symbol"],
         contract=data["contract"],
@@ -197,12 +224,35 @@ def trade_from_dict(data: dict[str, Any]) -> NormalizedTrade:
         time_ticks=(
             None if data.get("timeTicks") is None else int(data["timeTicks"])
         ),
+        source=str(data.get("source") or "nt"),
+        source_time_nanos=(
+            None
+            if data.get("sourceTimeNanos") is None
+            else int(data["sourceTimeNanos"])
+        ),
+        bridge_time=(
+            None if data.get("bridgeTime") is None else int(data["bridgeTime"])
+        ),
+        side=None if raw_side is None else Side(str(raw_side)),
+        aggressor_order_id=(
+            None
+            if data.get("aggressorOrderId") is None
+            else str(data["aggressorOrderId"])
+        ),
+        passive_order_id=(
+            None
+            if data.get("passiveOrderId") is None
+            else str(data["passiveOrderId"])
+        ),
+        execution_start=bool(data.get("executionStart", False)),
+        execution_end=bool(data.get("executionEnd", False)),
+        otc=bool(data.get("otc", False)),
     )
 
 
 def quote_to_dict(quote: NormalizedQuote) -> dict[str, Any]:
     """Serialize a ``NormalizedQuote`` into the `quote` wire shape. (Req 1.2)"""
-    return {
+    payload = {
         "type": "quote",
         "symbol": quote.symbol,
         "contract": quote.contract,
@@ -213,6 +263,9 @@ def quote_to_dict(quote: NormalizedQuote) -> dict[str, Any]:
         "askSize": quote.ask_size,
         "sequence": quote.sequence,
     }
+    if quote.bridge_time is not None:
+        payload["bridgeTime"] = quote.bridge_time
+    return payload
 
 
 def quote_from_dict(data: dict[str, Any]) -> NormalizedQuote:
@@ -227,6 +280,9 @@ def quote_from_dict(data: dict[str, Any]) -> NormalizedQuote:
         bid_size=int(data["bidSize"]),
         ask_size=int(data["askSize"]),
         sequence=int(data["sequence"]),
+        bridge_time=(
+            None if data.get("bridgeTime") is None else int(data["bridgeTime"])
+        ),
     )
 
 
@@ -339,7 +395,7 @@ class Subscribe:
         _expect_type(data, cls.type)
         return cls(
             symbol=data["symbol"],
-            events=[EventType(e) for e in data["events"]],
+            events=_decode_chart_event_types(data["events"]),
             tf=data.get("tf"),
         )
 
@@ -369,7 +425,7 @@ class Unsubscribe:
         _expect_type(data, cls.type)
         return cls(
             symbol=data["symbol"],
-            events=[EventType(e) for e in data["events"]],
+            events=_decode_chart_event_types(data["events"]),
             tf=data.get("tf"),
         )
 
@@ -440,9 +496,10 @@ class BarUpdate:
     tf: str
     bar: OHLCVBar
     closed: bool
+    source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "type": self.type,
             "symbol": self.symbol,
             "contract": self.contract,
@@ -450,6 +507,9 @@ class BarUpdate:
             "bar": self.bar.to_dict(),
             "closed": self.closed,
         }
+        if self.source is not None:
+            out["source"] = self.source
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BarUpdate":
@@ -460,6 +520,7 @@ class BarUpdate:
             tf=data["tf"],
             bar=OHLCVBar.from_dict(data["bar"]),
             closed=bool(data["closed"]),
+            source=data.get("source"),
         )
 
 
@@ -779,9 +840,10 @@ class BigTrade:
     price: float
     volume: int
     side: Side
+    source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "type": self.type,
             "symbol": self.symbol,
             "contract": self.contract,
@@ -791,6 +853,9 @@ class BigTrade:
             "volume": self.volume,
             "side": self.side.value,
         }
+        if self.source is not None:
+            out["source"] = self.source
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BigTrade":
@@ -803,83 +868,49 @@ class BigTrade:
             price=float(data["price"]),
             volume=int(data["volume"]),
             side=Side(data["side"]),
+            source=data.get("source"),
         )
 
 
 @dataclass(slots=True)
-class BookmapSiEvent:
-    """Bookmap Stops/Icebergs On-Chart event (Backend -> client)."""
+class MarketDataStatus:
+    """Current feed selection and rolling latency diagnostics."""
 
-    type: ClassVar[str] = "bookmap_si_event"
+    type: ClassVar[str] = "market_data_status"
 
     symbol: str
-    contract: str
-    alias: str
     time: CanonicalTimestamp
-    price: float
-    raw_price: int
-    size: float
-    raw_size: int
-    total_size: float
-    raw_total_size: int
-    event_kind: str
-    event_type: str
-    is_bid: bool
-    provider: str = "velox.indicators.sionchart.SitIndicator"
-    source: str = "bookmap"
-    order_id: str | None = None
-    time_nanos: int | None = None
+    active_source: str | None
+    preferred_source: str
+    switched_at: CanonicalTimestamp | None
+    reason: str | None
+    sources: dict[str, dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {
+        return {
             "type": self.type,
             "symbol": self.symbol,
-            "contract": self.contract,
-            "alias": self.alias,
-            "provider": self.provider,
-            "source": self.source,
-            "eventKind": self.event_kind,
-            "eventType": self.event_type,
             "time": self.time,
-            "price": self.price,
-            "rawPrice": self.raw_price,
-            "size": self.size,
-            "rawSize": self.raw_size,
-            "totalSize": self.total_size,
-            "rawTotalSize": self.raw_total_size,
-            "isBid": self.is_bid,
+            "activeSource": self.active_source,
+            "preferredSource": self.preferred_source,
+            "switchedAt": self.switched_at,
+            "reason": self.reason,
+            "sources": self.sources,
         }
-        if self.order_id is not None:
-            out["orderId"] = self.order_id
-        if self.time_nanos is not None:
-            out["timeNanos"] = self.time_nanos
-        return out
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "BookmapSiEvent":
+    def from_dict(cls, data: dict[str, Any]) -> "MarketDataStatus":
         _expect_type(data, cls.type)
-        raw_order_id = data.get("orderId")
-        raw_time_nanos = data.get("timeNanos")
         return cls(
             symbol=str(data["symbol"]),
-            contract=str(data["contract"]),
-            alias=str(data["alias"]),
             time=int(data["time"]),
-            price=float(data["price"]),
-            raw_price=int(data["rawPrice"]),
-            size=float(data["size"]),
-            raw_size=int(data["rawSize"]),
-            total_size=float(data["totalSize"]),
-            raw_total_size=int(data["rawTotalSize"]),
-            event_kind=str(data["eventKind"]),
-            event_type=str(data["eventType"]),
-            is_bid=bool(data["isBid"]),
-            provider=str(
-                data.get("provider", "velox.indicators.sionchart.SitIndicator")
+            active_source=data.get("activeSource"),
+            preferred_source=str(data["preferredSource"]),
+            switched_at=(
+                None if data.get("switchedAt") is None else int(data["switchedAt"])
             ),
-            source=str(data.get("source", "bookmap")),
-            order_id=None if raw_order_id is None else str(raw_order_id),
-            time_nanos=None if raw_time_nanos is None else int(raw_time_nanos),
+            reason=data.get("reason"),
+            sources=dict(data.get("sources") or {}),
         )
 
 

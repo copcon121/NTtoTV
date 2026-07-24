@@ -125,6 +125,26 @@ class BarAggregator:
             volume=volume,
         )
 
+    def reconcile_bar(
+        self,
+        contract: str,
+        tf: str,
+        bar: OHLCVBar,
+        *,
+        closed: bool,
+    ) -> None:
+        """Align live state with an authoritative external bar snapshot."""
+        if tf not in _TF_MS:
+            raise ValueError(f"unsupported timeframe: {tf!r}")
+        key = (contract, tf)
+        current = self._bars.get(key)
+        if closed:
+            if current is not None and current.time <= bar.time:
+                self._bars.pop(key, None)
+            return
+        if current is None or bar.time >= current.time:
+            self._bars[key] = _copy_bar(bar)
+
     def reset_contract(self, contract: str) -> None:
         """Drop all in-progress bar state for ``contract`` (all timeframes).
 
@@ -195,6 +215,28 @@ class BarAggregator:
 
         return updates
 
+    def advance_time(
+        self, symbol: str, contract: str, time_ms: int, *, source: str | None = None
+    ) -> list[BarUpdate]:
+        """Close bars whose bucket has ended without creating empty bars."""
+        updates: list[BarUpdate] = []
+        for tf in SUPPORTED_TFS:
+            current = self._bars.get((contract, tf))
+            if current is None or self.bucket_start(time_ms, tf) <= current.time:
+                continue
+            updates.append(
+                BarUpdate(
+                    symbol=symbol,
+                    contract=contract,
+                    tf=tf,
+                    bar=_copy_bar(current),
+                    closed=True,
+                    source=source,
+                )
+            )
+            del self._bars[(contract, tf)]
+        return updates
+
     def _update(
         self, t: NormalizedTrade, tf: str, bar: OHLCVBar, *, closed: bool
     ) -> BarUpdate:
@@ -205,4 +247,5 @@ class BarAggregator:
             tf=tf,
             bar=_copy_bar(bar),
             closed=closed,
+            source=t.source,
         )

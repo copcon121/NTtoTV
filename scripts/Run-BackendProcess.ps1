@@ -16,6 +16,7 @@ $env:NTTOTV_MT5_BACKEND = "real"
 $env:NTTOTV_TRADING_ENABLED = "1"
 $env:NTTOTV_LIVE_TRADING_ENABLED = "1"
 $env:NTTOTV_INVITE_CODE = "join-9999"
+$env:NTTOTV_MARKET_DATA_PREFERRED_SOURCE = "bookmap"
 
 Set-Location -LiteralPath $backendDir
 & $python -m uvicorn app.app:app --host 0.0.0.0 --port $Port

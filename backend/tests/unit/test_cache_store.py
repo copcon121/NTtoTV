@@ -24,7 +24,9 @@ EXPECTED_TABLES = {
     "orderflow_volume_delta",
     "footprint_bars",
     "footprint_levels",
+    "fvg_signals",
     "big_trades",
+    "market_source_switches",
     "alerts",
     "alert_events",
 }
@@ -92,6 +94,76 @@ def test_init_is_idempotent(tmp_path):
         assert row["value"] == "GC 08-26"
     finally:
         second.close()
+
+
+@pytest.mark.unit
+def test_big_trade_migration_preserves_existing_source(tmp_path):
+    db_path = tmp_path / "app.sqlite"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE big_trades (
+                symbol TEXT NOT NULL,
+                contract TEXT NOT NULL,
+                time INTEGER NOT NULL,
+                price REAL NOT NULL,
+                volume INTEGER NOT NULL,
+                side TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'legacy',
+                PRIMARY KEY (symbol, contract, time, side)
+            );
+            INSERT INTO big_trades
+                (symbol, contract, time, price, volume, side, source)
+            VALUES ('GC', 'GC', 1730313600000, 2346.0, 35, 'buy', 'bookmap');
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    store = CacheStore(db_path)
+    try:
+        rows = store.read_big_trades("GC", "GC")
+        assert len(rows) == 1
+        assert rows[0].trade_id == 0
+        assert rows[0].source == "bookmap"
+    finally:
+        store.close()
+
+
+@pytest.mark.unit
+def test_big_trade_migration_preserves_trade_id_from_pre_source_schema(tmp_path):
+    db_path = tmp_path / "app.sqlite"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE big_trades (
+                symbol TEXT NOT NULL,
+                contract TEXT NOT NULL,
+                time INTEGER NOT NULL,
+                price REAL NOT NULL,
+                volume INTEGER NOT NULL,
+                side TEXT NOT NULL,
+                trade_id INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (symbol, contract, time, side, trade_id)
+            );
+            INSERT INTO big_trades
+                (symbol, contract, time, price, volume, side, trade_id)
+            VALUES ('GC', 'GC', 1730313600000, 2346.0, 35, 'buy', 17);
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    store = CacheStore(db_path)
+    try:
+        rows = store.read_big_trades("GC", "GC")
+        assert [(row.trade_id, row.source) for row in rows] == [(17, "legacy")]
+    finally:
+        store.close()
 
 
 @pytest.mark.unit

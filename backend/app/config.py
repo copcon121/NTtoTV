@@ -59,6 +59,34 @@ class Settings:
     # NT_AddOn connection liveness (see Requirements 4.7, 4.8).
     nt_status_timeout_s: int = 15
 
+    # Realtime market-source arbitration. Production remains NT-first until the
+    # Bookmap shadow gate is explicitly promoted through the environment.
+    market_data_preferred_source: str = field(
+        default_factory=lambda: os.getenv(
+            "NTTOTV_MARKET_DATA_PREFERRED_SOURCE", "nt"
+        ).strip().lower()
+    )
+    market_data_cold_start_grace_ms: int = field(
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_MARKET_DATA_COLD_START_GRACE_MS", "5000")
+        )
+    )
+    bookmap_stale_ms: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_BOOKMAP_STALE_MS", "5000"))
+    )
+    bookmap_qualify_ms: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_BOOKMAP_QUALIFY_MS", "2000"))
+    )
+    bookmap_recover_ms: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_BOOKMAP_RECOVER_MS", "10000"))
+    )
+    market_data_min_hold_ms: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_MARKET_DATA_MIN_HOLD_MS", "30000"))
+    )
+    nt_feed_stale_ms: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_NT_FEED_STALE_MS", "10000"))
+    )
+
     # Raw tick retention (see Requirements 7.4, 7.5). This is a calendar-day
     # count including today's UTC shard; v1 keeps today and yesterday only.
     tick_retention_days: int = 2

@@ -110,6 +110,7 @@ class AppRuntime:
             cache=self._cache,
             tick_store=self._tick_store,
             resolver=self._resolver,
+            settings=s,
             symbol=self._symbol,
             native_fvg_signal=self._native_fvg,
             basis_engine=self._basis_engine,
@@ -121,6 +122,7 @@ class AppRuntime:
         self._flush_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._retention_task: asyncio.Task[None] | None = None
+        self._market_source_task: asyncio.Task[None] | None = None
         self._anchored_sync = AnchoredSyncEngine(
             self._cache, self._mt5_manager, self._basis_engine
         )
@@ -228,6 +230,8 @@ class AppRuntime:
             self._heartbeat_task = asyncio.create_task(self._registry.heartbeat_loop())
         if self._retention_task is None:
             self._retention_task = asyncio.create_task(self._retention_loop())
+        if self._market_source_task is None:
+            self._market_source_task = asyncio.create_task(self._market_source_loop())
         if self._anchored_sync_task is None:
             self._anchored_sync_task = asyncio.create_task(self._anchored_sync_loop())
         if self._reconciliation_task is None:
@@ -241,6 +245,7 @@ class AppRuntime:
             self._flush_task,
             self._heartbeat_task,
             self._retention_task,
+            self._market_source_task,
             self._anchored_sync_task,
             self._reconciliation_task,
         ):
@@ -253,6 +258,7 @@ class AppRuntime:
         self._flush_task = None
         self._heartbeat_task = None
         self._retention_task = None
+        self._market_source_task = None
         self._anchored_sync_task = None
         self._reconciliation_task = None
         if self._poi_scanner is not None:
@@ -291,6 +297,14 @@ class AppRuntime:
             except Exception as exc:
                 logger.warning("raw tick retention purge failed: %s", exc)
             await asyncio.sleep(60 * 60)
+
+    async def _market_source_loop(self) -> None:
+        while True:
+            try:
+                await self._pipeline.maintenance_tick()
+            except Exception as exc:
+                logger.warning("market source maintenance failed: %s", exc)
+            await asyncio.sleep(0.05)
 
     async def _purge_expired_ticks(self) -> None:
         removed = await asyncio.to_thread(

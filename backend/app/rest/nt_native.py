@@ -105,6 +105,8 @@ async def ingest_native_bar(
             "source": "nt_native",
         }
 
+    runtime.pipeline.note_nt_native_bar(time_ms)
+
     footprint_update = (
         _build_footprint_update(
             symbol=symbol,
@@ -150,19 +152,16 @@ async def ingest_native_bar(
         close_delta=close_delta,
     )
 
-    rollup_bar_updates, rollup_delta_updates = _persist_native_payload(
+    rollup_delta_updates = _persist_native_payload(
         runtime.cache,
         bar_update=bar_update,
         volume_delta_update=volume_delta_update,
         footprint_update=footprint_update,
     )
 
-    runtime.registry.enqueue(OutboundEvent.from_message(bar_update))
     runtime.registry.enqueue(OutboundEvent.from_message(volume_delta_update))
     if footprint_update is not None:
         runtime.registry.enqueue(OutboundEvent.from_message(footprint_update))
-    for update in rollup_bar_updates:
-        runtime.registry.enqueue(OutboundEvent.from_message(update))
     for update in rollup_delta_updates:
         runtime.registry.enqueue(OutboundEvent.from_message(update))
 
@@ -381,7 +380,7 @@ def _persist_native_payload(
     bar_update: BarUpdate,
     volume_delta_update: VolumeDeltaUpdate,
     footprint_update: FootprintUpdate | None,
-) -> tuple[list[BarUpdate], list[VolumeDeltaUpdate]]:
+) -> list[VolumeDeltaUpdate]:
     footprint_bar = None
     footprint_levels: list[FootprintLevelRecord] = []
     if footprint_update is not None:
@@ -461,23 +460,18 @@ def _persist_native_payload(
 
         cache.writer.write(write)
     cache.upsert_derived_batch(
-        bars=[bar_record],
         volume_deltas=[vd_record],
         footprint_bars=[] if footprint_bar is None else [footprint_bar],
         footprint_levels=footprint_levels,
     )
 
-    rollup_bars, rollup_deltas = _rebuild_native_rollups(cache, bar_record)
-    if rollup_bars or rollup_deltas:
+    _, rollup_deltas = _rebuild_native_rollups(cache, bar_record)
+    if rollup_deltas:
         cache.upsert_derived_batch(
-            bars=rollup_bars,
             volume_deltas=rollup_deltas,
         )
 
-    return (
-        [_bar_update_from_record(rec) for rec in rollup_bars],
-        [_volume_delta_update_from_record(rec) for rec in rollup_deltas],
-    )
+    return [_volume_delta_update_from_record(rec) for rec in rollup_deltas]
 
 
 def _rebuild_native_rollups(
@@ -489,17 +483,6 @@ def _rebuild_native_rollups(
     for tf in ROLLUP_TFS:
         bucket = timeframe_bucket_start(m1_bar.time, tf)
         end = bucket + TF_MS[tf] - 1
-
-        m1_bars = cache.read_bars(
-            m1_bar.symbol,
-            m1_bar.contract,
-            FOOTPRINT_TIMEFRAME,
-            bucket,
-            end,
-        )
-        bar = _rollup_bar(m1_bar.symbol, m1_bar.contract, tf, bucket, m1_bars)
-        if bar is not None:
-            bars.append(bar)
 
         m1_deltas = cache.read_volume_delta(
             m1_bar.symbol,

@@ -34,4 +34,13 @@ describe("StatusIndicator", () => {
     expect(screen.getByTestId("status-label")).toHaveTextContent("Offline");
     expect(screen.getByRole("status")).toHaveAttribute("title", "NT_AddOn silent >15s");
   });
+
+  it("uses a live market-data label when provided", () => {
+    render(<StatusIndicator state="connected" label="Bookmap - 120 ms" />);
+    expect(screen.getByTestId("status-label")).toHaveTextContent("Bookmap - 120 ms");
+    expect(screen.getByRole("status")).toHaveAttribute(
+      "aria-label",
+      "Connection status: Bookmap - 120 ms",
+    );
+  });
 });

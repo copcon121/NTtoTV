@@ -26,6 +26,8 @@ export interface StatusIndicatorProps {
   state: ConnectionState;
   /** Optional override of the per-state display labels. */
   labels?: Partial<Record<ConnectionState, string>>;
+  /** Optional live feed label, e.g. `Bookmap · 120 ms`. */
+  label?: string;
   /**
    * Optional reason/detail (e.g. from StatusMessage.reason) shown as a tooltip
    * via the `title` attribute.
@@ -33,20 +35,20 @@ export interface StatusIndicatorProps {
   reason?: string;
 }
 
-export function StatusIndicator({ state, labels, reason }: StatusIndicatorProps) {
-  const label = labels?.[state] ?? DEFAULT_LABELS[state];
+export function StatusIndicator({ state, labels, label, reason }: StatusIndicatorProps) {
+  const displayLabel = label ?? labels?.[state] ?? DEFAULT_LABELS[state];
   return (
     <span
       className={`status-indicator status-${state}`}
       role="status"
       aria-live="polite"
-      aria-label={`Connection status: ${label}`}
+      aria-label={`Connection status: ${displayLabel}`}
       data-state={state}
       title={reason}
     >
       <span className="status-dot" aria-hidden="true" />
       <span className="status-label" data-testid="status-label">
-        {label}
+        {displayLabel}
       </span>
     </span>
   );

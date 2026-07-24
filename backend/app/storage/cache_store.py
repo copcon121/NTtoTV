@@ -38,7 +38,7 @@ from .user_store import UserStore
 
 __all__ = ["CacheStore", "CACHE_SCHEMA", "CACHE_TABLES"]
 
-# The ten tables the Cache_Store must contain (Requirements 8.1, 8.2, 4.4,
+# The core tables the Cache_Store must contain (Requirements 8.1, 8.2, 4.4,
 # 14.3/14.4, 15, 16, 17.3). Kept as a constant so smoke tests and callers can
 # assert the schema without re-parsing DDL.
 CACHE_TABLES: tuple[str, ...] = (
@@ -51,6 +51,7 @@ CACHE_TABLES: tuple[str, ...] = (
     "footprint_levels",
     "fvg_signals",
     "big_trades",
+    "market_source_switches",
     "alerts",
     "alert_events",
 )
@@ -102,6 +103,7 @@ CREATE TABLE IF NOT EXISTS bars (
     close     REAL    NOT NULL,
     volume    INTEGER NOT NULL,
     closed    INTEGER NOT NULL DEFAULT 0,
+    source    TEXT    NOT NULL DEFAULT 'legacy',
     PRIMARY KEY (symbol, contract, timeframe, time)
 );
 
@@ -182,7 +184,18 @@ CREATE TABLE IF NOT EXISTS big_trades (
     volume    INTEGER NOT NULL,        -- merged volume
     side      TEXT NOT NULL,           -- buy | sell
     trade_id  INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (symbol, contract, time, side, trade_id)
+    source    TEXT NOT NULL DEFAULT 'legacy',
+    PRIMARY KEY (symbol, contract, time, side, source, trade_id)
+);
+
+CREATE TABLE IF NOT EXISTS market_source_switches (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol      TEXT NOT NULL,
+    contract    TEXT NOT NULL,
+    time        INTEGER NOT NULL,
+    from_source TEXT,
+    to_source   TEXT,
+    reason      TEXT NOT NULL
 );
 
 -- Alerts. (Req 16)
@@ -217,6 +230,8 @@ CREATE INDEX IF NOT EXISTS idx_volume_delta_range
     ON orderflow_volume_delta(symbol, contract, timeframe, time);
 CREATE INDEX IF NOT EXISTS idx_big_trades_range
     ON big_trades(symbol, contract, time);
+CREATE INDEX IF NOT EXISTS idx_market_source_switches_time
+    ON market_source_switches(symbol, contract, time);
 CREATE INDEX IF NOT EXISTS idx_stream_gaps_stream
     ON stream_gaps(symbol, contract, channel, time);
 CREATE INDEX IF NOT EXISTS idx_alert_events_alert
@@ -370,6 +385,7 @@ class CacheStore:
         self._migrate_footprint_bars()
         self._migrate_profiles_and_alerts()
         self._migrate_big_trades()
+        self._migrate_market_sources()
 
     def _migrate_footprint_bars(self) -> None:
         """Add v2 footprint panel/profile columns to existing cache files."""
@@ -416,10 +432,16 @@ class CacheStore:
         )
 
     def _migrate_big_trades(self) -> None:
-        """Add the NT-style trade_id key to existing big-trade cache files."""
+        """Migrate legacy BigTrade identity to include trade ID and source."""
         rows = self._writer.connection.execute("PRAGMA table_info(big_trades)").fetchall()
         existing = {str(r["name"]) for r in rows}
-        if "trade_id" in existing:
+        primary_key = tuple(
+            str(row["name"])
+            for row in sorted(rows, key=lambda row: int(row["pk"]))
+            if int(row["pk"]) > 0
+        )
+        expected_key = ("symbol", "contract", "time", "side", "source", "trade_id")
+        if "trade_id" in existing and "source" in existing and primary_key == expected_key:
             return
 
         def op(conn):
@@ -435,15 +457,19 @@ class CacheStore:
                     volume    INTEGER NOT NULL,
                     side      TEXT NOT NULL,
                     trade_id  INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (symbol, contract, time, side, trade_id)
+                    source    TEXT NOT NULL DEFAULT 'legacy',
+                    PRIMARY KEY (symbol, contract, time, side, source, trade_id)
                 )
                 """
             )
+            trade_id_expr = "trade_id" if "trade_id" in existing else "0"
+            source_expr = "source" if "source" in existing else "'legacy'"
             conn.execute(
-                """
+                f"""
                 INSERT INTO big_trades
-                    (symbol, contract, time, price, volume, side, trade_id)
-                SELECT symbol, contract, time, price, volume, side, 0
+                    (symbol, contract, time, price, volume, side, trade_id, source)
+                SELECT symbol, contract, time, price, volume, side,
+                       {trade_id_expr}, {source_expr}
                 FROM big_trades_old
                 """
             )
@@ -456,6 +482,33 @@ class CacheStore:
             )
 
         self._writer.write(op)
+
+    def _migrate_market_sources(self) -> None:
+        for table in ("bars", "big_trades"):
+            rows = self._writer.connection.execute(
+                f"PRAGMA table_info({table})"
+            ).fetchall()
+            existing = {str(r["name"]) for r in rows}
+            if "source" not in existing:
+                self._writer.execute(
+                    f"ALTER TABLE {table} ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'"
+                )
+
+    def record_market_source_switch(
+        self,
+        symbol: str,
+        contract: str,
+        time: int,
+        from_source: str | None,
+        to_source: str | None,
+        reason: str,
+    ) -> None:
+        self._writer.execute(
+            "INSERT INTO market_source_switches "
+            "(symbol, contract, time, from_source, to_source, reason) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (symbol, contract, int(time), from_source, to_source, reason),
+        )
 
     def reader(self):
         """Open a new read-only-style connection for concurrent reads (WAL)."""
@@ -674,8 +727,12 @@ class CacheStore:
         frm: int,
         to: int,
         recs: Iterable[BigTradeRecord],
+        *,
+        source: str | None = None,
     ) -> None:
-        self._keyed.replace_big_trades(symbol, contract, frm, to, recs)
+        self._keyed.replace_big_trades(
+            symbol, contract, frm, to, recs, source=source
+        )
 
     def read_big_trades(
         self,

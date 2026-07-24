@@ -27,10 +27,19 @@ class _Registry:
         self.events.append(event)
 
 
+class _Pipeline:
+    def __init__(self) -> None:
+        self.native_bar_times = []
+
+    def note_nt_native_bar(self, bar_time: int) -> None:
+        self.native_bar_times.append(bar_time)
+
+
 class _Runtime:
     def __init__(self, cache: CacheStore) -> None:
         self.cache = cache
         self.registry = _Registry()
+        self.pipeline = _Pipeline()
         self.native_fvg = FvgSignalEngine()
         self.native_fvg_seeded = set()
 
@@ -89,12 +98,10 @@ def test_native_bar_upserts_cache_and_enqueues_updates(tmp_path):
         assert body["ok"] is True
         assert body["contract"] == _ACTIVE
         assert body["rows"] == 2
+        assert runtime.pipeline.native_bar_times == [_BASE_MS]
 
-        bars = cache.read_bars(_SYMBOL, _ACTIVE, "1m", limit=1)
-        assert len(bars) == 1
-        assert bars[0].time == _BASE_MS
-        assert bars[0].volume == 21
-        assert bars[0].closed is True
+        # Native NT owns delta/footprint/FVG only; it must never overwrite OHLC.
+        assert cache.read_bars(_SYMBOL, _ACTIVE, "1m", limit=1) == []
 
         deltas = cache.read_volume_delta(_SYMBOL, _ACTIVE, "1m", limit=1)
         assert len(deltas) == 1
@@ -113,15 +120,9 @@ def test_native_bar_upserts_cache_and_enqueues_updates(tmp_path):
             (2400.2, 6, 5),
         ]
 
-        assert [event.payload["type"] for event in runtime.registry.events[:3]] == [
-            "bar_update",
-            "volume_delta_update",
-            "footprint_update",
-        ]
-        assert ("bar_update", "3m") in [
-            (event.payload["type"], event.payload.get("tf"))
-            for event in runtime.registry.events
-        ]
+        event_types = [event.payload["type"] for event in runtime.registry.events]
+        assert "bar_update" not in event_types
+        assert event_types[:2] == ["volume_delta_update", "footprint_update"]
         assert ("volume_delta_update", "3m") in [
             (event.payload["type"], event.payload.get("tf"))
             for event in runtime.registry.events
@@ -130,7 +131,7 @@ def test_native_bar_upserts_cache_and_enqueues_updates(tmp_path):
         tick_store.close()
         cache.close()
 
-def test_native_m1_history_rolls_up_chart_timeframes(tmp_path):
+def test_native_m1_history_rolls_up_delta_without_writing_chart_bars(tmp_path):
     settings = Settings(
         data_dir=tmp_path,
         supported_symbols=(_SYMBOL,),
@@ -209,13 +210,7 @@ def test_native_m1_history_rolls_up_chart_timeframes(tmp_path):
                 assert resp.status_code == 200
 
         for tf in ("3m", "5m", "15m", "30m", "1h", "4h", "1D"):
-            bars = cache.read_bars(_SYMBOL, _ACTIVE, tf, limit=1)
-            assert len(bars) == 1
-            assert bars[0].open == 100.0
-            assert bars[0].high == 106.0
-            assert bars[0].low == 99.0
-            assert bars[0].close == 105.0
-            assert bars[0].volume == 60
+            assert cache.read_bars(_SYMBOL, _ACTIVE, tf, limit=1) == []
 
             deltas = cache.read_volume_delta(_SYMBOL, _ACTIVE, tf, limit=1)
             assert len(deltas) == 1
@@ -232,7 +227,7 @@ def test_native_m1_history_rolls_up_chart_timeframes(tmp_path):
             (event.payload["type"], event.payload.get("tf"))
             for event in runtime.registry.events
         ]
-        assert ("bar_update", "5m") in event_slots
+        assert all(event_type != "bar_update" for event_type, _ in event_slots)
         assert ("volume_delta_update", "5m") in event_slots
     finally:
         tick_store.close()
@@ -331,13 +326,7 @@ def test_native_rollup_ignores_invalid_zero_rows(tmp_path):
             assert ignored.json()["ignored"] == "invalid_ohlcv"
             assert len(runtime.registry.events) == event_count
 
-        day_bars = cache.read_bars(_SYMBOL, _ACTIVE, "1D", limit=1)
-        assert len(day_bars) == 1
-        assert day_bars[0].open == 2400.0
-        assert day_bars[0].high == 2400.4
-        assert day_bars[0].low == 2399.8
-        assert day_bars[0].close == 2400.2
-        assert day_bars[0].volume == 21
+        assert cache.read_bars(_SYMBOL, _ACTIVE, "1D", limit=1) == []
 
         day_deltas = cache.read_volume_delta(_SYMBOL, _ACTIVE, "1D", limit=1)
         assert len(day_deltas) == 1

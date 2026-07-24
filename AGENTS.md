@@ -289,7 +289,8 @@ Operational notes:
   loopback and can keep serving the already-built frontend.
 - Backend runtime must inherit live MT5 env:
   `NTTOTV_MT5_BACKEND=real`, `NTTOTV_TRADING_ENABLED=1`,
-  `NTTOTV_LIVE_TRADING_ENABLED=1`, `NTTOTV_INVITE_CODE=join-9999`.
+  `NTTOTV_LIVE_TRADING_ENABLED=1`, `NTTOTV_INVITE_CODE=join-9999`,
+  `NTTOTV_MARKET_DATA_PREFERRED_SOURCE=bookmap`.
   `scripts\Run-BackendProcess.ps1` sets these values before launching uvicorn.
 - If the machine feels heavy, first run `scripts\Show-RuntimeLoad.ps1`. If port
   `5173` is listening and public `https://gcflowpy.xyz/` is in use, run
@@ -529,7 +530,10 @@ After the latest fixes:
 - Current real MT5 backend runtime env uses live trading enabled and invite-code
   gated self-registration:
   `NTTOTV_MT5_BACKEND=real`, `NTTOTV_TRADING_ENABLED=1`,
-  `NTTOTV_LIVE_TRADING_ENABLED=1`, `NTTOTV_INVITE_CODE=join-9999`.
+  `NTTOTV_LIVE_TRADING_ENABLED=1`, `NTTOTV_INVITE_CODE=join-9999`,
+  `NTTOTV_MARKET_DATA_PREFERRED_SOURCE=bookmap`.
+- Realtime OHLCV and BigTrade prefer Bookmap; NT remains warm as the automatic
+  fallback and continues to own native volume delta, footprint, and FVG.
 - Active REST contract is `GC 08-26`; chart cache key is `GC`.
 - Last-only file `export data\GC 08-26-5-6.Last.txt` was imported into chart
   cache as bars + volume delta.

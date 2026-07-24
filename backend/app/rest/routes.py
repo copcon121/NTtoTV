@@ -76,6 +76,26 @@ def get_tick_store(request: Request) -> TickStore:
     return store
 
 
+def _raw_rebuild_source(request: Request) -> str:
+    """Choose one raw feed for cache-miss rebuilds without merging sources."""
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is not None:
+        status = runtime.pipeline.market_data_status_message()
+        source = status.active_source or status.preferred_source
+    else:
+        source = default_settings.market_data_preferred_source
+    return source if source in ("nt", "bookmap") else "nt"
+
+
+def _raw_rebuild_contract(
+    state: ContractStateStore, symbol: str, resolved_contract: str
+) -> str:
+    """Map the logical chart alias to the active physical feed contract."""
+    if resolved_contract == symbol:
+        return state.active_contract(symbol)
+    return resolved_contract
+
+
 @router.get("/health")
 async def health() -> dict[str, str]:
     """Liveness probe used by smoke tests and the dev harness."""
@@ -203,6 +223,7 @@ def _bar_to_dict(bar: BarRecord) -> dict[str, Any]:
         "low": bar.low,
         "close": bar.close,
         "volume": bar.volume,
+        "source": bar.source,
     }
 
 
@@ -213,6 +234,9 @@ def _rebuild_bars(
     tf: str,
     frm: int,
     to: int,
+    *,
+    raw_contract: str | None = None,
+    source: str = "nt",
 ) -> list[BarRecord]:
     """Rebuild OHLCV bars for one timeframe from raw Tick_Store ticks.
 
@@ -224,7 +248,9 @@ def _rebuild_bars(
     """
     agg = BarAggregator()
     bars: dict[int, BarRecord] = {}
-    for trade in tick_store.read_range(contract, frm, to):
+    for trade in tick_store.read_range(
+        raw_contract or contract, frm, to, source=source
+    ):
         bucket = agg.bucket_start(trade.time, tf)
         rec = bars.get(bucket)
         if rec is None:
@@ -238,6 +264,7 @@ def _rebuild_bars(
                 low=trade.price,
                 close=trade.price,
                 volume=trade.volume,
+                source=trade.source,
                 closed=True,
             )
         else:
@@ -252,6 +279,7 @@ def _rebuild_bars(
 
 @router.get("/history")
 async def get_history(
+    request: Request,
     symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
     tf: str = Query(..., description="Timeframe (1m,3m,5m,15m,30m,1h,4h,1D)"),
     contract: str | None = Query(
@@ -324,7 +352,14 @@ async def get_history(
             )
             frm_ms = to_ms - retention_ms
         rebuilt = _rebuild_bars(
-            tick_store, symbol, resolved_contract, tf, frm_ms, to_ms
+            tick_store,
+            symbol,
+            resolved_contract,
+            tf,
+            frm_ms,
+            to_ms,
+            raw_contract=_raw_rebuild_contract(state, symbol, resolved_contract),
+            source=_raw_rebuild_source(request),
         )
         # Keep the response bounded to the same most-recent cap as the cache path.
         bars = rebuilt[-effective_limit:]

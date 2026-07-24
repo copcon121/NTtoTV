@@ -270,6 +270,33 @@ def test_big_trade_same_time_side_distinguished_by_trade_id(store):
 
 
 @pytest.mark.unit
+def test_big_trade_same_identity_isolated_by_source(store):
+    store.upsert_big_trade(
+        BigTradeRecord(
+            "GC", "GC", 1_000, 2345.6, 35, Side.BUY, trade_id=1, source="nt"
+        )
+    )
+    store.upsert_big_trade(
+        BigTradeRecord(
+            "GC",
+            "GC",
+            1_000,
+            2345.7,
+            40,
+            Side.BUY,
+            trade_id=1,
+            source="bookmap",
+        )
+    )
+
+    rows = store.read_big_trades("GC", "GC")
+    assert [(row.source, row.volume) for row in rows] == [
+        ("bookmap", 40),
+        ("nt", 35),
+    ]
+
+
+@pytest.mark.unit
 def test_big_trade_range_and_limit(store):
     for t in (1_000, 2_000, 3_000):
         store.upsert_big_trade(
@@ -310,6 +337,52 @@ def test_replace_big_trades_removes_stale_rows_in_range(store):
     assert [(r.time, r.trade_id, r.price) for r in rows] == [
         (1_500, 11, 2.0),
         (9_000, 0, 1.0),
+    ]
+
+
+@pytest.mark.unit
+def test_replace_big_trades_can_preserve_other_source(store):
+    store.upsert_big_trades(
+        [
+            BigTradeRecord(
+                "GC", "GC", 1_000, 1.0, 50, Side.BUY, trade_id=1, source="nt"
+            ),
+            BigTradeRecord(
+                "GC",
+                "GC",
+                1_000,
+                2.0,
+                60,
+                Side.BUY,
+                trade_id=1,
+                source="bookmap",
+            ),
+        ]
+    )
+    store.replace_big_trades(
+        "GC",
+        "GC",
+        1_000,
+        1_000,
+        [
+            BigTradeRecord(
+                "GC",
+                "GC",
+                1_000,
+                3.0,
+                70,
+                Side.BUY,
+                trade_id=2,
+                source="bookmap",
+            )
+        ],
+        source="bookmap",
+    )
+
+    rows = store.read_big_trades("GC", "GC")
+    assert [(row.source, row.trade_id, row.price) for row in rows] == [
+        ("nt", 1, 1.0),
+        ("bookmap", 2, 3.0),
     ]
 
 

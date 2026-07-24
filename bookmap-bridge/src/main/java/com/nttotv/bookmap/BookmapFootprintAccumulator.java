@@ -130,6 +130,7 @@ final class BookmapFootprintAccumulator {
     private final ClosedBarListener listener;
     private long currentTimeNanos;
     private State current;
+    private Bar lastClosed;
     private boolean firstBarAfterReset = true;
     private long skippedTradesWithoutTimestamp;
 
@@ -155,6 +156,7 @@ final class BookmapFootprintAccumulator {
     synchronized void reset() {
         currentTimeNanos = 0L;
         current = null;
+        lastClosed = null;
         firstBarAfterReset = true;
     }
 
@@ -260,6 +262,30 @@ final class BookmapFootprintAccumulator {
         return current != null;
     }
 
+    synchronized long currentTimeNanos() {
+        return currentTimeNanos;
+    }
+
+    synchronized boolean hasCurrentBar() {
+        return current != null;
+    }
+
+    synchronized long currentBarTime() {
+        return current == null ? 0L : current.time;
+    }
+
+    synchronized boolean currentPartialStart() {
+        return current == null || current.partialStart;
+    }
+
+    synchronized Bar currentSnapshot() {
+        return current == null ? null : new Bar(current);
+    }
+
+    synchronized Bar lastClosedSnapshot() {
+        return lastClosed;
+    }
+
     private void emitCurrent() {
         State closed = current;
         current = null;
@@ -267,7 +293,8 @@ final class BookmapFootprintAccumulator {
             return;
         }
         firstBarAfterReset = false;
-        listener.onClosedBar(new Bar(closed));
+        lastClosed = new Bar(closed);
+        listener.onClosedBar(lastClosed);
     }
 
     private double snapPrice(double price) {

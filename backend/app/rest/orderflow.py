@@ -24,10 +24,11 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from ..config import settings as default_settings
 from ..engines.big_trade_engine import BigTradeEngine
+from ..engines.bookmap_big_trade_engine import BookmapBigTradeEngine
 from ..engines.footprint_engine import (
     DEFAULT_TICK_SIZE,
     DEFAULT_VALUE_AREA_PERCENT,
@@ -48,7 +49,13 @@ from ..storage.records import (
 from ..storage.tick_store import TickStore
 from .contract_state import ContractStateStore
 from .errors import bad_request, not_found
-from .routes import _resolve_contract, get_contract_state, get_tick_store
+from .routes import (
+    _raw_rebuild_contract,
+    _raw_rebuild_source,
+    _resolve_contract,
+    get_contract_state,
+    get_tick_store,
+)
 
 router = APIRouter(prefix="/api", tags=["orderflow"])
 
@@ -110,6 +117,8 @@ def _rebuild_volume_delta(
     tf: str,
     frm: int,
     to: int,
+    *,
+    raw_contract: str | None = None,
 ) -> list[VolumeDeltaRecord]:
     """Rebuild per-bar volume-delta summaries from raw Tick_Store ticks.
 
@@ -127,7 +136,9 @@ def _rebuild_volume_delta(
     engine = VolumeDeltaEngine(timeframe=tf)
     final: dict[int, VolumeDeltaRecord] = {}
     order: list[int] = []
-    for trade in _trades_with_prevailing_quote(tick_store, contract, frm, to):
+    for trade in _trades_with_prevailing_quote(
+        tick_store, raw_contract or contract, frm, to
+    ):
         update = engine.on_trade(trade)
         if update is None:
             continue
@@ -164,7 +175,7 @@ def _trades_with_prevailing_quote(
     onto any trade that lacks a same-print snapshot. Mirrors the live pipeline's
     backfill so the rebuild classifies identically. (Req 13.2, 13.3)
     """
-    trades = list(tick_store.read_range(contract, frm, to))
+    trades = list(tick_store.read_range(contract, frm, to, source="nt"))
     quotes = list(tick_store.read_quotes(contract, frm, to))
     qi = 0
     nq = len(quotes)
@@ -189,19 +200,29 @@ def _rebuild_big_trades(
     contract: str,
     frm: int,
     to: int,
+    *,
+    raw_contract: str | None = None,
+    source: str = "nt",
 ) -> tuple[list[BigTradeRecord], bool]:
-    """Rebuild NT-style BigTrade markers from raw Tick_Store ticks.
-
-    This mirrors the live pipeline's simple BigTrade path: prevailing bid/ask is
-    stamped onto each trade, iceberg/DOM filters are ignored, and
-    ``BigTradeEngine`` applies the NT BigTrade defaults (MinVolume=30,
-    MaxVolume=-1, VolumeFilterEnable=true).
-    """
-    engine = BigTradeEngine(dedupe_repeated_timestamp_runs=True)
+    """Rebuild BigTrade markers from exactly one raw market-data source."""
+    physical_contract = raw_contract or contract
     out: list[BigTradeRecord] = []
     had_raw_trades = False
-    for trade in _trades_with_prevailing_quote(tick_store, contract, frm, to):
+    if source == "bookmap":
+        engine = BookmapBigTradeEngine()
+        trades = tick_store.read_range(
+            physical_contract, frm, to, source="bookmap"
+        )
+    else:
+        engine = BigTradeEngine(dedupe_repeated_timestamp_runs=True)
+        trades = _trades_with_prevailing_quote(
+            tick_store, physical_contract, frm, to
+        )
+
+    last_flush_clock = to
+    for trade in trades:
         had_raw_trades = True
+        last_flush_clock = max(last_flush_clock, trade.received_at or trade.time)
         for bt in engine.on_trade(trade):
             out.append(
                 BigTradeRecord(
@@ -212,9 +233,14 @@ def _rebuild_big_trades(
                     volume=bt.volume,
                     side=bt.side,
                     trade_id=bt.trade_id,
+                    source=source,
                 )
             )
-    for bt in engine.flush(contract):
+    if isinstance(engine, BookmapBigTradeEngine):
+        pending = engine.flush_idle(last_flush_clock + engine.idle_ms)
+    else:
+        pending = engine.flush(physical_contract)
+    for bt in pending:
         out.append(
             BigTradeRecord(
                 symbol=symbol,
@@ -224,6 +250,7 @@ def _rebuild_big_trades(
                 volume=bt.volume,
                 side=bt.side,
                 trade_id=bt.trade_id,
+                source=source,
             )
         )
     return out, had_raw_trades
@@ -365,6 +392,7 @@ def _big_trade_to_dict(rec: BigTradeRecord) -> dict[str, Any]:
         "price": rec.price,
         "volume": rec.volume,
         "side": rec.side.value,
+        "source": rec.source,
     }
 
 
@@ -792,7 +820,13 @@ async def get_volume_delta(
             )
             frm_ms = to_ms - retention_ms
         rebuilt = _rebuild_volume_delta(
-            tick_store, symbol, resolved, tf, frm_ms, to_ms
+            tick_store,
+            symbol,
+            resolved,
+            tf,
+            frm_ms,
+            to_ms,
+            raw_contract=_raw_rebuild_contract(state, symbol, resolved),
         )
         rows = rebuilt[-effective_limit:]
         source = "rebuild"
@@ -1025,6 +1059,7 @@ async def get_delta_profile(
 
 @router.get("/big-trades")
 async def get_big_trades(
+    request: Request,
     symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
     contract: str | None = Query(
         None, description="GC contract; defaults to the Active_Contract"
@@ -1072,12 +1107,33 @@ async def get_big_trades(
         retention_ms = default_settings.tick_retention_days * 24 * 60 * 60 * 1000
         frm_ms = to_ms - retention_ms
 
+    rebuild_source = _raw_rebuild_source(request)
     rebuilt, had_raw_trades = _rebuild_big_trades(
-        tick_store, symbol, resolved, frm_ms, to_ms
+        tick_store,
+        symbol,
+        resolved,
+        frm_ms,
+        to_ms,
+        raw_contract=_raw_rebuild_contract(state, symbol, resolved),
+        source=rebuild_source,
     )
     if had_raw_trades:
-        rows = rebuilt[-effective_limit:]
-        cache.replace_big_trades(symbol, resolved, frm_ms, to_ms, rebuilt)
+        replaced_sources = {rebuild_source}
+        if rebuild_source == "nt":
+            replaced_sources.add("legacy")
+        preserved = [row for row in cached if row.source not in replaced_sources]
+        rows = sorted(
+            [*preserved, *rebuilt],
+            key=lambda row: (row.time, row.trade_id, row.side.value, row.source),
+        )[-effective_limit:]
+        cache.replace_big_trades(
+            symbol,
+            resolved,
+            frm_ms,
+            to_ms,
+            rebuilt,
+            source=rebuild_source,
+        )
         source = "rebuild"
     else:
         rows = cached

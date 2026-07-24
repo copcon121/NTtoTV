@@ -22,9 +22,10 @@ import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Layer1SimpleAttachable
-@Layer1StrategyName("NTtoTV Bookmap Market Data Shadow")
+@Layer1StrategyName("NTtoTV Bookmap Market Data Live")
 @Layer1ApiVersion(Layer1ApiVersionValue.VERSION2)
 public class BookmapMarketDataBridge implements
     CustomModuleAdapter,
@@ -41,6 +42,13 @@ public class BookmapMarketDataBridge implements
     private InstrumentInfo instrumentInfo;
     private BookmapFootprintAccumulator accumulator;
     private ShadowWriter writer;
+    private BookmapWebSocketSender sender;
+    private Thread heartbeatThread;
+    private double tickSize = 0.1;
+    private double sizeMultiplier = 1.0;
+    private final AtomicLong tradeSequence = new AtomicLong();
+    private final AtomicLong heartbeatSequence = new AtomicLong();
+    private final AtomicLong barSequence = new AtomicLong();
     private long acceptedTrades;
     private long skippedTradesWithoutInfo;
     private long exportedBars;
@@ -49,8 +57,8 @@ public class BookmapMarketDataBridge implements
     public void initialize(String alias, InstrumentInfo info, Api api, InitialState initialState) {
         this.alias = alias == null || alias.trim().isEmpty() ? "unknown" : alias;
         instrumentInfo = info;
-        double tickSize = info == null || info.pips <= 0.0 ? 0.1 : info.pips;
-        double sizeMultiplier = info == null || info.sizeMultiplier <= 0.0
+        tickSize = info == null || info.pips <= 0.0 ? 0.1 : info.pips;
+        sizeMultiplier = info == null || info.sizeMultiplier <= 0.0
             ? 1.0
             : info.sizeMultiplier;
         writer = new ShadowWriter(exportDirectory(), this.alias);
@@ -60,10 +68,22 @@ public class BookmapMarketDataBridge implements
             new BookmapFootprintAccumulator.ClosedBarListener() {
                 @Override
                 public void onClosedBar(BookmapFootprintAccumulator.Bar bar) {
+                    enqueueBar(bar, true, false);
                     exportBar(bar);
                 }
             }
         );
+        sender = new BookmapWebSocketSender(
+            env("NTTOTV_BOOKMAP_WS_URL", "ws://127.0.0.1:8000/ws/bookmap"),
+            new BookmapWebSocketSender.ConnectedListener() {
+                @Override
+                public void onConnected() {
+                    enqueueSnapshots();
+                }
+            }
+        );
+        sender.start();
+        startHeartbeat();
         realtime = envBool("NTTOTV_BOOKMAP_MARKET_INCLUDE_HISTORICAL", false);
         if (realtime && initialState != null && initialState.getCurrentTime() > 0L) {
             accumulator.onTimestamp(initialState.getCurrentTime());
@@ -122,12 +142,21 @@ public class BookmapMarketDataBridge implements
             tradeInfo.passiveOrderId
         )) {
             acceptedTrades += 1L;
+            enqueueTrade(price, size, tradeInfo);
         }
     }
 
     @Override
     public void stop() {
         realtime = false;
+        Thread heartbeat = heartbeatThread;
+        if (heartbeat != null) {
+            heartbeat.interrupt();
+        }
+        BookmapWebSocketSender localSender = sender;
+        if (localSender != null) {
+            localSender.close();
+        }
         BookmapFootprintAccumulator local = accumulator;
         boolean discardedOpenBar = local != null && local.hasOpenBar();
         long missingTimestamp = local == null ? 0L : local.skippedTradesWithoutTimestamp();
@@ -138,6 +167,160 @@ public class BookmapMarketDataBridge implements
                 + " skippedWithoutTimestamp=" + missingTimestamp
                 + " discardedOpenBar=" + discardedOpenBar
         );
+    }
+
+    private void startHeartbeat() {
+        heartbeatThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (!Thread.currentThread().isInterrupted()) {
+                    try {
+                        Thread.sleep(1_000L);
+                    } catch (InterruptedException ignored) {
+                        return;
+                    }
+                    if (realtime) {
+                        BookmapWebSocketSender local = sender;
+                        if (local != null) {
+                            local.enqueue(heartbeatJson(local), true);
+                        }
+                    }
+                }
+            }
+        }, "NTtoTV-Bookmap-Heartbeat");
+        heartbeatThread.setDaemon(true);
+        heartbeatThread.start();
+    }
+
+    private void enqueueTrade(double rawPrice, int rawSize, TradeInfo info) {
+        BookmapWebSocketSender local = sender;
+        BookmapFootprintAccumulator localAccumulator = accumulator;
+        if (local == null || localAccumulator == null) {
+            return;
+        }
+        long timeNanos = localAccumulator.currentTimeNanos();
+        if (timeNanos <= 0L) {
+            return;
+        }
+        long timeMs = Math.floorDiv(timeNanos, 1_000_000L);
+        long bridgeTime = System.currentTimeMillis();
+        long volume = Math.round(rawSize / sizeMultiplier);
+        double price = round10(rawPrice * tickSize);
+        StringBuilder sb = new StringBuilder(512);
+        sb.append('{');
+        stringField(sb, "type", "trade", true);
+        stringField(sb, "source", "bookmap", true);
+        stringField(sb, "symbol", env("NTTOTV_BOOKMAP_SYMBOL", "GC"), true);
+        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 08-26"), true);
+        stringField(sb, "sourceContract", alias, true);
+        stringField(sb, "alias", alias, true);
+        numberField(sb, "time", Long.toString(timeMs), true);
+        numberField(sb, "timeNanos", Long.toString(timeNanos), true);
+        numberField(sb, "bridgeTime", Long.toString(bridgeTime), true);
+        numberField(sb, "price", doubleString(price), true);
+        numberField(sb, "volume", Long.toString(volume), true);
+        stringField(sb, "side", info.isBidAggressor ? "buy" : "sell", true);
+        booleanField(sb, "isBidAggressor", info.isBidAggressor, true);
+        booleanField(sb, "executionStart", info.isExecutionStart, true);
+        booleanField(sb, "executionEnd", info.isExecutionEnd, true);
+        booleanField(sb, "otc", info.isOtc, true);
+        stringField(sb, "aggressorOrderId", safe(info.aggressorOrderId), true);
+        stringField(sb, "passiveOrderId", safe(info.passiveOrderId), true);
+        numberField(sb, "sequence", Long.toString(tradeSequence.incrementAndGet()), false);
+        sb.append('}');
+        local.enqueue(sb.toString(), true);
+    }
+
+    private String heartbeatJson(BookmapWebSocketSender local) {
+        BookmapFootprintAccumulator localAccumulator = accumulator;
+        long timeNanos = localAccumulator == null ? 0L : localAccumulator.currentTimeNanos();
+        long timeMs = timeNanos <= 0L
+            ? System.currentTimeMillis()
+            : Math.floorDiv(timeNanos, 1_000_000L);
+        StringBuilder sb = new StringBuilder(320);
+        sb.append('{');
+        stringField(sb, "type", "heartbeat", true);
+        stringField(sb, "source", "bookmap", true);
+        stringField(sb, "symbol", env("NTTOTV_BOOKMAP_SYMBOL", "GC"), true);
+        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 08-26"), true);
+        stringField(sb, "alias", alias, true);
+        numberField(sb, "time", Long.toString(timeMs), true);
+        numberField(sb, "timeNanos", Long.toString(timeNanos), true);
+        numberField(sb, "bridgeTime", Long.toString(System.currentTimeMillis()), true);
+        booleanField(
+            sb,
+            "hasCurrentBar",
+            localAccumulator != null && localAccumulator.hasCurrentBar(),
+            true
+        );
+        numberField(
+            sb,
+            "currentBarTime",
+            Long.toString(localAccumulator == null ? 0L : localAccumulator.currentBarTime()),
+            true
+        );
+        booleanField(
+            sb,
+            "partialStart",
+            localAccumulator == null || localAccumulator.currentPartialStart(),
+            true
+        );
+        numberField(sb, "queueDepth", Integer.toString(local.queueDepth()), true);
+        numberField(sb, "droppedStale", Long.toString(local.droppedStale()), true);
+        numberField(sb, "droppedOverflow", Long.toString(local.droppedOverflow()), true);
+        numberField(sb, "sequence", Long.toString(heartbeatSequence.incrementAndGet()), false);
+        sb.append('}');
+        return sb.toString();
+    }
+
+    private void enqueueSnapshots() {
+        BookmapFootprintAccumulator localAccumulator = accumulator;
+        if (localAccumulator == null) {
+            return;
+        }
+        BookmapFootprintAccumulator.Bar previous = localAccumulator.lastClosedSnapshot();
+        BookmapFootprintAccumulator.Bar current = localAccumulator.currentSnapshot();
+        if (previous != null) {
+            enqueueBar(previous, true, true);
+        }
+        if (current != null) {
+            enqueueBar(current, false, true);
+        }
+    }
+
+    private void enqueueBar(
+        BookmapFootprintAccumulator.Bar bar,
+        boolean closed,
+        boolean snapshot
+    ) {
+        BookmapWebSocketSender local = sender;
+        if (local == null || bar == null) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder(512);
+        sb.append('{');
+        stringField(sb, "type", "bar", true);
+        stringField(sb, "source", "bookmap", true);
+        stringField(sb, "symbol", env("NTTOTV_BOOKMAP_SYMBOL", "GC"), true);
+        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 08-26"), true);
+        stringField(sb, "sourceContract", alias, true);
+        stringField(sb, "alias", alias, true);
+        stringField(sb, "tf", "1m", true);
+        numberField(sb, "time", Long.toString(bar.time), true);
+        numberField(sb, "bridgeTime", Long.toString(System.currentTimeMillis()), true);
+        numberField(sb, "firstEventTimeNanos", Long.toString(bar.firstEventTimeNanos), true);
+        numberField(sb, "lastEventTimeNanos", Long.toString(bar.lastEventTimeNanos), true);
+        numberField(sb, "open", doubleString(bar.open), true);
+        numberField(sb, "high", doubleString(bar.high), true);
+        numberField(sb, "low", doubleString(bar.low), true);
+        numberField(sb, "close", doubleString(bar.close), true);
+        numberField(sb, "volume", Long.toString(bar.volume), true);
+        booleanField(sb, "closed", closed, true);
+        booleanField(sb, "partialStart", bar.partialStart, true);
+        booleanField(sb, "snapshot", snapshot, true);
+        numberField(sb, "sequence", Long.toString(barSequence.incrementAndGet()), false);
+        sb.append('}');
+        local.enqueue(sb.toString(), !snapshot);
     }
 
     private void exportBar(BookmapFootprintAccumulator.Bar bar) {
@@ -176,7 +359,7 @@ public class BookmapMarketDataBridge implements
         StringBuilder sb = new StringBuilder(2048 + bar.rows.size() * 64);
         sb.append('{');
         numberField(sb, "schemaVersion", "2", true);
-        stringField(sb, "source", "bookmap_shadow", true);
+        stringField(sb, "source", "bookmap", true);
         stringField(sb, "symbol", symbol, true);
         stringField(sb, "contract", contract, true);
         stringField(sb, "sourceContract", alias, true);
@@ -237,7 +420,7 @@ public class BookmapMarketDataBridge implements
     }
 
     private static void log(String message) {
-        String line = Instant.now().toString() + " [NTtoTV Bookmap Market Data Shadow] " + message;
+        String line = Instant.now().toString() + " [NTtoTV Bookmap Market Data Live] " + message;
         System.out.println(line);
         try {
             Path directory = exportDirectory();
@@ -316,6 +499,14 @@ public class BookmapMarketDataBridge implements
             return "0";
         }
         return Double.toString(value);
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static double round10(double value) {
+        return Math.round(value * 10_000_000_000.0) / 10_000_000_000.0;
     }
 
     private static String sanitize(String value) {
