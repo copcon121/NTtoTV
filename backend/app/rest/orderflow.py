@@ -778,7 +778,7 @@ def _minute_bar_profile_to_dict(
 @router.get("/orderflow/volume-delta")
 async def get_volume_delta(
     symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
-    tf: str = Query(..., description="Timeframe (1m,3m,5m,15m,30m,1h,4h,1D)"),
+    tf: str = Query(..., description="Timeframe (15s,1m,3m,5m,15m,30m,1h,4h,1D)"),
     contract: str | None = Query(
         None, description="GC contract; defaults to the Active_Contract"
     ),

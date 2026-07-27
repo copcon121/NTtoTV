@@ -9,7 +9,16 @@
 // 6.2 (pong response to ping), 11.2 (realtime subscribe after history).
 
 /** Supported bar aggregation intervals (design Glossary: Timeframe). */
-export type Timeframe = "1m" | "3m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1D";
+export type Timeframe =
+  | "15s"
+  | "1m"
+  | "3m"
+  | "5m"
+  | "15m"
+  | "30m"
+  | "1h"
+  | "4h"
+  | "1D";
 
 /**
  * Event types a Frontend client can subscribe to (Req 5.2, 5.4, 5.5).

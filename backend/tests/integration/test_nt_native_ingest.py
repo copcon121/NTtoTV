@@ -209,6 +209,8 @@ def test_native_m1_history_rolls_up_delta_without_writing_chart_bars(tmp_path):
                 )
                 assert resp.status_code == 200
 
+        assert cache.read_volume_delta(_SYMBOL, _ACTIVE, "15s", limit=1) == []
+
         for tf in ("3m", "5m", "15m", "30m", "1h", "4h", "1D"):
             assert cache.read_bars(_SYMBOL, _ACTIVE, tf, limit=1) == []
 

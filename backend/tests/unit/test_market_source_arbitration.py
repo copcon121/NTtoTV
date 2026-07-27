@@ -5,8 +5,10 @@ import asyncio
 import pytest
 
 from app.config import Settings
+from app.engines.alert_engine import Alert, MGANN_BREAK_LS
 from app.engines.contract_resolver import ContractResolver
 from app.models import BarUpdate, NormalizedTrade, OHLCVBar, Side
+from app.models.messages import EventType
 from app.models.timestamp import now_ms
 from app.pipeline import Pipeline
 from app.registry import WebSocketRegistry
@@ -323,6 +325,102 @@ def test_authoritative_bookmap_rollup_survives_next_raw_trade(tmp_path):
             106.0,
             65,
         )
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
+def test_authoritative_bookmap_closed_bar_emits_mgann_break_alert(tmp_path):
+    pipeline, cache, ticks, captured = _pipeline(tmp_path)
+    try:
+        pipeline.alert_engine.upsert(
+            Alert(
+                id="mgann-break",
+                symbol=_SYMBOL,
+                type=MGANN_BREAK_LS,
+                params={
+                    "repeat": True,
+                    "requireBigTrade": False,
+                    "bigTradeThreshold": 70,
+                    "timeframe": "1m",
+                    "minVolume": 0,
+                    "volumeLookback": 2,
+                    "volumeMultiplier": 2,
+                    "minSpreadTicks": 0,
+                    "spreadLookback": 2,
+                    "spreadMultiplier": 2,
+                    "swingSize": 1,
+                    "pivotLookbackBars": 20,
+                    "minPivotCuts": 1,
+                    "confirmationBars": 2,
+                    "breakTicks": 0,
+                },
+            )
+        )
+        live_now = now_ms()
+        bookmap = pipeline._feed_states["bookmap"]
+        bookmap.connected = True
+        bookmap.last_heartbeat_at = live_now
+        bookmap.healthy_since = live_now - 5_000
+        bookmap.contract = _SOURCE
+        bookmap.bar_ready = True
+        pipeline._active_feed = "bookmap"
+
+        async def send_bar(
+            index: int,
+            open_: float,
+            high: float,
+            low: float,
+            close: float,
+            volume: int,
+        ) -> None:
+            bar_time = _BASE + index * 60_000
+            await pipeline.on_bookmap_bar(
+                {
+                    "contract": _SOURCE,
+                    "tf": "1m",
+                    "time": bar_time,
+                    "bridgeTime": live_now + index,
+                    "lastEventTimeNanos": (bar_time + 59_000) * 1_000_000,
+                    "open": open_,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "volume": volume,
+                    "closed": True,
+                    "partialStart": False,
+                    "snapshot": False,
+                }
+            )
+
+        async def run():
+            for index, bar in enumerate(
+                [
+                    (100.0, 100.2, 99.5, 100.0, 100),
+                    (100.0, 101.0, 98.5, 99.0, 100),
+                    (99.0, 99.5, 97.0, 98.0, 100),
+                    (98.0, 100.0, 97.5, 98.8, 100),
+                    (98.8, 99.0, 96.0, 96.5, 100),
+                    (96.5, 102.5, 96.0, 102.2, 500),
+                ]
+            ):
+                await send_bar(index, *bar)
+
+        asyncio.run(run())
+
+        alerts = [
+            event.payload
+            for event in captured
+            if event.event_type == EventType.ALERT_EVENT
+        ]
+        assert len(alerts) == 1
+        assert alerts[0]["alertId"] == "mgann-break"
+        assert alerts[0]["alertType"] == MGANN_BREAK_LS
+        assert alerts[0]["direction"] == 1
+        assert "Break L internal CHoCH" in alerts[0]["message"]
+        rows = cache.read_alert_events("mgann-break")
+        assert [row.time for row in rows] == [_BASE + 5 * 60_000]
     finally:
         ticks.close()
         cache.close()

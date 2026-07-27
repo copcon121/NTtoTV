@@ -143,6 +143,7 @@ const SOCKET_TRANSITION_TIMEOUT_MS = 10_000;
 const DISCONNECT_STATUS_DEBOUNCE_MS = 1_500;
 const DEGRADED_STATUS_TTL_MS = 8_000;
 const PROFILE_TIMEFRAMES = new Set<Timeframe>([
+  "15s",
   "1m",
   "3m",
   "5m",
@@ -163,6 +164,7 @@ function normalizeChartBackgroundColor(value: unknown): string {
 }
 
 const TIMEFRAME_RANK: Record<Timeframe, number> = {
+  "15s": 0.25,
   "1m": 1,
   "3m": 3,
   "5m": 5,
@@ -199,6 +201,7 @@ const EMPTY_SMC_AI_SIGNALS: readonly SmcAiSignalMarker[] = [];
 const EMPTY_ALERT_SIGNAL_MARKERS: readonly AlertSignalMarker[] = [];
 const EMPTY_FOOTPRINT_BARS: ReadonlyMap<number, FootprintBar> = new Map();
 const EMPTY_FVG_SIGNALS: ReadonlyMap<number, FvgSignalUpdateMessage> = new Map();
+const SUB_MINUTE_HISTORY_FALLBACK_TF: Timeframe = "1m";
 const DEFERRED_INDICATOR_LOAD_MS = 75;
 const DEFERRED_OVERLAY_LOAD_MS = 250;
 const REALTIME_OVERLAY_CATCH_UP_MS = 10_000;
@@ -1708,7 +1711,7 @@ export function appShellClassName(chartFocusMode: boolean): string {
 }
 
 export function bigTradesEnabledForTimeframe(timeframe: Timeframe): boolean {
-  return timeframe === "1m";
+  return timeframe === "15s" || timeframe === "1m";
 }
 
 export function outsideBarSettingsForTimeframe(
@@ -2699,12 +2702,22 @@ export function LiveApp() {
     let deltaTimer: number | undefined;
     void (async () => {
       try {
-        const history = await historyLoader.current!.load({
+        let history = await historyLoader.current!.load({
           symbol: SYMBOL,
           contract,
           timeframe,
           limit: INITIAL_HISTORY_LIMIT,
         });
+        let indicatorTimeframe = timeframe;
+        if (timeframe === "15s" && history.bars.length === 0) {
+          history = await historyLoader.current!.load({
+            symbol: SYMBOL,
+            contract,
+            timeframe: SUB_MINUTE_HISTORY_FALLBACK_TF,
+            limit: INITIAL_HISTORY_LIMIT,
+          });
+          indicatorTimeframe = SUB_MINUTE_HISTORY_FALLBACK_TF;
+        }
         if (!cancelled) {
           setLoadedSeriesKey(requestedSeriesKey);
           setBars(history.bars);
@@ -2716,7 +2729,7 @@ export function LiveApp() {
                 const delta = await api.volumeDelta(
                   SYMBOL,
                   contract,
-                  timeframe,
+                  indicatorTimeframe,
                   INITIAL_VOLUME_DELTA_LIMIT,
                 );
                 if (!cancelled) {

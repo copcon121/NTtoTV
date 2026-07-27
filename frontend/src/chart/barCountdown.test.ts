@@ -11,6 +11,7 @@ import {
 
 describe("bar countdown", () => {
   it("maps chart timeframes to their bar durations", () => {
+    expect(barDurationForTimeframe("15s")).toBe(15_000);
     expect(barDurationForTimeframe("1m")).toBe(60_000);
     expect(barDurationForTimeframe("15m")).toBe(15 * 60_000);
     expect(barDurationForTimeframe("4h")).toBe(4 * 60 * 60_000);

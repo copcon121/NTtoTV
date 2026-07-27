@@ -8,7 +8,7 @@ timeframe and produces :class:`~app.models.messages.BarUpdate` outputs carrying 
 
 Bucketization (Requirements 9.1, 9.4, 9.5):
 
-* Bars are computed for the timeframes ``1m, 3m, 5m, 15m, 30m, 1h, 4h, 1D``.
+* Bars are computed for the timeframes ``15s, 1m, 3m, 5m, 15m, 30m, 1h, 4h, 1D``.
 * Bucket boundaries are derived from the Canonical_Timestamp (integer ms since
   the Unix epoch in UTC). Intraday timeframes floor to UTC interval multiples;
   ``4h`` and ``1D`` floor to the GC trading-session grid, Sunday 17:00 CT
@@ -48,7 +48,17 @@ from app.models.messages import BarUpdate, OHLCVBar
 __all__ = ["SUPPORTED_TFS", "BarAggregator"]
 
 # Supported timeframes, finest to coarsest. (Req 9.1)
-SUPPORTED_TFS: list[str] = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1D"]
+SUPPORTED_TFS: list[str] = [
+    "15s",
+    "1m",
+    "3m",
+    "5m",
+    "15m",
+    "30m",
+    "1h",
+    "4h",
+    "1D",
+]
 
 
 def _copy_bar(bar: OHLCVBar) -> OHLCVBar:

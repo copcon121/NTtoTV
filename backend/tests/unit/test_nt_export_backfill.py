@@ -199,7 +199,7 @@ def test_import_nt_export_derived_cache_writes_bars_and_delta_only(tmp_path: Pat
 
     cache = CacheStore(tmp_path / "app.sqlite")
     try:
-        for tf in ("1m", "3m", "5m", "15m", "30m", "1h", "4h", "1D"):
+        for tf in ("15s", "1m", "3m", "5m", "15m", "30m", "1h", "4h", "1D"):
             assert cache.read_bars(_SYMBOL, _CHART_CONTRACT, tf)
             assert cache.read_volume_delta(_SYMBOL, _CHART_CONTRACT, tf)
 

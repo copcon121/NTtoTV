@@ -617,6 +617,8 @@ class Pipeline:
             await asyncio.to_thread(self._persist_derived_batch, updates, [], [], [])
             for source_update in updates:
                 await self._enqueue(OutboundEvent.from_message(source_update))
+            if not snapshot:
+                await self._evaluate_bookmap_bar_alerts(updates, received)
 
     # -- engine fan-out --------------------------------------------------------
 
@@ -631,8 +633,9 @@ class Pipeline:
         source_bar_updates = self._source_bars[source].on_trade(trade)
         self._remember_source_updates(source, source_bar_updates)
         bar_updates = source_bar_updates if active else []
+        use_trade_built_bar_alerts = source != "bookmap"
         for update in bar_updates:
-            if update.closed:
+            if update.closed and use_trade_built_bar_alerts:
                 closed_bars[update.tf] = update
                 if update.tf == _ALERT_BAR_TF:
                     alert_ctx_bar = update
@@ -812,6 +815,44 @@ class Pipeline:
             )
             await self._emit_alerts(self._alerts.evaluate(bt_ctx))
 
+    async def _evaluate_bookmap_bar_alerts(
+        self,
+        updates: list[BarUpdate],
+        event_time: int,
+    ) -> None:
+        """Evaluate bar-close alerts from authoritative Bookmap bar snapshots."""
+        for update in updates:
+            if not update.closed:
+                continue
+            bar = update.bar
+            breakout_events: list[BreakoutBoxEvent] = []
+            if update.tf == _ALERT_BAR_TF:
+                breakout_events = self._breakout.on_closed_bar(
+                    symbol=update.symbol,
+                    contract=update.contract,
+                    time=bar.time,
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                )
+            ctx = MarketContext(
+                symbol=update.symbol,
+                contract=update.contract,
+                time=event_time,
+                bar_closed=True,
+                bar_tf=update.tf,
+                bar_time=bar.time,
+                bar_open=bar.open,
+                bar_high=bar.high,
+                bar_low=bar.low,
+                bar_close=bar.close,
+                bar_volume=bar.volume,
+                breakout_events=breakout_events or None,
+            )
+            await self._emit_alerts(self._alerts.evaluate(ctx))
+
     # -- persistence -----------------------------------------------------------
 
     def _persist_derived_batch(
@@ -903,7 +944,7 @@ class Pipeline:
 
         updates = [minute_update]
         for tf in SUPPORTED_TFS:
-            if tf == "1m":
+            if TF_MS[tf] <= TF_MS["1m"]:
                 continue
             bucket = timeframe_bucket_start(minute_update.bar.time, tf)
             end = bucket + TF_MS[tf] - 1

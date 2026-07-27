@@ -305,7 +305,8 @@ describe("live chart series identity", () => {
     );
   });
 
-  it("enables BigTrade overlays only on 1m", () => {
+  it("enables BigTrade overlays only on the lowest intraday frames", () => {
+    expect(bigTradesEnabledForTimeframe("15s")).toBe(true);
     expect(bigTradesEnabledForTimeframe("1m")).toBe(true);
     expect(bigTradesEnabledForTimeframe("5m")).toBe(false);
     expect(bigTradesEnabledForTimeframe("1D")).toBe(false);
@@ -352,6 +353,7 @@ describe("live chart series identity", () => {
     };
 
     expect(drawingVisibleOnTimeframe(m5Drawing, "5m")).toBe(true);
+    expect(drawingVisibleOnTimeframe(m5Drawing, "15s")).toBe(true);
     expect(drawingVisibleOnTimeframe(m5Drawing, "15m")).toBe(false);
     expect(drawingVisibleOnTimeframe(m15Drawing, "5m")).toBe(true);
     expect(drawingVisibleOnTimeframe(m15Drawing, "15m")).toBe(true);

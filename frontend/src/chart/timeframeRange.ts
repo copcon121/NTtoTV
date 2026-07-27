@@ -3,6 +3,7 @@ import type { AnchorPoint } from "./drawings/types";
 import { barDurationForTimeframe } from "./barCountdown";
 
 const TIMEFRAME_DISPLAY_OFFSET_MS: Record<Timeframe, number> = {
+  "15s": 0,
   "1m": 0,
   "3m": 0,
   "5m": 0,

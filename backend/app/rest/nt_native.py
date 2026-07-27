@@ -45,7 +45,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/nt", tags=["nt-native"])
 
-ROLLUP_TFS = tuple(tf for tf in SUPPORTED_TFS if tf != FOOTPRINT_TIMEFRAME)
+ROLLUP_TFS = tuple(
+    tf for tf in SUPPORTED_TFS if TF_MS[tf] > TF_MS[FOOTPRINT_TIMEFRAME]
+)
 
 
 @router.post("/native-bar")

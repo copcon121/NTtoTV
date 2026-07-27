@@ -3,7 +3,7 @@ import type { Timeframe } from "../socket/messages";
 /**
  * TimeframeSelector — selects the active bar aggregation interval.
  *
- * Presents the supported timeframes (1m, 3m, 5m, 15m, 30m, 1h, 4h, 1D from the
+ * Presents the supported timeframes (15s, 1m, 3m, 5m, 15m, 30m, 1h, 4h, 1D from the
  * design Glossary) as a row of buttons and calls back when the user picks one.
  * Purely presentational: the parent owns the `value` state and reacts to
  * `onChange` (e.g. to switch the chart series via the MemoryCache).
@@ -14,6 +14,7 @@ import type { Timeframe } from "../socket/messages";
 
 /** The supported timeframes in display order (design Glossary: Timeframe). */
 export const TIMEFRAMES: readonly Timeframe[] = [
+  "15s",
   "1m",
   "3m",
   "5m",

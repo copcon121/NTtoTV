@@ -6,8 +6,18 @@ describe("TimeframeSelector", () => {
   it("renders the full supported timeframe set in order (Req 9.1)", () => {
     render(<TimeframeSelector value="1m" onChange={() => {}} />);
     const labels = screen.getAllByRole("radio").map((b) => b.textContent);
-    expect(labels).toEqual(["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1D"]);
-    expect(TIMEFRAMES).toHaveLength(8);
+    expect(labels).toEqual([
+      "15s",
+      "1m",
+      "3m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "4h",
+      "1D",
+    ]);
+    expect(TIMEFRAMES).toHaveLength(9);
   });
 
   it("marks the active timeframe as checked", () => {
