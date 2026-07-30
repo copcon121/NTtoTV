@@ -37,14 +37,14 @@ bookmap-bridge\build\market-data\NTtoTV-Bookmap-Market-Data-Live.jar
 ```
 
 Load that JAR through Bookmap's add-on manager and attach
-`NTtoTV Bookmap Market Data Live` to `GCQ6.COMEX@RITHMIC`.
+`NTtoTV Bookmap Market Data Live` to `GCV6.COMEX@RITHMIC`.
 
 ## Export location
 
 Default:
 
 ```text
-_run_logs\bookmap-market-data\GCQ6_COMEX_RITHMIC-v2-YYYY-MM-DD.jsonl
+_run_logs\bookmap-market-data\GCV6_COMEX_RITHMIC-v2-YYYY-MM-DD.jsonl
 ```
 
 The `v2` suffix keeps display-price exports separate from the initial diagnostic
@@ -64,7 +64,7 @@ After at least several complete one-minute bars:
 
 ```powershell
 backend\.venv\Scripts\python.exe scripts\compare_bookmap_nt_footprint.py `
-  --jsonl _run_logs\bookmap-market-data\GCQ6_COMEX_RITHMIC-v2-2026-07-22.jsonl `
+  --jsonl _run_logs\bookmap-market-data\GCV6_COMEX_RITHMIC-v2-2026-07-22.jsonl `
   --db backend\data\app.sqlite `
   --symbol GC --contract GC --tf 1m --tick-size 0.1
 ```

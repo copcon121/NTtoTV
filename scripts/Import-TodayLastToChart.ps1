@@ -20,7 +20,7 @@ $repoRoot = (Resolve-Path -LiteralPath (Join-Path $scriptDir "..")).Path
 $importScript = Join-Path $scriptDir "Import-NtGap.ps1"
 
 if ([string]::IsNullOrWhiteSpace($Last)) {
-    $Last = Join-Path $repoRoot "export data\GC 08-26-5-6.Last.txt"
+    $Last = Join-Path $repoRoot "export data\GC 12-26-5-6.Last.txt"
 }
 if (-not (Test-Path -LiteralPath $Last)) {
     throw "Last export not found: $Last"

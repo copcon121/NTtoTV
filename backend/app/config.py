@@ -34,7 +34,7 @@ DEFAULT_OPENAI_BASE_URL = "http://43.228.214.251:20128/v1"
 # entry until auto-resolution (Contract_Resolver, task 9.x) or a manual override
 # selects another. Kept here so the symbols/contracts endpoints (task 10.1) can
 # stand alone before the resolver is wired in.
-DEFAULT_GC_CANDIDATE_CONTRACTS = ("GC 02-26", "GC 04-26", "GC 06-26", "GC 08-26")
+DEFAULT_GC_CANDIDATE_CONTRACTS = ("GC 06-26", "GC 08-26", "GC 10-26", "GC 12-26")
 
 
 @dataclass(frozen=True)

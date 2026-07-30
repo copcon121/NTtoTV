@@ -19,16 +19,17 @@ He thong gom 3 phan:
 
 Symbol hien tai la `GC`. Frontend chart dung logical chart contract `GC`, khong
 con contract selector tren UI. NT source contract thuc te co the la
-`GC 08-26`, `GC 06-26`, etc.; backend normalize derived chart/cache ve key
+`GC 12-26`, `GC 10-26`, etc.; backend normalize derived chart/cache ve key
 `contract="GC"` trong khi raw tick van giu contract that.
 
 ## Trang Thai Contract Hien Tai
 
 - Backend default candidates nam trong `backend/app/config.py`:
-  `("GC 02-26", "GC 04-26", "GC 06-26", "GC 08-26")`.
-- Runtime default pin active source ve candidate cuoi, hien tai `GC 08-26`.
-- `nt-addon/ninjascript/gc-chart-bridge.json` cung pin
-  `"manualContractOverride": "GC 08-26"`.
+  `("GC 06-26", "GC 08-26", "GC 10-26", "GC 12-26")`.
+- Bookmap bridge dung GCV6 (GC 10-26) lam source contract.
+- NT AddOn dung GC 12-26 lam source contract.
+- `nt-addon/ninjascript/gc-chart-bridge.json` pin
+  `"manualContractOverride": "GC 12-26"`.
 - Pipeline chi chart/cache realtime mot source contract active. Trade/quote tu
   contract khac van co the duoc raw-record, nhung khong duoc dua vao
   bar/delta/footprint chart neu khong phai source active.
@@ -36,7 +37,7 @@ con contract selector tren UI. NT source contract thuc te co the la
   co the switch source de ho tro doi contract ben NT.
 
 Quan trong: dung key `contract=GC` khi doc chart history/order-flow tu
-frontend/cache. Dung contract thuc (`GC 08-26`) khi doc raw tick shards.
+frontend/cache. Dung contract thuc (`GC 12-26`) khi doc raw tick shards.
 
 ## Thu Muc Chinh
 
@@ -156,7 +157,7 @@ Networking rule:
   1m bars to `POST /api/nt/native-bar` for authoritative volume delta and
   footprint cache.
 - `ninjascript/gc-chart-bridge.json`: matching config, currently pins
-  `GC 08-26`.
+  `GC 12-26`.
 
 Deployed NT paths used on this machine:
 
@@ -363,7 +364,7 @@ GUI import:
 .\IMPORT_NT_EXPORT.cmd
 ```
 
-Last-only import for current `GC 08-26-5-6.Last.txt`:
+Last-only import for current `GC 12-26-5-6.Last.txt`:
 
 ```powershell
 .\IMPORT_TODAY_LAST_TO_CHART.cmd
@@ -377,8 +378,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Import-TodayLastToCh
 
 What this does:
 
-- Defaults to `export data\GC 08-26-5-6.Last.txt`.
-- Infers source contract from filename (`GC 08-26`).
+- Defaults to `export data\GC 12-26-5-6.Last.txt`.
+- Infers source contract from filename (`GC 12-26`).
 - Writes derived chart cache under `contract=GC`.
 - Skips raw Bid/Ask import.
 - Clears existing bars + volume delta in the imported range unless `-NoClear`
@@ -387,7 +388,7 @@ What this does:
 General NT gap import:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Import-NtGap.ps1 -Contract "GC 08-26" -Last "<path.Last.txt>" -SkipRecentRaw -ClearDerivedRange
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Import-NtGap.ps1 -Contract "GC 12-26" -Last "<path.Last.txt>" -SkipRecentRaw -ClearDerivedRange
 ```
 
 Raw recent import only happens when a complete Last/Bid/Ask set is present and
@@ -489,7 +490,7 @@ Frontend frozen / no data:
 
 1. Check backend: `GET /api/health`.
 2. Check public frontend/domain: `https://gcflowpy.xyz/`.
-3. Check `/api/contracts?symbol=GC`; active should normally be `GC 08-26`.
+3. Check `/api/contracts?symbol=GC`; active should normally be `GC 12-26`.
 4. Check `/api/history?symbol=GC&contract=GC&tf=1m&limit=5`.
 5. Check backend log for `/ws/nt` and `/ws/chart` accepted connections.
 6. If NT source changed, ensure NT AddOn config/manual override and backend
@@ -498,7 +499,7 @@ Frontend frozen / no data:
 Bar stream looks wrong:
 
 1. Suspect multiple source contracts merging.
-2. Verify active source is `GC 08-26`.
+2. Verify active source is `GC 12-26`.
 3. Raw shards may still receive quotes from old contracts; that is acceptable
    if chart/cache only moves with active source.
 4. If cache already has bad rows, clear or re-import only affected bar/delta
@@ -534,8 +535,9 @@ After the latest fixes:
   `NTTOTV_MARKET_DATA_PREFERRED_SOURCE=bookmap`.
 - Realtime OHLCV and BigTrade prefer Bookmap; NT remains warm as the automatic
   fallback and continues to own native volume delta, footprint, and FVG.
-- Active REST contract is `GC 08-26`; chart cache key is `GC`.
-- Last-only file `export data\GC 08-26-5-6.Last.txt` was imported into chart
+- Bookmap active source is GCV6 (`GC 10-26`); NT active source is `GC 12-26`;
+  chart cache key is `GC`.
+- Last-only file `export data\GC 12-26-5-6.Last.txt` was imported into chart
   cache as bars + volume delta.
 - Backend focused tests passed: resolver, control-plane, NT export backfill,
   pipeline wiring, REST contracts.

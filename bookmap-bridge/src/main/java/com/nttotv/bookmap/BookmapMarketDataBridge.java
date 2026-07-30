@@ -211,7 +211,7 @@ public class BookmapMarketDataBridge implements
         stringField(sb, "type", "trade", true);
         stringField(sb, "source", "bookmap", true);
         stringField(sb, "symbol", env("NTTOTV_BOOKMAP_SYMBOL", "GC"), true);
-        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 08-26"), true);
+        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 10-26"), true);
         stringField(sb, "sourceContract", alias, true);
         stringField(sb, "alias", alias, true);
         numberField(sb, "time", Long.toString(timeMs), true);
@@ -242,7 +242,7 @@ public class BookmapMarketDataBridge implements
         stringField(sb, "type", "heartbeat", true);
         stringField(sb, "source", "bookmap", true);
         stringField(sb, "symbol", env("NTTOTV_BOOKMAP_SYMBOL", "GC"), true);
-        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 08-26"), true);
+        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 10-26"), true);
         stringField(sb, "alias", alias, true);
         numberField(sb, "time", Long.toString(timeMs), true);
         numberField(sb, "timeNanos", Long.toString(timeNanos), true);
@@ -302,7 +302,7 @@ public class BookmapMarketDataBridge implements
         stringField(sb, "type", "bar", true);
         stringField(sb, "source", "bookmap", true);
         stringField(sb, "symbol", env("NTTOTV_BOOKMAP_SYMBOL", "GC"), true);
-        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 08-26"), true);
+        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 10-26"), true);
         stringField(sb, "sourceContract", alias, true);
         stringField(sb, "alias", alias, true);
         stringField(sb, "tf", "1m", true);

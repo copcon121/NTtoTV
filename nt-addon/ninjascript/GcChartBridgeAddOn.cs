@@ -19,7 +19,7 @@
 //
 // CONFIG (optional): Documents\NinjaTrader 8\gc-chart-bridge.json
 //   {
-//     "candidateContracts": ["GC 06-26", "GC 08-26", "GC 12-26"],
+//     "candidateContracts": ["GC 06-26", "GC 08-26", "GC 10-26", "GC 12-26"],
 //     "backendHost": "127.0.0.1",
 //     "backendPort": 8000,
 //     "backendPath": "/ws/nt",
@@ -133,7 +133,7 @@ namespace NinjaTrader.NinjaScript.AddOns.GcChartBridge
     // -------------------------------------------------------------------------
     internal sealed class GcBridgeConfig
     {
-        public List<string> CandidateContracts = new List<string> { "GC 08-26", "GC 10-26", "GC 12-26" };
+        public List<string> CandidateContracts = new List<string> { "GC 10-26", "GC 12-26" };
         public string BackendHost = "127.0.0.1";
         public int BackendPort = 8000;
         public string BackendPath = "/ws/nt";
