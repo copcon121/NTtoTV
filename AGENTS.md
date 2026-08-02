@@ -26,7 +26,7 @@ con contract selector tren UI. NT source contract thuc te co the la
 
 - Backend default candidates nam trong `backend/app/config.py`:
   `("GC 06-26", "GC 08-26", "GC 10-26", "GC 12-26")`.
-- Bookmap bridge dung GCV6 (GC 10-26) lam source contract.
+- Bookmap bridge dung GCZ6 (GC 12-26) lam source contract.
 - NT AddOn dung GC 12-26 lam source contract.
 - `nt-addon/ninjascript/gc-chart-bridge.json` pin
   `"manualContractOverride": "GC 12-26"`.
@@ -154,8 +154,9 @@ Networking rule:
   for deployment by copying into NinjaTrader custom AddOns.
 - `ninjascript/NTtoTVNativeDiagnostics.cs`: chart-side native bridge/diagnostic
   indicator. It uses chart OHLCV plus NT Volumetric data and posts finalized
-  1m bars to `POST /api/nt/native-bar` for authoritative volume delta and
-  footprint cache.
+  1m bars to `POST /api/nt/native-bar`. Those delta/footprint rows are accepted
+  only while NT is the active fallback; NT native footprint remains the FVG
+  grader input.
 - `ninjascript/gc-chart-bridge.json`: matching config, currently pins
   `GC 12-26`.
 
@@ -176,20 +177,25 @@ Current NinjaScript behavior:
   first candidate).
 - Backend also sends control-plane subscribe/unsubscribe commands on `/ws/nt`
   connect to keep stale multi-contract subscriptions from merging into chart.
-- The AddOn tick stream remains the realtime source for raw ticks and BigTrade.
-- The native chart indicator is the source of truth for finalized 1m OHLCV,
-  volume delta, and footprint ladder. Default bridge behavior posts only
-  realtime closed bars, not historical reloads, to avoid a large startup burst.
+- The AddOn tick stream remains warm for raw ticks and the automatic NT fallback.
+  While Bookmap is active, NT ticks are raw-recorded but cannot overwrite shared
+  chart/order-flow cache keys.
+- Bookmap is the primary realtime source for OHLCV, BigTrade, Volume Delta, and
+  Footprint. Its exchange-side trades update delta/footprint tick by tick; full
+  1m ladder snapshots reconcile reconnects and transport gaps.
+- The native chart indicator supplies finalized 1m delta/footprint only while NT
+  is the selected fallback. Default behavior posts realtime closed bars, not
+  historical reloads, to avoid a large startup burst.
 - FVG Signal Grader candle colors are also driven from the native finalized
   footprint path. The live AddOn tick pipeline does not emit FVG grader updates
   in production runtime, preventing old bid/ask-snapshot FVG signals from
   racing the native source. The tick FVG engine may still run internally for
   existing breakout/FVG confluence alert context, but it does not write the
   chart color cache.
-- Expected native-bridge latency is one finalized-bar update per minute:
+- Expected NT fallback native-bridge latency is one finalized-bar update per minute:
   localhost HTTP + SQLite upsert + websocket broadcast after NT closes the bar.
-  This keeps footprint/delta stable and avoids backend bid/ask snapshot
-  misclassification, but footprint/delta are not tick-by-tick realtime.
+  Bookmap-primary footprint/delta is tick-by-tick internally and UI-broadcast
+  through the normal websocket throttle.
 
 ## Commands
 
@@ -384,6 +390,9 @@ What this does:
 - Skips raw Bid/Ask import.
 - Clears existing bars + volume delta in the imported range unless `-NoClear`
   is supplied.
+- This direct cache import is independent of live source arbitration, so it
+  remains the supported way to repair missing history while Bookmap is primary.
+  The normal Last-only workflow does not reconstruct historical footprint rows.
 
 General NT gap import:
 
@@ -533,9 +542,10 @@ After the latest fixes:
   `NTTOTV_MT5_BACKEND=real`, `NTTOTV_TRADING_ENABLED=1`,
   `NTTOTV_LIVE_TRADING_ENABLED=1`, `NTTOTV_INVITE_CODE=join-9999`,
   `NTTOTV_MARKET_DATA_PREFERRED_SOURCE=bookmap`.
-- Realtime OHLCV and BigTrade prefer Bookmap; NT remains warm as the automatic
-  fallback and continues to own native volume delta, footprint, and FVG.
-- Bookmap active source is GCV6 (`GC 10-26`); NT active source is `GC 12-26`;
+- Realtime OHLCV, BigTrade, volume delta, and footprint prefer Bookmap; NT stays
+  warm and owns those shared keys only while selected as the automatic fallback.
+  FVG grading remains driven by finalized NT native footprint rows.
+- Bookmap active source is GCZ6 (`GC 12-26`); NT active source is `GC 12-26`;
   chart cache key is `GC`.
 - Last-only file `export data\GC 12-26-5-6.Last.txt` was imported into chart
   cache as bars + volume delta.

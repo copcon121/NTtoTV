@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.engines.volume_delta_engine import VolumeDeltaEngine
-from app.models.canonical import NormalizedTrade
+from app.models.canonical import NormalizedTrade, Side
 from app.models.timestamp import to_canonical_ms
 
 SYMBOL = "GC"
@@ -26,6 +26,7 @@ def _trade(
     *,
     bid: float | None = None,
     ask: float | None = None,
+    side: Side | None = None,
 ) -> NormalizedTrade:
     return NormalizedTrade(
         symbol=SYMBOL,
@@ -38,6 +39,7 @@ def _trade(
         best_bid=None,
         best_ask=None,
         sequence=sequence,
+        side=side,
     )
 
 
@@ -70,3 +72,27 @@ def test_seed_bar_continues_current_delta_bucket_after_restart():
     assert update.delta_low == -1
     assert update.open_delta == 2
     assert update.close_delta == 6
+
+
+@pytest.mark.unit
+def test_explicit_aggressor_side_overrides_quote_and_tick_inference():
+    engine = VolumeDeltaEngine(zero_baseline=True)
+    base = _ms(2025, 1, 2, 3, 4, 0)
+
+    first = engine.on_trade(
+        _trade(base + 1_000, 100.0, 7, side=Side.SELL, ask=100.0)
+    )
+    update = engine.on_trade(
+        _trade(base + 2_000, 99.9, 11, side=Side.BUY, bid=99.9)
+    )
+
+    assert first is not None
+    assert first.open_delta == 0
+    assert first.delta_high == 0
+    assert first.delta_low == -7
+    assert update is not None
+    assert update.buy_volume == 11
+    assert update.sell_volume == 7
+    assert update.delta == 4
+    assert update.delta_high == 4
+    assert update.delta_low == -7

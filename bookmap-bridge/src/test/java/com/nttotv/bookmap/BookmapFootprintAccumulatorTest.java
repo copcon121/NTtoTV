@@ -45,6 +45,29 @@ public final class BookmapFootprintAccumulatorTest {
         assertEquals(3L, first.rows.get(1).bid, "bottom row bid");
         assertEquals(0L, first.rows.get(1).ask, "bottom row ask");
 
+        String barJson = BookmapMarketDataBridge.barJson(
+            first,
+            "GCZ6.COMEX@RITHMIC",
+            "GC",
+            "GC 12-26",
+            true,
+            false,
+            T0_MS + 60_010L,
+            9L
+        );
+        assertContains(barJson, "\"buyVolume\":2", "bar buy volume JSON");
+        assertContains(barJson, "\"sellVolume\":3", "bar sell volume JSON");
+        assertContains(barJson, "\"delta\":-1", "bar delta JSON");
+        assertContains(barJson, "\"deltaHigh\":2", "bar delta high JSON");
+        assertContains(barJson, "\"deltaLow\":-1", "bar delta low JSON");
+        assertContains(barJson, "\"openDelta\":0", "bar open delta JSON");
+        assertContains(barJson, "\"closeDelta\":-1", "bar close delta JSON");
+        assertContains(
+            barJson,
+            "\"rows\":[{\"price\":100.0,\"bid\":0,\"ask\":2}",
+            "bar ladder JSON"
+        );
+
         accumulator.onTimestamp((T0_MS + 60_100L) * 1_000_000L);
         accumulator.onTrade(1001.0, 4, true, true, true, false, "a2", "p3");
         accumulator.onTimestamp((T0_MS + 120_000L) * 1_000_000L);
@@ -81,6 +104,12 @@ public final class BookmapFootprintAccumulatorTest {
     private static void assertDouble(double expected, double actual, String message) {
         if (Math.abs(expected - actual) > 0.000000001) {
             throw new AssertionError(message + ": expected=" + expected + " actual=" + actual);
+        }
+    }
+
+    private static void assertContains(String value, String expected, String message) {
+        if (value == null || !value.contains(expected)) {
+            throw new AssertionError(message + ": missing=" + expected + " value=" + value);
         }
     }
 }

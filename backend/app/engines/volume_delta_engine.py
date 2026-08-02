@@ -8,8 +8,10 @@ it folds the classified volume into the current (in-progress) bar and produces a
 
 Classification (the ordered rule set, Requirements 13.2-13.5)
 -------------------------------------------------------------
-``classify(trade_price, bid, ask, last_side, prev_price)`` applies the rules in
-strict priority order, returning the first that matches:
+An explicit canonical aggressor ``side`` (for example from Bookmap) is
+authoritative.  When it is absent, ``classify(trade_price, bid, ask, last_side,
+prev_price)`` applies the rules in strict priority order, returning the first
+that matches:
 
 1. **bid/ask lean -- buy** (Req 13.2): ``ask`` is known and ``price >= ask``.
 2. **bid/ask lean -- sell** (Req 13.3): ``bid`` is known and ``price <= bid``.
@@ -116,6 +118,7 @@ class VolumeDeltaEngine:
         timeframe: str = DEFAULT_TIMEFRAME,
         mode: VolumeDeltaMode = VolumeDeltaMode.DELTA,
         min_trade_size: int = 0,
+        zero_baseline: bool = False,
     ) -> None:
         if timeframe not in _TF_MS:
             raise ValueError(f"unsupported timeframe: {timeframe!r}")
@@ -124,6 +127,7 @@ class VolumeDeltaEngine:
         self.timeframe = timeframe
         self.mode = mode
         self.min_trade_size = min_trade_size
+        self.zero_baseline = zero_baseline
 
         # Continuous classification state, keyed by contract.
         self._prev_price: dict[str, float] = {}
@@ -195,13 +199,18 @@ class VolumeDeltaEngine:
             # Out-of-order trade for an already-closed bucket: ignore it.
             return None
 
-        side = self.classify(
-            t.price,
-            t.bid,
-            t.ask,
-            self._last_side.get(t.contract),
-            self._prev_price.get(t.contract),
-        )
+        # Bookmap supplies the exchange aggressor side on every trade.  Prefer
+        # that canonical value over quote/tick inference; NT trades normally
+        # leave it unset and continue through the established rule set.
+        side = t.side
+        if side is None:
+            side = self.classify(
+                t.price,
+                t.bid,
+                t.ask,
+                self._last_side.get(t.contract),
+                self._prev_price.get(t.contract),
+            )
         # Advance continuous classification state.
         self._prev_price[t.contract] = t.price
         self._last_side[t.contract] = side
@@ -220,9 +229,9 @@ class VolumeDeltaEngine:
                 buy_volume=t.volume if side is Side.BUY else 0,
                 sell_volume=t.volume if side is Side.SELL else 0,
                 running_delta=signed,
-                delta_high=signed,
-                delta_low=signed,
-                open_delta=signed,
+                delta_high=max(0, signed) if self.zero_baseline else signed,
+                delta_low=min(0, signed) if self.zero_baseline else signed,
+                open_delta=0 if self.zero_baseline else signed,
             )
             self._bar[t.contract] = bar
         else:

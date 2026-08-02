@@ -8,6 +8,8 @@ Covers ``GET /api/orderflow/volume-delta`` (Req 18.5), ``GET /api/orderflow/foot
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -116,6 +118,90 @@ def test_volume_delta_chart_contract_alias_is_accepted(env):
     assert body["contract"] == "GC"
     assert body["source"] == "cache"
     assert body["bars"][0]["delta"] == 2
+
+
+@pytest.mark.integration
+def test_volume_delta_cache_miss_rebuilds_active_bookmap_source_only(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path,
+        supported_symbols=(_SYMBOL,),
+        gc_candidate_contracts=_CANDIDATES,
+    )
+    cache = CacheStore(tmp_path / "app.sqlite")
+    state = ContractStateStore(cache, settings=settings)
+    tick_store = TickStore(tmp_path / "ticks")
+    status = SimpleNamespace(active_source="bookmap", preferred_source="bookmap")
+    pipeline = SimpleNamespace(market_data_status_message=lambda: status)
+    app = create_app(lifespan=False)
+    app.state.contract_state = state
+    app.state.tick_store = tick_store
+    app.state.runtime = SimpleNamespace(pipeline=pipeline)
+    try:
+        tick_store.record_trade(
+            NormalizedTrade(
+                symbol=_SYMBOL,
+                contract=_ACTIVE,
+                time=_BASE_MS + 1_000,
+                price=2300.0,
+                volume=99,
+                bid=2300.0,
+                ask=2300.1,
+                best_bid=2300.0,
+                best_ask=2300.1,
+                sequence=1,
+                source="nt",
+            )
+        )
+        for sequence, (volume, side) in enumerate(
+            ((7, Side.SELL), (3, Side.BUY)), start=1
+        ):
+            tick_store.record_trade(
+                NormalizedTrade(
+                    symbol=_SYMBOL,
+                    contract=_ACTIVE,
+                    time=_BASE_MS + sequence * 1_000,
+                    price=2400.0 + sequence * 0.1,
+                    volume=volume,
+                    bid=None,
+                    ask=None,
+                    best_bid=None,
+                    best_ask=None,
+                    sequence=sequence,
+                    source="bookmap",
+                    side=side,
+                )
+            )
+
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/orderflow/volume-delta",
+                params={
+                    "symbol": _SYMBOL,
+                    "contract": _SYMBOL,
+                    "tf": "1m",
+                    "from": _BASE_MS,
+                    "to": _BASE_MS + _MINUTE_MS,
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["source"] == "rebuild"
+        assert response.json()["bars"] == [
+            {
+                "time": _BASE_MS,
+                "volume": 10,
+                "buyVolume": 3,
+                "sellVolume": 7,
+                "delta": -4,
+                "deltaHigh": 0,
+                "deltaLow": -7,
+                "openDelta": 0,
+                "closeDelta": -4,
+            }
+        ]
+    finally:
+        tick_store.close()
+        cache.close()
 
 
 @pytest.mark.integration

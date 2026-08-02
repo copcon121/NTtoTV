@@ -1,14 +1,15 @@
 """NinjaTrader native chart bridge ingest.
 
-Receives finalized chart-side bars from the NTtoTVNativeDiagnostics/bridge
-indicator. These rows are sourced from NinjaTrader chart OHLCV and native
-Volumetric/OrderFlow data, so they are authoritative for bar volume, delta, and
-footprint cache. The existing AddOn tick stream remains useful for raw ticks and
-BigTrade reconstruction.
+Receives finalized chart-side bars from the NTtoTVNativeDiagnostics/bridge.
+Realtime NT delta/footprint is authoritative only while NT is the selected
+fallback feed. Historical gaps continue through the existing NT-export import
+workflow, which writes cache rows directly. FVG grading continues to use NT
+native footprint rows.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from typing import Any
@@ -154,18 +155,33 @@ async def ingest_native_bar(
         close_delta=close_delta,
     )
 
-    rollup_delta_updates = _persist_native_payload(
-        runtime.cache,
-        bar_update=bar_update,
-        volume_delta_update=volume_delta_update,
-        footprint_update=footprint_update,
-    )
+    pipeline = runtime.pipeline
+    acceptor = getattr(pipeline, "accept_nt_native_orderflow", None)
+    lock = getattr(pipeline, "derived_source_lock", None)
+    if lock is not None:
+        await lock.acquire()
+    try:
+        orderflow_accepted = (
+            True if acceptor is None else bool(acceptor())
+        )
+        rollup_delta_updates: list[VolumeDeltaUpdate] = []
+        if orderflow_accepted:
+            rollup_delta_updates = await asyncio.to_thread(
+                _persist_native_payload,
+                runtime.cache,
+                bar_update=bar_update,
+                volume_delta_update=volume_delta_update,
+                footprint_update=footprint_update,
+            )
 
-    runtime.registry.enqueue(OutboundEvent.from_message(volume_delta_update))
-    if footprint_update is not None:
-        runtime.registry.enqueue(OutboundEvent.from_message(footprint_update))
-    for update in rollup_delta_updates:
-        runtime.registry.enqueue(OutboundEvent.from_message(update))
+            runtime.registry.enqueue(OutboundEvent.from_message(volume_delta_update))
+            if footprint_update is not None:
+                runtime.registry.enqueue(OutboundEvent.from_message(footprint_update))
+            for update in rollup_delta_updates:
+                runtime.registry.enqueue(OutboundEvent.from_message(update))
+    finally:
+        if lock is not None:
+            lock.release()
 
     fvg_updates: list[FvgSignalUpdate] = []
     # FVG grading uses only finalized native footprint rows. If NT does not
@@ -188,7 +204,7 @@ async def ingest_native_bar(
         for update in fvg_updates:
             runtime.registry.enqueue(OutboundEvent.from_message(update))
 
-    return {
+    response = {
         "ok": True,
         "symbol": symbol,
         "contract": contract,
@@ -197,7 +213,11 @@ async def ingest_native_bar(
         "rows": 0 if footprint_update is None else len(footprint_update.rows),
         "fvgSignals": len(fvg_updates),
         "source": "nt_native",
+        "orderFlowAccepted": orderflow_accepted,
     }
+    if not orderflow_accepted:
+        response["ignored"] = "inactive_market_source"
+    return response
 
 
 def _update_native_fvg(
@@ -447,24 +467,11 @@ def _persist_native_payload(
         close_delta=volume_delta_update.close_delta,
     )
 
-    if footprint_update is not None:
-        def write(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                "DELETE FROM footprint_levels "
-                "WHERE symbol=? AND contract=? AND timeframe=? AND time=?",
-                (
-                    footprint_update.symbol,
-                    footprint_update.contract,
-                    footprint_update.tf,
-                    footprint_update.time,
-                ),
-            )
-
-        cache.writer.write(write)
     cache.upsert_derived_batch(
         volume_deltas=[vd_record],
         footprint_bars=[] if footprint_bar is None else [footprint_bar],
         footprint_levels=footprint_levels,
+        replace_footprint_levels=footprint_bar is not None,
     )
 
     _, rollup_deltas = _rebuild_native_rollups(cache, bar_record)

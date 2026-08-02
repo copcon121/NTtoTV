@@ -8,12 +8,12 @@ from app.config import Settings
 from app.engines.alert_engine import Alert, MGANN_BREAK_LS
 from app.engines.contract_resolver import ContractResolver
 from app.models import BarUpdate, NormalizedTrade, OHLCVBar, Side
-from app.models.messages import EventType
+from app.models.messages import EventType, VolumeDeltaUpdate
 from app.models.timestamp import now_ms
 from app.pipeline import Pipeline
 from app.registry import WebSocketRegistry
 from app.storage import CacheStore, TickStore
-from app.storage.records import BarRecord
+from app.storage.records import BarRecord, VolumeDeltaRecord
 
 _SYMBOL = "GC"
 _SOURCE = "GC 08-26"
@@ -110,6 +110,88 @@ def test_bookmap_stale_falls_back_to_recent_nt_and_recovery_is_hysteretic(tmp_pa
 
 
 @pytest.mark.unit
+def test_bookmap_sequence_gap_stays_unready_until_full_orderflow_snapshot(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(tmp_path, preferred="nt")
+    try:
+        state = pipeline._feed_states["bookmap"]
+        state.bar_ready = True
+
+        # Heartbeat/bar channels have independent sequences; losing one of
+        # those frames must not imply that a trade is missing from the ladder.
+        pipeline.note_bookmap_sequence_gap()
+        assert state.orderflow_gap_pending is False
+        assert state.bar_ready is True
+
+        def trade(sequence: int, offset: int) -> NormalizedTrade:
+            return NormalizedTrade(
+                symbol=_SYMBOL,
+                contract=_SOURCE,
+                time=_BASE + offset,
+                price=2400.0,
+                volume=1,
+                bid=None,
+                ask=None,
+                best_bid=None,
+                best_ask=None,
+                sequence=sequence,
+                source="bookmap",
+                side=Side.BUY,
+            )
+
+        async def create_trade_gap() -> None:
+            await pipeline.on_bookmap_trade(trade(1, 100))
+            await pipeline.on_bookmap_trade(trade(3, 300))
+
+        asyncio.run(create_trade_gap())
+        assert state.orderflow_gap_pending is True
+
+        asyncio.run(
+            pipeline.on_bookmap_heartbeat(
+                {
+                    "contract": _SOURCE,
+                    "time": _BASE,
+                    "hasCurrentBar": True,
+                    "partialStart": False,
+                }
+            )
+        )
+        assert state.bar_ready is False
+
+        asyncio.run(
+            pipeline.on_bookmap_bar(
+                {
+                    "contract": _SOURCE,
+                    "tf": "1m",
+                    "time": _BASE,
+                    "bridgeTime": _BASE + 1_000,
+                    "lastEventTimeNanos": (_BASE + 900) * 1_000_000,
+                    "open": 2400.0,
+                    "high": 2400.1,
+                    "low": 2399.9,
+                    "close": 2400.0,
+                    "volume": 10,
+                    "buyVolume": 6,
+                    "sellVolume": 4,
+                    "delta": 2,
+                    "deltaHigh": 3,
+                    "deltaLow": -1,
+                    "openDelta": 0,
+                    "closeDelta": 2,
+                    "closed": False,
+                    "partialStart": False,
+                    "snapshot": True,
+                    "rows": [{"price": 2400.0, "bid": 4, "ask": 6}],
+                }
+            )
+        )
+        assert state.orderflow_gap_pending is False
+        assert state.bar_ready is True
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
 def test_nt_stale_does_not_bypass_bookmap_recovery_hysteresis(tmp_path):
     pipeline, cache, ticks, _ = _pipeline(tmp_path)
     try:
@@ -183,6 +265,126 @@ def test_nt_native_bar_close_latency_is_reported(tmp_path):
 
 
 @pytest.mark.unit
+def test_bookmap_primary_owns_live_delta_and_footprint_while_nt_stays_warm(tmp_path):
+    pipeline, cache, ticks, captured = _pipeline(tmp_path)
+    try:
+        now = now_ms()
+        state = pipeline._feed_states["bookmap"]
+        state.connected = True
+        state.last_heartbeat_at = now
+        state.healthy_since = now - 60_000
+        state.contract = _SOURCE
+        state.bar_ready = True
+        pipeline._active_feed = "bookmap"
+        pipeline._source_switched_at = now - 60_000
+
+        bookmap_trade = NormalizedTrade(
+            symbol=_SYMBOL,
+            contract=_SOURCE,
+            time=_BASE + 1_000,
+            price=2400.0,
+            volume=7,
+            bid=None,
+            ask=None,
+            best_bid=None,
+            best_ask=None,
+            sequence=1,
+            source="bookmap",
+            side=Side.SELL,
+        )
+        inactive_nt_trade = NormalizedTrade(
+            symbol=_SYMBOL,
+            contract=_SOURCE,
+            time=_BASE + 2_000,
+            price=2400.1,
+            volume=50,
+            bid=2400.0,
+            ask=2400.1,
+            best_bid=2400.0,
+            best_ask=2400.1,
+            sequence=1,
+        )
+
+        async def run():
+            await pipeline.on_bookmap_trade(bookmap_trade)
+            await pipeline.on_trade(inactive_nt_trade)
+
+        asyncio.run(run())
+
+        delta = cache.read_volume_delta(_SYMBOL, _SYMBOL, "1m", limit=1)
+        assert len(delta) == 1
+        assert (delta[0].buy_volume, delta[0].sell_volume, delta[0].delta) == (
+            0,
+            7,
+            -7,
+        )
+        footprint_events = [
+            event
+            for event in captured
+            if event.event_type == EventType.FOOTPRINT_UPDATE
+        ]
+        assert footprint_events
+        assert footprint_events[-1].payload["rows"] == [
+            {"price": 2400.0, "bid": 7, "ask": 0, "imbalance": None}
+        ]
+
+        # Both feeds remain raw-recorded even though only Bookmap may write the
+        # shared derived cache while it is active.
+        raw = list(ticks.read_range(_SOURCE, _BASE, _BASE + 60_000, source=None))
+        assert {trade.source for trade in raw} == {"bookmap", "nt"}
+
+        authoritative = {
+            "contract": _SOURCE,
+            "tf": "1m",
+            "time": _BASE,
+            "bridgeTime": now,
+            "lastEventTimeNanos": (_BASE + 59_000) * 1_000_000,
+            "open": 2400.0,
+            "high": 2400.2,
+            "low": 2399.9,
+            "close": 2400.1,
+            "volume": 12,
+            "buyVolume": 5,
+            "sellVolume": 7,
+            "delta": -2,
+            "deltaHigh": 0,
+            "deltaLow": -7,
+            "openDelta": 0,
+            "closeDelta": -2,
+            "closed": True,
+            "partialStart": False,
+            "snapshot": False,
+            "rows": [
+                {"price": 2400.1, "bid": 0, "ask": 5},
+                {"price": 2400.0, "bid": 7, "ask": 0},
+            ],
+        }
+        asyncio.run(pipeline.on_bookmap_bar(authoritative))
+
+        levels = cache.read_footprint_levels(_SYMBOL, _SYMBOL, _BASE, "1m")
+        assert [(row.price, row.bid_volume, row.ask_volume) for row in levels] == [
+            (2400.1, 0, 5),
+            (2400.0, 7, 0),
+        ]
+
+        # A later authoritative replacement removes levels no longer present.
+        corrected = dict(authoritative)
+        corrected["rows"] = [{"price": 2400.1, "bid": 2, "ask": 10}]
+        corrected["buyVolume"] = 10
+        corrected["sellVolume"] = 2
+        corrected["delta"] = 8
+        corrected["closeDelta"] = 8
+        asyncio.run(pipeline.on_bookmap_bar(corrected))
+        levels = cache.read_footprint_levels(_SYMBOL, _SYMBOL, _BASE, "1m")
+        assert [(row.price, row.bid_volume, row.ask_volume) for row in levels] == [
+            (2400.1, 2, 10)
+        ]
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
 def test_authoritative_bookmap_minute_repairs_higher_rollup(tmp_path):
     pipeline, cache, ticks, _ = _pipeline(tmp_path, preferred="nt")
     try:
@@ -226,6 +428,83 @@ def test_authoritative_bookmap_minute_repairs_higher_rollup(tmp_path):
         assert m5.bar.close == 102.0
         assert m5.bar.volume == 40
         assert m5.source == "bookmap"
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
+def test_authoritative_bookmap_delta_repairs_higher_timeframes(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(tmp_path, preferred="nt")
+    try:
+        bucket = (_BASE // 300_000) * 300_000
+        for minute, values in enumerate(
+            (
+                # volume, buy, sell, high, low, close
+                (10, 8, 2, 6, 0, 6),
+                (6, 1, 5, 1, -4, -4),
+            )
+        ):
+            cache.upsert_volume_delta(
+                VolumeDeltaRecord(
+                    symbol=_SYMBOL,
+                    contract=_SYMBOL,
+                    timeframe="1m",
+                    time=bucket + minute * 60_000,
+                    volume=values[0],
+                    buy_volume=values[1],
+                    sell_volume=values[2],
+                    delta=values[5],
+                    delta_high=values[3],
+                    delta_low=values[4],
+                    open_delta=0,
+                    close_delta=values[5],
+                )
+            )
+
+        corrected = VolumeDeltaUpdate(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            tf="1m",
+            time=bucket + 120_000,
+            volume=10,
+            buy_volume=7,
+            sell_volume=3,
+            delta=4,
+            delta_high=5,
+            delta_low=-1,
+            open_delta=0,
+            close_delta=4,
+        )
+        updates = pipeline._bookmap_delta_rollup_updates(corrected)
+        m5 = next(update for update in updates if update.tf == "5m")
+        assert (
+            m5.volume,
+            m5.buy_volume,
+            m5.sell_volume,
+            m5.delta,
+            m5.delta_high,
+            m5.delta_low,
+        ) == (26, 16, 10, 6, 7, 0)
+
+        next_tick = pipeline._source_vds["bookmap"]["5m"].on_trade(
+            NormalizedTrade(
+                symbol=_SYMBOL,
+                contract=_SYMBOL,
+                time=bucket + 180_000,
+                price=2400.0,
+                volume=2,
+                bid=None,
+                ask=None,
+                best_bid=None,
+                best_ask=None,
+                sequence=1,
+                source="bookmap",
+                side=Side.SELL,
+            )
+        )
+        assert next_tick is not None
+        assert (next_tick.volume, next_tick.delta, next_tick.delta_high) == (28, 4, 7)
     finally:
         ticks.close()
         cache.close()

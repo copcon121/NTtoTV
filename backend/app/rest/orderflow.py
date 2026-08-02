@@ -119,6 +119,7 @@ def _rebuild_volume_delta(
     to: int,
     *,
     raw_contract: str | None = None,
+    source: str = "nt",
 ) -> list[VolumeDeltaRecord]:
     """Rebuild per-bar volume-delta summaries from raw Tick_Store ticks.
 
@@ -133,12 +134,16 @@ def _rebuild_volume_delta(
     most recent prevailing quote's bid/ask (matching MyVolumeDelta) instead of
     falling back to the tick rule. (Req 13.2, 13.3)
     """
-    engine = VolumeDeltaEngine(timeframe=tf)
+    engine = VolumeDeltaEngine(timeframe=tf, zero_baseline=source == "bookmap")
     final: dict[int, VolumeDeltaRecord] = {}
     order: list[int] = []
-    for trade in _trades_with_prevailing_quote(
-        tick_store, raw_contract or contract, frm, to
-    ):
+    physical_contract = raw_contract or contract
+    trades = (
+        tick_store.read_range(physical_contract, frm, to, source="bookmap")
+        if source == "bookmap"
+        else _trades_with_prevailing_quote(tick_store, physical_contract, frm, to)
+    )
+    for trade in trades:
         update = engine.on_trade(trade)
         if update is None:
             continue
@@ -777,6 +782,7 @@ def _minute_bar_profile_to_dict(
 
 @router.get("/orderflow/volume-delta")
 async def get_volume_delta(
+    request: Request,
     symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
     tf: str = Query(..., description="Timeframe (15s,1m,3m,5m,15m,30m,1h,4h,1D)"),
     contract: str | None = Query(
@@ -827,6 +833,7 @@ async def get_volume_delta(
             frm_ms,
             to_ms,
             raw_contract=_raw_rebuild_contract(state, symbol, resolved),
+            source=_raw_rebuild_source(request),
         )
         rows = rebuilt[-effective_limit:]
         source = "rebuild"

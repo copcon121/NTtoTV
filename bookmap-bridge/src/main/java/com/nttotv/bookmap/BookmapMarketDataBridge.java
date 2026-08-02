@@ -49,6 +49,7 @@ public class BookmapMarketDataBridge implements
     private final AtomicLong tradeSequence = new AtomicLong();
     private final AtomicLong heartbeatSequence = new AtomicLong();
     private final AtomicLong barSequence = new AtomicLong();
+    private final Object outboundGate = new Object();
     private long acceptedTrades;
     private long skippedTradesWithoutInfo;
     private long exportedBars;
@@ -99,9 +100,11 @@ public class BookmapMarketDataBridge implements
 
     @Override
     public void onRealtimeStart() {
-        BookmapFootprintAccumulator local = accumulator;
-        if (local != null) {
-            local.reset();
+        synchronized (outboundGate) {
+            BookmapFootprintAccumulator local = accumulator;
+            if (local != null) {
+                local.reset();
+            }
         }
         realtime = true;
         log("realtime capture started; first closed bar will be marked partialStart");
@@ -114,7 +117,9 @@ public class BookmapMarketDataBridge implements
         }
         BookmapFootprintAccumulator local = accumulator;
         if (local != null) {
-            local.onTimestamp(timeNanos);
+            synchronized (outboundGate) {
+                local.onTimestamp(timeNanos);
+            }
         }
     }
 
@@ -131,18 +136,20 @@ public class BookmapMarketDataBridge implements
         if (local == null) {
             return;
         }
-        if (local.onTrade(
-            price,
-            size,
-            tradeInfo.isBidAggressor,
-            tradeInfo.isExecutionStart,
-            tradeInfo.isExecutionEnd,
-            tradeInfo.isOtc,
-            tradeInfo.aggressorOrderId,
-            tradeInfo.passiveOrderId
-        )) {
-            acceptedTrades += 1L;
-            enqueueTrade(price, size, tradeInfo);
+        synchronized (outboundGate) {
+            if (local.onTrade(
+                price,
+                size,
+                tradeInfo.isBidAggressor,
+                tradeInfo.isExecutionStart,
+                tradeInfo.isExecutionEnd,
+                tradeInfo.isOtc,
+                tradeInfo.aggressorOrderId,
+                tradeInfo.passiveOrderId
+            )) {
+                acceptedTrades += 1L;
+                enqueueTrade(price, size, tradeInfo);
+            }
         }
     }
 
@@ -211,7 +218,7 @@ public class BookmapMarketDataBridge implements
         stringField(sb, "type", "trade", true);
         stringField(sb, "source", "bookmap", true);
         stringField(sb, "symbol", env("NTTOTV_BOOKMAP_SYMBOL", "GC"), true);
-        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 10-26"), true);
+        stringField(sb, "contract", env("NTTOTV_BOOKMAP_SOURCE_CONTRACT", "GC 12-26"), true);
         stringField(sb, "sourceContract", alias, true);
         stringField(sb, "alias", alias, true);
         numberField(sb, "time", Long.toString(timeMs), true);
@@ -242,7 +249,7 @@ public class BookmapMarketDataBridge implements
         stringField(sb, "type", "heartbeat", true);
         stringField(sb, "source", "bookmap", true);
         stringField(sb, "symbol", env("NTTOTV_BOOKMAP_SYMBOL", "GC"), true);
-        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 10-26"), true);
+        stringField(sb, "contract", env("NTTOTV_BOOKMAP_SOURCE_CONTRACT", "GC 12-26"), true);
         stringField(sb, "alias", alias, true);
         numberField(sb, "time", Long.toString(timeMs), true);
         numberField(sb, "timeNanos", Long.toString(timeNanos), true);
@@ -274,17 +281,19 @@ public class BookmapMarketDataBridge implements
     }
 
     private void enqueueSnapshots() {
-        BookmapFootprintAccumulator localAccumulator = accumulator;
-        if (localAccumulator == null) {
-            return;
-        }
-        BookmapFootprintAccumulator.Bar previous = localAccumulator.lastClosedSnapshot();
-        BookmapFootprintAccumulator.Bar current = localAccumulator.currentSnapshot();
-        if (previous != null) {
-            enqueueBar(previous, true, true);
-        }
-        if (current != null) {
-            enqueueBar(current, false, true);
+        synchronized (outboundGate) {
+            BookmapFootprintAccumulator localAccumulator = accumulator;
+            if (localAccumulator == null) {
+                return;
+            }
+            BookmapFootprintAccumulator.Bar previous = localAccumulator.lastClosedSnapshot();
+            BookmapFootprintAccumulator.Bar current = localAccumulator.currentSnapshot();
+            if (previous != null) {
+                enqueueBar(previous, true, true);
+            }
+            if (current != null) {
+                enqueueBar(current, false, true);
+            }
         }
     }
 
@@ -297,17 +306,42 @@ public class BookmapMarketDataBridge implements
         if (local == null || bar == null) {
             return;
         }
-        StringBuilder sb = new StringBuilder(512);
+        String json = barJson(
+            bar,
+            alias,
+            env("NTTOTV_BOOKMAP_SYMBOL", "GC"),
+            env("NTTOTV_BOOKMAP_SOURCE_CONTRACT", "GC 12-26"),
+            closed,
+            snapshot,
+            System.currentTimeMillis(),
+            barSequence.incrementAndGet()
+        );
+        // A full ladder snapshot repairs dropped tick frames and seeds a new
+        // backend connection, so it must not expire with stale-sensitive ticks.
+        local.enqueue(json, false);
+    }
+
+    static String barJson(
+        BookmapFootprintAccumulator.Bar bar,
+        String alias,
+        String symbol,
+        String contract,
+        boolean closed,
+        boolean snapshot,
+        long bridgeTime,
+        long sequence
+    ) {
+        StringBuilder sb = new StringBuilder(2048 + bar.rows.size() * 64);
         sb.append('{');
         stringField(sb, "type", "bar", true);
         stringField(sb, "source", "bookmap", true);
-        stringField(sb, "symbol", env("NTTOTV_BOOKMAP_SYMBOL", "GC"), true);
-        stringField(sb, "contract", env("NTTOTV_BOOKMAP_CONTRACT", "GC 10-26"), true);
+        stringField(sb, "symbol", symbol, true);
+        stringField(sb, "contract", contract, true);
         stringField(sb, "sourceContract", alias, true);
         stringField(sb, "alias", alias, true);
         stringField(sb, "tf", "1m", true);
         numberField(sb, "time", Long.toString(bar.time), true);
-        numberField(sb, "bridgeTime", Long.toString(System.currentTimeMillis()), true);
+        numberField(sb, "bridgeTime", Long.toString(bridgeTime), true);
         numberField(sb, "firstEventTimeNanos", Long.toString(bar.firstEventTimeNanos), true);
         numberField(sb, "lastEventTimeNanos", Long.toString(bar.lastEventTimeNanos), true);
         numberField(sb, "open", doubleString(bar.open), true);
@@ -315,12 +349,32 @@ public class BookmapMarketDataBridge implements
         numberField(sb, "low", doubleString(bar.low), true);
         numberField(sb, "close", doubleString(bar.close), true);
         numberField(sb, "volume", Long.toString(bar.volume), true);
+        numberField(sb, "buyVolume", Long.toString(bar.buyVolume), true);
+        numberField(sb, "sellVolume", Long.toString(bar.sellVolume), true);
+        numberField(sb, "delta", Long.toString(bar.delta), true);
+        numberField(sb, "deltaHigh", Long.toString(bar.deltaHigh), true);
+        numberField(sb, "deltaLow", Long.toString(bar.deltaLow), true);
+        numberField(sb, "openDelta", "0", true);
+        numberField(sb, "closeDelta", Long.toString(bar.delta), true);
         booleanField(sb, "closed", closed, true);
         booleanField(sb, "partialStart", bar.partialStart, true);
         booleanField(sb, "snapshot", snapshot, true);
-        numberField(sb, "sequence", Long.toString(barSequence.incrementAndGet()), false);
+        numberField(sb, "sequence", Long.toString(sequence), true);
+        sb.append("\"rows\":[");
+        for (int i = 0; i < bar.rows.size(); i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            BookmapFootprintAccumulator.Row row = bar.rows.get(i);
+            sb.append('{');
+            numberField(sb, "price", doubleString(row.price), true);
+            numberField(sb, "bid", Long.toString(row.bid), true);
+            numberField(sb, "ask", Long.toString(row.ask), false);
+            sb.append('}');
+        }
+        sb.append(']');
         sb.append('}');
-        local.enqueue(sb.toString(), !snapshot);
+        return sb.toString();
     }
 
     private void exportBar(BookmapFootprintAccumulator.Bar bar) {

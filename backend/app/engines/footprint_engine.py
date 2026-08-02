@@ -9,10 +9,11 @@ the current bar's ladder and produces a
 :class:`~app.models.messages.FootprintUpdate` snapshot. (Requirements 14.1,
 14.3, 14.4, 14.5, 14.10)
 
-Classification mirrors ``MzFootprintClone`` with ``DeltaCalculationMode=0``
-(``BidAsk``): a trade is **buy** only when ``price >= ask`` and **sell** only
-when ``price <= bid``. Trades inside the spread still create a price row but do
-not add volume to either side. A buy adds to the level's ``ask_volume``
+An explicit canonical aggressor side (as supplied by Bookmap) is authoritative.
+When it is absent, classification mirrors ``MzFootprintClone`` with
+``DeltaCalculationMode=0`` (``BidAsk``): a trade is **buy** only when ``price >=
+ask`` and **sell** only when ``price <= bid``. Trades inside the spread still
+create a price row but do not add volume to either side. A buy adds to the level's ``ask_volume``
 (aggressive lifting of the offer); a sell adds to ``bid_volume`` (aggressive
 hitting of the bid). (Req 14.5)
 
@@ -214,13 +215,17 @@ class FootprintEngine:
         if bar is not None and bucket < bar.time:
             return None  # out-of-order trade for an already-closed bar
 
-        side = self.classify(
-            t.price,
-            t.bid,
-            t.ask,
-            None,
-            None,
-        )
+        # Bookmap already resolves the aggressor side at the exchange feed.
+        # NT/native callers without an explicit side retain BidAsk behavior.
+        side = t.side
+        if side is None:
+            side = self.classify(
+                t.price,
+                t.bid,
+                t.ask,
+                None,
+                None,
+            )
         self._symbol[t.contract] = t.symbol
 
         if bar is None or bucket > bar.time:
@@ -256,6 +261,42 @@ class FootprintEngine:
         if bar is None:
             return None
         return self._build_update(contract, self._symbol.get(contract, "GC"), bar)
+
+    def seed_bar(
+        self,
+        contract: str,
+        *,
+        symbol: str,
+        time: int,
+        open: float,
+        high: float,
+        low: float,
+        close: float,
+        rows: list[tuple[float, int, int]],
+    ) -> None:
+        """Replace the current ladder with an authoritative bar snapshot.
+
+        Bookmap sends this snapshot on reconnect and at each minute close.  It
+        lets the tick-by-tick engine resume without losing trades that occurred
+        before a backend reconnect and repairs any transport gap exactly.
+        """
+        levels: dict[float, _Level] = {}
+        for price, bid, ask in rows:
+            if bid <= 0 and ask <= 0:
+                continue
+            levels[self.level_price(price)] = _Level(
+                bid_volume=max(0, int(bid)),
+                ask_volume=max(0, int(ask)),
+            )
+        self._bar[contract] = _BarState(
+            time=time,
+            open=open,
+            high=high,
+            low=low,
+            close=close,
+            levels=levels,
+        )
+        self._symbol[contract] = symbol
 
     def reset_contract(self, contract: str) -> None:
         """Drop all per-bar + classification state for ``contract`` (rewind)."""

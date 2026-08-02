@@ -73,8 +73,12 @@ if (!$SkipTests) {
             throw "Market-data bridge test source not found: $testSource"
         }
     }
-    $testClasspath = @($classes, $bookmapApi, $bookmapSimplifiedApi) -join ";"
-    & $javac -encoding UTF-8 -source 17 -target 17 -classpath $testClasspath -d $testClasses $testSources
+    # The bridge implementation is intentionally package-private. Compile the
+    # focused tests together with those sources so Bookmap's bundled javac can
+    # resolve the package-private types consistently on Windows.
+    $testClasspath = @($bookmapApi, $bookmapSimplifiedApi) -join ";"
+    $testCompileSources = @($sources) + @($testSources)
+    & $javac -encoding UTF-8 -source 17 -target 17 -classpath $testClasspath -d $testClasses $testCompileSources
     if ($LASTEXITCODE -ne 0) {
         throw "test javac failed with exit code $LASTEXITCODE"
     }

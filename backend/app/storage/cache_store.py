@@ -582,6 +582,7 @@ class CacheStore:
         footprint_bar: FootprintBarRecord | None = None,
         footprint_bars: Iterable[FootprintBarRecord] = (),
         footprint_levels: Iterable[FootprintLevelRecord] = (),
+        replace_footprint_levels: bool = False,
         fvg_signals: Iterable[FvgSignalRecord] = (),
         big_trades: Iterable[BigTradeRecord] = (),
     ) -> None:
@@ -591,6 +592,7 @@ class CacheStore:
             footprint_bar=footprint_bar,
             footprint_bars=footprint_bars,
             footprint_levels=footprint_levels,
+            replace_footprint_levels=replace_footprint_levels,
             fvg_signals=fvg_signals,
             big_trades=big_trades,
         )

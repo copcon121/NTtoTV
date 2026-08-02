@@ -8,10 +8,12 @@ all derived outputs through the WebSocket_Registry to `/ws/chart`:
   the :class:`~app.storage.tick_store.TickStore` **before any throttling**
   (Req 4.4, 4.5) — both handled by the :class:`~app.ingest.coordinator.IngestionCoordinator`;
 * accepted Active_Contract trades feed the :class:`~app.engines.bar_aggregator.BarAggregator`,
-  :class:`~app.engines.volume_delta_engine.VolumeDeltaEngine`, and
+  :class:`~app.engines.volume_delta_engine.VolumeDeltaEngine`,
+  :class:`~app.engines.footprint_engine.FootprintEngine`, and
   :class:`~app.engines.big_trade_engine.BigTradeEngine`; their outputs are
   persisted to the Cache_Store and enqueued on the registry (Req 9.3, 20.1).
-  Footprint cache/websocket updates are native-only via ``/api/nt/native-bar``;
+  Bookmap supplies tick-by-tick delta/footprint while active; NT native bars are
+  the automatic fallback and remain available for explicit history imports;
 * every accepted trade/quote is observed by the
   :class:`~app.engines.contract_resolver.ContractResolver`, whose needed-set /
   Active_Contract changes drive Control_Commands and Active_Contract status
@@ -46,7 +48,7 @@ from .engines.big_trade_engine import BigTradeEngine
 from .engines.bookmap_big_trade_engine import BookmapBigTradeEngine
 from .engines.breakout_box_engine import BreakoutBoxEngine, BreakoutBoxEvent
 from .engines.contract_resolver import ContractResolver
-from .engines.footprint_engine import FOOTPRINT_TIMEFRAME
+from .engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
 from .engines.fvg_signal_engine import FvgSignalEngine
 from .engines.session_calendar import TF_MS, is_gc_session_open, timeframe_bucket_start
 from .engines.volume_delta_engine import VolumeDeltaEngine, VolumeDeltaMode
@@ -61,6 +63,7 @@ from .models.messages import (
     AlertEvent,
     BigTrade,
     ChartStatusEvent,
+    FootprintUpdate,
     FvgSignalUpdate,
     MarketDataStatus,
     NTStatusEvent,
@@ -74,6 +77,8 @@ from .storage.cache_store import CacheStore
 from .storage.records import (
     BarRecord,
     BigTradeRecord,
+    FootprintBarRecord,
+    FootprintLevelRecord,
     FvgSignalRecord,
     VolumeDeltaRecord,
 )
@@ -98,6 +103,7 @@ class _FeedState:
     healthy_since: int | None = None
     contract: str | None = None
     bar_ready: bool = False
+    orderflow_gap_pending: bool = False
     connected: bool = False
     queue_depth: int = 0
     dropped_stale: int = 0
@@ -238,16 +244,25 @@ class Pipeline:
         # An injected engine (tests/replay) seeds its own timeframe; the rest are
         # constructed with matching mode/min-trade-size so behavior is uniform.
         seed = volume_delta
-        self._vds: dict[str, VolumeDeltaEngine] = {}
-        for tf in SUPPORTED_TFS:
-            if seed is not None and seed.timeframe == tf:
-                self._vds[tf] = seed
-            else:
-                self._vds[tf] = VolumeDeltaEngine(
-                    timeframe=tf,
-                    mode=seed.mode if seed is not None else VolumeDeltaMode.DELTA,
-                    min_trade_size=seed.min_trade_size if seed is not None else 0,
-                )
+        self._source_vds: dict[str, dict[str, VolumeDeltaEngine]] = {
+            "nt": {},
+            "bookmap": {},
+        }
+        for source, engines in self._source_vds.items():
+            for tf in SUPPORTED_TFS:
+                if source == "nt" and seed is not None and seed.timeframe == tf:
+                    engines[tf] = seed
+                else:
+                    engines[tf] = VolumeDeltaEngine(
+                        timeframe=tf,
+                        mode=seed.mode if seed is not None else VolumeDeltaMode.DELTA,
+                        min_trade_size=seed.min_trade_size if seed is not None else 0,
+                        zero_baseline=source == "bookmap",
+                    )
+        # Compatibility alias for focused tests and replay code that injects the
+        # historical NT engine.  Live routing uses the source-scoped map above.
+        self._vds = self._source_vds["nt"]
+        self._source_footprints = {"bookmap": FootprintEngine()}
         self._fvg = fvg_signal or FvgSignalEngine()
         self._native_fvg_signal = native_fvg_signal
         self._enable_tick_fvg_signal = enable_tick_fvg_signal
@@ -310,7 +325,9 @@ class Pipeline:
             "bookmap": {},
         }
         self._bookmap_minute_bars: dict[int, BarUpdate] = {}
+        self._bookmap_minute_deltas: dict[int, VolumeDeltaUpdate] = {}
         self._bookmap_connection_id: str | None = None
+        self._derived_source_lock = asyncio.Lock()
         self._last_market_status_emit = 0
         self._hydrate_engine_state_from_cache()
 
@@ -479,6 +496,16 @@ class Pipeline:
     async def on_bookmap_connect(self, connection_id: str) -> None:
         """Start a fresh Bookmap connection generation and sequence scope."""
         self._bookmap_connection_id = connection_id
+        state = self._feed_states["bookmap"]
+        state.connected = False
+        state.last_heartbeat_at = None
+        state.last_event_at = None
+        state.healthy_since = None
+        state.bar_ready = False
+        # Require the reconnect snapshot barrier before this generation can
+        # become primary; otherwise an old ready flag can promote it before the
+        # ladder state has been seeded.
+        state.orderflow_gap_pending = True
         self._bookmap_coordinator = IngestionCoordinator(
             self._tick_store,
             SequenceValidator(),
@@ -492,7 +519,14 @@ class Pipeline:
         return self._bookmap_connection_id == connection_id
 
     def note_bookmap_sequence_gap(self) -> None:
-        self._feed_states["bookmap"].sequence_gaps += 1
+        """Record a non-trade channel gap without invalidating the ladder.
+
+        Heartbeat and bar channels have independent counters and can be dropped
+        without losing any trade. Actual trade gaps are detected by the trade
+        coordinator in :meth:`on_bookmap_trade` and do invalidate order flow.
+        """
+        state = self._feed_states["bookmap"]
+        state.sequence_gaps += 1
 
     async def on_bookmap_trade(
         self, trade: NormalizedTrade, *, connection_id: str | None = None
@@ -506,7 +540,12 @@ class Pipeline:
         if not decision.accepted:
             return
         if decision.outcome is SeqOutcome.GAP:
-            self._feed_states["bookmap"].sequence_gaps += 1
+            gap_state = self._feed_states["bookmap"]
+            gap_state.sequence_gaps += 1
+            # A missing trade makes the intrabar ladder incomplete.  Fall back
+            # until the next authoritative Bookmap bar snapshot repairs it.
+            gap_state.orderflow_gap_pending = True
+            gap_state.bar_ready = False
         self._note_feed_event("bookmap", trade.time, trade.bridge_time, received)
         state = self._feed_states["bookmap"]
         state.contract = trade.contract
@@ -527,7 +566,10 @@ class Pipeline:
         state = self._feed_states["bookmap"]
         state.contract = str(payload.get("contract") or state.contract or "") or None
         if bool(payload.get("hasCurrentBar", False)):
-            state.bar_ready = not bool(payload.get("partialStart", True))
+            state.bar_ready = (
+                not bool(payload.get("partialStart", True))
+                and not state.orderflow_gap_pending
+            )
         state.queue_depth = int(payload.get("queueDepth", state.queue_depth) or 0)
         state.dropped_stale = int(
             payload.get("droppedStale", state.dropped_stale) or 0
@@ -556,7 +598,7 @@ class Pipeline:
         state = self._feed_states["bookmap"]
         state.contract = contract
         partial = bool(payload.get("partialStart", False))
-        state.bar_ready = not partial
+        state.bar_ready = not partial and not state.orderflow_gap_pending
         bridge_time = int(payload.get("bridgeTime") or received)
         bar_time = int(payload["time"])
         last_event_nanos = payload.get("lastEventTimeNanos")
@@ -597,6 +639,23 @@ class Pipeline:
             update.bar,
             closed=update.closed,
         )
+        try:
+            bookmap_vd, bookmap_fp = self._reconcile_bookmap_orderflow(
+                payload, update
+            )
+        except (KeyError, TypeError, ValueError):
+            state.orderflow_gap_pending = True
+            state.bar_ready = False
+            await self._evaluate_source_selection(received)
+            raise
+        if bookmap_vd is not None and bookmap_fp is not None and not partial:
+            state.orderflow_gap_pending = False
+        state.bar_ready = not partial and not state.orderflow_gap_pending
+        bookmap_vds = (
+            []
+            if bookmap_vd is None
+            else self._bookmap_delta_rollup_updates(bookmap_vd)
+        )
         updates = self._bookmap_rollup_updates(update)
         # Raw Bookmap trades also maintain provisional higher-timeframe bars.
         # Reconcile that state to the authoritative 1m rollup so the next trade
@@ -614,45 +673,115 @@ class Pipeline:
         was_active = self._active_feed == "bookmap"
         await self._evaluate_source_selection(received)
         if was_active and self._active_feed == "bookmap":
-            await asyncio.to_thread(self._persist_derived_batch, updates, [], [], [])
-            for source_update in updates:
-                await self._enqueue(OutboundEvent.from_message(source_update))
+            async with self._derived_source_lock:
+                if self._active_feed != "bookmap":
+                    return
+                await asyncio.to_thread(
+                    self._persist_derived_batch,
+                    updates,
+                    bookmap_vds,
+                    [],
+                    [],
+                    [] if bookmap_fp is None else [bookmap_fp],
+                    bookmap_fp is not None,
+                )
+                for source_update in updates:
+                    await self._enqueue(OutboundEvent.from_message(source_update))
+                for delta_update in bookmap_vds:
+                    await self._enqueue(OutboundEvent.from_message(delta_update))
+                if bookmap_fp is not None:
+                    await self._enqueue(OutboundEvent.from_message(bookmap_fp))
             if not snapshot:
-                await self._evaluate_bookmap_bar_alerts(updates, received)
+                await self._evaluate_bookmap_bar_alerts(
+                    updates,
+                    received,
+                    volume_delta_update=bookmap_vd,
+                    footprint_update=bookmap_fp,
+                )
+
+    def _reconcile_bookmap_orderflow(
+        self, payload: dict, bar_update: BarUpdate
+    ) -> tuple[VolumeDeltaUpdate | None, FootprintUpdate | None]:
+        """Seed live Bookmap order-flow engines from a full bar snapshot."""
+        if bar_update.tf != FOOTPRINT_TIMEFRAME or "buyVolume" not in payload:
+            return None, None
+
+        contract = self._chart_contract()
+        volume_delta = VolumeDeltaUpdate(
+            symbol=bar_update.symbol,
+            contract=contract,
+            tf=bar_update.tf,
+            time=bar_update.bar.time,
+            volume=int(payload["volume"]),
+            buy_volume=int(payload.get("buyVolume", 0)),
+            sell_volume=int(payload.get("sellVolume", 0)),
+            delta=int(payload.get("delta", 0)),
+            delta_high=int(payload.get("deltaHigh", 0)),
+            delta_low=int(payload.get("deltaLow", 0)),
+            open_delta=int(payload.get("openDelta", 0)),
+            close_delta=int(payload.get("closeDelta", payload.get("delta", 0))),
+        )
+        self._source_vds["bookmap"][FOOTPRINT_TIMEFRAME].seed_bar(
+            contract,
+            time=volume_delta.time,
+            volume=volume_delta.volume,
+            buy_volume=volume_delta.buy_volume,
+            sell_volume=volume_delta.sell_volume,
+            delta_high=volume_delta.delta_high,
+            delta_low=volume_delta.delta_low,
+            open_delta=volume_delta.open_delta,
+            close_delta=volume_delta.close_delta,
+            last_price=bar_update.bar.close,
+        )
+
+        raw_rows = payload.get("rows")
+        if not isinstance(raw_rows, list):
+            raise ValueError("Bookmap bar rows must be a list")
+        rows: list[tuple[float, int, int]] = []
+        for raw in raw_rows:
+            if not isinstance(raw, dict):
+                continue
+            rows.append(
+                (
+                    float(raw["price"]),
+                    int(raw.get("bid", 0)),
+                    int(raw.get("ask", 0)),
+                )
+            )
+        footprint_engine = self._source_footprints["bookmap"]
+        footprint_engine.seed_bar(
+            contract,
+            symbol=bar_update.symbol,
+            time=bar_update.bar.time,
+            open=bar_update.bar.open,
+            high=bar_update.bar.high,
+            low=bar_update.bar.low,
+            close=bar_update.bar.close,
+            rows=rows,
+        )
+        return volume_delta, footprint_engine.current_update(contract)
 
     # -- engine fan-out --------------------------------------------------------
 
     async def _run_trade_engines(self, trade: NormalizedTrade, *, source: str) -> None:
         if not is_gc_session_open(trade.time):
             return
-        active = self._active_feed == source
 
-        # 1) OHLCV bars across all timeframes. (Req 9.3)
-        alert_ctx_bar: BarUpdate | None = None
-        closed_bars: dict[str, BarUpdate] = {}
+        # Keep every source warm so a fallback can take over without starting a
+        # fresh intrabar state.  Only the active source is allowed to persist or
+        # broadcast the shared chart keys below.
         source_bar_updates = self._source_bars[source].on_trade(trade)
         self._remember_source_updates(source, source_bar_updates)
-        bar_updates = source_bar_updates if active else []
-        use_trade_built_bar_alerts = source != "bookmap"
-        for update in bar_updates:
-            if update.closed and use_trade_built_bar_alerts:
-                closed_bars[update.tf] = update
-                if update.tf == _ALERT_BAR_TF:
-                    alert_ctx_bar = update
+        source_vd_updates: list[VolumeDeltaUpdate] = []
+        for engine in self._source_vds[source].values():
+            update = engine.on_trade(trade)
+            if update is not None:
+                source_vd_updates.append(update)
 
-        # 2) VolumeDelta across all timeframes so the lower delta-candle series
-        # follows the charted timeframe (Req 13). The alert context pairs with
-        # the 1m bar close, so capture that timeframe's update for alerts.
-        vd_update: VolumeDeltaUpdate | None = None
-        vd_updates: list[VolumeDeltaUpdate] = []
-        if source == "nt":
-            for tf, engine in self._vds.items():
-                update = engine.on_trade(trade)
-                if update is None:
-                    continue
-                vd_updates.append(update)
-                if tf == _ALERT_BAR_TF:
-                    vd_update = update
+        source_fp_update: FootprintUpdate | None = None
+        footprint_engine = self._source_footprints.get(source)
+        if footprint_engine is not None:
+            source_fp_update = footprint_engine.on_trade(trade)
 
         # 3) Tick FVG remains internal for breakout/FVG confluence. Confirmed
         # FVG cache rows come only from finalized NT native bars; the shared
@@ -670,24 +799,82 @@ class Pipeline:
 
         # 4) BigTrade (merge + filter). (Req 15)
         source_big_trades = self._source_big_trades[source].on_trade(trade)
-        big_trades = source_big_trades if active else []
-        for bt in big_trades:
+        for bt in source_big_trades:
             bt.source = source
 
-        # 5) Breakout Box detection on closed 1m bars.
+        # Serialize active-source writes with feed switches.  This second source
+        # check prevents an in-flight old-source task from winning the SQLite
+        # race after a switch has already selected the other feed.
+        alert_ctx_bar: BarUpdate | None = None
+        closed_bars: dict[str, BarUpdate] = {}
+        vd_update: VolumeDeltaUpdate | None = None
+        fp_update: FootprintUpdate | None = None
+        bar_updates: list[BarUpdate] = []
+        vd_updates: list[VolumeDeltaUpdate] = []
+        big_trades: list[BigTrade] = []
         breakout_events: list[BreakoutBoxEvent] = []
-        if alert_ctx_bar is not None and alert_ctx_bar.closed:
-            b = alert_ctx_bar.bar
-            breakout_events = self._breakout.on_closed_bar(
-                symbol=trade.symbol,
-                contract=trade.contract,
-                time=b.time,
-                open=b.open,
-                high=b.high,
-                low=b.low,
-                close=b.close,
-                volume=b.volume,
-            )
+        active = False
+        async with self._derived_source_lock:
+            active = self._active_feed == source
+            if active:
+                bar_updates = source_bar_updates
+                vd_updates = source_vd_updates
+                big_trades = source_big_trades
+                fp_update = source_fp_update
+                use_trade_built_bar_alerts = source != "bookmap"
+                for update in bar_updates:
+                    if update.closed and use_trade_built_bar_alerts:
+                        closed_bars[update.tf] = update
+                        if update.tf == _ALERT_BAR_TF:
+                            alert_ctx_bar = update
+                vd_update = next(
+                    (u for u in vd_updates if u.tf == _ALERT_BAR_TF), None
+                )
+                if alert_ctx_bar is not None:
+                    b = alert_ctx_bar.bar
+                    breakout_events = self._breakout.on_closed_bar(
+                        symbol=trade.symbol,
+                        contract=trade.contract,
+                        time=b.time,
+                        open=b.open,
+                        high=b.high,
+                        low=b.low,
+                        close=b.close,
+                        volume=b.volume,
+                    )
+
+                # Footprint is broadcast from every Bookmap trade but persisted
+                # as a full replacement only on source switch/reconnect/close.
+                await asyncio.to_thread(
+                    self._persist_derived_batch,
+                    bar_updates,
+                    vd_updates,
+                    fvg_updates,
+                    big_trades,
+                )
+                if self._analyst_event_sink is not None and (
+                    bar_updates
+                    or vd_updates
+                    or fp_update is not None
+                    or fvg_updates
+                    or big_trades
+                ):
+                    try:
+                        self._analyst_event_sink()
+                    except Exception as exc:
+                        logger.warning("analyst event enqueue failed: %s", exc)
+                for update in bar_updates:
+                    await self._enqueue(OutboundEvent.from_message(update))
+                for update in vd_updates:
+                    await self._enqueue(OutboundEvent.from_message(update))
+                if fp_update is not None:
+                    await self._enqueue(OutboundEvent.from_message(fp_update))
+                for update in fvg_updates:
+                    await self._enqueue(OutboundEvent.from_message(update))
+                for update in native_fvg_preview_updates:
+                    await self._enqueue(OutboundEvent.from_message(update))
+                for bt in big_trades:
+                    await self._enqueue(OutboundEvent.from_message(bt))
 
         # Track the most recent confirmed FVG signal for confluence matching.
         # We only keep the latest confirmed signal; the confluence alert checks
@@ -699,39 +886,27 @@ class Pipeline:
                 fvg_confirmed_level = u.level
                 fvg_confirmed_direction = u.direction
 
-        # Persist the full derived snapshot in one transaction. A busy trade
-        # updates multiple timeframe rows; committing each row separately
-        # starves the asyncio loop that flushes UI WebSockets.
-        await asyncio.to_thread(
-            self._persist_derived_batch,
-            bar_updates,
-            vd_updates,
-            fvg_updates,
-            big_trades,
-        )
-        if self._analyst_event_sink is not None and (
-            bar_updates or vd_updates or fvg_updates or big_trades
-        ):
-            try:
-                self._analyst_event_sink()
-            except Exception as exc:
-                logger.warning("analyst event enqueue failed: %s", exc)
-
-        for update in bar_updates:
-            await self._enqueue(OutboundEvent.from_message(update))
-        for update in vd_updates:
-            await self._enqueue(OutboundEvent.from_message(update))
-        for update in fvg_updates:
-            await self._enqueue(OutboundEvent.from_message(update))
-        for update in native_fvg_preview_updates:
-            await self._enqueue(OutboundEvent.from_message(update))
-        for bt in big_trades:
-            await self._enqueue(OutboundEvent.from_message(bt))
-
+        # FVG remains NT-owned even while Bookmap is the selected market-data
+        # feed, so preserve its independent persistence/preview path when this
+        # trade came from an inactive NT source.
+        if not active:
+            await asyncio.to_thread(
+                self._persist_derived_batch, [], [], fvg_updates, []
+            )
+            if self._analyst_event_sink is not None and fvg_updates:
+                try:
+                    self._analyst_event_sink()
+                except Exception as exc:
+                    logger.warning("analyst event enqueue failed: %s", exc)
+            for update in fvg_updates:
+                await self._enqueue(OutboundEvent.from_message(update))
+            for update in native_fvg_preview_updates:
+                await self._enqueue(OutboundEvent.from_message(update))
         # 6) Alerts: last-trade-price crossings + per-bar / big-trade conditions.
-        if active:
+        if active and self._active_feed == source:
             await self._evaluate_alerts(
                 trade, closed_bar=alert_ctx_bar, vd_update=vd_update,
+                fp_update=fp_update,
                 big_trades=big_trades,
                 closed_bars=closed_bars,
                 breakout_events=breakout_events,
@@ -746,6 +921,7 @@ class Pipeline:
         closed_bar: BarUpdate | None,
         vd_update: VolumeDeltaUpdate | None,
         big_trades: list[BigTrade],
+        fp_update: FootprintUpdate | None = None,
         closed_bars: dict[str, BarUpdate] | None = None,
         breakout_events: list[BreakoutBoxEvent] | None = None,
         fvg_level: int | None = None,
@@ -765,6 +941,11 @@ class Pipeline:
         # the 1m bar close. (Req 16.7)
         if closed_bar is not None:
             bar = closed_bar.bar
+            stacked = (
+                len(fp_update.stacked_imbalance) > 0
+                if fp_update is not None and fp_update.time == bar.time
+                else None
+            )
             bar_ctx = MarketContext(
                 symbol=trade.symbol,
                 contract=trade.contract,
@@ -778,7 +959,7 @@ class Pipeline:
                 bar_close=bar.close,
                 bar_volume=bar.volume,
                 bar_volume_delta=vd_update.delta if vd_update is not None else None,
-                bar_stacked_imbalance=None,
+                bar_stacked_imbalance=stacked,
                 breakout_events=breakout_events or None,
                 fvg_level=fvg_level,
                 fvg_direction=fvg_direction,
@@ -819,6 +1000,9 @@ class Pipeline:
         self,
         updates: list[BarUpdate],
         event_time: int,
+        *,
+        volume_delta_update: VolumeDeltaUpdate | None = None,
+        footprint_update: FootprintUpdate | None = None,
     ) -> None:
         """Evaluate bar-close alerts from authoritative Bookmap bar snapshots."""
         for update in updates:
@@ -849,6 +1033,20 @@ class Pipeline:
                 bar_low=bar.low,
                 bar_close=bar.close,
                 bar_volume=bar.volume,
+                bar_volume_delta=(
+                    volume_delta_update.delta
+                    if volume_delta_update is not None
+                    and volume_delta_update.time == bar.time
+                    and volume_delta_update.tf == update.tf
+                    else None
+                ),
+                bar_stacked_imbalance=(
+                    len(footprint_update.stacked_imbalance) > 0
+                    if footprint_update is not None
+                    and footprint_update.time == bar.time
+                    and footprint_update.tf == update.tf
+                    else None
+                ),
                 breakout_events=breakout_events or None,
             )
             await self._emit_alerts(self._alerts.evaluate(ctx))
@@ -861,7 +1059,47 @@ class Pipeline:
         volume_delta_updates: list[VolumeDeltaUpdate],
         fvg_signal_updates: list[FvgSignalUpdate],
         big_trades: list[BigTrade],
+        footprint_updates: list[FootprintUpdate] | None = None,
+        replace_footprint_levels: bool = False,
     ) -> None:
+        footprint_bars: list[FootprintBarRecord] = []
+        footprint_levels: list[FootprintLevelRecord] = []
+        for update in footprint_updates or []:
+            footprint_bars.append(
+                FootprintBarRecord(
+                    symbol=update.symbol,
+                    contract=update.contract,
+                    timeframe=update.tf,
+                    time=update.time,
+                    poc=update.poc,
+                    open_price=update.open,
+                    high_price=update.high,
+                    low_price=update.low,
+                    close_price=update.close,
+                    poc_volume=update.poc_volume,
+                    vah=update.vah,
+                    val=update.val,
+                    bar_delta=update.bar_delta,
+                    buy_pct=update.buy_pct,
+                    sell_pct=update.sell_pct,
+                    unfinished_high=update.unfinished_auction.high,
+                    unfinished_low=update.unfinished_auction.low,
+                )
+            )
+            footprint_levels.extend(
+                FootprintLevelRecord(
+                    symbol=update.symbol,
+                    contract=update.contract,
+                    timeframe=update.tf,
+                    time=update.time,
+                    price=row.price,
+                    bid_volume=row.bid,
+                    ask_volume=row.ask,
+                    imbalance=row.imbalance,
+                )
+                for row in update.rows
+            )
+
         fvg_signals = [
             FvgSignalRecord(
                 symbol=update.symbol,
@@ -913,6 +1151,9 @@ class Pipeline:
                 )
                 for u in volume_delta_updates
             ),
+            footprint_bars=footprint_bars,
+            footprint_levels=footprint_levels,
+            replace_footprint_levels=replace_footprint_levels,
             fvg_signals=fvg_signals,
             big_trades=(
                 BigTradeRecord(
@@ -1002,6 +1243,99 @@ class Pipeline:
             )
         return updates
 
+    def _bookmap_delta_rollup_updates(
+        self, minute_update: VolumeDeltaUpdate
+    ) -> list[VolumeDeltaUpdate]:
+        """Rebuild higher-timeframe delta from authoritative Bookmap M1 rows.
+
+        A minute snapshot carries enough intrabar extrema to reconstruct the
+        exact cumulative-delta path of a larger bucket: offset each minute's
+        high/low by the preceding minutes' close delta, then advance the offset.
+        This repairs every chart timeframe after a dropped tick or reconnect,
+        instead of fixing only the visible M1 row.
+        """
+        if minute_update.tf != FOOTPRINT_TIMEFRAME:
+            return [minute_update]
+
+        self._bookmap_minute_deltas[minute_update.time] = minute_update
+        cutoff = minute_update.time - 7 * 24 * 60 * 60 * 1_000
+        for old_time in [t for t in self._bookmap_minute_deltas if t < cutoff]:
+            self._bookmap_minute_deltas.pop(old_time, None)
+
+        updates = [minute_update]
+        contract = self._chart_contract()
+        for tf in SUPPORTED_TFS:
+            if TF_MS[tf] <= TF_MS[FOOTPRINT_TIMEFRAME]:
+                continue
+            bucket = timeframe_bucket_start(minute_update.time, tf)
+            end = bucket + TF_MS[tf] - 1
+            rows: dict[int, tuple[int, int, int, int, int, int]] = {
+                rec.time: (
+                    rec.volume,
+                    rec.buy_volume,
+                    rec.sell_volume,
+                    rec.delta_high,
+                    rec.delta_low,
+                    rec.close_delta,
+                )
+                for rec in self._cache.read_volume_delta(
+                    self._symbol,
+                    contract,
+                    FOOTPRINT_TIMEFRAME,
+                    bucket,
+                    end,
+                )
+            }
+            for row_time, source_update in self._bookmap_minute_deltas.items():
+                if bucket <= row_time <= end:
+                    rows[row_time] = (
+                        source_update.volume,
+                        source_update.buy_volume,
+                        source_update.sell_volume,
+                        source_update.delta_high,
+                        source_update.delta_low,
+                        source_update.close_delta,
+                    )
+            ordered = sorted(rows.items())
+            if not ordered:
+                continue
+
+            running_delta = 0
+            delta_high = 0
+            delta_low = 0
+            for _, values in ordered:
+                delta_high = max(delta_high, running_delta + values[3])
+                delta_low = min(delta_low, running_delta + values[4])
+                running_delta += values[5]
+
+            update = VolumeDeltaUpdate(
+                symbol=self._symbol,
+                contract=contract,
+                tf=tf,
+                time=bucket,
+                volume=sum(values[0] for _, values in ordered),
+                buy_volume=sum(values[1] for _, values in ordered),
+                sell_volume=sum(values[2] for _, values in ordered),
+                delta=running_delta,
+                delta_high=delta_high,
+                delta_low=delta_low,
+                open_delta=0,
+                close_delta=running_delta,
+            )
+            self._source_vds["bookmap"][tf].seed_bar(
+                contract,
+                time=update.time,
+                volume=update.volume,
+                buy_volume=update.buy_volume,
+                sell_volume=update.sell_volume,
+                delta_high=update.delta_high,
+                delta_low=update.delta_low,
+                open_delta=update.open_delta,
+                close_delta=update.close_delta,
+            )
+            updates.append(update)
+        return updates
+
     @staticmethod
     def _valid_rollup_bar(
         open_price: float,
@@ -1045,33 +1379,38 @@ class Pipeline:
         engine = self._source_big_trades["bookmap"]
         if isinstance(engine, BookmapBigTradeEngine):
             emitted = engine.flush_idle(now)
-            if self._active_feed == "bookmap" and emitted:
-                for bt in emitted:
-                    bt.contract = self._chart_contract()
-                await asyncio.to_thread(
-                    self._persist_derived_batch, [], [], [], emitted
+            published: list[BigTrade] = []
+            if emitted:
+                async with self._derived_source_lock:
+                    if self._active_feed == "bookmap":
+                        for bt in emitted:
+                            bt.contract = self._chart_contract()
+                        await asyncio.to_thread(
+                            self._persist_derived_batch, [], [], [], emitted
+                        )
+                        for bt in emitted:
+                            await self._enqueue(OutboundEvent.from_message(bt))
+                        published = emitted
+            for bt in published:
+                await self._evaluate_alerts(
+                    NormalizedTrade(
+                        symbol=bt.symbol,
+                        contract=bt.contract,
+                        time=bt.time,
+                        price=bt.price,
+                        volume=bt.volume,
+                        bid=None,
+                        ask=None,
+                        best_bid=None,
+                        best_ask=None,
+                        sequence=bt.trade_id,
+                        source="bookmap",
+                        side=bt.side,
+                    ),
+                    closed_bar=None,
+                    vd_update=None,
+                    big_trades=[bt],
                 )
-                for bt in emitted:
-                    await self._enqueue(OutboundEvent.from_message(bt))
-                    await self._evaluate_alerts(
-                        NormalizedTrade(
-                            symbol=bt.symbol,
-                            contract=bt.contract,
-                            time=bt.time,
-                            price=bt.price,
-                            volume=bt.volume,
-                            bid=None,
-                            ask=None,
-                            best_bid=None,
-                            best_ask=None,
-                            sequence=bt.trade_id,
-                            source="bookmap",
-                            side=bt.side,
-                        ),
-                        closed_bar=None,
-                        vd_update=None,
-                        big_trades=[bt],
-                    )
 
         if now - self._last_market_status_emit >= 1_000:
             self._last_market_status_emit = now
@@ -1081,6 +1420,12 @@ class Pipeline:
         if not self._accept_bookmap_connection(connection_id):
             return
         self._bookmap_connection_id = None
+        state = self._feed_states["bookmap"]
+        state.connected = False
+        state.healthy_since = None
+        state.bar_ready = False
+        state.orderflow_gap_pending = True
+        await self._evaluate_source_selection(now_ms())
 
     def market_data_status_message(self) -> MarketDataStatus:
         now = now_ms()
@@ -1099,6 +1444,21 @@ class Pipeline:
 
     def market_data_status_dict(self) -> dict:
         return self.market_data_status_message().to_dict()
+
+    @property
+    def derived_source_lock(self) -> asyncio.Lock:
+        """Serialize active-source writes with source-switch resynchronization."""
+        return self._derived_source_lock
+
+    def accept_nt_native_orderflow(self) -> bool:
+        """Whether an NT native bar may write shared delta/footprint keys.
+
+        Native HTTP bars write only while NT is the selected fallback, preventing
+        NT from racing Bookmap's primary live order-flow stream. Historical gap
+        imports keep using the existing direct NT-export importer, which does not
+        pass through this realtime source gate.
+        """
+        return self._active_feed == "nt"
 
     def note_nt_native_bar(self, bar_time: int, received_at: int | None = None) -> None:
         """Record finalized NT native bar-close latency without changing OHLC."""
@@ -1145,6 +1505,7 @@ class Pipeline:
             "droppedStale": state.dropped_stale,
             "droppedOverflow": state.dropped_overflow,
             "sequenceGaps": state.sequence_gaps,
+            "orderflowGapPending": state.orderflow_gap_pending,
         }
 
     def _note_feed_heartbeat(self, source: str, received_at: int) -> None:
@@ -1239,39 +1600,67 @@ class Pipeline:
     async def _switch_feed(
         self, source: str | None, reason: str, switched_at: int
     ) -> None:
-        old = self._active_feed
-        if old == source:
-            return
-        self._active_feed = source
-        self._source_switched_at = switched_at
-        self._source_switch_reason = reason
-        await asyncio.to_thread(
-            self._cache.record_market_source_switch,
-            self._symbol,
-            self._chart_contract(),
-            switched_at,
-            old,
-            source,
-            reason,
-        )
-        logger.warning("market source switched %s -> %s reason=%s", old, source, reason)
-        if source is None:
-            return
-        engine = self._source_big_trades[source]
-        if isinstance(engine, BookmapBigTradeEngine):
-            engine.reset_pending()
-        elif isinstance(engine, BigTradeEngine):
-            engine.reset_contract(self._chart_contract())
-        snapshots = [
-            update
-            for tf in SUPPORTED_TFS
-            for update in self._source_snapshots[source].get(tf, [])
-        ]
-        if snapshots:
+        async with self._derived_source_lock:
+            old = self._active_feed
+            if old == source:
+                return
+            self._active_feed = source
+            self._source_switched_at = switched_at
+            self._source_switch_reason = reason
             await asyncio.to_thread(
-                self._persist_derived_batch, snapshots, [], [], []
+                self._cache.record_market_source_switch,
+                self._symbol,
+                self._chart_contract(),
+                switched_at,
+                old,
+                source,
+                reason,
+            )
+            logger.warning(
+                "market source switched %s -> %s reason=%s", old, source, reason
+            )
+            if source is None:
+                return
+            engine = self._source_big_trades[source]
+            if isinstance(engine, BookmapBigTradeEngine):
+                engine.reset_pending()
+            elif isinstance(engine, BigTradeEngine):
+                engine.reset_contract(self._chart_contract())
+            snapshots = [
+                update
+                for tf in SUPPORTED_TFS
+                for update in self._source_snapshots[source].get(tf, [])
+            ]
+            delta_snapshots = [
+                update
+                for tf in SUPPORTED_TFS
+                for update in (
+                    self._source_vds[source][tf].current_update(
+                        self._chart_contract()
+                    ),
+                )
+                if update is not None
+            ]
+            footprint_snapshots: list[FootprintUpdate] = []
+            footprint_engine = self._source_footprints.get(source)
+            if footprint_engine is not None:
+                footprint = footprint_engine.current_update(self._chart_contract())
+                if footprint is not None:
+                    footprint_snapshots.append(footprint)
+            await asyncio.to_thread(
+                self._persist_derived_batch,
+                snapshots,
+                delta_snapshots,
+                [],
+                [],
+                footprint_snapshots,
+                bool(footprint_snapshots),
             )
             for update in snapshots:
+                await self._enqueue(OutboundEvent.from_message(update))
+            for update in delta_snapshots:
+                await self._enqueue(OutboundEvent.from_message(update))
+            for update in footprint_snapshots:
                 await self._enqueue(OutboundEvent.from_message(update))
 
     def _remember_source_updates(
@@ -1359,9 +1748,9 @@ class Pipeline:
                 tf,
                 limit=1,
             )
-            if source == "nt" and deltas and deltas[-1].time == bar.time:
+            if source in self._source_vds and deltas and deltas[-1].time == bar.time:
                 delta = deltas[-1]
-                self._vds[tf].seed_bar(
+                self._source_vds[source][tf].seed_bar(
                     chart_contract,
                     time=delta.time,
                     volume=delta.volume,
@@ -1373,6 +1762,27 @@ class Pipeline:
                     close_delta=delta.close_delta,
                     last_price=bar.close,
                 )
+            if source == "bookmap" and tf == FOOTPRINT_TIMEFRAME:
+                levels = self._cache.read_footprint_levels(
+                    self._symbol,
+                    chart_contract,
+                    bar.time,
+                    FOOTPRINT_TIMEFRAME,
+                )
+                if levels:
+                    self._source_footprints["bookmap"].seed_bar(
+                        chart_contract,
+                        symbol=self._symbol,
+                        time=bar.time,
+                        open=bar.open,
+                        high=bar.high,
+                        low=bar.low,
+                        close=bar.close,
+                        rows=[
+                            (level.price, level.bid_volume, level.ask_volume)
+                            for level in levels
+                        ],
+                    )
             seeded += 1
         if seeded:
             logger.info("pipeline: hydrated %s open chart bars from cache", seeded)
@@ -1439,7 +1849,7 @@ class Pipeline:
         """
         chart_contract = self._chart_contract()
         self._bars.reset_contract(chart_contract)
-        for engine in self._vds.values():
+        for engine in self._source_vds["nt"].values():
             engine.reset_contract(chart_contract)
         self._fvg.reset_contract(chart_contract)
         self._bt.reset_contract(chart_contract)

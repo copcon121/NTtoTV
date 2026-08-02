@@ -30,9 +30,13 @@ class _Registry:
 class _Pipeline:
     def __init__(self) -> None:
         self.native_bar_times = []
+        self.accept_orderflow = True
 
     def note_nt_native_bar(self, bar_time: int) -> None:
         self.native_bar_times.append(bar_time)
+
+    def accept_nt_native_orderflow(self) -> bool:
+        return self.accept_orderflow
 
 
 class _Runtime:
@@ -127,6 +131,69 @@ def test_native_bar_upserts_cache_and_enqueues_updates(tmp_path):
             (event.payload["type"], event.payload.get("tf"))
             for event in runtime.registry.events
         ]
+    finally:
+        tick_store.close()
+        cache.close()
+
+
+def test_native_realtime_orderflow_is_ignored_while_bookmap_is_primary(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path,
+        supported_symbols=(_SYMBOL,),
+        gc_candidate_contracts=(_SOURCE,),
+    )
+    cache = CacheStore(tmp_path / "app.sqlite")
+    tick_store = TickStore(tmp_path / "ticks")
+    runtime = _Runtime(cache)
+    runtime.pipeline.accept_orderflow = False
+    app = create_app(lifespan=False)
+    app.state.runtime = runtime
+    app.state.contract_state = ContractStateStore(cache, settings=settings)
+    app.state.tick_store = tick_store
+    payload = {
+        "symbol": _SYMBOL,
+        "contract": _ACTIVE,
+        "sourceContract": _SOURCE,
+        "tf": "1m",
+        "time": _BASE_MS,
+        "open": 2400.0,
+        "high": 2400.2,
+        "low": 2399.9,
+        "close": 2400.1,
+        "volume": 10,
+        "buyVolume": 7,
+        "sellVolume": 3,
+        "delta": 4,
+        "deltaHigh": 4,
+        "deltaLow": 0,
+        "openDelta": 0,
+        "closeDelta": 4,
+        "rows": [{"price": 2400.1, "bid": 3, "ask": 7}],
+    }
+
+    try:
+        with TestClient(app) as client:
+            response = client.post("/api/nt/native-bar", json=payload)
+
+        assert response.status_code == 200
+        assert response.json()["ignored"] == "inactive_market_source"
+        assert response.json()["orderFlowAccepted"] is False
+        assert cache.read_volume_delta(_SYMBOL, _ACTIVE, "1m", limit=1) == []
+        assert cache.read_footprint_bars(_SYMBOL, _ACTIVE, "1m", limit=1) == []
+        assert not any(
+            event.payload["type"] in {"volume_delta_update", "footprint_update"}
+            for event in runtime.registry.events
+        )
+
+        # A caller cannot bypass live source ownership by labeling an HTTP frame
+        # historical. Missing history continues through the direct export importer.
+        payload["historical"] = True
+        with TestClient(app) as client:
+            historical = client.post("/api/nt/native-bar", json=payload)
+        assert historical.status_code == 200
+        assert historical.json()["orderFlowAccepted"] is False
+        assert cache.read_volume_delta(_SYMBOL, _ACTIVE, "1m", limit=1) == []
+        assert cache.read_footprint_bars(_SYMBOL, _ACTIVE, "1m", limit=1) == []
     finally:
         tick_store.close()
         cache.close()

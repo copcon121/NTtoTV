@@ -179,6 +179,7 @@ class KeyedStore:
         footprint_bar: FootprintBarRecord | None = None,
         footprint_bars: Iterable[FootprintBarRecord] = (),
         footprint_levels: Iterable[FootprintLevelRecord] = (),
+        replace_footprint_levels: bool = False,
         fvg_signals: Iterable[FvgSignalRecord] = (),
         big_trades: Iterable[BigTradeRecord] = (),
     ) -> None:
@@ -192,12 +193,18 @@ class KeyedStore:
         """
         bar_rows = [_bar_params(bar) for bar in bars]
         delta_rows = [_volume_delta_params(rec) for rec in volume_deltas]
-        footprint_rows = [_footprint_bar_params(rec) for rec in footprint_bars]
+        footprint_records = list(footprint_bars)
+        footprint_rows = [_footprint_bar_params(rec) for rec in footprint_records]
         level_rows = [_footprint_level_params(rec) for rec in footprint_levels]
         fvg_rows = [_fvg_signal_params(rec) for rec in fvg_signals]
         big_trade_rows = [_big_trade_params(rec) for rec in big_trades]
         if footprint_bar is not None:
             footprint_rows.append(_footprint_bar_params(footprint_bar))
+            footprint_records.append(footprint_bar)
+        replace_keys = {
+            (rec.symbol, rec.contract, rec.timeframe, rec.time)
+            for rec in footprint_records
+        }
         if not (
             bar_rows
             or delta_rows
@@ -213,6 +220,12 @@ class KeyedStore:
                 conn.executemany(_UPSERT_BAR, bar_rows)
             if delta_rows:
                 conn.executemany(_UPSERT_VOLUME_DELTA, delta_rows)
+            if replace_footprint_levels and replace_keys:
+                conn.executemany(
+                    "DELETE FROM footprint_levels "
+                    "WHERE symbol=? AND contract=? AND timeframe=? AND time=?",
+                    sorted(replace_keys),
+                )
             if footprint_rows:
                 conn.executemany(_UPSERT_FOOTPRINT_BAR, footprint_rows)
             if level_rows:

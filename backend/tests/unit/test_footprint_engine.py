@@ -17,7 +17,7 @@ SYMBOL = "GC"
 CONTRACT = "GC 08-26"
 
 
-def _t(time, price, volume, bid=None, ask=None, seq=0) -> NormalizedTrade:
+def _t(time, price, volume, bid=None, ask=None, seq=0, side=None) -> NormalizedTrade:
     return NormalizedTrade(
         symbol=SYMBOL,
         contract=CONTRACT,
@@ -29,6 +29,7 @@ def _t(time, price, volume, bid=None, ask=None, seq=0) -> NormalizedTrade:
         best_bid=None,
         best_ask=None,
         sequence=seq,
+        side=side,
     )
 
 
@@ -43,6 +44,42 @@ def test_ladder_splits_buy_to_ask_and_sell_to_bid():
     assert by_price[100.2].ask == 7 and by_price[100.2].bid == 0
     # Conservation.
     assert sum(r.bid + r.ask for r in u.rows) == 12
+
+
+@pytest.mark.unit
+def test_explicit_bookmap_side_populates_ladder_without_quotes():
+    eng = FootprintEngine()
+    eng.on_trade(_t(0, 100.0, 5, side=Side.SELL))
+    update = eng.on_trade(_t(1, 100.1, 8, side=Side.BUY))
+
+    assert update is not None
+    by_price = {row.price: row for row in update.rows}
+    assert (by_price[100.0].bid, by_price[100.0].ask) == (5, 0)
+    assert (by_price[100.1].bid, by_price[100.1].ask) == (0, 8)
+    assert update.bar_delta == 3
+    assert sum(row.bid + row.ask for row in update.rows) == 13
+
+
+@pytest.mark.unit
+def test_authoritative_seed_replaces_stale_ladder_levels():
+    eng = FootprintEngine()
+    eng.on_trade(_t(0, 99.9, 4, side=Side.SELL))
+
+    eng.seed_bar(
+        CONTRACT,
+        symbol=SYMBOL,
+        time=0,
+        open=100.0,
+        high=100.1,
+        low=100.0,
+        close=100.1,
+        rows=[(100.0, 3, 0), (100.1, 0, 9)],
+    )
+    update = eng.current_update(CONTRACT)
+
+    assert update is not None
+    assert {row.price for row in update.rows} == {100.0, 100.1}
+    assert update.bar_delta == 6
 
 
 @pytest.mark.unit

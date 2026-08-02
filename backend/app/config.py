@@ -60,7 +60,8 @@ class Settings:
     nt_status_timeout_s: int = 15
 
     # Realtime market-source arbitration. Production remains NT-first until the
-    # Bookmap shadow gate is explicitly promoted through the environment.
+    # Local/test default stays NT; production promotes Bookmap through the
+    # environment while keeping NT warm as the automatic fallback.
     market_data_preferred_source: str = field(
         default_factory=lambda: os.getenv(
             "NTTOTV_MARKET_DATA_PREFERRED_SOURCE", "nt"
