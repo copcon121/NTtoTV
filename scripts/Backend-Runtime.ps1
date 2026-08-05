@@ -284,20 +284,20 @@ function Start-BackendRuntime {
     Remove-Item -LiteralPath $paths.Stdout -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $paths.Stderr -Force -ErrorAction SilentlyContinue
 
-    $args = @(
+    $runnerArgs = @(
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",
         "-File", $paths.Runner,
-        "-Port", [string]$Port
+        "-Port", [string]$Port,
+        "-StdoutLog", $paths.Stdout,
+        "-StderrLog", $paths.Stderr
     )
     $process = Start-Process `
         -FilePath "powershell.exe" `
-        -ArgumentList $args `
+        -ArgumentList $runnerArgs `
         -WorkingDirectory $paths.Root `
         -WindowStyle Hidden `
-        -PassThru `
-        -RedirectStandardOutput $paths.Stdout `
-        -RedirectStandardError $paths.Stderr
+        -PassThru
 
     Write-Host ("Started backend wrapper PID {0}; waiting for health." -f $process.Id)
 

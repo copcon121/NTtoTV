@@ -31,12 +31,16 @@ class _Pipeline:
     def __init__(self) -> None:
         self.native_bar_times = []
         self.accept_orderflow = True
+        self.reconciled_orderflow = []
 
     def note_nt_native_bar(self, bar_time: int) -> None:
         self.native_bar_times.append(bar_time)
 
-    def accept_nt_native_orderflow(self) -> bool:
+    def accept_nt_native_orderflow(self, **_bar_key) -> bool:
         return self.accept_orderflow
+
+    def reconcile_nt_native_orderflow(self, minute_update, rollup_updates) -> None:
+        self.reconciled_orderflow.append((minute_update, rollup_updates))
 
 
 class _Runtime:
@@ -103,6 +107,7 @@ def test_native_bar_upserts_cache_and_enqueues_updates(tmp_path):
         assert body["contract"] == _ACTIVE
         assert body["rows"] == 2
         assert runtime.pipeline.native_bar_times == [_BASE_MS]
+        assert len(runtime.pipeline.reconciled_orderflow) == 1
 
         # Native NT owns delta/footprint/FVG only; it must never overwrite OHLC.
         assert cache.read_bars(_SYMBOL, _ACTIVE, "1m", limit=1) == []
@@ -131,6 +136,33 @@ def test_native_bar_upserts_cache_and_enqueues_updates(tmp_path):
             (event.payload["type"], event.payload.get("tf"))
             for event in runtime.registry.events
         ]
+    finally:
+        tick_store.close()
+        cache.close()
+
+
+def test_native_bar_rejects_reverse_proxy_requests(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path,
+        supported_symbols=(_SYMBOL,),
+        gc_candidate_contracts=(_SOURCE,),
+    )
+    cache = CacheStore(tmp_path / "app.sqlite")
+    tick_store = TickStore(tmp_path / "ticks")
+    runtime = _Runtime(cache)
+    app = create_app(lifespan=False)
+    app.state.runtime = runtime
+    app.state.contract_state = ContractStateStore(cache, settings=settings)
+    app.state.tick_store = tick_store
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/nt/native-bar",
+                json={},
+                headers={"x-forwarded-for": "203.0.113.10"},
+            )
+        assert response.status_code == 403
+        assert runtime.pipeline.native_bar_times == []
     finally:
         tick_store.close()
         cache.close()

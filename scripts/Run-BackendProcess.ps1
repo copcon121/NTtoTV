@@ -1,5 +1,7 @@
 param(
-    [int]$Port = 8000
+    [int]$Port = 8000,
+    [string]$StdoutLog = "",
+    [string]$StderrLog = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,5 +21,15 @@ $env:NTTOTV_INVITE_CODE = "join-9999"
 $env:NTTOTV_MARKET_DATA_PREFERRED_SOURCE = "bookmap"
 
 Set-Location -LiteralPath $backendDir
-& $python -m uvicorn app.app:app --host 0.0.0.0 --port $Port
-exit $LASTEXITCODE
+if ($StdoutLog -and $StderrLog) {
+    # Use cmd /c to perform file-based redirection that survives the parent
+    # terminal closing.  PowerShell's native 1> 2> operators inherit the
+    # caller's console handles which may not exist in a -WindowStyle Hidden
+    # wrapper.
+    $cmdLine = "`"$python`" -m uvicorn app.app:app --host 0.0.0.0 --port $Port 1>`"$StdoutLog`" 2>`"$StderrLog`""
+    cmd /c $cmdLine
+    exit $LASTEXITCODE
+} else {
+    & $python -m uvicorn app.app:app --host 0.0.0.0 --port $Port
+    exit $LASTEXITCODE
+}

@@ -9,12 +9,11 @@ native footprint rows.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, HTTPException, Request
 
 from ..engines.bar_aggregator import SUPPORTED_TFS
 from ..engines.footprint_engine import (
@@ -49,6 +48,7 @@ router = APIRouter(prefix="/api/nt", tags=["nt-native"])
 ROLLUP_TFS = tuple(
     tf for tf in SUPPORTED_TFS if TF_MS[tf] > TF_MS[FOOTPRINT_TIMEFRAME]
 )
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
 @router.post("/native-bar")
@@ -56,12 +56,16 @@ async def ingest_native_bar(
     request: Request, payload: dict[str, Any] = Body(...)
 ) -> dict[str, Any]:
     """Upsert one finalized native NT bar/delta/footprint payload."""
+    client_host = None if request.client is None else request.client.host
+    if client_host not in _LOOPBACK_HOSTS or request.headers.get("x-forwarded-for"):
+        raise HTTPException(status_code=403, detail="NT native ingest is loopback only")
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is None:
         raise bad_request("runtime is not available", field="runtime")
 
     symbol = str(payload.get("symbol") or "GC")
     contract = str(payload.get("contract") or symbol)
+    source_contract = str(payload.get("sourceContract") or "") or None
     tf = str(payload.get("tf") or FOOTPRINT_TIMEFRAME)
     if tf != FOOTPRINT_TIMEFRAME:
         raise bad_request("native bridge currently accepts only 1m bars", field="tf")
@@ -162,17 +166,33 @@ async def ingest_native_bar(
         await lock.acquire()
     try:
         orderflow_accepted = (
-            True if acceptor is None else bool(acceptor())
+            True
+            if acceptor is None
+            else bool(
+                acceptor(
+                    symbol=symbol,
+                    contract=contract,
+                    tf=tf,
+                    bar_time=time_ms,
+                    source_contract=source_contract,
+                )
+            )
         )
         rollup_delta_updates: list[VolumeDeltaUpdate] = []
         if orderflow_accepted:
-            rollup_delta_updates = await asyncio.to_thread(
-                _persist_native_payload,
+            # This endpoint runs once per finalized minute. Keep the small cache
+            # transaction synchronous while holding the source lock so a live
+            # trade cannot mutate the NT engines between persistence and seed.
+            rollup_delta_updates = _persist_native_payload(
                 runtime.cache,
                 bar_update=bar_update,
                 volume_delta_update=volume_delta_update,
                 footprint_update=footprint_update,
             )
+
+            reconcile = getattr(pipeline, "reconcile_nt_native_orderflow", None)
+            if reconcile is not None:
+                reconcile(volume_delta_update, rollup_delta_updates)
 
             runtime.registry.enqueue(OutboundEvent.from_message(volume_delta_update))
             if footprint_update is not None:

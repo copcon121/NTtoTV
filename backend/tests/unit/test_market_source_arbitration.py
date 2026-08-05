@@ -20,6 +20,19 @@ _SOURCE = "GC 08-26"
 _BASE = 1_753_200_000_000
 
 
+def _bookmap_orderflow(volume: int, price: float) -> dict:
+    return {
+        "buyVolume": volume,
+        "sellVolume": 0,
+        "delta": volume,
+        "deltaHigh": volume,
+        "deltaLow": 0,
+        "openDelta": 0,
+        "closeDelta": volume,
+        "rows": [{"price": price, "bid": 0, "ask": volume}],
+    }
+
+
 def _pipeline(tmp_path, *, preferred="bookmap"):
     settings = Settings(
         data_dir=tmp_path,
@@ -237,6 +250,7 @@ def test_snapshot_bar_does_not_pollute_live_latency_metrics(tmp_path):
                     "low": 99.0,
                     "close": 100.5,
                     "volume": 10,
+                    **_bookmap_orderflow(10, 100.5),
                     "closed": True,
                     "partialStart": False,
                     "snapshot": True,
@@ -253,12 +267,106 @@ def test_snapshot_bar_does_not_pollute_live_latency_metrics(tmp_path):
 
 
 @pytest.mark.unit
+def test_invalid_bookmap_ladder_is_rejected_before_engine_seed(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(tmp_path, preferred="nt")
+    try:
+        update = BarUpdate(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            tf="1m",
+            bar=OHLCVBar(
+                time=_BASE,
+                open=2400.0,
+                high=2400.1,
+                low=2399.9,
+                close=2400.0,
+                volume=10,
+            ),
+            closed=False,
+            source="bookmap",
+        )
+        payload = {"volume": 10, **_bookmap_orderflow(10, 2400.0)}
+        payload["rows"] = [{"price": 2400.0, "bid": 0, "ask": 9}]
+        with pytest.raises(ValueError, match="conserve"):
+            pipeline._reconcile_bookmap_orderflow(payload, update)
+        assert (
+            pipeline._source_vds["bookmap"]["1m"].current_update(_SYMBOL)
+            is None
+        )
+        assert pipeline._source_footprints["bookmap"].current_update(_SYMBOL) is None
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
 def test_nt_native_bar_close_latency_is_reported(tmp_path):
     pipeline, cache, ticks, _ = _pipeline(tmp_path, preferred="nt")
     try:
         pipeline.note_nt_native_bar(_BASE, _BASE + 61_500)
         status = pipeline.market_data_status_dict()
         assert status["sources"]["nt"]["barCloseLagMs"]["p95"] == 1_500
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
+def test_nt_native_orderflow_uses_bar_time_owner_not_arrival_source(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(tmp_path)
+    try:
+        pipeline._active_feed = "bookmap"
+        cache.upsert_bar(
+            BarRecord(
+                symbol=_SYMBOL,
+                contract=_SYMBOL,
+                timeframe="1m",
+                time=_BASE,
+                open=2400.0,
+                high=2400.1,
+                low=2399.9,
+                close=2400.0,
+                volume=10,
+                closed=True,
+                source="nt",
+            )
+        )
+        assert pipeline.accept_nt_native_orderflow(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            tf="1m",
+            bar_time=_BASE,
+        )
+        assert not pipeline.accept_nt_native_orderflow(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            tf="1m",
+            bar_time=_BASE,
+            source_contract="GC 06-26",
+        )
+
+        cache.upsert_bar(
+            BarRecord(
+                symbol=_SYMBOL,
+                contract=_SYMBOL,
+                timeframe="1m",
+                time=_BASE,
+                open=2400.0,
+                high=2400.1,
+                low=2399.9,
+                close=2400.0,
+                volume=10,
+                closed=True,
+                source="bookmap",
+            )
+        )
+        pipeline._active_feed = "nt"
+        assert not pipeline.accept_nt_native_orderflow(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            tf="1m",
+            bar_time=_BASE,
+        )
     finally:
         ticks.close()
         cache.close()
@@ -373,6 +481,7 @@ def test_bookmap_primary_owns_live_delta_and_footprint_while_nt_stays_warm(tmp_p
         corrected["buyVolume"] = 10
         corrected["sellVolume"] = 2
         corrected["delta"] = 8
+        corrected["deltaHigh"] = 8
         corrected["closeDelta"] = 8
         asyncio.run(pipeline.on_bookmap_bar(corrected))
         levels = cache.read_footprint_levels(_SYMBOL, _SYMBOL, _BASE, "1m")
@@ -511,6 +620,81 @@ def test_authoritative_bookmap_delta_repairs_higher_timeframes(tmp_path):
 
 
 @pytest.mark.unit
+def test_nt_native_delta_correction_survives_the_next_fallback_tick(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(tmp_path, preferred="nt")
+    try:
+        bucket = (_BASE // 300_000) * 300_000
+        pipeline._active_feed = "nt"
+
+        def nt_trade(time_ms: int, volume: int, side: Side) -> NormalizedTrade:
+            return NormalizedTrade(
+                symbol=_SYMBOL,
+                contract=_SYMBOL,
+                time=time_ms,
+                price=2400.0,
+                volume=volume,
+                bid=2399.9,
+                ask=2400.0,
+                best_bid=2399.9,
+                best_ask=2400.0,
+                sequence=time_ms,
+                source="nt",
+                side=side,
+            )
+
+        asyncio.run(
+            pipeline._run_trade_engines(
+                nt_trade(bucket + 10_000, 10, Side.BUY), source="nt"
+            )
+        )
+        assert cache.read_volume_delta(_SYMBOL, _SYMBOL, "5m", limit=1)[0].delta == 10
+
+        corrected_m1 = VolumeDeltaUpdate(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            tf="1m",
+            time=bucket,
+            volume=10,
+            buy_volume=0,
+            sell_volume=10,
+            delta=-10,
+            delta_high=0,
+            delta_low=-10,
+            open_delta=0,
+            close_delta=-10,
+        )
+        corrected_m5 = VolumeDeltaUpdate(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            tf="5m",
+            time=bucket,
+            volume=10,
+            buy_volume=0,
+            sell_volume=10,
+            delta=-10,
+            delta_high=0,
+            delta_low=-10,
+            open_delta=0,
+            close_delta=-10,
+        )
+        pipeline._persist_derived_batch(
+            [], [corrected_m1, corrected_m5], [], []
+        )
+        pipeline.reconcile_nt_native_orderflow(corrected_m1, [corrected_m5])
+
+        asyncio.run(
+            pipeline._run_trade_engines(
+                nt_trade(bucket + 60_100, 1, Side.SELL), source="nt"
+            )
+        )
+        corrected = cache.read_volume_delta(_SYMBOL, _SYMBOL, "5m", limit=1)[0]
+        assert (corrected.volume, corrected.delta, corrected.delta_low) == (11, -11, -11)
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
 def test_authoritative_bookmap_rollup_survives_next_raw_trade(tmp_path):
     pipeline, cache, ticks, _ = _pipeline(tmp_path)
     try:
@@ -560,6 +744,7 @@ def test_authoritative_bookmap_rollup_survives_next_raw_trade(tmp_path):
                     "low": 104.0,
                     "close": 104.5,
                     "volume": 30,
+                    **_bookmap_orderflow(30, 104.5),
                     "closed": True,
                     "partialStart": False,
                     "snapshot": True,
@@ -667,6 +852,7 @@ def test_authoritative_bookmap_closed_bar_emits_mgann_break_alert(tmp_path):
                     "low": low,
                     "close": close,
                     "volume": volume,
+                    **_bookmap_orderflow(volume, close),
                     "closed": True,
                     "partialStart": False,
                     "snapshot": False,

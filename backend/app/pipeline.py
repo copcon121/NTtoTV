@@ -13,7 +13,7 @@ all derived outputs through the WebSocket_Registry to `/ws/chart`:
   :class:`~app.engines.big_trade_engine.BigTradeEngine`; their outputs are
   persisted to the Cache_Store and enqueued on the registry (Req 9.3, 20.1).
   Bookmap supplies tick-by-tick delta/footprint while active; NT native bars are
-  the automatic fallback and remain available for explicit history imports;
+  the automatic fallback, while NT-export files remain the history repair path;
 * every accepted trade/quote is observed by the
   :class:`~app.engines.contract_resolver.ContractResolver`, whose needed-set /
   Active_Contract changes drive Control_Commands and Active_Contract status
@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import math
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
@@ -376,6 +377,7 @@ class Pipeline:
         received = now_ms()
         trade.source = "nt"
         trade.received_at = received
+        self._feed_states["nt"].contract = trade.contract
         self._note_feed_event("nt", trade.time, trade.bridge_time, received)
 
         # Backfill the trade's bid/ask from the prevailing quote when NT did not
@@ -439,6 +441,7 @@ class Pipeline:
         decision = await self._coordinator.on_quote(quote)
         if not decision.accepted:
             return
+        self._feed_states["nt"].contract = quote.contract
         self._note_feed_event("nt", quote.time, quote.bridge_time, received)
 
         # Track the prevailing best bid/ask per contract so trades can be
@@ -546,6 +549,7 @@ class Pipeline:
             # until the next authoritative Bookmap bar snapshot repairs it.
             gap_state.orderflow_gap_pending = True
             gap_state.bar_ready = False
+            gap_state.healthy_since = None
         self._note_feed_event("bookmap", trade.time, trade.bridge_time, received)
         state = self._feed_states["bookmap"]
         state.contract = trade.contract
@@ -633,12 +637,19 @@ class Pipeline:
             closed=bool(payload.get("closed", False)),
             source="bookmap",
         )
-        self._source_bars["bookmap"].reconcile_bar(
-            self._chart_contract(),
-            update.tf,
-            update.bar,
-            closed=update.closed,
-        )
+        bar = update.bar
+        if update.tf != FOOTPRINT_TIMEFRAME or not self._valid_rollup_bar(
+            bar.open,
+            bar.high,
+            bar.low,
+            bar.close,
+            bar.volume,
+        ):
+            state.orderflow_gap_pending = True
+            state.bar_ready = False
+            state.healthy_since = None
+            await self._evaluate_source_selection(received)
+            raise ValueError("invalid Bookmap bar snapshot")
         try:
             bookmap_vd, bookmap_fp = self._reconcile_bookmap_orderflow(
                 payload, update
@@ -646,9 +657,21 @@ class Pipeline:
         except (KeyError, TypeError, ValueError):
             state.orderflow_gap_pending = True
             state.bar_ready = False
+            state.healthy_since = None
             await self._evaluate_source_selection(received)
             raise
-        if bookmap_vd is not None and bookmap_fp is not None and not partial:
+        self._source_bars["bookmap"].reconcile_bar(
+            self._chart_contract(),
+            update.tf,
+            update.bar,
+            closed=update.closed,
+        )
+        if not partial:
+            # A valid OHLCV bar clears the gap even when the bridge does not
+            # embed orderflow fields.  The live tick stream already drives
+            # volume-delta and footprint engines independently.
+            if state.orderflow_gap_pending:
+                state.healthy_since = received
             state.orderflow_gap_pending = False
         state.bar_ready = not partial and not state.orderflow_gap_pending
         bookmap_vds = (
@@ -702,24 +725,95 @@ class Pipeline:
     def _reconcile_bookmap_orderflow(
         self, payload: dict, bar_update: BarUpdate
     ) -> tuple[VolumeDeltaUpdate | None, FootprintUpdate | None]:
-        """Seed live Bookmap order-flow engines from a full bar snapshot."""
-        if bar_update.tf != FOOTPRINT_TIMEFRAME or "buyVolume" not in payload:
+        """Seed live Bookmap order-flow engines from a full bar snapshot.
+
+        Returns ``(None, None)`` when the payload does not contain embedded
+        order-flow fields.  This allows legacy bridge JARs that send only
+        OHLCV bars to still promote Bookmap as the active source; the live
+        tick stream drives volume-delta and footprint engines independently.
+        """
+        contract = self._chart_contract()
+        required = {
+            "buyVolume",
+            "sellVolume",
+            "delta",
+            "deltaHigh",
+            "deltaLow",
+            "openDelta",
+            "closeDelta",
+            "rows",
+        }
+        missing = required.difference(payload)
+        if missing:
+            if not getattr(self, "_bookmap_orderflow_missing_logged", False):
+                logger.info(
+                    "Bookmap bar snapshot without embedded order-flow "
+                    "(missing %s); live tick stream will drive engines",
+                    ", ".join(sorted(missing)),
+                )
+                self._bookmap_orderflow_missing_logged = True
             return None, None
 
-        contract = self._chart_contract()
+        volume = int(payload["volume"])
+        buy_volume = int(payload["buyVolume"])
+        sell_volume = int(payload["sellVolume"])
+        delta = int(payload["delta"])
+        delta_high = int(payload["deltaHigh"])
+        delta_low = int(payload["deltaLow"])
+        open_delta = int(payload["openDelta"])
+        close_delta = int(payload["closeDelta"])
+        if min(volume, buy_volume, sell_volume) < 0:
+            raise ValueError("Bookmap order-flow volumes must be non-negative")
+        if buy_volume + sell_volume != volume:
+            raise ValueError("Bookmap buy/sell volume does not conserve bar volume")
+        if delta != buy_volume - sell_volume or close_delta != delta:
+            raise ValueError("Bookmap delta does not match buy/sell volume")
+        if open_delta != 0:
+            raise ValueError("Bookmap delta snapshots must use a zero baseline")
+        if delta_low > min(0, close_delta) or delta_high < max(0, close_delta):
+            raise ValueError("Bookmap delta extrema do not contain the delta path")
+
+        raw_rows = payload["rows"]
+        if not isinstance(raw_rows, list):
+            raise ValueError("Bookmap bar rows must be a list")
+        footprint_engine = self._source_footprints["bookmap"]
+        rows: list[tuple[float, int, int]] = []
+        seen_prices: set[float] = set()
+        row_bid = 0
+        row_ask = 0
+        for raw in raw_rows:
+            if not isinstance(raw, dict):
+                raise ValueError("Bookmap footprint row must be an object")
+            price = float(raw["price"])
+            bid = int(raw.get("bid", 0))
+            ask = int(raw.get("ask", 0))
+            if not math.isfinite(price) or price <= 0 or min(bid, ask) < 0:
+                raise ValueError("Bookmap footprint row contains invalid values")
+            price = footprint_engine.level_price(price)
+            if price in seen_prices:
+                raise ValueError("Bookmap footprint snapshot contains duplicate levels")
+            if price < bar_update.bar.low - 1e-8 or price > bar_update.bar.high + 1e-8:
+                raise ValueError("Bookmap footprint level is outside bar range")
+            seen_prices.add(price)
+            row_bid += bid
+            row_ask += ask
+            rows.append((price, bid, ask))
+        if row_bid != sell_volume or row_ask != buy_volume:
+            raise ValueError("Bookmap footprint ladder does not conserve side volume")
+
         volume_delta = VolumeDeltaUpdate(
             symbol=bar_update.symbol,
             contract=contract,
             tf=bar_update.tf,
             time=bar_update.bar.time,
-            volume=int(payload["volume"]),
-            buy_volume=int(payload.get("buyVolume", 0)),
-            sell_volume=int(payload.get("sellVolume", 0)),
-            delta=int(payload.get("delta", 0)),
-            delta_high=int(payload.get("deltaHigh", 0)),
-            delta_low=int(payload.get("deltaLow", 0)),
-            open_delta=int(payload.get("openDelta", 0)),
-            close_delta=int(payload.get("closeDelta", payload.get("delta", 0))),
+            volume=volume,
+            buy_volume=buy_volume,
+            sell_volume=sell_volume,
+            delta=delta,
+            delta_high=delta_high,
+            delta_low=delta_low,
+            open_delta=open_delta,
+            close_delta=close_delta,
         )
         self._source_vds["bookmap"][FOOTPRINT_TIMEFRAME].seed_bar(
             contract,
@@ -734,21 +828,6 @@ class Pipeline:
             last_price=bar_update.bar.close,
         )
 
-        raw_rows = payload.get("rows")
-        if not isinstance(raw_rows, list):
-            raise ValueError("Bookmap bar rows must be a list")
-        rows: list[tuple[float, int, int]] = []
-        for raw in raw_rows:
-            if not isinstance(raw, dict):
-                continue
-            rows.append(
-                (
-                    float(raw["price"]),
-                    int(raw.get("bid", 0)),
-                    int(raw.get("ask", 0)),
-                )
-            )
-        footprint_engine = self._source_footprints["bookmap"]
         footprint_engine.seed_bar(
             contract,
             symbol=bar_update.symbol,
@@ -1450,15 +1529,85 @@ class Pipeline:
         """Serialize active-source writes with source-switch resynchronization."""
         return self._derived_source_lock
 
-    def accept_nt_native_orderflow(self) -> bool:
+    def accept_nt_native_orderflow(
+        self,
+        *,
+        symbol: str,
+        contract: str,
+        tf: str,
+        bar_time: int,
+        source_contract: str | None = None,
+    ) -> bool:
         """Whether an NT native bar may write shared delta/footprint keys.
 
         Native HTTP bars write only while NT is the selected fallback, preventing
         NT from racing Bookmap's primary live order-flow stream. Historical gap
         imports keep using the existing direct NT-export importer, which does not
-        pass through this realtime source gate.
+        pass through this realtime source gate. Ownership is resolved for the
+        bar being posted, not merely from the source active at HTTP arrival time,
+        because native finalized bars can arrive just after a source switch.
         """
+        if source_contract and source_contract != self._active_contract():
+            return False
+        bars = self._cache.read_bars(
+            symbol,
+            contract,
+            tf,
+            bar_time,
+            bar_time,
+            limit=1,
+        )
+        if bars and bars[-1].time == bar_time and bars[-1].source in {
+            "nt",
+            "bookmap",
+        }:
+            return bars[-1].source == "nt"
         return self._active_feed == "nt"
+
+    def reconcile_nt_native_orderflow(
+        self,
+        minute_update: VolumeDeltaUpdate,
+        rollup_updates: list[VolumeDeltaUpdate],
+    ) -> None:
+        """Seed the warm NT delta engines from an accepted native correction.
+
+        This runs under :attr:`derived_source_lock` after the cache transaction.
+        When NT is currently active, the persisted rollups include any already
+        received open-minute row, so the next NT tick continues from the native
+        correction instead of overwriting it with the older provisional state.
+        A delayed correction for a prior NT-owned minute seeds only the shared
+        higher-timeframe state of the currently active source; it never injects
+        an NT M1 ladder into Bookmap's live minute.
+        """
+        source = self._active_feed
+        if source not in self._source_vds:
+            return
+        contract = self._chart_contract()
+        # The M1 correction belongs specifically to NT. Higher-timeframe
+        # rollups represent the shared, per-minute ownership timeline and must
+        # seed whichever source is currently active or its next tick would
+        # overwrite the corrected cache row.
+        updates = [*rollup_updates]
+        if source == "nt":
+            updates.insert(0, minute_update)
+        for update in updates:
+            engine = self._source_vds[source].get(update.tf)
+            if engine is None:
+                continue
+            current = engine.current_update(contract)
+            if current is not None and current.time > update.time:
+                continue
+            engine.seed_bar(
+                contract,
+                time=update.time,
+                volume=update.volume,
+                buy_volume=update.buy_volume,
+                sell_volume=update.sell_volume,
+                delta_high=update.delta_high,
+                delta_low=update.delta_low,
+                open_delta=update.open_delta,
+                close_delta=update.close_delta,
+            )
 
     def note_nt_native_bar(self, bar_time: int, received_at: int | None = None) -> None:
         """Record finalized NT native bar-close latency without changing OHLC."""
@@ -1512,7 +1661,9 @@ class Pipeline:
         state = self._feed_states[source]
         state.last_heartbeat_at = received_at
         state.connected = True
-        if state.healthy_since is None:
+        if state.healthy_since is None and not (
+            source == "bookmap" and state.orderflow_gap_pending
+        ):
             state.healthy_since = received_at
 
     def _note_feed_event(
@@ -1558,7 +1709,7 @@ class Pipeline:
                 and state.bar_ready
                 and healthy_ms >= self._settings.bookmap_qualify_ms
             )
-        return True
+        return state.contract in (None, self._active_contract())
 
     async def _evaluate_source_selection(self, now: int) -> None:
         if self._preferred_source == "nt":
