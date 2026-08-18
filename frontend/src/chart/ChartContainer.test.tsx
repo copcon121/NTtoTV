@@ -538,7 +538,7 @@ describe("ChartContainer", () => {
     expect(port.setCvdVisibleCalls).toEqual([false]);
   });
 
-  it("suppresses MGannSwing on 1m and restores it on other timeframes", () => {
+  it("keeps MGannSwing visible on 1m and other timeframes", () => {
     const port = new FakePort();
     const factory: ChartPortFactory = () => port;
 
@@ -564,7 +564,7 @@ describe("ChartContainer", () => {
       />,
     );
 
-    expect(port.setMgannSwingVisibleCalls).toEqual([false, true]);
+    expect(port.setMgannSwingVisibleCalls).toEqual([true]);
   });
 
   it("loads FVG Signal Grader colors and toggles their visibility", () => {

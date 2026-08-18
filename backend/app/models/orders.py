@@ -46,6 +46,7 @@ class OrderStatus(str, Enum):
 class OrderSource(str, Enum):
     CHART_BRACKET = "chart_bracket"
     MARKET_BAR = "market_bar"
+    AUTO_MGANN = "auto_mgann"
     API = "api"
 
 

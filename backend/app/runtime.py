@@ -27,6 +27,7 @@ from .analyst.event_provider import LlmAnalystEventProvider, MockAnalystEventPro
 from .analyst.poi_scanner import PoiScanner
 from .analyst.store import AnalystStore
 from .engines.anchored_sync import AnchoredSyncEngine
+from .engines.auto_mgann_trade import AutoMgannTradeEngine
 from .engines.basis_engine import BasisEngine
 from .engines.contract_resolver import ContractResolver
 from .engines.fvg_signal_engine import FvgSignalEngine
@@ -103,6 +104,13 @@ class AppRuntime:
             )
         self._native_fvg = FvgSignalEngine()
         self._native_fvg_seeded: set[tuple[str, str]] = set()
+        self._auto_mgann_trade = AutoMgannTradeEngine(
+            self._cache,
+            self._mt5_manager,
+            self._basis_engine,
+            self._registry,
+            settings=s,
+        )
         # The pipeline; control plane is bound per /ws/nt connection so its
         # send_control targets the live socket.
         self._pipeline = Pipeline(
@@ -117,6 +125,8 @@ class AppRuntime:
             analyst_event_sink=(
                 None if self._poi_scanner is None else self._poi_scanner.enqueue_latest
             ),
+            auto_trade_closed_bar_sink=self._on_auto_mgann_closed_bar,
+            auto_trade_price_sink=self._on_auto_mgann_price,
             enable_tick_fvg_signal=False,
         )
         self._flush_task: asyncio.Task[None] | None = None
@@ -137,6 +147,10 @@ class AppRuntime:
     @property
     def registry(self) -> WebSocketRegistry:
         return self._registry
+
+    @property
+    def settings(self) -> Settings:
+        return self._settings
 
     @property
     def pipeline(self) -> Pipeline:
@@ -177,6 +191,10 @@ class AppRuntime:
     @property
     def reconciliation(self) -> ReconciliationEngine:
         return self._reconciliation
+
+    @property
+    def auto_mgann_trade(self) -> AutoMgannTradeEngine:
+        return self._auto_mgann_trade
 
     @property
     def analyst_store(self) -> AnalystStore | None:
@@ -224,6 +242,7 @@ class AppRuntime:
 
     async def start(self) -> None:
         """Start the registry's flush + heartbeat background loops."""
+        await asyncio.to_thread(self._auto_mgann_trade.seed, symbol=self._symbol)
         if self._flush_task is None:
             self._flush_task = asyncio.create_task(self._registry.flush_loop())
         if self._heartbeat_task is None:
@@ -280,6 +299,15 @@ class AppRuntime:
             except Exception as exc:
                 logger.warning("anchored sync failed: %s", exc)
             await asyncio.sleep(2.0)
+
+    async def _on_auto_mgann_closed_bar(self, bar) -> None:
+        await asyncio.to_thread(self._auto_mgann_trade.on_closed_bar, bar)
+
+    async def _on_auto_mgann_price(self, price: float, at: int) -> None:
+        if not self._auto_mgann_trade.should_scan_open_order_management(at):
+            return
+        await asyncio.to_thread(self._auto_mgann_trade.activate_ema21_trailing_at_1r, price)
+        await asyncio.to_thread(self._auto_mgann_trade.cancel_unfilled_limits_at_1r, price)
 
     async def _reconciliation_loop(self) -> None:
         while True:

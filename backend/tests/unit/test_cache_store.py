@@ -29,6 +29,7 @@ EXPECTED_TABLES = {
     "market_source_switches",
     "alerts",
     "alert_events",
+    "auto_trade_settings",
 }
 
 

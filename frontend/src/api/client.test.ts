@@ -144,6 +144,48 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
+  it("loads and saves automatic mGann trading switches", async () => {
+    const settings = {
+      longEnabled: true,
+      shortEnabled: false,
+      volumeLots: 0.2,
+      updatedAt: 10,
+    };
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ settings }))
+      .mockResolvedValueOnce(jsonResponse({ settings: { ...settings, shortEnabled: true } }));
+    const api = new ApiClient({ fetchFn });
+
+    await expect(api.autoTradeSettings()).resolves.toEqual(settings);
+    await expect(
+      api.updateAutoTradeSettings({
+        longEnabled: true,
+        shortEnabled: true,
+        volumeLots: 0.2,
+      }),
+    ).resolves.toMatchObject({ shortEnabled: true });
+
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      1,
+      "/api/auto-trade",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      2,
+      "/api/auto-trade",
+      expect.objectContaining({
+        method: "PUT",
+        credentials: "same-origin",
+        body: JSON.stringify({
+          longEnabled: true,
+          shortEnabled: true,
+          volumeLots: 0.2,
+        }),
+      }),
+    );
+  });
+
   it("sends a partial app order close volume", async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({ order: { id: "ord_1", status: "filled", volumeLots: 0.05 } }),

@@ -41,6 +41,10 @@ export interface ChartProfilePayload {
   showFvgGrader?: boolean;
   /** Optional maximum number of FVG Grader signals to fetch/display on M1. */
   fvgSignalLimit?: number;
+  /** Optional M1 lookback window used to load mGann Break L/S chart markers. */
+  mgannBreakSignalHistoryBars?: number;
+  /** Optional maximum number of mGann Break L/S chart markers to display. */
+  mgannBreakSignalLimit?: number;
   showBigTrades: boolean;
   ema: EmaSettings;
   smc: SmcSettings;

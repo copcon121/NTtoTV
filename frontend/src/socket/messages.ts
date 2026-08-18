@@ -295,7 +295,7 @@ export interface TradingOrder {
   id: string;
   userId: string;
   accountId: string;
-  source: "chart_bracket" | "market_bar" | "api";
+  source: "chart_bracket" | "market_bar" | "auto_mgann" | "api";
   symbolInternal: string;
   contractInternal: string;
   sourceContract?: string | null;

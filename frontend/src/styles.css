@@ -855,6 +855,48 @@ body {
   font: inherit;
 }
 
+.auto-trade-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.auto-trade-toggle {
+  display: inline-flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 4px !important;
+  padding: 4px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  color: #bcbcbc !important;
+  cursor: pointer;
+}
+
+.auto-trade-toggle input {
+  width: auto !important;
+  height: auto !important;
+  accent-color: #2fbe85;
+}
+
+.auto-trade-toggle.active.long {
+  border-color: rgba(47, 190, 133, 0.95);
+  color: #72e5b2 !important;
+  background: rgba(47, 190, 133, 0.14);
+}
+
+.auto-trade-toggle.active.short {
+  border-color: rgba(235, 77, 97, 0.95);
+  color: #ff9ba9 !important;
+  background: rgba(235, 77, 97, 0.14);
+}
+
+.auto-trade-detail {
+  color: #9da8bb;
+  font-size: 10px;
+}
+
 .account-badge {
   display: inline-flex;
   align-items: center;
@@ -2792,6 +2834,11 @@ body {
 
   .market-order-settings input {
     width: 100%;
+  }
+
+  .auto-trade-controls {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 
   .market-order-actions {

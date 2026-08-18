@@ -110,11 +110,35 @@ export const DEFAULT_BIG_TRADE_SETTINGS: BigTradeSettings = {
 export const DEFAULT_FVG_SIGNAL_LIMIT = 100;
 export const MIN_FVG_SIGNAL_LIMIT = 25;
 export const MAX_FVG_SIGNAL_LIMIT = 2000;
+export const DEFAULT_MGANN_BREAK_SIGNAL_HISTORY_BARS = 1000;
+export const MIN_MGANN_BREAK_SIGNAL_HISTORY_BARS = 250;
+export const MAX_MGANN_BREAK_SIGNAL_HISTORY_BARS = 5000;
+export const DEFAULT_MGANN_BREAK_SIGNAL_LIMIT = 500;
+export const MIN_MGANN_BREAK_SIGNAL_LIMIT = 25;
+export const MAX_MGANN_BREAK_SIGNAL_LIMIT = 5000;
 
 export function normalizeFvgSignalLimit(value: unknown): number {
   const parsed = Math.round(Number(value));
   if (!Number.isFinite(parsed)) return DEFAULT_FVG_SIGNAL_LIMIT;
   return Math.min(MAX_FVG_SIGNAL_LIMIT, Math.max(MIN_FVG_SIGNAL_LIMIT, parsed));
+}
+
+export function normalizeMgannBreakSignalHistoryBars(value: unknown): number {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) return DEFAULT_MGANN_BREAK_SIGNAL_HISTORY_BARS;
+  return Math.min(
+    MAX_MGANN_BREAK_SIGNAL_HISTORY_BARS,
+    Math.max(MIN_MGANN_BREAK_SIGNAL_HISTORY_BARS, parsed),
+  );
+}
+
+export function normalizeMgannBreakSignalLimit(value: unknown): number {
+  const parsed = Math.round(Number(value));
+  if (!Number.isFinite(parsed)) return DEFAULT_MGANN_BREAK_SIGNAL_LIMIT;
+  return Math.min(
+    MAX_MGANN_BREAK_SIGNAL_LIMIT,
+    Math.max(MIN_MGANN_BREAK_SIGNAL_LIMIT, parsed),
+  );
 }
 
 export interface IndicatorTogglesProps {
@@ -125,6 +149,8 @@ export interface IndicatorTogglesProps {
   footprint: boolean;
   fvgGrader?: boolean;
   fvgSignalLimit?: number;
+  mgannBreakSignalHistoryBars?: number;
+  mgannBreakSignalLimit?: number;
   bigTrades: boolean;
   ema: EmaSettings;
   smc: SmcSettings;
@@ -142,6 +168,8 @@ export interface IndicatorTogglesProps {
   onFootprintChange: (enabled: boolean) => void;
   onFvgGraderChange?: (enabled: boolean) => void;
   onFvgSignalLimitChange?: (limit: number) => void;
+  onMgannBreakSignalHistoryBarsChange?: (bars: number) => void;
+  onMgannBreakSignalLimitChange?: (limit: number) => void;
   dailyVolumeProfile?: boolean;
   dailyVolumeProfileWidth?: number;
   dailyVolumeProfileDevelopingPoc?: boolean;
@@ -202,6 +230,8 @@ export function IndicatorToggles({
   footprint,
   fvgGrader = false,
   fvgSignalLimit = DEFAULT_FVG_SIGNAL_LIMIT,
+  mgannBreakSignalHistoryBars = DEFAULT_MGANN_BREAK_SIGNAL_HISTORY_BARS,
+  mgannBreakSignalLimit = DEFAULT_MGANN_BREAK_SIGNAL_LIMIT,
   bigTrades,
   dailyVolumeProfile = false,
   dailyVolumeProfileWidth = DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
@@ -222,6 +252,8 @@ export function IndicatorToggles({
   onFootprintChange,
   onFvgGraderChange = () => {},
   onFvgSignalLimitChange = () => {},
+  onMgannBreakSignalHistoryBarsChange = () => {},
+  onMgannBreakSignalLimitChange = () => {},
   onDailyVolumeProfileChange = () => {},
   onDailyVolumeProfileWidthChange = () => {},
   onDailyVolumeProfileDevelopingPocChange = () => {},
@@ -243,6 +275,7 @@ export function IndicatorToggles({
   const [smcSettingsOpen, setSmcSettingsOpen] = useState(false);
   const [fpSettingsOpen, setFpSettingsOpen] = useState(false);
   const [fvgSettingsOpen, setFvgSettingsOpen] = useState(false);
+  const [mgannBreakSettingsOpen, setMgannBreakSettingsOpen] = useState(false);
   const [btSettingsOpen, setBtSettingsOpen] = useState(false);
   // Local draft for the length input so typing is smooth; committed on blur/Enter.
   const [lengthDraft, setLengthDraft] = useState(String(ema.period));
@@ -426,6 +459,7 @@ export function IndicatorToggles({
         setMgannSwingSettingsOpen(false);
         setSmcSettingsOpen(false);
         setFpSettingsOpen(false);
+        setMgannBreakSettingsOpen(false);
         setBtSettingsOpen(false);
       }
     };
@@ -437,6 +471,7 @@ export function IndicatorToggles({
         setMgannSwingSettingsOpen(false);
         setSmcSettingsOpen(false);
         setFpSettingsOpen(false);
+        setMgannBreakSettingsOpen(false);
         setBtSettingsOpen(false);
       }
     };
@@ -464,6 +499,12 @@ export function IndicatorToggles({
   const normalizedDailyVolumeProfileWidth =
     normalizeSessionVolumeProfileWidth(dailyVolumeProfileWidth);
   const normalizedFvgSignalLimit = normalizeFvgSignalLimit(fvgSignalLimit);
+  const normalizedMgannBreakSignalHistoryBars = normalizeMgannBreakSignalHistoryBars(
+    mgannBreakSignalHistoryBars,
+  );
+  const normalizedMgannBreakSignalLimit = normalizeMgannBreakSignalLimit(
+    mgannBreakSignalLimit,
+  );
 
   const toggleCombinedIndicators = (enabled: boolean) => {
     onEmaChange(
@@ -961,6 +1002,56 @@ export function IndicatorToggles({
                       event.currentTarget.blur();
                     }
                   }}
+                />
+              </div>
+            </div>
+          )}
+          <div className="indicator-row">
+            <span className="indicator-row-main">mGann Break L/S</span>
+            <button
+              type="button"
+              className="indicator-gear"
+              aria-label="mGann Break L/S display settings"
+              aria-expanded={mgannBreakSettingsOpen}
+              onClick={() => setMgannBreakSettingsOpen((value) => !value)}
+            >
+              {"\u2699"}
+            </button>
+          </div>
+          {mgannBreakSettingsOpen && (
+            <div className="ema-settings" aria-label="mGann Break L/S display settings panel">
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">M1 bars</span>
+                <input
+                  type="number"
+                  min={MIN_MGANN_BREAK_SIGNAL_HISTORY_BARS}
+                  max={MAX_MGANN_BREAK_SIGNAL_HISTORY_BARS}
+                  step={250}
+                  className="ema-length-input"
+                  aria-label="mGann Break L/S history bars"
+                  value={normalizedMgannBreakSignalHistoryBars}
+                  onChange={(event) =>
+                    onMgannBreakSignalHistoryBarsChange(
+                      normalizeMgannBreakSignalHistoryBars(event.currentTarget.value),
+                    )
+                  }
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Signals</span>
+                <input
+                  type="number"
+                  min={MIN_MGANN_BREAK_SIGNAL_LIMIT}
+                  max={MAX_MGANN_BREAK_SIGNAL_LIMIT}
+                  step={25}
+                  className="ema-length-input"
+                  aria-label="mGann Break L/S display limit"
+                  value={normalizedMgannBreakSignalLimit}
+                  onChange={(event) =>
+                    onMgannBreakSignalLimitChange(
+                      normalizeMgannBreakSignalLimit(event.currentTarget.value),
+                    )
+                  }
                 />
               </div>
             </div>

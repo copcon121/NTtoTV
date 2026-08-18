@@ -215,6 +215,13 @@ export interface OrderSubmitInput {
   idempotencyKey: string;
 }
 
+export interface AutoTradeSettings {
+  longEnabled: boolean;
+  shortEnabled: boolean;
+  volumeLots: number;
+  updatedAt: number;
+}
+
 export interface Mt5PendingOrder {
   brokerOrderTicket: number;
   orderId?: string | null;
@@ -491,6 +498,27 @@ export class ApiClient {
     if (!res.ok) throw new Error(await this.errorMessage(res, "POST /orders"));
     const body = (await res.json()) as { order: TradingOrder };
     return body.order;
+  }
+
+  async autoTradeSettings(): Promise<AutoTradeSettings> {
+    const body = await this.getJson<{ settings: AutoTradeSettings }>("/auto-trade");
+    return body.settings;
+  }
+
+  async updateAutoTradeSettings(input: {
+    longEnabled: boolean;
+    shortEnabled: boolean;
+    volumeLots: number;
+  }): Promise<AutoTradeSettings> {
+    const res = await this.fetchFn(`${this.basePath}/auto-trade`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(await this.errorMessage(res, "PUT /auto-trade"));
+    const body = (await res.json()) as { settings: AutoTradeSettings };
+    return body.settings;
   }
 
   async patchOrder(

@@ -494,6 +494,85 @@ def test_bookmap_primary_owns_live_delta_and_footprint_while_nt_stays_warm(tmp_p
 
 
 @pytest.mark.unit
+def test_bookmap_closed_bar_footprint_persisted_without_bridge_orderflow(tmp_path):
+    """When a Bookmap trade crosses a minute boundary the just-closed bar's
+    footprint ladder must be persisted to the delta-profile cache even when the
+    bridge bar snapshot never carries embedded order-flow fields.
+
+    This is the path that keeps the session-daily histogram on the chart
+    current after the source has been switched to Bookmap.
+    """
+    pipeline, cache, ticks, _ = _pipeline(tmp_path)
+    try:
+        now = now_ms()
+        state = pipeline._feed_states["bookmap"]
+        state.connected = True
+        state.last_heartbeat_at = now
+        state.healthy_since = now - 60_000
+        state.contract = _SOURCE
+        state.bar_ready = True
+        pipeline._active_feed = "bookmap"
+        pipeline._source_switched_at = now - 60_000
+
+        # Trade within minute _BASE — forming bar, nothing persisted yet.
+        asyncio.run(
+            pipeline.on_bookmap_trade(
+                NormalizedTrade(
+                    symbol=_SYMBOL,
+                    contract=_SOURCE,
+                    time=_BASE + 30_000,
+                    price=2400.0,
+                    volume=7,
+                    bid=None,
+                    ask=None,
+                    best_bid=None,
+                    best_ask=None,
+                    sequence=1,
+                    source="bookmap",
+                    side=Side.SELL,
+                )
+            )
+        )
+
+        # No closed bar yet → footprint cache stays empty.
+        assert cache.read_footprint_bars(_SYMBOL, _SYMBOL, "1m") == []
+
+        # Trade in the next minute closes the _BASE bar.  The live-tick path
+        # must capture and persist the closed bar's footprint ladder.
+        asyncio.run(
+            pipeline.on_bookmap_trade(
+                NormalizedTrade(
+                    symbol=_SYMBOL,
+                    contract=_SOURCE,
+                    time=_BASE + 60_000,
+                    price=2400.1,
+                    volume=5,
+                    bid=None,
+                    ask=None,
+                    best_bid=None,
+                    best_ask=None,
+                    sequence=2,
+                    source="bookmap",
+                    side=Side.BUY,
+                )
+            )
+        )
+
+        fp_bars = cache.read_footprint_bars(_SYMBOL, _SYMBOL, "1m")
+        assert len(fp_bars) == 1
+        assert fp_bars[0].time == _BASE
+        assert fp_bars[0].bar_delta == -7  # 0 buy − 7 sell
+
+        levels = cache.read_footprint_levels(_SYMBOL, _SYMBOL, _BASE, "1m")
+        assert [
+            (lvl.price, lvl.bid_volume, lvl.ask_volume) for lvl in levels
+        ] == [(2400.0, 7, 0)]
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
 def test_authoritative_bookmap_minute_repairs_higher_rollup(tmp_path):
     pipeline, cache, ticks, _ = _pipeline(tmp_path, preferred="nt")
     try:

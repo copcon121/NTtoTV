@@ -200,6 +200,26 @@ class OrderStore:
         finally:
             conn.close()
 
+    def list_open_for_account_with_event(
+        self, user_id: str, account_id: str, event_type: str
+    ) -> list[OrderRecord]:
+        """Return open orders that have a durable audit event of ``event_type``."""
+        conn = self._reader()
+        try:
+            rows = conn.execute(
+                f"SELECT {_ORDER_COLUMNS} FROM orders o "
+                "WHERE o.user_id = ? AND o.account_id = ? "
+                "AND o.status IN ('pending_submit','submitted','working','filled','sync_paused','sync_error') "
+                "AND EXISTS ("
+                "SELECT 1 FROM order_events e "
+                "WHERE e.order_id = o.id AND e.event_type = ?"
+                ") ORDER BY o.updated_at DESC",
+                (user_id, account_id, event_type),
+            ).fetchall()
+            return [_row_to_order(row) for row in rows]
+        finally:
+            conn.close()
+
     def update(self, order: OrderRecord) -> OrderRecord:
         order.version += 1
         assignments = ", ".join(

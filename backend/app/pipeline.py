@@ -95,6 +95,10 @@ __all__ = ["Pipeline"]
 # alerts share a clock.
 _ALERT_BAR_TF = FOOTPRINT_TIMEFRAME
 _SOURCE_SWITCH_QUIET_MS = 15_000
+# How often the forming (in-progress) footprint bar is flushed to the cache so
+# the REST delta-profile endpoint (session-daily histogram) stays current
+# between minute closes without writing on every trade.
+_FOOTPRINT_FORMING_FLUSH_MS = 30_000
 
 
 @dataclass(slots=True)
@@ -199,6 +203,8 @@ def _big_trade_for_contract(bt: BigTrade, contract: str) -> BigTrade:
 
 AlertTextSender = Callable[[AlertEvent], Awaitable[None] | None]
 AnalystEventSink = Callable[[], None]
+AutoTradeClosedBarSink = Callable[[OHLCVBar], Awaitable[None] | None]
+AutoTradePriceSink = Callable[[float, int], Awaitable[None] | None]
 
 
 class Pipeline:
@@ -223,6 +229,8 @@ class Pipeline:
         basis_engine: BasisEngine | None = None,
         send_alert_text: AlertTextSender | None = None,
         analyst_event_sink: AnalystEventSink | None = None,
+        auto_trade_closed_bar_sink: AutoTradeClosedBarSink | None = None,
+        auto_trade_price_sink: AutoTradePriceSink | None = None,
         control_plane: ControlPlaneCoordinator | None = None,
         validator: SequenceValidator | None = None,
         enable_tick_fvg_signal: bool = True,
@@ -233,6 +241,8 @@ class Pipeline:
         self._tick_store = tick_store
         self._resolver = resolver
         self._symbol = symbol
+        self._auto_trade_closed_bar_sink = auto_trade_closed_bar_sink
+        self._auto_trade_price_sink = auto_trade_price_sink
         self._bars = bar_aggregator or BarAggregator()
         self._source_bars: dict[str, BarAggregator] = {
             "nt": self._bars,
@@ -330,6 +340,7 @@ class Pipeline:
         self._bookmap_connection_id: str | None = None
         self._derived_source_lock = asyncio.Lock()
         self._last_market_status_emit = 0
+        self._last_footprint_flush = 0
         self._hydrate_engine_state_from_cache()
 
     # -- wiring seams ----------------------------------------------------------
@@ -858,8 +869,27 @@ class Pipeline:
                 source_vd_updates.append(update)
 
         source_fp_update: FootprintUpdate | None = None
+        closed_footprint: FootprintUpdate | None = None
         footprint_engine = self._source_footprints.get(source)
         if footprint_engine is not None:
+            # The footprint engine only retains the current forming bar; once a
+            # trade opens a new minute the previous bar's ladder is dropped.
+            # Snapshot the closing bar before on_trade() rolls the bucket so it
+            # can be persisted to the delta-profile cache below. This keeps the
+            # session-daily histogram current even when the Bookmap bar
+            # snapshot does not embed order-flow fields.
+            closed_1m = next(
+                (
+                    u
+                    for u in source_bar_updates
+                    if u.tf == FOOTPRINT_TIMEFRAME and u.closed
+                ),
+                None,
+            )
+            if closed_1m is not None:
+                prev_fp = footprint_engine.current_update(trade.contract)
+                if prev_fp is not None and prev_fp.time == closed_1m.bar.time:
+                    closed_footprint = prev_fp
             source_fp_update = footprint_engine.on_trade(trade)
 
         # 3) Tick FVG remains internal for breakout/FVG confluence. Confirmed
@@ -922,14 +952,21 @@ class Pipeline:
                         volume=b.volume,
                     )
 
-                # Footprint is broadcast from every Bookmap trade but persisted
-                # as a full replacement only on source switch/reconnect/close.
+                # Footprint is broadcast live from every trade; the just-closed
+                # bar's ladder is persisted here so the REST delta-profile cache
+                # (session-daily histogram) stays current without relying on an
+                # embedded order-flow snapshot from the bridge.
+                fp_persist: list[FootprintUpdate] = []
+                if closed_footprint is not None:
+                    fp_persist.append(closed_footprint)
                 await asyncio.to_thread(
                     self._persist_derived_batch,
                     bar_updates,
                     vd_updates,
                     fvg_updates,
                     big_trades,
+                    fp_persist or None,
+                    bool(fp_persist),
                 )
                 if self._analyst_event_sink is not None and (
                     bar_updates
@@ -992,6 +1029,8 @@ class Pipeline:
                 fvg_level=fvg_confirmed_level,
                 fvg_direction=fvg_confirmed_direction,
             )
+            if self._auto_trade_price_sink is not None:
+                await _maybe_await(self._auto_trade_price_sink(trade.price, trade.time))
 
     async def _evaluate_alerts(
         self,
@@ -1044,6 +1083,7 @@ class Pipeline:
                 fvg_direction=fvg_direction,
             )
             await self._emit_alerts(self._alerts.evaluate(bar_ctx))
+            await self._run_auto_trade_closed_bar(bar_ctx)
 
         m5_bar = (closed_bars or {}).get("5m")
         if m5_bar is not None:
@@ -1129,6 +1169,34 @@ class Pipeline:
                 breakout_events=breakout_events or None,
             )
             await self._emit_alerts(self._alerts.evaluate(ctx))
+            await self._run_auto_trade_closed_bar(ctx)
+
+    async def _run_auto_trade_closed_bar(self, ctx: MarketContext) -> None:
+        """Pass only live finalized M1 OHLCV bars to opted-in auto execution."""
+        if (
+            self._auto_trade_closed_bar_sink is None
+            or not ctx.bar_closed
+            or ctx.bar_tf != _ALERT_BAR_TF
+            or ctx.bar_time is None
+            or ctx.bar_open is None
+            or ctx.bar_high is None
+            or ctx.bar_low is None
+            or ctx.bar_close is None
+            or ctx.bar_volume is None
+        ):
+            return
+        await _maybe_await(
+            self._auto_trade_closed_bar_sink(
+                OHLCVBar(
+                    time=ctx.bar_time,
+                    open=ctx.bar_open,
+                    high=ctx.bar_high,
+                    low=ctx.bar_low,
+                    close=ctx.bar_close,
+                    volume=ctx.bar_volume,
+                )
+            )
+        )
 
     # -- persistence -----------------------------------------------------------
 
@@ -1490,6 +1558,31 @@ class Pipeline:
                     vd_update=None,
                     big_trades=[bt],
                 )
+
+        # Periodically flush the forming (in-progress) footprint bar to the
+        # cache so the REST delta-profile endpoint reflects the current minute
+        # between closed-bar writes. Only the active bookmap feed owns the
+        # shared chart footprint cache keys.
+        if (
+            self._active_feed == "bookmap"
+            and now - self._last_footprint_flush >= _FOOTPRINT_FORMING_FLUSH_MS
+        ):
+            self._last_footprint_flush = now
+            fp_engine = self._source_footprints.get("bookmap")
+            if fp_engine is not None:
+                forming = fp_engine.current_update(self._chart_contract())
+                if forming is not None:
+                    async with self._derived_source_lock:
+                        if self._active_feed == "bookmap":
+                            await asyncio.to_thread(
+                                self._persist_derived_batch,
+                                [],
+                                [],
+                                [],
+                                [],
+                                [forming],
+                                True,
+                            )
 
         if now - self._last_market_status_emit >= 1_000:
             self._last_market_status_emit = now

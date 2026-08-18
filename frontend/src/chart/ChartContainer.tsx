@@ -280,7 +280,7 @@ export interface ChartContainerProps {
   showVolumeDelta?: boolean;
   /** Show current wave delta as an MBox histogram at the bottom of the chart. */
   showCvd?: boolean;
-  /** Show MGannSwing price swingline/signals. MGannSwing is hidden on M1. */
+  /** Show MGannSwing price swingline/signals. */
   showMgannSwing?: boolean;
   /** MGannSwing sub-settings. */
   mgannSwing?: Partial<MgannSwingSettings>;
@@ -479,7 +479,7 @@ export function ChartContainer({
   const portRef = useRef<DisposableChartPort | null>(null);
   const controllerRef = useRef<ChartSeriesController | null>(null);
   const drawingManagerRef = useRef<DrawingManager | null>(null);
-  const showMgannSwingForTimeframe = showMgannSwing && timeframe !== "1m";
+  const showMgannSwingForTimeframe = showMgannSwing;
   const smcThrottleRef = useRef<number | undefined>(undefined);
   const [footprintViewport, setFootprintViewport] =
     useState<FootprintViewport | null>(null);

@@ -103,7 +103,18 @@ class ReconciliationEngine:
                     and order.broker_position_ticket is None
                     and order.broker_order_ticket not in broker_orders
                 ):
-                    order.status = OrderStatus.CANCELLED
+                    matched_position = _match_broker_position(
+                        order, broker_positions.values()
+                    )
+                    if matched_position is not None:
+                        order.status = OrderStatus.FILLED
+                        order.broker_position_ticket = int(matched_position["ticket"])
+                        entry = matched_position.get("entryBroker")
+                        if isinstance(entry, (int, float)):
+                            order.fill_price_broker = float(entry)
+                        order.filled_at = current_time
+                    else:
+                        order.status = OrderStatus.CANCELLED
                     order.updated_at = current_time
                     changed = True
                 if (

@@ -19,6 +19,7 @@ from pathlib import Path
 
 from ..config import Settings, settings as default_settings
 from .alert_store import AlertStore
+from .auto_trade_store import AutoTradeStore
 from .connection import SingleWriter, connect, connect_reader
 from .keyed_store import KeyedStore
 from .order_store import OrderStore
@@ -54,6 +55,7 @@ CACHE_TABLES: tuple[str, ...] = (
     "market_source_switches",
     "alerts",
     "alert_events",
+    "auto_trade_settings",
 )
 
 # Schema DDL. Mirrors the design's Cache_Store section verbatim in structure.
@@ -330,6 +332,18 @@ CREATE TABLE IF NOT EXISTS order_events (
 
 CREATE INDEX IF NOT EXISTS idx_order_events_order
     ON order_events(order_id, created_at);
+
+CREATE TABLE IF NOT EXISTS auto_trade_settings (
+    user_id       TEXT PRIMARY KEY,
+    long_enabled  INTEGER NOT NULL DEFAULT 0,
+    short_enabled INTEGER NOT NULL DEFAULT 0,
+    volume_lots   REAL NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_auto_trade_settings_enabled
+    ON auto_trade_settings(long_enabled, short_enabled, updated_at);
 """
 
 
@@ -363,6 +377,7 @@ class CacheStore:
         self._profiles = ProfileStore(self._writer, self.reader)
         self._users = UserStore(self._writer, self.reader)
         self._orders = OrderStore(self._writer, self.reader)
+        self._auto_trade = AutoTradeStore(self._writer, self.reader)
 
     @classmethod
     def open(cls, settings: Settings | None = None) -> "CacheStore":
@@ -771,6 +786,11 @@ class CacheStore:
     def orders(self) -> OrderStore:
         """The order-on-chart persistence collaborator."""
         return self._orders
+
+    @property
+    def auto_trade(self) -> AutoTradeStore:
+        """Per-user mGann automatic execution settings."""
+        return self._auto_trade
 
     def upsert_profile(self, profile: ProfileRecord) -> None:
         self._profiles.upsert_profile(profile)

@@ -13,6 +13,7 @@ defined in :mod:`app.storage.connection`.
 from __future__ import annotations
 
 from .alert_store import AlertStore
+from .auto_trade_store import AutoTradeStore
 from .cache_store import CACHE_TABLES, CacheStore
 from .connection import DEFAULT_BUSY_TIMEOUT_MS, SingleWriter, connect, connect_reader
 from .keyed_store import KeyedStore
@@ -35,6 +36,7 @@ __all__ = [
     "CACHE_TABLES",
     "KeyedStore",
     "AlertStore",
+    "AutoTradeStore",
     "ProfileStore",
     "BarRecord",
     "VolumeDeltaRecord",

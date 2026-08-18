@@ -318,6 +318,41 @@ describe("IndicatorToggles", () => {
     expect(onLimit).toHaveBeenCalledWith(150);
   });
 
+  it("edits the mGann Break L/S chart history window and signal limit", () => {
+    const onHistoryBars = vi.fn();
+    const onLimit = vi.fn();
+    render(
+      <IndicatorToggles
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        mgannBreakSignalHistoryBars={1000}
+        mgannBreakSignalLimit={500}
+        onMgannBreakSignalHistoryBarsChange={onHistoryBars}
+        onMgannBreakSignalLimitChange={onLimit}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    fireEvent.click(screen.getByLabelText("mGann Break L/S display settings"));
+    fireEvent.change(screen.getByLabelText("mGann Break L/S history bars"), {
+      target: { value: "2500" },
+    });
+    fireEvent.change(screen.getByLabelText("mGann Break L/S display limit"), {
+      target: { value: "750" },
+    });
+
+    expect(onHistoryBars).toHaveBeenCalledWith(2500);
+    expect(onLimit).toHaveBeenCalledWith(750);
+  });
+
   it("can disable BigTrade independently", () => {
     render(
       <IndicatorToggles

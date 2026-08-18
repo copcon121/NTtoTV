@@ -96,6 +96,51 @@ describe("MarketOrderBar", () => {
     expect(onMarketOrder).toHaveBeenNthCalledWith(2, "buy");
   });
 
+  it("offers independent Auto L and Auto S toggles using the configured lots", () => {
+    const onAutoTradeSettingsChange = vi.fn();
+    render(
+      <MarketOrderBar
+        account={{
+          accountId: "acct",
+          login: 123,
+          server: "Exness-Demo",
+          tradeMode: "demo",
+          currency: "USD",
+          balance: 10000,
+          equity: 9999.5,
+        }}
+        openOrderCount={0}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+        autoTradeSettings={{
+          longEnabled: false,
+          shortEnabled: false,
+          volumeLots: 0.1,
+          updatedAt: 1,
+        }}
+        onAutoTradeSettingsChange={onAutoTradeSettingsChange}
+      />,
+    );
+
+    expect(screen.getByText("BOS/CHoCH · Body x2-x6 · >3.0: Lmt70 · TP 3R / EMA21 @1R")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Auto trade L"));
+    fireEvent.click(screen.getByLabelText("Auto trade S"));
+
+    expect(onAutoTradeSettingsChange).toHaveBeenNthCalledWith(1, {
+      longEnabled: true,
+      shortEnabled: false,
+      volumeLots: 0.1,
+      updatedAt: 1,
+    });
+    expect(onAutoTradeSettingsChange).toHaveBeenNthCalledWith(2, {
+      longEnabled: false,
+      shortEnabled: true,
+      volumeLots: 0.1,
+      updatedAt: 1,
+    });
+  });
+
   it("keeps market buttons hidden while the drawer is closed", () => {
     const onDrawerOpenChange = vi.fn();
     const account = {

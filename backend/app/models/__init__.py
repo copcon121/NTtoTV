@@ -8,6 +8,7 @@ helpers, and the typed serializers/deserializers for all `/ws/nt` and
 from __future__ import annotations
 
 from .canonical import NormalizedQuote, NormalizedTrade, Side
+from .auto_trade import AutoTradeSettingsRecord
 from .messages import (
     AlertEvent,
     BarUpdate,
@@ -59,6 +60,7 @@ __all__ = [
     "NormalizedTrade",
     "NormalizedQuote",
     "Side",
+    "AutoTradeSettingsRecord",
     # Canonical_Timestamp helpers (Task 2.1)
     "CanonicalTimestamp",
     "MS_PER_SECOND",

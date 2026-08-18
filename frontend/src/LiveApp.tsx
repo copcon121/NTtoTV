@@ -6,6 +6,7 @@ import {
   type AlertSignalRestRow,
   type AnalystEventAiState,
   type AnalystReport,
+  type AutoTradeSettings,
   type AuthUser,
   type Mt5Account,
   type Mt5ConnectInput,
@@ -28,9 +29,13 @@ import {
   DEFAULT_BIG_TRADE_SETTINGS,
   DEFAULT_EMA_SETTINGS,
   DEFAULT_FVG_SIGNAL_LIMIT,
+  DEFAULT_MGANN_BREAK_SIGNAL_HISTORY_BARS,
+  DEFAULT_MGANN_BREAK_SIGNAL_LIMIT,
   DEFAULT_FOOTPRINT_SETTINGS,
   normalizeEmaSettings,
   normalizeFvgSignalLimit,
+  normalizeMgannBreakSignalHistoryBars,
+  normalizeMgannBreakSignalLimit,
 } from "./chart/IndicatorToggles";
 import type {
   BigTradeSettings,
@@ -209,8 +214,6 @@ const FVG_GRADER_CATCH_UP_MS = 30_000;
 const RESUME_REFRESH_THROTTLE_MS = 2_000;
 const INITIAL_HISTORY_LIMIT = 5_000;
 const HISTORY_BACKFILL_LIMIT = 5_000;
-const HISTORICAL_ALERT_SIGNAL_BAR_LIMIT = 1_000;
-const HISTORICAL_ALERT_SIGNAL_LIMIT = 500;
 const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
 const INITIAL_BIG_TRADE_LIMIT = DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
@@ -228,6 +231,12 @@ const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
   tpDistanceGc: 6,
 };
 const EMPTY_MT5_OPEN_TRADES: Mt5OpenTrades = { positions: [], orders: [] };
+const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
+  longEnabled: false,
+  shortEnabled: false,
+  volumeLots: DEFAULT_MARKET_ORDER_SETTINGS.volumeLots,
+  updatedAt: 0,
+};
 
 /** Play a short beep via the Web Audio API when a big trade arrives. */
 function playBigTradeSound(): void {
@@ -1809,13 +1818,19 @@ export function LiveApp() {
   const [mgannSwing, setMgannSwing] = useState<MgannSwingSettings>(() => ({
     ...DEFAULT_MGANN_SWING_SETTINGS,
   }));
-  const mgannSwingDisabled = timeframe === "1m";
-  const showMgannSwingForTimeframe = showMgannSwing && !mgannSwingDisabled;
+  const mgannSwingDisabled = false;
+  const showMgannSwingForTimeframe = showMgannSwing;
   const showMgannWaveDelta =
     showMgannSwingForTimeframe && mgannSwing.showWaveDelta;
   const [showFootprint, setShowFootprint] = useState(false);
   const [showFvgGrader, setShowFvgGrader] = useState(true);
   const [fvgSignalLimit, setFvgSignalLimit] = useState(DEFAULT_FVG_SIGNAL_LIMIT);
+  const [mgannBreakSignalHistoryBars, setMgannBreakSignalHistoryBars] = useState(
+    DEFAULT_MGANN_BREAK_SIGNAL_HISTORY_BARS,
+  );
+  const [mgannBreakSignalLimit, setMgannBreakSignalLimit] = useState(
+    DEFAULT_MGANN_BREAK_SIGNAL_LIMIT,
+  );
   const [showBigTrades, setShowBigTrades] = useState(true);
   const [ema, setEma] = useState<EmaSettings>(() => ({ ...DEFAULT_EMA_SETTINGS }));
   const [smc, setSmc] = useState<SmcSettings>(() => ({ ...DEFAULT_SMC_SETTINGS }));
@@ -1892,6 +1907,10 @@ export function LiveApp() {
   const [latestPrice, setLatestPrice] = useState<number | undefined>(undefined);
   const [marketOrderSettings, setMarketOrderSettings] =
     useState<MarketOrderSettings>(() => readMarketOrderSettings());
+  const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(
+    DEFAULT_AUTO_TRADE_SETTINGS,
+  );
+  const [autoTradePending, setAutoTradePending] = useState(false);
   const [orderPending, setOrderPending] = useState(false);
   const [orderError, setOrderError] = useState("");
   // TradingView-style chart context menu, anchored at the click point.
@@ -1967,6 +1986,8 @@ export function LiveApp() {
       showFootprint,
       showFvgGrader,
       fvgSignalLimit,
+      mgannBreakSignalHistoryBars,
+      mgannBreakSignalLimit,
       showBigTrades,
       ema: { ...ema },
       smc: { ...smc },
@@ -1986,6 +2007,8 @@ export function LiveApp() {
       ema,
       footprintSettings,
       fvgSignalLimit,
+      mgannBreakSignalHistoryBars,
+      mgannBreakSignalLimit,
       fixedRangeProfileMode,
       marketOrderSettings,
       mgannSwing,
@@ -2210,6 +2233,59 @@ export function LiveApp() {
   useEffect(() => {
     persistMarketOrderSettings(marketOrderSettings);
   }, [marketOrderSettings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!authUser) {
+      setAutoTradeSettings({
+        ...DEFAULT_AUTO_TRADE_SETTINGS,
+        volumeLots: marketOrderSettings.volumeLots,
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    void api.autoTradeSettings().then(
+      (settings) => {
+        if (!cancelled) setAutoTradeSettings(settings);
+      },
+      () => {
+        // The trade panel remains usable even if the settings request is late.
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [api, authUser]);
+
+  useEffect(() => {
+    if (
+      !authUser ||
+      (!autoTradeSettings.longEnabled && !autoTradeSettings.shortEnabled) ||
+      autoTradeSettings.volumeLots === marketOrderSettings.volumeLots ||
+      autoTradePending
+    ) {
+      return;
+    }
+    let cancelled = false;
+    void api
+      .updateAutoTradeSettings({
+        longEnabled: autoTradeSettings.longEnabled,
+        shortEnabled: autoTradeSettings.shortEnabled,
+        volumeLots: marketOrderSettings.volumeLots,
+      })
+      .then((settings) => {
+        if (!cancelled) setAutoTradeSettings(settings);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setOrderError(error instanceof Error ? error.message : "Auto trade update failed");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, authUser, autoTradePending, autoTradeSettings, marketOrderSettings.volumeLots]);
 
   useEffect(() => {
     if (!authUser || !profileHydrated) return;
@@ -2818,10 +2894,10 @@ export function LiveApp() {
             from: Math.max(
               firstLoadedBarTime,
               latestLoadedBarTime -
-                HISTORICAL_ALERT_SIGNAL_BAR_LIMIT * 60_000,
+                mgannBreakSignalHistoryBars * 60_000,
             ),
             to: latestLoadedBarTime,
-            limit: HISTORICAL_ALERT_SIGNAL_LIMIT,
+            limit: mgannBreakSignalLimit,
           });
           if (!cancelled) {
             setAlertSignalMarkers((prev) =>
@@ -2858,6 +2934,8 @@ export function LiveApp() {
     firstLoadedBarTime,
     hasLoadedCurrentSeries,
     latestLoadedBarTime,
+    mgannBreakSignalHistoryBars,
+    mgannBreakSignalLimit,
     profileHydrated,
     profileId,
     timeframe,
@@ -3973,6 +4051,22 @@ export function LiveApp() {
     });
   };
 
+  const onAutoTradeSettingsChange = (next: AutoTradeSettings) => {
+    setAutoTradePending(true);
+    setOrderError("");
+    void api
+      .updateAutoTradeSettings({
+        longEnabled: next.longEnabled,
+        shortEnabled: next.shortEnabled,
+        volumeLots: marketOrderSettings.volumeLots,
+      })
+      .then((settings) => setAutoTradeSettings(settings))
+      .catch((error) => {
+        setOrderError(error instanceof Error ? error.message : "Auto trade update failed");
+      })
+      .finally(() => setAutoTradePending(false));
+  };
+
   // Create a price-crosses-level alert at the price the user right-clicked.
   const onConfirmAlertAtPrice = (price: number) => {
     const rounded = roundGcPrice(price);
@@ -4043,6 +4137,12 @@ export function LiveApp() {
     );
     setShowFvgGrader(payload.showFvgGrader !== false);
     setFvgSignalLimit(normalizeFvgSignalLimit(payload.fvgSignalLimit));
+    setMgannBreakSignalHistoryBars(
+      normalizeMgannBreakSignalHistoryBars(payload.mgannBreakSignalHistoryBars),
+    );
+    setMgannBreakSignalLimit(
+      normalizeMgannBreakSignalLimit(payload.mgannBreakSignalLimit),
+    );
     setShowBigTrades(payload.showBigTrades !== false);
     setEma(normalizeEmaSettings(payload.ema));
     setSmc({ ...DEFAULT_SMC_SETTINGS, ...(payload.smc ?? {}) });
@@ -4492,6 +4592,8 @@ export function LiveApp() {
           footprint={showFootprint}
           fvgGrader={showFvgGrader}
           fvgSignalLimit={fvgSignalLimit}
+          mgannBreakSignalHistoryBars={mgannBreakSignalHistoryBars}
+          mgannBreakSignalLimit={mgannBreakSignalLimit}
           bigTrades={showBigTrades && bigTradeOverlayEnabled}
           ema={ema}
           smc={smc}
@@ -4517,6 +4619,8 @@ export function LiveApp() {
           onFootprintChange={setShowFootprint}
           onFvgGraderChange={setShowFvgGrader}
           onFvgSignalLimitChange={setFvgSignalLimit}
+          onMgannBreakSignalHistoryBarsChange={setMgannBreakSignalHistoryBars}
+          onMgannBreakSignalLimitChange={setMgannBreakSignalLimit}
           onBigTradesChange={setShowBigTrades}
           onEmaChange={setEma}
           onSmcChange={setSmc}
@@ -4736,6 +4840,9 @@ export function LiveApp() {
               setMarketOrderSettings(sanitizeMarketOrderSettings(settings))
             }
             onMarketOrder={onMarketOrder}
+            autoTradeSettings={autoTradeSettings}
+            autoTradePending={autoTradePending}
+            onAutoTradeSettingsChange={onAutoTradeSettingsChange}
             onOrderRowBreakEven={onOrderRowBreakEven}
             onOrderRowClose={onOrderRowClose}
             onOrderRowClose50Percent={onOrderRowClose50Percent}
