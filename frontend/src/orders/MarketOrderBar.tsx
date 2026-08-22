@@ -6,6 +6,8 @@ export interface MarketOrderSettings {
   volumeLots: number;
   slDistanceGc: number;
   tpDistanceGc: number;
+  sizingMode?: "lots" | "risk";
+  riskAmount?: number;
 }
 
 export interface MarketOrderRow {
@@ -73,9 +75,13 @@ export function MarketOrderBar({
 }: MarketOrderBarProps) {
   const connected = account !== undefined;
   const balance = money(account?.balance);
-  const equity = money(account?.equity);
   const drawer = variant === "drawer";
   const expanded = !drawer || drawerOpen;
+  const sizingMode = settings.sizingMode === "risk" ? "risk" : "lots";
+  const riskAmount =
+    typeof settings.riskAmount === "number" && Number.isFinite(settings.riskAmount)
+      ? settings.riskAmount
+      : 100;
   const update = (patch: Partial<MarketOrderSettings>) =>
     onSettingsChange({ ...settings, ...patch });
   return (
@@ -102,20 +108,37 @@ export function MarketOrderBar({
               <span className={`account-badge ${account?.tradeMode === "live" ? "live" : "demo"}`}>
                 {account ? account.tradeMode.toUpperCase() : "NO ACCOUNT"}
               </span>
-              <span>{account ? `#${account.login}` : "Trading locked"}</span>
+              {!account && <span>Trading locked</span>}
               {balance && <span>Bal {balance}</span>}
-              {equity && <span>Eq {equity}</span>}
-              <span>Open {openOrderCount}</span>
+              <label className="market-order-size-control">
+                <span>Size</span>
+                <select
+                  aria-label="Sizing mode"
+                  value={sizingMode}
+                  onChange={(event) =>
+                    update({
+                      sizingMode: event.currentTarget.value === "risk" ? "risk" : "lots",
+                    })
+                  }
+                >
+                  <option value="lots">Lots</option>
+                  <option value="risk">Risk $</option>
+                </select>
+              </label>
               {error && <span className="market-order-error">{error}</span>}
             </div>
             <div className="market-order-settings" aria-label="Market order settings">
               <label>
-                <span>Lots</span>
+                <span>{sizingMode === "risk" ? "Risk $" : "Lots"}</span>
                 <NumberSettingInput
-                  value={settings.volumeLots}
-                  min={0.01}
-                  step="0.01"
-                  onCommit={(volumeLots) => update({ volumeLots })}
+                  value={sizingMode === "risk" ? riskAmount : settings.volumeLots}
+                  min={sizingMode === "risk" ? 1 : 0.01}
+                  step={sizingMode === "risk" ? "1" : "0.01"}
+                  onCommit={(value) =>
+                    sizingMode === "risk"
+                      ? update({ riskAmount: value })
+                      : update({ volumeLots: value })
+                  }
                 />
               </label>
               <label>
@@ -168,7 +191,6 @@ export function MarketOrderBar({
                     />
                     <span>Auto S</span>
                   </label>
-                  <span className="auto-trade-detail">BOS/CHoCH · Body x2-x8 · &gt;4.0: Lmt70 · TP 3R / EMA21 @1R</span>
                 </span>
               )}
             </div>

@@ -11,6 +11,7 @@ import {
   appShellClassName,
   bigTradesEnabledForTimeframe,
   buildChartLimitOrderDraft,
+  calculateRiskBasedLots,
   drawingVisibleOnTimeframe,
   historyBackfillLimit,
   initialHistoryWindow,
@@ -151,6 +152,41 @@ describe("mobile chart limit order draft", () => {
         settings,
       }),
     ).toBeUndefined();
+  });
+
+  it("sizes a chart bracket from the target risk and floors to the broker lot step", () => {
+    const symbol = {
+      symbol: "GC",
+      digits: 2,
+      tickSize: 0.1,
+      minLot: 0.01,
+      maxLot: 100,
+      lotStep: 0.01,
+      stopsLevel: 0,
+      pipValue: 1,
+    };
+
+    expect(
+      calculateRiskBasedLots({
+        riskAmount: 100,
+        entryGc: 2360,
+        stopGc: 2357,
+        symbol,
+      }),
+    ).toBe(3.33);
+
+    expect(
+      buildChartLimitOrderDraft({
+        entryPrice: 2360.04,
+        referencePrice: 2370.02,
+        settings: {
+          ...settings,
+          sizingMode: "risk",
+          riskAmount: 100,
+        },
+        symbol,
+      })?.volumeLots,
+    ).toBe(3.33);
   });
 });
 

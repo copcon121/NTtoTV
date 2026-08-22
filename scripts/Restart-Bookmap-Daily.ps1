@@ -43,9 +43,15 @@ function Get-PathStats {
     }
 
     $files = @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force -Filter $Filter -ErrorAction SilentlyContinue)
+    $measure = $files | Measure-Object -Property Length -Sum
+    $bytes = if ($null -eq $measure -or $null -eq $measure.Sum) {
+        [int64]0
+    } else {
+        [int64]$measure.Sum
+    }
     return [pscustomobject]@{
         Files = $files.Count
-        Bytes = [int64](($files | Measure-Object Length -Sum).Sum)
+        Bytes = $bytes
     }
 }
 
@@ -160,7 +166,12 @@ function Clear-DataLibraryRecordings {
     }
 
     $recordings = @(Get-ChildItem -LiteralPath $dataLibraryPath -File -Force -Filter "*.bml" -ErrorAction SilentlyContinue)
-    $bytes = [int64](($recordings | Measure-Object Length -Sum).Sum)
+    $measure = $recordings | Measure-Object -Property Length -Sum
+    $bytes = if ($null -eq $measure -or $null -eq $measure.Sum) {
+        [int64]0
+    } else {
+        [int64]$measure.Sum
+    }
     Write-MaintenanceLog ("Removing Bookmap data recordings: {0} files, {1:N2} MiB." -f $recordings.Count, ($bytes / 1MB))
     foreach ($recording in $recordings) {
         Remove-Item -LiteralPath $recording.FullName -Force -ErrorAction Stop
@@ -189,6 +200,27 @@ function Start-Bookmap {
     Start-Sleep -Seconds 3
     if (-not (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) {
         throw "Bookmap exited immediately after restart."
+    }
+
+    # Bookmap may show a modal GPU/OpenGL failure dialog even when GPU
+    # acceleration is disabled. It blocks workspace loading until dismissed.
+    # Wait until the check has had time to appear, then dismiss the modal for
+    # this exact Bookmap process. Enter is harmless on the main chart window.
+    Start-Sleep -Seconds 22
+    $liveProcess = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+    if ($null -ne $liveProcess) {
+        try {
+            $shell = New-Object -ComObject WScript.Shell
+            if ($shell.AppActivate($process.Id)) {
+                Start-Sleep -Milliseconds 250
+                $shell.SendKeys('{ENTER}')
+                Write-MaintenanceLog ("Sent Enter to skip the Bookmap GPU acceleration dialog for PID {0}." -f $process.Id)
+            } else {
+                Write-MaintenanceLog ("Could not activate Bookmap PID {0} to skip the GPU acceleration dialog." -f $process.Id) "WARN"
+            }
+        } catch {
+            Write-MaintenanceLog ("GPU acceleration dialog skip failed for PID {0}: {1}" -f $process.Id, $_.Exception.Message) "WARN"
+        }
     }
 }
 

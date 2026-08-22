@@ -837,6 +837,15 @@ body {
   white-space: nowrap;
 }
 
+.market-order-size-control {
+  display: inline-flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 5px !important;
+  flex: 0 0 auto;
+  color: #a8a8a8;
+}
+
 .market-order-settings {
   display: flex;
   align-items: center;
@@ -863,6 +872,19 @@ body {
   background: #101010;
   color: #f3f3f3;
   padding: 0 7px;
+  font: inherit;
+}
+
+.market-order-settings select,
+.market-order-size-control select {
+  width: 78px;
+  height: 30px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  background: #101010;
+  color: #f3f3f3;
+  padding: 0 5px;
   font: inherit;
 }
 
@@ -1304,41 +1326,59 @@ body {
   pointer-events: none;
 }
 
-.timezone-control {
-  flex: 0 0 auto;
-  margin-left: auto;
+.chart-timezone-control {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 15;
   display: inline-flex;
   align-items: center;
-  height: 24px;
-  padding: 0 5px;
-  background: #101010e6;
-  border: 1px solid #333;
-  border-radius: 4px;
-  color: #f5f5f5;
+  justify-content: flex-end;
+  min-width: 68px;
+  height: 22px;
+  padding: 0 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: #111111;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  line-height: 24px;
+  line-height: 22px;
 }
 
-.timezone-control select {
-  height: 22px;
-  max-width: 76px;
-  background: transparent;
-  color: #f5f5f5;
-  border: 0;
-  padding: 0 2px;
-  font: inherit;
+.chart-timezone-control select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
   cursor: pointer;
 }
 
-.timezone-control select:focus-visible {
-  outline: 1px solid #008b8b;
-  outline-offset: 1px;
+.chart-timezone-control select:focus-visible {
+  opacity: 0;
 }
 
-.timezone-control option {
-  background: #181818;
-  color: #f5f5f5;
+.chart-timezone-control option {
+  background: #ffffff;
+  color: #111111;
+}
+
+.chart-crosshair-time {
+  position: absolute;
+  bottom: 0;
+  z-index: 16;
+  min-width: max-content;
+  height: 22px;
+  padding: 0 7px;
+  background: #111111;
+  color: #ffffff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 22px;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1419,6 +1459,24 @@ body {
   background: #38464f;
   margin: 6px 0;
   flex-shrink: 0;
+}
+
+.drawing-toolbar-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin-top: auto;
+}
+
+.drawing-tool-indicators.is-hidden {
+  background: rgba(41, 98, 255, 0.28);
+  color: #ffffff;
+  border-color: #3f6da8;
+}
+
+.drawing-tool-indicators.is-hidden:hover {
+  background: rgba(49, 93, 156, 0.7);
 }
 
 .drawing-profile-context-menu {
@@ -1543,7 +1601,7 @@ body {
 }
 
 .drawing-tool-delete {
-  margin-top: auto;
+  margin-top: 0;
 }
 
 .drawing-count-badge {
@@ -2344,38 +2402,6 @@ body {
   padding: 4px;
 }
 
-.indicator-master-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  margin: 0 0 4px;
-  padding: 8px 10px;
-  color: var(--text, #d8d8d8);
-  background: #242424;
-  border: 0;
-  border-bottom: 1px solid #3a3a3a;
-  border-radius: 4px 4px 2px 2px;
-  font: inherit;
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.indicator-master-toggle:hover {
-  background: #303030;
-}
-
-.indicator-master-toggle.is-hidden {
-  color: #fff;
-  background: #274d85;
-  border-bottom-color: #3f6da8;
-}
-
-.indicator-master-toggle.is-hidden:hover {
-  background: #315d9c;
-}
-
 .chart-menu-item,
 .alert-menu-item {
   display: block;
@@ -2533,7 +2559,7 @@ body {
     grid-template-columns: 24px minmax(0, 1fr) auto auto auto;
     grid-template-areas:
       "symbol timeframe analyst bg status"
-      "indicators account account tz alerts";
+      "indicators account account account alerts";
     align-items: center;
     gap: 6px 4px;
     padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 6px;
@@ -2656,18 +2682,6 @@ body {
     width: 32px;
     height: 30px;
     font-size: 12px;
-  }
-
-  .timezone-control {
-    grid-area: tz;
-    justify-self: end;
-    margin-left: 0;
-    height: 28px;
-    line-height: 28px;
-  }
-
-  .timezone-control select {
-    height: 26px;
   }
 
   .alert-popover .alert-panel {
@@ -2806,12 +2820,18 @@ body {
 
   .drawing-toolbar-mobile.is-collapsed .drawing-toolbar-tools,
   .drawing-toolbar-mobile.is-collapsed .drawing-toolbar-separator,
-  .drawing-toolbar-mobile.is-collapsed .drawing-tool-delete {
+  .drawing-toolbar-mobile.is-collapsed .drawing-toolbar-bottom {
     display: none;
   }
 
   .drawing-toolbar-mobile .drawing-toolbar-separator {
     display: none;
+  }
+
+  .drawing-toolbar-mobile .drawing-toolbar-bottom {
+    flex-direction: row;
+    align-items: center;
+    margin-top: 0;
   }
 
   .drawing-toolbar-mobile .drawing-tool-delete {
@@ -2849,9 +2869,9 @@ body {
   .market-order-bar {
     align-items: stretch;
     flex-direction: column;
-    gap: 8px;
+    gap: 5px;
     max-height: min(38dvh, 290px);
-    padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
   }
 
   .market-order-main {
@@ -2864,23 +2884,38 @@ body {
     gap: 6px;
   }
 
+  .market-order-size-control {
+    margin-left: auto;
+  }
+
   .market-order-settings {
     order: 2;
     width: 100%;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    column-gap: 10px;
+    row-gap: 5px;
   }
 
   .market-order-settings label {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto 56px;
+    gap: 4px;
+    flex: 0 0 auto;
+    width: max-content;
   }
 
   .market-order-settings input {
-    width: 100%;
+    width: 56px;
+  }
+
+  .market-order-settings select {
+    width: 78px;
   }
 
   .auto-trade-controls {
-    grid-column: 1 / -1;
+    flex: 0 0 100%;
     justify-content: flex-start;
   }
 
@@ -2895,7 +2930,7 @@ body {
   }
 
   .market-order-actions button {
-    min-height: 44px;
+    min-height: 38px;
     width: 100%;
   }
 

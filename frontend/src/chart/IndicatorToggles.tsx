@@ -29,10 +29,10 @@ import {
  * IndicatorToggles â€” TradingView-style "Indicators" dropdown.
  *
  * A single button opens a popover listing the available indicators, each with
- * an enable/disable checkbox. The EMA row has a gear button that opens a small
- * settings panel to edit the EMA length and line color. Footprint is M1-only
- * and can be disabled independently. EMA is an explicitly-added overlay
- * (Req 19.3).
+ * an enable/disable checkbox. Volume is intentionally always enabled. The EMA
+ * row has a gear button that opens a small settings panel to edit the EMA
+ * length and line color. Footprint is M1-only and can be disabled
+ * independently. EMA is an explicitly-added overlay (Req 19.3).
  */
 export interface EmaSettings {
   enabled: boolean;
@@ -154,7 +154,6 @@ export function normalizeMgannBreakSignalLimit(value: unknown): number {
 export interface IndicatorTogglesProps {
   /** Temporary master visibility; individual indicator settings stay unchanged. */
   indicatorsVisible?: boolean;
-  volume?: boolean;
   volumeDelta?: boolean;
   mgannSwing?: boolean;
   mgannSwingSettings?: Partial<MgannSwingSettings>;
@@ -173,8 +172,6 @@ export interface IndicatorTogglesProps {
   footprintDisabled?: boolean;
   fvgGraderDisabled?: boolean;
   bigTradeDisabled?: boolean;
-  onIndicatorsVisibleChange?: (visible: boolean) => void;
-  onVolumeChange?: (enabled: boolean) => void;
   onVolumeDeltaChange?: (enabled: boolean) => void;
   onMgannSwingChange?: (enabled: boolean) => void;
   onMgannSwingSettingsChange?: (next: MgannSwingSettings) => void;
@@ -237,7 +234,6 @@ function IndicatorRow({ label, checked, disabled = false, onChange, trailing }: 
 
 export function IndicatorToggles({
   indicatorsVisible = true,
-  volume = false,
   volumeDelta = false,
   mgannSwing = false,
   mgannSwingSettings = DEFAULT_MGANN_SWING_SETTINGS,
@@ -259,8 +255,6 @@ export function IndicatorToggles({
   footprintDisabled = false,
   fvgGraderDisabled = false,
   bigTradeDisabled = false,
-  onIndicatorsVisibleChange = () => {},
-  onVolumeChange = () => {},
   onVolumeDeltaChange = () => {},
   onMgannSwingChange = () => {},
   onMgannSwingSettingsChange = () => {},
@@ -502,7 +496,7 @@ export function IndicatorToggles({
     ema.enabled || ema.showEma200 || outsideBarConfig.enabled;
 
   const activeCount =
-    (volume ? 1 : 0) +
+    1 +
     (volumeDelta ? 1 : 0) +
     (dailyVolumeProfile ? 1 : 0) +
     (mgannSwing && !mgannSwingDisabled ? 1 : 0) +
@@ -773,24 +767,11 @@ export function IndicatorToggles({
       </button>
       {open && (
         <div className="indicator-menu" role="menu" aria-label="Indicator list">
-          <button
-            type="button"
-            className={`indicator-master-toggle${
-              indicatorsVisible ? "" : " is-hidden"
-            }`}
-            role="menuitem"
-            aria-label={
-              indicatorsVisible ? "Hide all indicators" : "Restore indicators"
-            }
-            onClick={() => onIndicatorsVisibleChange(!indicatorsVisible)}
-          >
-            <span aria-hidden="true">{indicatorsVisible ? "\u25C9" : "\u25CB"}</span>
-            <span>{indicatorsVisible ? "Hide all indicators" : "Restore indicators"}</span>
-          </button>
           <IndicatorRow
             label="Volume"
-            checked={volume}
-            onChange={onVolumeChange}
+            checked
+            disabled
+            onChange={() => {}}
           />
           <IndicatorRow
             label="Volume Delta"

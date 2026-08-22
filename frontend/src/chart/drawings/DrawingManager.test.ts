@@ -145,6 +145,27 @@ function pressDelete() {
   );
 }
 
+function pressUndo() {
+  document.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      bubbles: true,
+      ctrlKey: true,
+      key: "z",
+    }),
+  );
+}
+
+function pressRedo() {
+  document.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      bubbles: true,
+      ctrlKey: true,
+      key: "z",
+      shiftKey: true,
+    }),
+  );
+}
+
 function pressShift() {
   document.dispatchEvent(
     new KeyboardEvent("keydown", {
@@ -289,6 +310,28 @@ describe("DrawingManager selection", () => {
     deleteButton!.click();
 
     expect(manager.exportState()).toEqual([]);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("undoes and redoes drawing actions with Ctrl+Z", () => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("trendline");
+    placeAnchors(clickHandlers, [
+      { x: 10, y: 20 },
+      { x: 60, y: 80 },
+    ]);
+
+    expect(manager.exportState()).toHaveLength(1);
+    pressUndo();
+    expect(manager.exportState()).toEqual([]);
+
+    pressRedo();
+    expect(manager.exportState()[0].anchors).toEqual([
+      { time: 10, logical: 10, price: 20 },
+      { time: 60, logical: 60, price: 80 },
+    ]);
 
     manager.dispose();
     container.remove();

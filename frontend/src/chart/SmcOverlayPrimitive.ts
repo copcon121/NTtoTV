@@ -107,22 +107,22 @@ function styleFor(zone: RenderableSmcZone): ZoneStyle {
     return zone.direction === 1
       ? {
           fill: "rgba(25, 35, 45, 0.20)",
-          stroke: "rgba(40, 80, 120, 0.48)",
+          stroke: "rgba(40, 80, 120, 0.24)",
         }
       : {
           fill: "rgba(45, 25, 25, 0.20)",
-          stroke: "rgba(120, 40, 40, 0.48)",
+          stroke: "rgba(120, 40, 40, 0.24)",
         };
   }
 
   return zone.direction === 1
     ? {
         fill: "rgba(30, 45, 60, 0.18)",
-        stroke: "rgba(50, 100, 150, 0.50)",
+        stroke: "rgba(50, 100, 150, 0.26)",
       }
     : {
         fill: "rgba(60, 30, 30, 0.18)",
-        stroke: "rgba(150, 50, 50, 0.50)",
+        stroke: "rgba(150, 50, 50, 0.26)",
       };
 }
 

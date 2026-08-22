@@ -124,8 +124,6 @@ import {
 } from "./chart/timeframeRange";
 import {
   DEFAULT_TIMEZONE_OFFSET_MINUTES,
-  TIMEZONE_OFFSET_OPTIONS,
-  formatUtcOffset,
   normalizeTimezoneOffsetMinutes,
 } from "./chart/timezone";
 import { resolveEndpoints } from "./endpoints";
@@ -241,6 +239,8 @@ const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
   volumeLots: 0.1,
   slDistanceGc: 3,
   tpDistanceGc: 6,
+  sizingMode: "lots",
+  riskAmount: 100,
 };
 const EMPTY_MT5_OPEN_TRADES: Mt5OpenTrades = { positions: [], orders: [] };
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
@@ -566,6 +566,7 @@ export function buildChartLimitOrderDraft(input: {
   entryPrice: number;
   referencePrice: number | undefined;
   settings: MarketOrderSettings;
+  symbol?: Mt5Symbol;
 }): ChartLimitOrderDraft | undefined {
   const referencePrice = input.referencePrice;
   if (
@@ -588,11 +589,18 @@ export function buildChartLimitOrderDraft(input: {
     side === "buy"
       ? roundGcPrice(entryGc + settings.tpDistanceGc)
       : roundGcPrice(entryGc - settings.tpDistanceGc);
+  const volumeLots = resolveOrderVolumeLots({
+    settings,
+    entryGc,
+    slGc,
+    symbol: input.symbol,
+  });
+  if (volumeLots === undefined) return undefined;
   return {
     source: "chart_bracket",
     side,
     kind: "limit",
-    volumeLots: settings.volumeLots,
+    volumeLots,
     entryGc,
     referenceGc,
     slGc,
@@ -607,6 +615,7 @@ function sanitizeMarketOrderSettings(
   const volumeLots = Number(value?.volumeLots);
   const slDistanceGc = Number(value?.slDistanceGc);
   const tpDistanceGc = Number(value?.tpDistanceGc);
+  const riskAmount = Number(value?.riskAmount);
   return {
     volumeLots: Number.isFinite(volumeLots)
       ? Math.max(0.01, Math.round(volumeLots * 100) / 100)
@@ -617,7 +626,74 @@ function sanitizeMarketOrderSettings(
     tpDistanceGc: Number.isFinite(tpDistanceGc)
       ? Math.max(0.1, roundGcPrice(tpDistanceGc))
       : DEFAULT_MARKET_ORDER_SETTINGS.tpDistanceGc,
+    sizingMode: value?.sizingMode === "risk" ? "risk" : "lots",
+    riskAmount: Number.isFinite(riskAmount)
+      ? Math.max(1, Math.round(riskAmount * 100) / 100)
+      : DEFAULT_MARKET_ORDER_SETTINGS.riskAmount,
   };
+}
+
+export function calculateRiskBasedLots(input: {
+  riskAmount: number;
+  entryGc: number;
+  stopGc: number;
+  symbol?: Mt5Symbol;
+}): number | undefined {
+  if (
+    !Number.isFinite(input.riskAmount) ||
+    input.riskAmount <= 0 ||
+    !Number.isFinite(input.entryGc) ||
+    !Number.isFinite(input.stopGc) ||
+    input.symbol === undefined
+  ) {
+    return undefined;
+  }
+
+  const { tickSize, pipValue: tickValue, minLot, maxLot, lotStep } = input.symbol;
+  if (
+    !Number.isFinite(tickSize) ||
+    tickSize <= 0 ||
+    !Number.isFinite(tickValue) ||
+    tickValue <= 0 ||
+    !Number.isFinite(minLot) ||
+    minLot <= 0 ||
+    !Number.isFinite(maxLot) ||
+    maxLot < minLot ||
+    !Number.isFinite(lotStep) ||
+    lotStep <= 0
+  ) {
+    return undefined;
+  }
+  const stopDistance = Math.abs(input.entryGc - input.stopGc);
+  const riskPerLot = (stopDistance / tickSize) * tickValue;
+  if (!Number.isFinite(riskPerLot) || riskPerLot <= 0) return undefined;
+
+  const rawLots = input.riskAmount / riskPerLot;
+  if (!Number.isFinite(rawLots) || rawLots <= 0) return undefined;
+
+  // Floor to the broker's step so the rounded size does not exceed the target risk.
+  const steppedLots = Math.floor((rawLots + lotStep * 1e-9) / lotStep) * lotStep;
+  // Do not force the broker minimum if it would exceed the user's risk budget.
+  if (steppedLots < minLot - lotStep * 1e-9) return undefined;
+  const boundedLots = Math.min(maxLot, Math.max(minLot, steppedLots));
+  return Number(boundedLots.toFixed(8));
+}
+
+function resolveOrderVolumeLots(input: {
+  settings: MarketOrderSettings;
+  entryGc: number;
+  slGc: number;
+  symbol?: Mt5Symbol;
+}): number | undefined {
+  const settings = sanitizeMarketOrderSettings(input.settings);
+  if (settings.sizingMode !== "risk") return settings.volumeLots;
+  if (input.symbol === undefined) return undefined;
+  return calculateRiskBasedLots({
+    riskAmount: settings.riskAmount ?? DEFAULT_MARKET_ORDER_SETTINGS.riskAmount ?? 100,
+    entryGc: input.entryGc,
+    stopGc: input.slGc,
+    symbol: input.symbol,
+  });
 }
 
 function readMarketOrderSettings(
@@ -1270,53 +1346,6 @@ function isTimeframe(value: unknown): value is Timeframe {
   return typeof value === "string" && PROFILE_TIMEFRAMES.has(value as Timeframe);
 }
 
-function TimezoneControl({
-  offsetMinutes,
-  onChange,
-}: {
-  offsetMinutes: number;
-  onChange: (offsetMinutes: number) => void;
-}) {
-  const normalizedOffset = normalizeTimezoneOffsetMinutes(offsetMinutes);
-  const options = useMemo(() => {
-    if (
-      TIMEZONE_OFFSET_OPTIONS.some(
-        (option) => option.offsetMinutes === normalizedOffset,
-      )
-    ) {
-      return TIMEZONE_OFFSET_OPTIONS;
-    }
-    return [
-      ...TIMEZONE_OFFSET_OPTIONS,
-      {
-        offsetMinutes: normalizedOffset,
-        label: formatUtcOffset(normalizedOffset),
-      },
-    ].sort((a, b) => a.offsetMinutes - b.offsetMinutes);
-  }, [normalizedOffset]);
-
-  return (
-    <label
-      className="timezone-control"
-      title={`Chart timezone: ${formatUtcOffset(normalizedOffset)}`}
-    >
-      <select
-        aria-label="Chart timezone"
-        value={normalizedOffset}
-        onChange={(event) =>
-          onChange(normalizeTimezoneOffsetMinutes(event.currentTarget.value))
-        }
-      >
-        {options.map((option) => (
-          <option key={option.offsetMinutes} value={option.offsetMinutes}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
 function AlertToolbarButton({
   open,
   alertCount,
@@ -1837,7 +1866,6 @@ export function LiveApp() {
   const [marketDataStatus, setMarketDataStatus] =
     useState<MarketDataStatusMessage>();
   const [indicatorsVisible, setIndicatorsVisible] = useState(true);
-  const [showVolume, setShowVolume] = useState(true);
   const [showDailyVolumeProfile, setShowDailyVolumeProfile] = useState(false);
   const [dailyVolumeProfileWidth, setDailyVolumeProfileWidth] = useState(
     DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
@@ -2026,7 +2054,7 @@ export function LiveApp() {
       version: 1,
       timeframe,
       chartBackgroundColor,
-      showVolume,
+      showVolume: true,
       showVolumeDelta,
       showDailyVolumeProfile,
       dailyVolumeProfileWidth,
@@ -2068,7 +2096,6 @@ export function LiveApp() {
       showFootprint,
       fvgSignalLimit,
       showMgannSwing,
-      showVolume,
       showVolumeDelta,
       showDailyVolumeProfile,
       showDailyVolumeProfileDevelopingPoc,
@@ -3611,6 +3638,24 @@ export function LiveApp() {
       latestPriceRef.current ??
       latestPrice ??
       (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
+  const marketVolumeLots =
+      marketGcReference === undefined
+        ? marketOrderSettings.sizingMode === "risk"
+          ? undefined
+          : marketOrderSettings.volumeLots
+        : resolveOrderVolumeLots({
+            settings: marketOrderSettings,
+            entryGc: marketGcReference,
+            slGc:
+              side === "buy"
+                ? marketGcReference - marketOrderSettings.slDistanceGc
+                : marketGcReference + marketOrderSettings.slDistanceGc,
+            symbol: mt5Symbol,
+          });
+    if (marketVolumeLots === undefined) {
+      setOrderError("Risk sizing needs a live MT5 symbol and current price.");
+      return;
+    }
     setOrderPending(true);
     setOrderError("");
     void (async () => {
@@ -3619,7 +3664,7 @@ export function LiveApp() {
           source: "market_bar",
           side,
           kind: "market",
-          volumeLots: marketOrderSettings.volumeLots,
+          volumeLots: marketVolumeLots,
           ...(marketGcReference !== undefined
             ? { referenceGc: roundGcPrice(marketGcReference) }
             : {}),
@@ -3664,6 +3709,16 @@ export function LiveApp() {
       setOrderError("Connect MT5 before placing chart orders.");
       return;
     }
+    const volumeLots = resolveOrderVolumeLots({
+      settings: marketOrderSettings,
+      entryGc,
+      slGc,
+      symbol: mt5Symbol,
+    });
+    if (volumeLots === undefined) {
+      setOrderError("Risk sizing requires a valid Entry-to-SL distance and MT5 symbol data.");
+      return;
+    }
     submittedOrderDrawingIdsRef.current.add(drawing.id);
     const side: "buy" | "sell" = isBuy ? "buy" : "sell";
     const latestBar = hasLoadedCurrentSeries ? bars[bars.length - 1] : undefined;
@@ -3680,7 +3735,7 @@ export function LiveApp() {
           source: "chart_bracket",
           side,
           kind,
-          volumeLots: marketOrderSettings.volumeLots,
+          volumeLots,
           entryGc,
           referenceGc: roundGcPrice(referencePrice),
           slGc,
@@ -4278,7 +4333,6 @@ export function LiveApp() {
     }
     setChartBackgroundColor(normalizeChartBackgroundColor(payload.chartBackgroundColor));
     setShowFootprint(Boolean(payload.showFootprint));
-    setShowVolume(payload.showVolume !== false);
     setShowVolumeDelta(payload.showVolumeDelta !== false);
     setShowDailyVolumeProfile(Boolean(payload.showDailyVolumeProfile));
     setDailyVolumeProfileWidth(
@@ -4675,6 +4729,7 @@ export function LiveApp() {
           entryPrice: chartMenu.price,
           referencePrice: chartMenu.referencePrice,
           settings: marketOrderSettings,
+          symbol: mt5Symbol,
         });
 
   useEffect(() => {
@@ -4769,7 +4824,6 @@ export function LiveApp() {
         <TimeframeSelector value={timeframe} onChange={setTimeframe} />
         <IndicatorToggles
           indicatorsVisible={indicatorsVisible}
-          volume={showVolume}
           volumeDelta={showVolumeDelta}
           mgannSwing={showMgannSwing}
           mgannSwingSettings={mgannSwing}
@@ -4791,8 +4845,6 @@ export function LiveApp() {
           dailyVolumeProfile={showDailyVolumeProfile}
           dailyVolumeProfileWidth={dailyVolumeProfileWidth}
           dailyVolumeProfileDevelopingPoc={showDailyVolumeProfileDevelopingPoc}
-          onIndicatorsVisibleChange={setIndicatorsVisible}
-          onVolumeChange={setShowVolume}
           onDailyVolumeProfileChange={setShowDailyVolumeProfile}
           onDailyVolumeProfileWidthChange={setDailyVolumeProfileWidth}
           onDailyVolumeProfileDevelopingPocChange={
@@ -4897,10 +4949,6 @@ export function LiveApp() {
             webPushSupported={webPushSupported}
           />
         </div>
-        <TimezoneControl
-          offsetMinutes={timezoneOffsetMinutes}
-          onChange={setTimezoneOffsetMinutes}
-        />
         <StatusIndicator
           state={connection}
           label={connection === "disconnected" ? undefined : marketStatusLabel}
@@ -4914,6 +4962,8 @@ export function LiveApp() {
           drawingCount={drawingCount}
           onToolSelect={setActiveTool}
           onDeleteAll={deleteAllDrawings}
+          indicatorsVisible={indicatorsVisible}
+          onIndicatorsVisibleChange={setIndicatorsVisible}
         />
         <div className="chart-stack">
           <ChartContainer
@@ -4940,7 +4990,7 @@ export function LiveApp() {
             sessionVolumeProfileDevelopingPoc={
               showDailyVolumeProfileDevelopingPoc
             }
-            showVolume={indicatorsVisible && showVolume}
+            showVolume
             showVolumeDelta={indicatorsVisible && showVolumeDelta}
             showCvd={indicatorsVisible && showMgannWaveDelta}
             showMgannSwing={indicatorsVisible && showMgannSwingForTimeframe}
@@ -4951,6 +5001,7 @@ export function LiveApp() {
             bigTradeSettings={bigTradeSettings}
             chartBackgroundColor={chartBackgroundColor}
             timezoneOffsetMinutes={timezoneOffsetMinutes}
+            onTimezoneOffsetChange={setTimezoneOffsetMinutes}
             socket={socket}
             onRequestAlertAtPrice={onRequestChartMenu}
             onRealtimeBar={onChartRealtimeBar}
@@ -5018,30 +5069,34 @@ export function LiveApp() {
               drawingCount={drawingCount}
               onToolSelect={setActiveTool}
               onDeleteAll={deleteAllDrawings}
+              indicatorsVisible={indicatorsVisible}
+              onIndicatorsVisibleChange={setIndicatorsVisible}
             />
           </ChartContainer>
-          <MarketOrderBar
-            account={mt5Account}
-            pending={orderPending}
-            error={orderError}
-            variant={chartFocusMode ? "drawer" : "default"}
-            drawerOpen={marketOrderDrawerOpen}
-            onDrawerOpenChange={setMarketOrderDrawerOpen}
-            openOrderCount={orderRows.length}
-            orderRows={orderRows}
-            settings={marketOrderSettings}
-            onSettingsChange={(settings) =>
-              setMarketOrderSettings(sanitizeMarketOrderSettings(settings))
-            }
-            onMarketOrder={onMarketOrder}
-            autoTradeSettings={autoTradeSettings}
-            autoTradePending={autoTradePending}
-            onAutoTradeSettingsChange={onAutoTradeSettingsChange}
-            onOrderRowBreakEven={onOrderRowBreakEven}
-            onOrderRowClose={onOrderRowClose}
-            onOrderRowClose50Percent={onOrderRowClose50Percent}
-            onOrderRowCancel={onOrderRowCancel}
-          />
+          {authUser && (
+            <MarketOrderBar
+              account={mt5Account}
+              pending={orderPending}
+              error={orderError}
+              variant={chartFocusMode ? "drawer" : "default"}
+              drawerOpen={marketOrderDrawerOpen}
+              onDrawerOpenChange={setMarketOrderDrawerOpen}
+              openOrderCount={orderRows.length}
+              orderRows={orderRows}
+              settings={marketOrderSettings}
+              onSettingsChange={(settings) =>
+                setMarketOrderSettings(sanitizeMarketOrderSettings(settings))
+              }
+              onMarketOrder={onMarketOrder}
+              autoTradeSettings={autoTradeSettings}
+              autoTradePending={autoTradePending}
+              onAutoTradeSettingsChange={onAutoTradeSettingsChange}
+              onOrderRowBreakEven={onOrderRowBreakEven}
+              onOrderRowClose={onOrderRowClose}
+              onOrderRowClose50Percent={onOrderRowClose50Percent}
+              onOrderRowCancel={onOrderRowCancel}
+            />
+          )}
         </div>
         <AuthDialog
           open={authDialogOpen}

@@ -39,7 +39,7 @@ describe("MarketOrderBar", () => {
     expect(screen.queryByRole("button", { name: "SELL" })).not.toBeInTheDocument();
   });
 
-  it("shows compact verified account balance when connected", () => {
+  it("shows only the account mode and balance in the compact account summary", () => {
     render(
       <MarketOrderBar
         account={{
@@ -58,11 +58,11 @@ describe("MarketOrderBar", () => {
       />,
     );
 
-    expect(screen.getByText("#123")).toBeInTheDocument();
+    expect(screen.getByText("DEMO")).toBeInTheDocument();
     expect(screen.queryByText(/Exness-Demo/)).not.toBeInTheDocument();
     expect(screen.getByText("Bal 10,000.00")).toBeInTheDocument();
-    expect(screen.getByText("Eq 9,999.50")).toBeInTheDocument();
-    expect(screen.getByText("Open 2")).toBeInTheDocument();
+    expect(screen.queryByText("Eq 9,999.50")).not.toBeInTheDocument();
+    expect(screen.queryByText("Open 2")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "BUY" })).toBeInTheDocument();
   });
 
@@ -123,7 +123,7 @@ describe("MarketOrderBar", () => {
       />,
     );
 
-    expect(screen.getByText("BOS/CHoCH · Body x2-x8 · >4.0: Lmt70 · TP 3R / EMA21 @1R")).toBeInTheDocument();
+    expect(screen.queryByText(/BOS\/CHoCH/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Auto trade L"));
     fireEvent.click(screen.getByLabelText("Auto trade S"));
 
@@ -293,6 +293,45 @@ describe("MarketOrderBar", () => {
     expect(onSettingsChange).toHaveBeenCalledWith({
       ...settings,
       slDistanceGc: 1.5,
+    });
+  });
+
+  it("allows switching the chart sizing input from lots to account risk", () => {
+    const onSettingsChange = vi.fn();
+    const { rerender } = render(
+      <MarketOrderBar
+        openOrderCount={0}
+        settings={{ ...settings, riskAmount: 100 }}
+        onSettingsChange={onSettingsChange}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Sizing mode"), {
+      target: { value: "risk" },
+    });
+    expect(onSettingsChange).toHaveBeenCalledWith({
+      ...settings,
+      riskAmount: 100,
+      sizingMode: "risk",
+    });
+
+    rerender(
+      <MarketOrderBar
+        openOrderCount={0}
+        settings={{ ...settings, riskAmount: 100, sizingMode: "risk" }}
+        onSettingsChange={onSettingsChange}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+    const risk = screen.getByLabelText("Risk $") as HTMLInputElement;
+    fireEvent.focus(risk);
+    fireEvent.change(risk, { target: { value: "125" } });
+    fireEvent.blur(risk);
+    expect(onSettingsChange).toHaveBeenLastCalledWith({
+      ...settings,
+      riskAmount: 125,
+      sizingMode: "risk",
     });
   });
 });

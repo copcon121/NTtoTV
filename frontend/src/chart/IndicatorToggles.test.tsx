@@ -25,7 +25,6 @@ function open() {
 
 describe("IndicatorToggles", () => {
   it("opens the dropdown and toggles each indicator", () => {
-    const onVolume = vi.fn();
     const onVolumeDelta = vi.fn();
     const onMgannSwing = vi.fn();
     const onFootprint = vi.fn();
@@ -40,7 +39,6 @@ describe("IndicatorToggles", () => {
         bigTrades
         ema={EMA}
         smc={SMC}
-        onVolumeChange={onVolume}
         onVolumeDeltaChange={onVolumeDelta}
         onMgannSwingChange={onMgannSwing}
         onFootprintChange={onFootprint}
@@ -57,7 +55,8 @@ describe("IndicatorToggles", () => {
     expect(screen.queryByLabelText("EMA 21")).not.toBeInTheDocument();
 
     open();
-    fireEvent.click(screen.getByLabelText("Volume"));
+    expect(screen.getByLabelText("Volume")).toBeChecked();
+    expect(screen.getByLabelText("Volume")).toBeDisabled();
     fireEvent.click(screen.getByLabelText("Volume Delta"));
     fireEvent.click(screen.getByLabelText("MGannSwing"));
     fireEvent.click(screen.getByLabelText("EMA/OSB"));
@@ -66,7 +65,6 @@ describe("IndicatorToggles", () => {
     fireEvent.click(screen.getByLabelText("FVG Grader"));
     fireEvent.click(screen.getByLabelText("BigTrade"));
 
-    expect(onVolume).toHaveBeenCalledWith(true);
     expect(onVolumeDelta).toHaveBeenCalledWith(true);
     expect(onMgannSwing).toHaveBeenCalledWith(true);
     expect(onEma).toHaveBeenCalledWith({
@@ -392,17 +390,15 @@ describe("IndicatorToggles", () => {
         onFootprintSettingsChange={() => {}}
       />,
     );
-    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("4")).toBeInTheDocument();
   });
 
-  it("temporarily hides and restores all indicators without changing their settings", () => {
-    const onIndicatorsVisibleChange = vi.fn();
+  it("shows the master visibility state without putting the toggle in the menu", () => {
     const props = {
       footprint: true,
       bigTrades: true,
       ema: { ...EMA, enabled: true },
       smc: SMC,
-      onIndicatorsVisibleChange,
       onFootprintChange: () => {},
       onBigTradesChange: () => {},
       onEmaChange: () => {},
@@ -415,13 +411,10 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("Hide all indicators"));
-    expect(onIndicatorsVisibleChange).toHaveBeenLastCalledWith(false);
+    expect(screen.queryByLabelText("Hide all indicators")).toBeNull();
 
     rerender(<IndicatorToggles {...props} indicatorsVisible={false} />);
     expect(screen.getByText("Off")).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("Restore indicators"));
-    expect(onIndicatorsVisibleChange).toHaveBeenLastCalledWith(true);
     expect(screen.getByLabelText("Footprint")).toBeChecked();
     expect(screen.getByLabelText("BigTrade")).toBeChecked();
   });

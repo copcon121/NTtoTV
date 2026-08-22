@@ -68,17 +68,17 @@ describe("lightweightChartsAdapter time conversion", () => {
     );
   });
 
-  it("marks chart bars displayed at 08:01 and 20:01 UTC+7", () => {
-    const oneMinute = 60_000;
-    const oldEightAm = Date.UTC(2026, 5, 3, 0, 59, 0);
-    const eightOhOneAm = Date.UTC(2026, 5, 3, 1, 0, 0);
-    const eightOhOnePm = Date.UTC(2026, 5, 3, 13, 0, 0);
-    const ordinaryBar = Date.UTC(2026, 5, 3, 1, 1, 0);
+  it("marks chart bars displayed at 08:00 and 20:00 UTC+7", () => {
+    const displayOffsetMs = 0;
+    const eightAm = Date.UTC(2026, 5, 3, 1, 0, 0);
+    const eightOhOneAm = Date.UTC(2026, 5, 3, 1, 1, 0);
+    const eightPm = Date.UTC(2026, 5, 3, 13, 0, 0);
+    const ordinaryBar = Date.UTC(2026, 5, 3, 1, 59, 0);
 
-    expect(isUtcPlus7SessionHighlightTime(oldEightAm, oneMinute)).toBe(false);
-    expect(isUtcPlus7SessionHighlightTime(eightOhOneAm, oneMinute)).toBe(true);
-    expect(isUtcPlus7SessionHighlightTime(eightOhOnePm, oneMinute)).toBe(true);
-    expect(isUtcPlus7SessionHighlightTime(ordinaryBar, oneMinute)).toBe(false);
+    expect(isUtcPlus7SessionHighlightTime(eightAm, displayOffsetMs)).toBe(true);
+    expect(isUtcPlus7SessionHighlightTime(eightOhOneAm, displayOffsetMs)).toBe(false);
+    expect(isUtcPlus7SessionHighlightTime(eightPm, displayOffsetMs)).toBe(true);
+    expect(isUtcPlus7SessionHighlightTime(ordinaryBar, displayOffsetMs)).toBe(false);
   });
 });
 

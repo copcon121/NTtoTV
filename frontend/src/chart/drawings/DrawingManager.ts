@@ -125,6 +125,8 @@ type DrawingPlacement = {
   lastPoint?: ChartPoint;
 };
 
+const MAX_HISTORY_ENTRIES = 100;
+
 let nextId = 1;
 
 function uid(): string {
@@ -135,6 +137,26 @@ function bumpNextId(id: string): void {
   const match = /^drawing-(\d+)$/.exec(id);
   if (!match) return;
   nextId = Math.max(nextId, Number(match[1]) + 1);
+}
+
+function cloneDrawingStates(states: readonly DrawingState[]): DrawingState[] {
+  return states.map((state) => ({
+    ...state,
+    anchors: state.anchors.map((anchor) => ({ ...anchor })),
+    options: state.options
+      ? {
+          ...state.options,
+          fibLevels: state.options.fibLevels?.map((level) => ({ ...level })),
+        }
+      : undefined,
+  }));
+}
+
+function drawingStatesEqual(
+  left: readonly DrawingState[],
+  right: readonly DrawingState[],
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export class DrawingManager implements IDrawingManager {
@@ -152,6 +174,13 @@ export class DrawingManager implements IDrawingManager {
   private readonly _countListeners = new Set<(count: number) => void>();
   /** Full-state subscribers. */
   private readonly _stateListeners = new Set<(state: DrawingState[]) => void>();
+
+  /** Completed drawing states before the current state, newest last. */
+  private readonly _undoHistory: DrawingState[][] = [];
+  /** States available after undo, newest last. */
+  private readonly _redoHistory: DrawingState[][] = [];
+  /** Last state delivered to the history tracker. */
+  private _historyState: DrawingState[] = [];
 
   /** Bound event handlers for cleanup. */
   private _onClick: ((e: MouseEventParams) => void) | null = null;
@@ -212,6 +241,22 @@ export class DrawingManager implements IDrawingManager {
 
     // Escape key cancels placement
     this._onKeyDown = (e: KeyboardEvent) => {
+      if (!this._isEditableTarget(e.target) && (e.ctrlKey || e.metaKey)) {
+        const key = e.key.toLowerCase();
+        const handled =
+          key === "z"
+            ? e.shiftKey
+              ? this.redo()
+              : this.undo()
+            : key === "y"
+              ? this.redo()
+              : false;
+        if (handled) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+      }
       if (e.key === "Escape") {
         this.cancelDrawing();
         this._selectDrawing(null);
@@ -374,12 +419,34 @@ export class DrawingManager implements IDrawingManager {
     this._clearDrawings(true);
   }
 
+  undo(): boolean {
+    if (!this._series) return false;
+    const previous = this._undoHistory.pop();
+    if (previous === undefined) return false;
+    this._redoHistory.push(cloneDrawingStates(this._historyState));
+    this._replaceState(previous);
+    this._notifyCountChange();
+    this._notifyStateChange(false);
+    return true;
+  }
+
+  redo(): boolean {
+    if (!this._series) return false;
+    const next = this._redoHistory.pop();
+    if (next === undefined) return false;
+    this._undoHistory.push(cloneDrawingStates(this._historyState));
+    this._replaceState(next);
+    this._notifyCountChange();
+    this._notifyStateChange(false);
+    return true;
+  }
+
   setFixedRangeDeltaProfile(id: string, state: DeltaProfileLoadState): void {
     const drawing = this._drawings.get(id);
     if (drawing instanceof FixedRangeDeltaProfilePrimitive) {
       drawing.setProfileState(state);
       if (drawing.fitVerticalRangeToProfile()) {
-        this._notifyStateChange();
+        this._notifyStateChange(false);
         this._updateSelectionActions();
       }
     }
@@ -404,6 +471,17 @@ export class DrawingManager implements IDrawingManager {
 
   loadState(states: readonly DrawingState[]): void {
     if (!this._series) return;
+    this._replaceState(states);
+    this._undoHistory.length = 0;
+    this._redoHistory.length = 0;
+    this._historyState = cloneDrawingStates(this.exportState());
+    this._notifyCountChange();
+    this._notifyStateChange(false);
+  }
+
+  private _replaceState(states: readonly DrawingState[]): void {
+    const series = this._series;
+    if (!series) return;
     this.cancelDrawing();
     this._clearDrawings(false);
     for (const state of states) {
@@ -414,7 +492,7 @@ export class DrawingManager implements IDrawingManager {
         state.options,
       );
       if (!drawing) continue;
-      this._series.attachPrimitive(drawing as unknown as Parameters<typeof this._series.attachPrimitive>[0]);
+      series.attachPrimitive(drawing as unknown as Parameters<typeof series.attachPrimitive>[0]);
       this._drawings.set(state.id, drawing);
       if (state.locked === true) {
         this._lockedDrawingIds.add(state.id);
@@ -424,8 +502,6 @@ export class DrawingManager implements IDrawingManager {
       bumpNextId(state.id);
     }
     this._selectDrawing(null);
-    this._notifyCountChange();
-    this._notifyStateChange();
   }
 
   onCountChange(handler: (count: number) => void): () => void {
@@ -1149,8 +1225,16 @@ export class DrawingManager implements IDrawingManager {
     }
   }
 
-  private _notifyStateChange(): void {
+  private _notifyStateChange(recordHistory = true): void {
     const state = this.exportState();
+    if (recordHistory && !drawingStatesEqual(state, this._historyState)) {
+      this._undoHistory.push(cloneDrawingStates(this._historyState));
+      if (this._undoHistory.length > MAX_HISTORY_ENTRIES) {
+        this._undoHistory.shift();
+      }
+      this._redoHistory.length = 0;
+    }
+    this._historyState = cloneDrawingStates(state);
     for (const listener of this._stateListeners) {
       listener(state);
     }

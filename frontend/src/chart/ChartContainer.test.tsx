@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -6,6 +6,7 @@ import {
   type DisposableChartPort,
   type VolumeDeltaDatum,
   type AlertLine,
+  type CrosshairPosition,
   type EmaLineData,
   type OrderLine,
   type PriceLineSelection,
@@ -88,6 +89,9 @@ class FakePort implements DisposableChartPort {
   }[] = [];
   visibleLogicalRangeHandlers: ((
     info: VisibleLogicalRangeInfo | null,
+  ) => void)[] = [];
+  crosshairPositionHandlers: ((
+    position: CrosshairPosition | undefined,
   ) => void)[] = [];
   selectedPriceLine: PriceLineSelection | undefined;
   screenshotDataUrl = "data:image/png;base64,abc";
@@ -216,6 +220,16 @@ class FakePort implements DisposableChartPort {
     return () => {
       this.visibleLogicalRangeHandlers = this.visibleLogicalRangeHandlers.filter(
         (h) => h !== handler,
+      );
+    };
+  }
+  subscribeCrosshairPosition(
+    handler: (position: CrosshairPosition | undefined) => void,
+  ): () => void {
+    this.crosshairPositionHandlers.push(handler);
+    return () => {
+      this.crosshairPositionHandlers = this.crosshairPositionHandlers.filter(
+        (current) => current !== handler,
       );
     };
   }
@@ -367,6 +381,63 @@ describe("ChartContainer", () => {
 
     expect(port.timezoneOffsetCalls).toEqual([0, 7 * 60]);
     expect(port.disposed).toBe(false);
+  });
+
+  it("renders the timezone selector in the bottom-right chart corner", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const onTimezoneOffsetChange = vi.fn();
+
+    const { container } = render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        timezoneOffsetMinutes={7 * 60}
+        onTimezoneOffsetChange={onTimezoneOffsetChange}
+        portFactory={factory}
+      />,
+    );
+
+    const control = container.querySelector<HTMLElement>(
+      ".chart-timezone-control",
+    );
+    const select = control?.querySelector<HTMLSelectElement>("select");
+    expect(control).not.toBeNull();
+    expect(select?.value).toBe(String(7 * 60));
+
+    fireEvent.change(select!, { target: { value: "0" } });
+    expect(onTimezoneOffsetChange).toHaveBeenCalledWith(0);
+  });
+
+  it("keeps a date/time label visible in the right-side whitespace", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const { container } = render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        timezoneOffsetMinutes={7 * 60}
+        portFactory={factory}
+      />,
+    );
+
+    const time = Date.UTC(2026, 7, 24, 2, 31) / 1000;
+    act(() => {
+      port.crosshairPositionHandlers[0]?.({
+        x: 400,
+        y: 120,
+        time,
+        isWhitespace: true,
+      });
+    });
+
+    expect(container.querySelector(".chart-crosshair-time")?.textContent).toBe(
+      "2026-08-24 09:31 UTC+7",
+    );
   });
 
   it("passes Outside Bar settings to the chart port and updates them", () => {

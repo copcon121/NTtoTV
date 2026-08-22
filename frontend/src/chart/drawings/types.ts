@@ -207,6 +207,12 @@ export interface IDrawingManager {
   /** Remove all drawings. */
   removeAllDrawings(): void;
 
+  /** Undo the latest completed drawing action, if one exists. */
+  undo(): boolean;
+
+  /** Redo the latest undone drawing action, if one exists. */
+  redo(): boolean;
+
   /** Update computed data for one fixed-range delta profile drawing. */
   setFixedRangeDeltaProfile(id: string, state: DeltaProfileLoadState): void;
 

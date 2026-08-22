@@ -1,9 +1,9 @@
 /**
  * DrawingToolbar — TradingView-style vertical toolbar on the left of the chart.
  *
- * Renders SVG icon buttons for each drawing tool and a "Delete All" trash
- * button at the bottom. Mirrors the left toolbar layout from TradingView
- * (see the screenshot in the user's request).
+ * Renders SVG icon buttons for each drawing tool, plus the indicator visibility
+ * toggle and a "Delete All" trash button at the bottom. Mirrors the left
+ * toolbar layout from TradingView (see the screenshot in the user's request).
  */
 
 import { useState } from "react";
@@ -22,6 +22,10 @@ export interface DrawingToolbarProps {
   onToolSelect: (tool: DrawingToolType | null) => void;
   /** Called when the delete-all button is clicked. */
   onDeleteAll: () => void;
+  /** Whether indicator overlays are currently visible. */
+  indicatorsVisible?: boolean;
+  /** Toggles the temporary visibility of indicator overlays. */
+  onIndicatorsVisibleChange?: (visible: boolean) => void;
 }
 
 export function DrawingToolbar({
@@ -30,6 +34,8 @@ export function DrawingToolbar({
   drawingCount,
   onToolSelect,
   onDeleteAll,
+  indicatorsVisible = true,
+  onIndicatorsVisibleChange = () => {},
 }: DrawingToolbarProps) {
   const isMobile = className?.includes("drawing-toolbar-mobile") === true;
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -97,33 +103,61 @@ export function DrawingToolbar({
 
       <div className="drawing-toolbar-separator" />
 
-      <button
-        type="button"
-        className="drawing-tool-btn drawing-tool-delete"
-        title={`Delete all drawings${drawingCount > 0 ? ` (${drawingCount})` : ""}`}
-        aria-label={`Delete all drawings${drawingCount > 0 ? ` (${drawingCount})` : ""}`}
-        disabled={drawingCount === 0}
-        onClick={onDeleteAll}
-      >
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+      <div className="drawing-toolbar-bottom">
+        <button
+          type="button"
+          className={`drawing-tool-btn drawing-tool-indicators${
+            indicatorsVisible ? "" : " is-hidden"
+          }`}
+          title={indicatorsVisible ? "Hide all indicators" : "Restore indicators"}
+          aria-label={indicatorsVisible ? "Hide all indicators" : "Restore indicators"}
+          aria-pressed={!indicatorsVisible}
+          onClick={() => onIndicatorsVisibleChange(!indicatorsVisible)}
         >
-          <polyline points="3 6 5 6 21 6" />
-          <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-          <line x1="10" y1="11" x2="10" y2="17" />
-          <line x1="14" y1="11" x2="14" y2="17" />
-        </svg>
-        {drawingCount > 0 && (
-          <span className="drawing-count-badge">{drawingCount}</span>
-        )}
-      </button>
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+            <circle cx="12" cy="12" r="2.5" />
+            {!indicatorsVisible && <path d="M4 4 20 20" />}
+          </svg>
+        </button>
+
+        <button
+          type="button"
+          className="drawing-tool-btn drawing-tool-delete"
+          title={`Delete all drawings${drawingCount > 0 ? ` (${drawingCount})` : ""}`}
+          aria-label={`Delete all drawings${drawingCount > 0 ? ` (${drawingCount})` : ""}`}
+          disabled={drawingCount === 0}
+          onClick={onDeleteAll}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+            <line x1="10" y1="11" x2="10" y2="17" />
+            <line x1="14" y1="11" x2="14" y2="17" />
+          </svg>
+          {drawingCount > 0 && (
+            <span className="drawing-count-badge">{drawingCount}</span>
+          )}
+        </button>
+      </div>
     </aside>
   );
 }

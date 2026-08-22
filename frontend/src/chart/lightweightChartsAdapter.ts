@@ -268,7 +268,7 @@ const DIVERGENCE_MAX_VISIBLE = 20;
 const DIVERGENCE_LOOKBACK_BARS = 260;
 const SESSION_HIGHLIGHT_UTC_PLUS_7_MINUTES = 7 * 60;
 const SESSION_HIGHLIGHT_HOURS_UTC_PLUS_7 = new Set([8, 20]);
-const SESSION_HIGHLIGHT_MINUTE_UTC_PLUS_7 = 1;
+const SESSION_HIGHLIGHT_MINUTE_UTC_PLUS_7 = 0;
 const SESSION_HIGHLIGHT_BODY_COLOR = "rgba(255, 213, 79, 0.78)";
 const SESSION_HIGHLIGHT_LINE_COLOR = "#ffd54f";
 
@@ -414,6 +414,16 @@ export interface LightweightChartsAdapterOptions {
   timezoneOffsetMinutes?: number;
   /** Optional candle recoloring for bullish/bearish outside bars. */
   outsideBar?: Partial<OutsideBarSettings>;
+}
+
+/** Position and display time of the crosshair, including chart whitespace. */
+export interface CrosshairPosition {
+  x: number;
+  y: number;
+  /** Display timestamp in Lightweight Charts seconds (UTC). */
+  time: number;
+  /** True when the pointer is not over a candle/data point. */
+  isWhitespace: boolean;
 }
 
 /** Convert a Canonical_Timestamp (ms) to a Lightweight Charts UTCTimestamp (s). */
@@ -1115,8 +1125,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: palette.crosshair },
-        horzLine: { color: palette.crosshair },
+        vertLine: { color: palette.crosshair, labelVisible: true },
+        horzLine: { color: palette.crosshair, labelVisible: true },
       },
     });
 
@@ -1373,8 +1383,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: palette.crosshair },
-        horzLine: { color: palette.crosshair },
+        vertLine: { color: palette.crosshair, labelVisible: true },
+        horzLine: { color: palette.crosshair, labelVisible: true },
       },
     });
     this.candleSeries.applyOptions({
@@ -2808,6 +2818,60 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         low: point.low,
         close: point.close,
         volume: source?.volume ?? 0,
+      });
+    };
+    this.chart.subscribeCrosshairMove(listener);
+    return () => this.chart.unsubscribeCrosshairMove(listener);
+  }
+
+  /**
+   * Subscribe to the crosshair position, including the right-side whitespace
+   * after the last candle. Lightweight Charts leaves `param.time` undefined
+   * there, so extrapolate the timestamp from the current timeframe and the
+   * crosshair's logical index just like a continuous time axis.
+   */
+  subscribeCrosshairPosition(
+    handler: (position: CrosshairPosition | undefined) => void,
+  ): () => void {
+    const listener = (param: MouseEventParams) => {
+      const point = param.point;
+      if (point === undefined) {
+        handler(undefined);
+        return;
+      }
+
+      let displayTime: number | undefined;
+      if (typeof param.time === "number" && Number.isFinite(param.time)) {
+        displayTime = param.time;
+      } else {
+        const logical = Number(param.logical);
+        const lastBar = this.candleBars[this.candleBars.length - 1];
+        const durationSeconds = Math.max(1, this.barCountdownDurationMs / 1000);
+        if (
+          Number.isFinite(logical) &&
+          lastBar !== undefined &&
+          this.candleBars.length > 0
+        ) {
+          const lastDisplayTime = Number(
+            toUtcTimestamp(lastBar.time, this.displayTimeOffsetMs),
+          );
+          const lastIndex = this.candleBars.length - 1;
+          displayTime =
+            lastDisplayTime +
+            Math.round(logical - lastIndex) * durationSeconds;
+        }
+      }
+
+      if (displayTime === undefined || !Number.isFinite(displayTime)) {
+        handler(undefined);
+        return;
+      }
+
+      handler({
+        x: point.x,
+        y: point.y,
+        time: displayTime,
+        isWhitespace: param.time === undefined,
       });
     };
     this.chart.subscribeCrosshairMove(listener);

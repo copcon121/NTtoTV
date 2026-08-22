@@ -44,6 +44,7 @@ import {
   type VolumeDeltaDatum,
   type AlertLine,
   type AlertSignalMarker,
+  type CrosshairPosition,
   type EmaLineData,
   type OrderLine,
   type PriceLineSelection,
@@ -85,7 +86,13 @@ import type {
   FixedRangeProfileMode,
 } from "./drawings/types";
 import { barDurationForTimeframe } from "./barCountdown";
-import { DEFAULT_TIMEZONE_OFFSET_MINUTES } from "./timezone";
+import {
+  DEFAULT_TIMEZONE_OFFSET_MINUTES,
+  TIMEZONE_OFFSET_OPTIONS,
+  formatCrosshairTimeForOffset,
+  formatUtcOffset,
+  normalizeTimezoneOffsetMinutes,
+} from "./timezone";
 import { displayOffsetForTimeframe } from "./timeframeRange";
 import type { DeltaProfileData, DeltaProfileLoadState } from "../orderflow/deltaProfile";
 import { DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX } from "./sessionVolumeProfileSettings";
@@ -149,6 +156,9 @@ export interface DisposableChartPort extends ChartSeriesPort {
   }): () => void;
   subscribeVisibleLogicalRange?(
     handler: (info: VisibleLogicalRangeInfo | null) => void,
+  ): () => void;
+  subscribeCrosshairPosition?(
+    handler: (position: CrosshairPosition | undefined) => void,
   ): () => void;
 }
 
@@ -299,6 +309,8 @@ export interface ChartContainerProps {
   chartBackgroundColor?: string;
   /** Display timezone offset for axis labels, in minutes from UTC. */
   timezoneOffsetMinutes?: number;
+  /** Change the chart timezone from the bottom-right timezone control. */
+  onTimezoneOffsetChange?: (offsetMinutes: number) => void;
   /** Chart socket whose `bar_update` events drive incremental updates. */
   socket?: ChartSocket;
   /** Options forwarded to the Lightweight Charts adapter. */
@@ -414,6 +426,58 @@ export function filterBigTradeMarkers(
   return filtered.length > maxVisible ? filtered.slice(-maxVisible) : filtered;
 }
 
+function ChartTimezoneControl({
+  offsetMinutes,
+  onChange,
+}: {
+  offsetMinutes: number;
+  onChange?: (offsetMinutes: number) => void;
+}) {
+  const normalizedOffset = normalizeTimezoneOffsetMinutes(offsetMinutes);
+  const timezoneLabel = formatUtcOffset(normalizedOffset);
+  const label = timezoneLabel;
+  const options = useMemo(() => {
+    if (
+      TIMEZONE_OFFSET_OPTIONS.some(
+        (option) => option.offsetMinutes === normalizedOffset,
+      )
+    ) {
+      return TIMEZONE_OFFSET_OPTIONS;
+    }
+    return [
+      ...TIMEZONE_OFFSET_OPTIONS,
+      { offsetMinutes: normalizedOffset, label },
+    ].sort((left, right) => left.offsetMinutes - right.offsetMinutes);
+  }, [normalizedOffset, timezoneLabel]);
+
+  return (
+    <div
+      className="chart-timezone-control"
+      aria-label={`Chart timezone: ${timezoneLabel}`}
+      title={`Chart timezone: ${label}`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <span aria-hidden="true">{label}</span>
+      {onChange && (
+        <select
+          aria-label="Chart timezone"
+          value={normalizedOffset}
+          onChange={(event) =>
+            onChange(normalizeTimezoneOffsetMinutes(event.currentTarget.value))
+          }
+        >
+          {options.map((option) => (
+            <option key={option.offsetMinutes} value={option.offsetMinutes}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
 export function ChartContainer({
   symbol,
   contract,
@@ -445,6 +509,7 @@ export function ChartContainer({
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
   chartBackgroundColor = "#d3d3d3",
   timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES,
+  onTimezoneOffsetChange,
   socket,
   options,
   portFactory = defaultPortFactory,
@@ -485,6 +550,9 @@ export function ChartContainer({
   const [positionedOrderControls, setPositionedOrderControls] = useState<
     readonly PositionedOrderControl[]
   >([]);
+  const [crosshairTime, setCrosshairTime] = useState<
+    CrosshairPosition | undefined
+  >();
   // Keep the latest crosshair callback without re-subscribing on every render.
   const crosshairRef = useRef<((bar: Bar | undefined) => void) | undefined>(
     onCrosshairMove,
@@ -668,6 +736,9 @@ export function ChartContainer({
     let disposeCrosshair: (() => void) | undefined;
     const maybe = port as DisposableChartPort & {
       subscribeCrosshair?: (h: (bar: Bar | undefined) => void) => () => void;
+      subscribeCrosshairPosition?: (
+        h: (position: CrosshairPosition | undefined) => void,
+      ) => () => void;
     };
     if (
       typeof maybe.subscribeCrosshair === "function" &&
@@ -677,6 +748,10 @@ export function ChartContainer({
         crosshairRef.current?.(bar),
       );
     }
+    const disposeCrosshairPosition =
+      typeof maybe.subscribeCrosshairPosition === "function"
+        ? maybe.subscribeCrosshairPosition(setCrosshairTime)
+        : undefined;
 
     let disposeVisibleRange: (() => void) | undefined;
     if (typeof port.subscribeVisibleLogicalRange === "function") {
@@ -754,6 +829,8 @@ export function ChartContainer({
       if (wheelIdleTimer !== undefined) window.clearTimeout(wheelIdleTimer);
       chartInteractionActiveRef.current = false;
       disposeCrosshair?.();
+      disposeCrosshairPosition?.();
+      setCrosshairTime(undefined);
       disposeVisibleRange?.();
       disposeContextMenu?.();
       disposeOrderDrag?.();
@@ -1199,6 +1276,32 @@ export function ChartContainer({
       data-timeframe={timeframe}
     >
       <div ref={hostRef} className="chart-host" />
+      {crosshairTime?.isWhitespace && (
+        <div
+          className="chart-crosshair-time"
+          style={{
+            left: `${(() => {
+              const width = hostRef.current?.clientWidth ?? 0;
+              if (width <= 0) return crosshairTime.x;
+              const halfLabelWidth = 96;
+              return Math.min(
+                Math.max(crosshairTime.x, halfLabelWidth),
+                Math.max(halfLabelWidth, width - halfLabelWidth),
+              );
+            })()}px`,
+          }}
+          aria-hidden="true"
+        >
+          {formatCrosshairTimeForOffset(
+            crosshairTime.time,
+            timezoneOffsetMinutes,
+          )}
+        </div>
+      )}
+      <ChartTimezoneControl
+        offsetMinutes={timezoneOffsetMinutes}
+        onChange={onTimezoneOffsetChange}
+      />
       {showFootprint && timeframe === "1m" && footprintViewport !== null && (
         <FootprintCanvas
           bars={footprintBars ?? new Map()}

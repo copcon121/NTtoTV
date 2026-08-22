@@ -81,6 +81,7 @@ export {
   type LightweightChartsAdapterOptions,
   type VolumeDeltaDatum,
   type AlertLine,
+  type CrosshairPosition,
   type OrderLine,
   type OrderLineField,
   type PriceLineSelection,

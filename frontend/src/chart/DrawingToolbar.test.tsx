@@ -41,6 +41,40 @@ describe("DrawingToolbar", () => {
     expect(onDeleteAll).toHaveBeenCalledTimes(1);
   });
 
+  it("toggles hide-all indicators beside the delete button", () => {
+    const onIndicatorsVisibleChange = vi.fn();
+
+    render(
+      <DrawingToolbar
+        activeTool={null}
+        drawingCount={0}
+        indicatorsVisible
+        onToolSelect={vi.fn()}
+        onDeleteAll={vi.fn()}
+        onIndicatorsVisibleChange={onIndicatorsVisibleChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide all indicators" }));
+    expect(onIndicatorsVisibleChange).toHaveBeenCalledWith(false);
+  });
+
+  it("offers restore when indicators are hidden", () => {
+    render(
+      <DrawingToolbar
+        activeTool={null}
+        drawingCount={0}
+        indicatorsVisible={false}
+        onToolSelect={vi.fn()}
+        onDeleteAll={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Restore indicators" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("shows date range and hides the retired vertical line tool", () => {
     render(
       <DrawingToolbar

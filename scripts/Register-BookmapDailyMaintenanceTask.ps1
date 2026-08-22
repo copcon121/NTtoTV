@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$TaskName = "NTtoTV Bookmap Daily Maintenance",
-    [string]$UtcTime = "04:10"
+    [string]$UtcTime = "04:30"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,7 +22,7 @@ if ($timeZone.BaseUtcOffset -ne [TimeSpan]::Zero -or $timeZone.SupportsDaylightS
 
 $parsedTime = [TimeSpan]::Zero
 if (-not [TimeSpan]::TryParseExact($UtcTime, "hh\:mm", [Globalization.CultureInfo]::InvariantCulture, [ref]$parsedTime)) {
-    throw "UtcTime must use HH:mm format, for example 04:10."
+    throw "UtcTime must use HH:mm format, for example 04:30."
 }
 if ($parsedTime.TotalHours -ge 24) {
     throw "UtcTime must be within one day."

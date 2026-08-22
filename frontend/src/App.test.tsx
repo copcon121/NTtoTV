@@ -14,6 +14,14 @@ describe("App layout chrome", () => {
     expect(screen.getByLabelText("OHLCV")).toBeInTheDocument();
   });
 
+  it("hides the market order bar until the user logs in", () => {
+    render(<App />);
+
+    expect(
+      screen.queryByRole("region", { name: "Market orders" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("switches the active timeframe when a selector option is clicked", () => {
     render(<App />);
     expect(screen.getByRole("radio", { name: "1m" })).toHaveAttribute("aria-checked", "true");

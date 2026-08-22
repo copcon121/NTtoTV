@@ -14,6 +14,10 @@ export interface ProfileMarketOrderSettings {
   volumeLots: number;
   slDistanceGc: number;
   tpDistanceGc: number;
+  /** Optional sizing mode for backwards compatibility with older profiles. */
+  sizingMode?: "lots" | "risk";
+  /** Target account-currency risk for chart orders when sizingMode is "risk". */
+  riskAmount?: number;
 }
 
 export interface ChartProfilePayload {
