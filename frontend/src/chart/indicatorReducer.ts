@@ -196,6 +196,26 @@ export function reduceBigTrades(
 }
 
 /**
+ * Fold realtime BigTrade updates while retaining only the newest markers.
+ *
+ * A busy session can produce an effectively unbounded marker list. Keeping a
+ * bounded tail prevents every subsequent merge and chart repaint from getting
+ * progressively more expensive while preserving the newest visible data.
+ */
+export function reduceBigTradesCapped(
+  initial: BigTradeMarkers,
+  updates: Iterable<BigTradeInput>,
+  maxMarkers: number,
+): BigTradeMarkers {
+  let markers = initial;
+  for (const update of updates) {
+    markers = applyBigTrade(markers, update).markers;
+  }
+  const cap = Math.max(1, Math.floor(maxMarkers));
+  return markers.length > cap ? markers.slice(-cap) : markers;
+}
+
+/**
  * Bubble radius for a big trade, proportional to the visible maximum volume
  * (Req 15.5). Returns a radius in `[minRadius, maxRadius]`; a trade equal to the
  * visible max gets `maxRadius`, and zero/empty visible max yields `minRadius`.

@@ -395,6 +395,37 @@ describe("IndicatorToggles", () => {
     expect(screen.getByText("3")).toBeInTheDocument();
   });
 
+  it("temporarily hides and restores all indicators without changing their settings", () => {
+    const onIndicatorsVisibleChange = vi.fn();
+    const props = {
+      footprint: true,
+      bigTrades: true,
+      ema: { ...EMA, enabled: true },
+      smc: SMC,
+      onIndicatorsVisibleChange,
+      onFootprintChange: () => {},
+      onBigTradesChange: () => {},
+      onEmaChange: () => {},
+      onSmcChange: () => {},
+      footprintSettings: DEFAULT_FOOTPRINT_SETTINGS,
+      onFootprintSettingsChange: () => {},
+    };
+    const { rerender } = render(
+      <IndicatorToggles {...props} indicatorsVisible />,
+    );
+
+    open();
+    fireEvent.click(screen.getByLabelText("Hide all indicators"));
+    expect(onIndicatorsVisibleChange).toHaveBeenLastCalledWith(false);
+
+    rerender(<IndicatorToggles {...props} indicatorsVisible={false} />);
+    expect(screen.getByText("Off")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Restore indicators"));
+    expect(onIndicatorsVisibleChange).toHaveBeenLastCalledWith(true);
+    expect(screen.getByLabelText("Footprint")).toBeChecked();
+    expect(screen.getByLabelText("BigTrade")).toBeChecked();
+  });
+
   it("toggles and edits Outside Bar settings", () => {
     const onOutsideBar = vi.fn();
     render(
@@ -670,7 +701,7 @@ describe("IndicatorToggles", () => {
     fireEvent.blur(eu);
     fireEvent.change(us, { target: { value: "120" } });
     fireEvent.blur(us);
-    fireEvent.change(limit, { target: { value: "200" } });
+    fireEvent.change(limit, { target: { value: "40" } });
     fireEvent.blur(limit);
 
     expect(onBigTradeSettings).toHaveBeenCalledWith({
@@ -702,7 +733,7 @@ describe("IndicatorToggles", () => {
     });
     expect(onBigTradeSettings).toHaveBeenCalledWith({
       ...DEFAULT_BIG_TRADE_SETTINGS,
-      maxVisible: 200,
+      maxVisible: 40,
     });
   });
 });

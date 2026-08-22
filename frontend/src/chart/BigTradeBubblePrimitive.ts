@@ -113,7 +113,19 @@ class BigTradeBubblePaneView implements IPrimitivePaneView {
     }
 
     const next: ViewBubble[] = [];
+    const visibleRange = chart.timeScale().getVisibleRange();
     for (const marker of this.source.markers) {
+      // Lightweight Charts asks primitives to update while the user pans. Skip
+      // off-screen bubbles before coordinate conversion and canvas work.
+      if (
+        visibleRange !== null &&
+        typeof marker.time === "number" &&
+        typeof visibleRange.from === "number" &&
+        typeof visibleRange.to === "number" &&
+        (marker.time < visibleRange.from || marker.time > visibleRange.to)
+      ) {
+        continue;
+      }
       const x = chart.timeScale().timeToCoordinate(marker.time);
       const y = series.priceToCoordinate(marker.price);
       if (x === null || y === null) continue;

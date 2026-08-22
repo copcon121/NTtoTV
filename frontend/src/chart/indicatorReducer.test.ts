@@ -5,6 +5,7 @@ import {
   applyVolumeDelta,
   bubbleRadius,
   reduceBigTrades,
+  reduceBigTradesCapped,
   reduceVolumeDelta,
   visibleMaxVolume,
 } from "./indicatorReducer";
@@ -119,6 +120,33 @@ describe("indicatorReducer — BigTrade markers (Req 15.4, 15.5)", () => {
     });
     expect(second.kind).toBe("noop");
     expect(second.markers).toBe(first.markers);
+  });
+
+  it("keeps only the newest markers when realtime history is capped", () => {
+    const out = reduceBigTradesCapped(
+      [],
+      [
+        { tradeId: 1, time: 1000, price: 100, volume: 35, side: "buy" },
+        { tradeId: 2, time: 2000, price: 101, volume: 40, side: "sell" },
+        { tradeId: 3, time: 3000, price: 102, volume: 45, side: "buy" },
+      ],
+      2,
+    );
+
+    expect(out.map((marker) => marker.tradeId)).toEqual([2, 3]);
+  });
+
+  it("preserves array identity when a catch-up batch contains no changes", () => {
+    const initial = reduceBigTrades([], [
+      { tradeId: 1, time: 1000, price: 100, volume: 35, side: "buy" },
+    ]);
+    const out = reduceBigTradesCapped(
+      initial,
+      [{ tradeId: 1, time: 1000, price: 100, volume: 35, side: "buy" }],
+      50,
+    );
+
+    expect(out).toBe(initial);
   });
 });
 

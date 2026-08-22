@@ -155,7 +155,7 @@ def test_auto_mgann_uses_body_70_percent_limit_and_cancels_it_at_1r(tmp_path):
                 SimpleNamespace(
                     direction=1,
                     structure_kind="BOS",
-                    bar_spread=3.2,
+                    bar_spread=4.2,
                     avg_spread=0.6,
                 )
             ]
@@ -200,7 +200,7 @@ def test_auto_mgann_body_70_percent_limit_uses_signal_direction():
 
 
 @pytest.mark.unit
-def test_auto_mgann_skips_body_strictly_larger_than_six_times_average(tmp_path):
+def test_auto_mgann_skips_body_strictly_larger_than_eight_times_average(tmp_path):
     cache, _, _, user, _, engine = _setup(tmp_path)
     try:
         cache.auto_trade.upsert(
@@ -214,7 +214,7 @@ def test_auto_mgann_skips_body_strictly_larger_than_six_times_average(tmp_path):
         trigger = SimpleNamespace(
             direction=1,
             structure_kind="BOS",
-            bar_spread=3.1,
+            bar_spread=4.1,
             avg_spread=0.5,
         )
         engine._signals = SimpleNamespace(  # type: ignore[assignment]
@@ -231,7 +231,7 @@ def test_auto_mgann_skips_body_strictly_larger_than_six_times_average(tmp_path):
 
         assert not _is_auto_body_size_allowed(trigger)
         assert _is_auto_body_size_allowed(
-            SimpleNamespace(bar_spread=3.0, avg_spread=0.5)
+            SimpleNamespace(bar_spread=4.0, avg_spread=0.5)
         )
         assert engine.on_closed_bar(bar) == 0
         assert cache.orders.list_for_user(user.id, open_only=False) == []

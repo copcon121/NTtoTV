@@ -40,9 +40,9 @@ logger = logging.getLogger(__name__)
 _GC_TICK_SIZE = 0.1
 _SL_BUFFER_TICKS = 2
 _TP_R_MULTIPLE = 3.0
-_LIMIT_BODY_MIN_GC = 3.0
+_LIMIT_BODY_MIN_GC = 4.0
 _LIMIT_BODY_FRACTION = 0.70
-_MAX_BODY_MULTIPLE = 6.0
+_MAX_BODY_MULTIPLE = 8.0
 _EMA_PERIOD = 21
 _EMA_SMOOTHING = 2.0 / (_EMA_PERIOD + 1)
 _EMA_TRAILING_STARTED_EVENT = "auto_mgann_ema21_trailing_started"
@@ -66,7 +66,7 @@ class AutoMgannTradeEngine:
         self._registry = registry
         self._settings = settings or default_settings
         # Exact requested strategy: M1 internal BOS/CHoCH, body from 2x through
-        # 6x the prior 20 bodies, volume >= 2x the prior 20 volumes, without
+        # 8x the prior 20 bodies, volume >= 2x the prior 20 volumes, without
         # BigTrade gate.
         self._signals = MgannBigTradeSweepState(
             timeframe="1m",
@@ -611,7 +611,7 @@ def _is_enabled_for_direction(config: AutoTradeSettingsRecord, direction: int) -
 
 
 def _is_auto_body_size_allowed(trigger) -> bool:
-    """Reject only bodies strictly larger than 6x their prior-20 average."""
+    """Reject only bodies strictly larger than 8x their prior-20 average."""
     body = getattr(trigger, "bar_spread", None)
     average = getattr(trigger, "avg_spread", None)
     if not isinstance(body, (int, float)) or not math.isfinite(body):
@@ -622,7 +622,7 @@ def _is_auto_body_size_allowed(trigger) -> bool:
 
 
 def _uses_body_midpoint_limit(trigger) -> bool:
-    """Use a body-based limit only for a body strictly larger than 3.0 GC."""
+    """Use a body-based limit only for a body strictly larger than 4.0 GC."""
     body_spread = getattr(trigger, "bar_spread", None)
     return (
         isinstance(body_spread, (int, float))

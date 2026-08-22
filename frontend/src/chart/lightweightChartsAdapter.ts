@@ -1012,6 +1012,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private sessionVolumeProfilePrimitive: SessionVolumeProfilePrimitive | undefined;
   private waveDivergencePrimitive: DivergenceLinePrimitive | undefined;
   private smcOverlay: SmcOverlay = emptySmcOverlay();
+  private smcOverlaySignature = "";
   private readonly emaSeriesById = new Map<string, ISeriesApi<"Line">>();
   private readonly emaLastTimeById = new Map<string, number>();
   private readonly emaColorById = new Map<string, string>();
@@ -1020,6 +1021,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private outsideBar: OutsideBarSettings;
   private readonly barsByTime = new Map<number, Bar>();
   private readonly volumeDeltaByTime = new Map<number, VolumeDeltaDatum>();
+  private volumeVisible = true;
+  private volumeDeltaVisible = true;
   private mgannSwingVisible = false;
   private waveDeltaVisible = false;
   private mgannSwingSettings: MgannSwingSettings = DEFAULT_MGANN_SWING_SETTINGS;
@@ -1050,6 +1053,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     | { kind: PriceLineDragKind; id: string; pointerId: number }
     | undefined;
   private disposePriceLineDragListeners: (() => void) | undefined;
+  private disposeRealtimeInteractionListeners: (() => void) | undefined;
+  private realtimeInteractionActive = false;
+  private readonly deferredBarTimes = new Set<number>();
+  private readonly deferredVolumeDeltaTimes = new Set<number>();
+  private deferredSessionMarkers = false;
   private displayTimeOffsetMs: number;
   private readonly container: HTMLElement;
   private chartBackgroundColor: string;
@@ -1250,6 +1258,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       () => this.updateBarCountdown(),
       1_000,
     );
+    this.installRealtimeInteractionDeferral();
   }
 
   /** The underlying chart instance (for layout chrome wired in task 12.7). */
@@ -1396,16 +1405,33 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   updateBar(bar: Bar): void {
     const result = applyBarUpdate(this.candleBars, bar);
     this.candleBars = result.bars;
-    if (this.shouldRenderMgannImpulseWaves()) {
-      this.renderCandleSeries();
+    if (this.realtimeInteractionActive) {
+      // Keep the data model current but defer canvas invalidation until the pan
+      // gesture ends. Usually this set contains only the live bar's timestamp.
+      this.deferredBarTimes.add(bar.time);
+      if (result.kind === "append" || result.kind === "insert") {
+        this.deferredSessionMarkers = true;
+      }
     } else {
-      this.updateCandleAt(result.index);
-      this.updateCandleAt(result.index + 1);
+      if (this.shouldRenderMgannImpulseWaves()) {
+        this.renderCandleSeries();
+      } else {
+        this.updateCandleAt(result.index);
+        this.updateCandleAt(result.index + 1);
+      }
+      // Session markers only depend on bar timestamps. Rebuilding all markers
+      // for every overwrite of the live bar needlessly scans the full history.
+      if (result.kind === "append" || result.kind === "insert") {
+        this.renderSessionMarkers();
+      }
+      if (this.volumeVisible) {
+        this.updateVolumeAt(result.index);
+      }
+      this.renderWaveDeltaSeries();
+      if (this.mgannSwingVisible) {
+        this.renderMgannSwing();
+      }
     }
-    this.renderSessionMarkers();
-    this.updateVolumeAt(result.index);
-    this.renderWaveDeltaSeries();
-    this.renderMgannSwing();
     this.barsByTime.set(
       toUtcTimestamp(bar.time, this.displayTimeOffsetMs) as number,
       { ...bar },
@@ -1434,12 +1460,28 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   /** Show or hide the TradingView-style Volume histogram overlay. */
   setVolumeVisible(visible: boolean): void {
+    if (this.volumeVisible === visible) {
+      return;
+    }
+    this.volumeVisible = visible;
     this.volumeSeries.applyOptions({ visible });
+    if (visible) {
+      // Hidden live updates are retained in candleBars and caught up once.
+      this.renderVolumeSeries();
+    }
   }
 
   /** Show or hide the MyVolumeDelta-style overlay candles. */
   setVolumeDeltaVisible(visible: boolean): void {
+    if (this.volumeDeltaVisible === visible) {
+      return;
+    }
+    this.volumeDeltaVisible = visible;
     this.deltaSeries.applyOptions({ visible });
+    if (visible) {
+      // Hidden live updates are retained in volumeDeltaByTime and caught up once.
+      this.renderVolumeDeltaSeries();
+    }
   }
 
   /** Show or hide the wave-delta MBox overlay. */
@@ -1871,20 +1913,32 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     if (this.shouldRenderMgannImpulseWaves()) {
       this.renderCandleSeries();
     }
-    this.renderVolumeDeltaSeries();
+    if (this.volumeDeltaVisible) {
+      this.renderVolumeDeltaSeries();
+    }
     this.renderWaveDeltaSeries();
-    this.renderMgannSwing();
+    if (this.mgannSwingVisible) {
+      this.renderMgannSwing();
+    }
   }
 
   /** Apply one incremental volume-delta update. */
   updateVolumeDelta(point: VolumeDeltaDatum): void {
     const next = { ...point };
     this.volumeDeltaByTime.set(point.time, next);
-    this.deltaSeries.update(
-      toVolumeDelta(next, this.deltaColors, this.displayTimeOffsetMs),
-    );
+    if (this.realtimeInteractionActive) {
+      this.deferredVolumeDeltaTimes.add(point.time);
+      return;
+    }
+    if (this.volumeDeltaVisible) {
+      this.deltaSeries.update(
+        toVolumeDelta(next, this.deltaColors, this.displayTimeOffsetMs),
+      );
+    }
     this.renderWaveDeltaSeries();
-    this.renderMgannSwing();
+    if (this.mgannSwingVisible) {
+      this.renderMgannSwing();
+    }
     if (this.shouldRenderMgannImpulseWaves()) {
       const index = this.candleBars.findIndex((bar) => bar.time === point.time);
       this.updateCandleAt(index);
@@ -1951,6 +2005,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   /** Draw or clear the SMC overlay markers and active zones. */
   setSmcOverlay(overlay: SmcOverlay): void {
+    // Most live-bar changes do not alter SMC structures. Avoid replacing the
+    // marker collection and invalidating the custom primitive when the computed
+    // overlay is byte-for-byte unchanged.
+    const signature = JSON.stringify(overlay);
+    if (signature === this.smcOverlaySignature) {
+      return;
+    }
+    this.smcOverlaySignature = signature;
     this.smcOverlay = {
       markers: overlay.markers.map((marker) => ({ ...marker })),
       zones: overlay.zones.map((zone) => ({ ...zone })),
@@ -2232,6 +2294,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         }
         config.handlers.onPreview?.(drag.id, price);
         e.preventDefault();
+        return;
+      }
+      // A pressed primary pointer that did not start a price-line drag belongs
+      // to the chart pan gesture. Avoid line hit-testing and DOM positioning on
+      // every movement so Lightweight Charts owns the hot path by itself.
+      if ((e.buttons & 1) !== 0) {
         return;
       }
       this.positionSelectedPriceLineHandles();
@@ -2651,7 +2719,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
           shape: isLong ? "arrowUp" : "arrowDown",
           color: isLong ? "#00b8a9" : "#ff3131",
           id: marker.id,
-          text: marker.text ?? (isLong ? "Break L" : "Break S"),
           size: 1.45,
         };
       });
@@ -2822,6 +2889,110 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     };
   }
 
+  /**
+   * Keep websocket-driven paints off the main-thread pan gesture. Data is still
+   * merged immediately; only the small set of affected series points is painted
+   * once when the primary-pointer interaction finishes.
+   */
+  private installRealtimeInteractionDeferral(): void {
+    let pointerId: number | undefined;
+    let startX = 0;
+    let startY = 0;
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      pointerId = event.pointerId;
+      startX = event.clientX;
+      startY = event.clientY;
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (pointerId !== event.pointerId || (event.buttons & 1) === 0) return;
+      if (
+        Math.abs(event.clientX - startX) >= 3 ||
+        Math.abs(event.clientY - startY) >= 3
+      ) {
+        this.realtimeInteractionActive = true;
+      }
+    };
+    const finishInteraction = (event: PointerEvent) => {
+      if (pointerId !== event.pointerId) return;
+      pointerId = undefined;
+      if (!this.realtimeInteractionActive) return;
+      this.realtimeInteractionActive = false;
+      this.flushDeferredRealtimeUpdates();
+    };
+
+    this.container.addEventListener("pointerdown", onPointerDown);
+    this.container.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", finishInteraction);
+    window.addEventListener("pointercancel", finishInteraction);
+    this.disposeRealtimeInteractionListeners = () => {
+      this.container.removeEventListener("pointerdown", onPointerDown);
+      this.container.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", finishInteraction);
+      window.removeEventListener("pointercancel", finishInteraction);
+      this.realtimeInteractionActive = false;
+      this.deferredBarTimes.clear();
+      this.deferredVolumeDeltaTimes.clear();
+      this.deferredSessionMarkers = false;
+    };
+  }
+
+  private flushDeferredRealtimeUpdates(): void {
+    const dirtyIndexes = [...this.deferredBarTimes]
+      .map((time) => this.candleBars.findIndex((bar) => bar.time === time))
+      .filter((index) => index >= 0);
+    const hasBarUpdates = dirtyIndexes.length > 0;
+    const hasDeltaUpdates = this.deferredVolumeDeltaTimes.size > 0;
+
+    if (
+      this.shouldRenderMgannImpulseWaves() &&
+      (hasBarUpdates || hasDeltaUpdates)
+    ) {
+      this.renderCandleSeries();
+    } else {
+      const candleIndexes = new Set<number>();
+      for (const index of dirtyIndexes) {
+        candleIndexes.add(index);
+        candleIndexes.add(index + 1);
+      }
+      for (const index of [...candleIndexes].sort((left, right) => left - right)) {
+        this.updateCandleAt(index);
+      }
+    }
+
+    if (this.deferredSessionMarkers) {
+      this.renderSessionMarkers();
+    }
+    if (this.volumeVisible) {
+      for (const index of dirtyIndexes) {
+        this.updateVolumeAt(index);
+      }
+    }
+    if (this.volumeDeltaVisible) {
+      for (const time of [...this.deferredVolumeDeltaTimes].sort(
+        (left, right) => left - right,
+      )) {
+        const point = this.volumeDeltaByTime.get(time);
+        if (point !== undefined) {
+          this.deltaSeries.update(
+            toVolumeDelta(point, this.deltaColors, this.displayTimeOffsetMs),
+          );
+        }
+      }
+    }
+    if (hasBarUpdates || hasDeltaUpdates) {
+      this.renderWaveDeltaSeries();
+      if (this.mgannSwingVisible) {
+        this.renderMgannSwing();
+      }
+    }
+
+    this.deferredBarTimes.clear();
+    this.deferredVolumeDeltaTimes.clear();
+    this.deferredSessionMarkers = false;
+  }
+
   /** Release the chart instance and its DOM. */
   dispose(): void {
     if (this.barCountdownTimer !== undefined) {
@@ -2830,6 +3001,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
     this.disposePriceLineDragListeners?.();
     this.disposePriceLineDragListeners = undefined;
+    this.disposeRealtimeInteractionListeners?.();
+    this.disposeRealtimeInteractionListeners = undefined;
     for (const handle of this.priceLineDragHandles.values()) {
       handle.remove();
     }

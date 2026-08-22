@@ -849,6 +849,23 @@ describe("ChartContainer", () => {
     ).toEqual(markers.slice(2));
   });
 
+  it("hard-caps legacy BigTrade profiles to 50 canvas bubbles", () => {
+    const markers: BigTradeMarker[] = Array.from({ length: 80 }, (_, index) => ({
+      tradeId: index + 1,
+      time: Date.UTC(2026, 5, 16, 14, index),
+      price: 4500 + index / 10,
+      volume: 1000,
+      side: index % 2 === 0 ? "buy" : "sell",
+    }));
+
+    const filtered = filterBigTradeMarkers(markers, {
+      minVolume: 0,
+      maxVisible: 500,
+    });
+    expect(filtered).toHaveLength(50);
+    expect(filtered).toEqual(markers.slice(-50));
+  });
+
   it("filters BigTrade markers by New York session thresholds", () => {
     const asia = Date.UTC(2026, 5, 16, 2, 0); // 22:00 ET previous day
     const asiaEnd = Date.UTC(2026, 5, 16, 5, 59); // 01:59 ET
@@ -1192,12 +1209,12 @@ describe("ChartContainer", () => {
     expect(onOrderDragBatchCommit).toHaveBeenCalledWith(updates);
   });
 
-  it("requests more history when the visible range reaches the oldest bars", () => {
+  it("requests more history only after user navigation reaches the oldest bars", () => {
     const port = new FakePort();
     const factory: ChartPortFactory = () => port;
     const onRequestMoreHistory = vi.fn();
 
-    render(
+    const { container } = render(
       <ChartContainer
         symbol="GC"
         contract="GC"
@@ -1209,6 +1226,15 @@ describe("ChartContainer", () => {
     );
 
     expect(port.visibleLogicalRangeHandlers).toHaveLength(1);
+    // Initial chart layout at the edge must not start a backfill cascade.
+    port.visibleLogicalRangeHandlers[0]({
+      from: 0,
+      to: 100,
+      barsBefore: 20,
+      barsAfter: 100,
+    });
+    expect(onRequestMoreHistory).not.toHaveBeenCalled();
+
     port.visibleLogicalRangeHandlers[0]({
       from: 100,
       to: 200,
@@ -1217,10 +1243,21 @@ describe("ChartContainer", () => {
     });
     expect(onRequestMoreHistory).not.toHaveBeenCalled();
 
+    fireEvent.pointerDown(container.querySelector(".chart-host") as Element);
     port.visibleLogicalRangeHandlers[0]({
       from: 0,
       to: 100,
       barsBefore: 20,
+      barsAfter: 100,
+    });
+    expect(onRequestMoreHistory).toHaveBeenCalledTimes(1);
+
+    // One gesture loads one chunk; layout callbacks from prepending data do not
+    // immediately request another chunk.
+    port.visibleLogicalRangeHandlers[0]({
+      from: 0,
+      to: 100,
+      barsBefore: 10,
       barsAfter: 100,
     });
     expect(onRequestMoreHistory).toHaveBeenCalledTimes(1);

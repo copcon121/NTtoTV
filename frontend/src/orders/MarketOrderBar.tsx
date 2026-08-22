@@ -168,7 +168,7 @@ export function MarketOrderBar({
                     />
                     <span>Auto S</span>
                   </label>
-                  <span className="auto-trade-detail">BOS/CHoCH · Body x2-x6 · &gt;3.0: Lmt70 · TP 3R / EMA21 @1R</span>
+                  <span className="auto-trade-detail">BOS/CHoCH · Body x2-x8 · &gt;4.0: Lmt70 · TP 3R / EMA21 @1R</span>
                 </span>
               )}
             </div>

@@ -12,6 +12,8 @@ import {
   bigTradesEnabledForTimeframe,
   buildChartLimitOrderDraft,
   drawingVisibleOnTimeframe,
+  historyBackfillLimit,
+  initialHistoryWindow,
   mergeVisibleDrawingState,
   mergeMt5AccountUpdate,
   mergeMt5OpenTradeProfitUpdates,
@@ -67,6 +69,23 @@ describe("resolveEndpoints", () => {
         host: "charts.example.test",
       }).ws,
     ).toBe("wss://charts.example.test/ws/chart");
+  });
+});
+
+describe("chart history windows", () => {
+  it("loads only the latest three calendar days for the initial M1 chart", () => {
+    const now = Date.UTC(2026, 7, 19, 12);
+    expect(initialHistoryWindow("1m", now)).toEqual({
+      from: now - 3 * 24 * 60 * 60 * 1_000,
+      to: now,
+      limit: 3 * 24 * 60,
+    });
+  });
+
+  it("backfills M1 one day at a time and preserves existing limits elsewhere", () => {
+    expect(historyBackfillLimit("1m")).toBe(24 * 60);
+    expect(initialHistoryWindow("5m", 123)).toEqual({ limit: 5_000 });
+    expect(historyBackfillLimit("5m")).toBe(5_000);
   });
 });
 

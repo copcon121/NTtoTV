@@ -171,6 +171,11 @@ body {
   background: #242424;
 }
 
+.indicator-button.is-muted {
+  color: var(--muted, #9aa0aa);
+  border-color: #555;
+}
+
 .account-toolbar {
   display: inline-flex;
   align-items: center;
@@ -207,6 +212,12 @@ body {
 .indicator-caret {
   font-size: 10px;
   color: var(--muted);
+}
+
+.indicator-badge.is-muted {
+  background: #555;
+  color: #eee;
+  text-transform: uppercase;
 }
 
 .chart-bg-control {
@@ -2331,6 +2342,38 @@ body {
   border-radius: 6px;
   box-shadow: 0 6px 18px #000a;
   padding: 4px;
+}
+
+.indicator-master-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 4px;
+  padding: 8px 10px;
+  color: var(--text, #d8d8d8);
+  background: #242424;
+  border: 0;
+  border-bottom: 1px solid #3a3a3a;
+  border-radius: 4px 4px 2px 2px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.indicator-master-toggle:hover {
+  background: #303030;
+}
+
+.indicator-master-toggle.is-hidden {
+  color: #fff;
+  background: #274d85;
+  border-bottom-color: #3f6da8;
+}
+
+.indicator-master-toggle.is-hidden:hover {
+  background: #315d9c;
 }
 
 .chart-menu-item,

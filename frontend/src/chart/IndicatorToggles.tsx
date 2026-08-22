@@ -89,6 +89,9 @@ export interface BigTradeSettings {
   sessionMinVolumes?: BigTradeSessionMinVolumes;
 }
 
+/** Hard rendering budget for the custom BigTrade canvas primitive. */
+export const MAX_BIG_TRADE_VISIBLE = 50;
+
 export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
   showVA: false,
   vaPercent: 70,
@@ -103,10 +106,17 @@ export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
 
 export const DEFAULT_BIG_TRADE_SETTINGS: BigTradeSettings = {
   minVolume: DEFAULT_BIG_TRADE_SESSION_MIN_VOLUMES.asia,
-  maxVisible: 500,
+  maxVisible: MAX_BIG_TRADE_VISIBLE,
   soundEnabled: false,
   sessionMinVolumes: DEFAULT_BIG_TRADE_SESSION_MIN_VOLUMES,
 };
+
+export function normalizeBigTradeMaxVisible(value: unknown): number {
+  const parsed = Math.round(Number(value));
+  return Number.isFinite(parsed)
+    ? Math.min(MAX_BIG_TRADE_VISIBLE, Math.max(1, parsed))
+    : DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
+}
 export const DEFAULT_FVG_SIGNAL_LIMIT = 100;
 export const MIN_FVG_SIGNAL_LIMIT = 25;
 export const MAX_FVG_SIGNAL_LIMIT = 2000;
@@ -142,6 +152,8 @@ export function normalizeMgannBreakSignalLimit(value: unknown): number {
 }
 
 export interface IndicatorTogglesProps {
+  /** Temporary master visibility; individual indicator settings stay unchanged. */
+  indicatorsVisible?: boolean;
   volume?: boolean;
   volumeDelta?: boolean;
   mgannSwing?: boolean;
@@ -161,6 +173,7 @@ export interface IndicatorTogglesProps {
   footprintDisabled?: boolean;
   fvgGraderDisabled?: boolean;
   bigTradeDisabled?: boolean;
+  onIndicatorsVisibleChange?: (visible: boolean) => void;
   onVolumeChange?: (enabled: boolean) => void;
   onVolumeDeltaChange?: (enabled: boolean) => void;
   onMgannSwingChange?: (enabled: boolean) => void;
@@ -223,6 +236,7 @@ function IndicatorRow({ label, checked, disabled = false, onChange, trailing }: 
 }
 
 export function IndicatorToggles({
+  indicatorsVisible = true,
   volume = false,
   volumeDelta = false,
   mgannSwing = false,
@@ -245,6 +259,7 @@ export function IndicatorToggles({
   footprintDisabled = false,
   fvgGraderDisabled = false,
   bigTradeDisabled = false,
+  onIndicatorsVisibleChange = () => {},
   onVolumeChange = () => {},
   onVolumeDeltaChange = () => {},
   onMgannSwingChange = () => {},
@@ -711,7 +726,7 @@ export function IndicatorToggles({
 
   const commitBtLimit = () => {
     const parsed = Math.round(Number(btLimitDraft));
-    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 5000) {
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= MAX_BIG_TRADE_VISIBLE) {
       onBigTradeSettingsChange({ ...bigTradeSettings, maxVisible: parsed });
     } else {
       setBtLimitDraft(String(bigTradeSettings.maxVisible));
@@ -740,20 +755,38 @@ export function IndicatorToggles({
     <div className="indicator-toggles" ref={rootRef}>
       <button
         type="button"
-        className="indicator-button"
+        className={`indicator-button${indicatorsVisible ? "" : " is-muted"}`}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Indicators"
         onClick={() => setOpen((v) => !v)}
       >
         Indicators
-        {activeCount > 0 && <span className="indicator-badge">{activeCount}</span>}
+        {indicatorsVisible ? (
+          activeCount > 0 && <span className="indicator-badge">{activeCount}</span>
+        ) : (
+          <span className="indicator-badge is-muted">Off</span>
+        )}
         <span className="indicator-caret" aria-hidden="true">
           {"\u25BE"}
         </span>
       </button>
       {open && (
         <div className="indicator-menu" role="menu" aria-label="Indicator list">
+          <button
+            type="button"
+            className={`indicator-master-toggle${
+              indicatorsVisible ? "" : " is-hidden"
+            }`}
+            role="menuitem"
+            aria-label={
+              indicatorsVisible ? "Hide all indicators" : "Restore indicators"
+            }
+            onClick={() => onIndicatorsVisibleChange(!indicatorsVisible)}
+          >
+            <span aria-hidden="true">{indicatorsVisible ? "\u25C9" : "\u25CB"}</span>
+            <span>{indicatorsVisible ? "Hide all indicators" : "Restore indicators"}</span>
+          </button>
           <IndicatorRow
             label="Volume"
             checked={volume}
@@ -1788,7 +1821,7 @@ export function IndicatorToggles({
                 <input
                   type="number"
                   min={1}
-                  max={5000}
+                  max={MAX_BIG_TRADE_VISIBLE}
                   className="ema-length-input"
                   aria-label="BigTrade display limit"
                   value={btLimitDraft}

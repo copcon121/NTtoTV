@@ -123,7 +123,7 @@ describe("MarketOrderBar", () => {
       />,
     );
 
-    expect(screen.getByText("BOS/CHoCH · Body x2-x6 · >3.0: Lmt70 · TP 3R / EMA21 @1R")).toBeInTheDocument();
+    expect(screen.getByText("BOS/CHoCH · Body x2-x8 · >4.0: Lmt70 · TP 3R / EMA21 @1R")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Auto trade L"));
     fireEvent.click(screen.getByLabelText("Auto trade S"));
 

@@ -56,6 +56,7 @@ import { FootprintCanvas } from "../footprint/FootprintCanvas";
 import {
   DEFAULT_EMA_SETTINGS,
   DEFAULT_BIG_TRADE_SETTINGS,
+  normalizeBigTradeMaxVisible,
   type EmaSettings,
   type BigTradeSettings,
   type FootprintSettings,
@@ -406,10 +407,7 @@ export function filterBigTradeMarkers(
   markers: readonly BigTradeMarker[],
   settings: BigTradeSettings,
 ): readonly BigTradeMarker[] {
-  const rawMaxVisible = Math.round(Number(settings.maxVisible));
-  const maxVisible = Number.isFinite(rawMaxVisible)
-    ? Math.max(1, rawMaxVisible)
-    : DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
+  const maxVisible = normalizeBigTradeMaxVisible(settings.maxVisible);
   const filtered = markers.filter(
     (marker) => marker.volume >= bigTradeMinVolumeForTime(marker.time, settings),
   );
@@ -481,6 +479,7 @@ export function ChartContainer({
   const drawingManagerRef = useRef<DrawingManager | null>(null);
   const showMgannSwingForTimeframe = showMgannSwing;
   const smcThrottleRef = useRef<number | undefined>(undefined);
+  const chartInteractionActiveRef = useRef(false);
   const [footprintViewport, setFootprintViewport] =
     useState<FootprintViewport | null>(null);
   const [positionedOrderControls, setPositionedOrderControls] = useState<
@@ -521,6 +520,8 @@ export function ChartContainer({
   orderDragBatchCommitRef.current = onOrderDragBatchCommit;
   const priceSnapRef = useRef<((price: number) => number) | undefined>(priceSnap);
   priceSnapRef.current = priceSnap;
+  const orderControlsRef = useRef(orderControls);
+  orderControlsRef.current = orderControls;
   // Running EMA state for incremental live updates. `closedValue` is the EMA at
   // the most recent fully-closed bar (the base for the in-progress bar);
   // `time` is the current bar's time; `displayValue` is the EMA currently drawn
@@ -580,8 +581,11 @@ export function ChartContainer({
 
   const refreshOrderControlPositions = useCallback(() => {
     const port = portRef.current;
-    if (!port?.priceToCoordinate || !orderControls || orderControls.length === 0) {
-      setPositionedOrderControls([]);
+    const controls = orderControlsRef.current;
+    if (!port?.priceToCoordinate || !controls || controls.length === 0) {
+      setPositionedOrderControls((current) =>
+        current.length === 0 ? current : [],
+      );
       return;
     }
     const paneHeight = Math.max(1, port.createFootprintViewport?.(1, 1).height ?? 1);
@@ -589,7 +593,7 @@ export function ChartContainer({
       ORDER_CONTROL_MIN_TOP_PX,
       paneHeight - ORDER_CONTROL_MAX_BOTTOM_PAD_PX,
     );
-    const raw = orderControls.flatMap((control) => {
+    const raw = controls.flatMap((control) => {
       const y = port.priceToCoordinate?.(control.price);
       if (y === null || y === undefined || !Number.isFinite(y)) return [];
       const top = Math.min(
@@ -618,7 +622,7 @@ export function ChartContainer({
       }
     }
     setPositionedOrderControls(next);
-  }, [orderControls]);
+  }, []);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -637,12 +641,38 @@ export function ChartContainer({
     controllerRef.current = new ChartSeriesController(port);
     screenshotCaptureReadyRef.current?.(() => port.takeScreenshotDataUrl?.());
 
+    // Full SMC detection is intentionally kept off pointer/wheel navigation.
+    // The latest websocket bar is still merged by the controller and the next
+    // idle SMC pass catches up after the gesture.
+    let wheelIdleTimer: number | undefined;
+    const onChartPointerDown = (event: PointerEvent) => {
+      if (event.button === 0) chartInteractionActiveRef.current = true;
+    };
+    const onChartPointerEnd = () => {
+      chartInteractionActiveRef.current = false;
+    };
+    const onChartWheel = () => {
+      chartInteractionActiveRef.current = true;
+      if (wheelIdleTimer !== undefined) window.clearTimeout(wheelIdleTimer);
+      wheelIdleTimer = window.setTimeout(() => {
+        wheelIdleTimer = undefined;
+        chartInteractionActiveRef.current = false;
+      }, 160);
+    };
+    host.addEventListener("pointerdown", onChartPointerDown, { passive: true });
+    host.addEventListener("wheel", onChartWheel, { passive: true });
+    window.addEventListener("pointerup", onChartPointerEnd);
+    window.addEventListener("pointercancel", onChartPointerEnd);
+
     // Wire the crosshair readout when the port supports it (real adapter).
     let disposeCrosshair: (() => void) | undefined;
     const maybe = port as DisposableChartPort & {
       subscribeCrosshair?: (h: (bar: Bar | undefined) => void) => () => void;
     };
-    if (typeof maybe.subscribeCrosshair === "function") {
+    if (
+      typeof maybe.subscribeCrosshair === "function" &&
+      crosshairRef.current !== undefined
+    ) {
       disposeCrosshair = maybe.subscribeCrosshair((bar) =>
         crosshairRef.current?.(bar),
       );
@@ -650,11 +680,31 @@ export function ChartContainer({
 
     let disposeVisibleRange: (() => void) | undefined;
     if (typeof port.subscribeVisibleLogicalRange === "function") {
+      // The chart library can emit a left-edge range while initially laying out
+      // data. Only arm lazy history after an actual navigation gesture so the
+      // initial three-day M1 window cannot cascade into loading all history.
+      let historyNavigationArmed = false;
+      const armHistoryNavigation = () => {
+        historyNavigationArmed = true;
+      };
+      host.addEventListener("pointerdown", armHistoryNavigation, { passive: true });
+      host.addEventListener("wheel", armHistoryNavigation, { passive: true });
       disposeVisibleRange = port.subscribeVisibleLogicalRange((info) => {
-        if (info !== null && info.barsBefore < HISTORY_EDGE_THRESHOLD_BARS) {
+        if (
+          historyNavigationArmed &&
+          info !== null &&
+          info.barsBefore < HISTORY_EDGE_THRESHOLD_BARS
+        ) {
+          historyNavigationArmed = false;
           requestMoreHistoryRef.current?.();
         }
       });
+      const disposeRangeSubscription = disposeVisibleRange;
+      disposeVisibleRange = () => {
+        host.removeEventListener("pointerdown", armHistoryNavigation);
+        host.removeEventListener("wheel", armHistoryNavigation);
+        disposeRangeSubscription();
+      };
     }
 
     // Wire the right-click / long-press "Add alert at price" affordance.
@@ -697,6 +747,12 @@ export function ChartContainer({
     return () => {
       mgr.dispose();
       drawingManagerRef.current = null;
+      host.removeEventListener("pointerdown", onChartPointerDown);
+      host.removeEventListener("wheel", onChartWheel);
+      window.removeEventListener("pointerup", onChartPointerEnd);
+      window.removeEventListener("pointercancel", onChartPointerEnd);
+      if (wheelIdleTimer !== undefined) window.clearTimeout(wheelIdleTimer);
+      chartInteractionActiveRef.current = false;
       disposeCrosshair?.();
       disposeVisibleRange?.();
       disposeContextMenu?.();
@@ -926,10 +982,18 @@ export function ChartContainer({
   useEffect(() => {
     // Defer SMC recomputation by 100ms so the chart renders bars first
     // without blocking the main thread on O(n) structure detection.
-    const timer = window.setTimeout(() => {
+    let timer: number | undefined;
+    const computeWhenIdle = () => {
+      if (chartInteractionActiveRef.current) {
+        timer = window.setTimeout(computeWhenIdle, 100);
+        return;
+      }
       portRef.current?.setSmcOverlay?.(computeSmcOverlay(bars ?? [], smc));
-    }, 100);
-    return () => window.clearTimeout(timer);
+    };
+    timer = window.setTimeout(computeWhenIdle, 100);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [symbol, contract, timeframe, bars, smc]);
 
   useEffect(() => {
@@ -956,7 +1020,7 @@ export function ChartContainer({
 
       // Only schedule order position refresh when there are active order
       // controls, avoiding needless rAF work on every tick.
-      if (orderControls && orderControls.length > 0) {
+      if ((orderControlsRef.current?.length ?? 0) > 0) {
         window.requestAnimationFrame(refreshOrderControlPositions);
       }
 
@@ -971,7 +1035,7 @@ export function ChartContainer({
             smcThrottleRef.current = undefined;
             const ctrl = controllerRef.current;
             const cfg = smcConfigRef.current;
-            if (ctrl && cfg?.enabled) {
+            if (ctrl && cfg?.enabled && !chartInteractionActiveRef.current) {
               portRef.current?.setSmcOverlay?.(
                 computeSmcOverlay(ctrl.bars, cfg),
               );
@@ -1046,7 +1110,7 @@ export function ChartContainer({
         smcThrottleRef.current = undefined;
       }
     };
-  }, [socket, symbol, contract, timeframe, orderControls, refreshOrderControlPositions]);
+  }, [socket, symbol, contract, timeframe, refreshOrderControlPositions]);
 
   // Drawing tool activation / deactivation.
   useEffect(() => {

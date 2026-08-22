@@ -338,6 +338,14 @@ class Pipeline:
         self._bookmap_minute_bars: dict[int, BarUpdate] = {}
         self._bookmap_minute_deltas: dict[int, VolumeDeltaUpdate] = {}
         self._bookmap_connection_id: str | None = None
+        # Closed Bookmap bar snapshots carry the authoritative full ladder.
+        # Keep their minute keys so a delayed/partial tick close cannot write
+        # an incomplete ladder over the repaired snapshot.
+        self._bookmap_authoritative_footprint_times: set[int] = set()
+        # Legacy Bookmap bridges may omit the ladder, and a dropped raw trade
+        # can make the rebuild incomplete.  Keep those minutes out of the
+        # tick-close persistence path until a complete snapshot/rebuild exists.
+        self._bookmap_incomplete_footprint_times: set[int] = set()
         self._derived_source_lock = asyncio.Lock()
         self._last_market_status_emit = 0
         self._last_footprint_flush = 0
@@ -671,6 +679,35 @@ class Pipeline:
             state.healthy_since = None
             await self._evaluate_source_selection(received)
             raise
+        if bookmap_fp is None and update.closed:
+            # Older deployed bridge JARs send the authoritative OHLCV close but
+            # omit the ladder fields. Rebuild that closed minute from the raw
+            # Bookmap shard, whose trades are ordered independently of live
+            # websocket delivery, so a delayed tick prefix cannot be cached as
+            # the final footprint.
+            rebuilt = await asyncio.to_thread(
+                self._rebuild_bookmap_footprint, bar_time
+            )
+            if rebuilt is not None and self._bookmap_footprint_matches_bar(rebuilt, bar):
+                bookmap_fp = rebuilt
+            else:
+                # Do not persist/broadcast a prefix ladder as if it were final.
+                # The OHLCV snapshot remains usable, while order-flow stays
+                # degraded until a complete snapshot is received.
+                state.orderflow_gap_pending = True
+                state.bar_ready = False
+                self._bookmap_incomplete_footprint_times.add(bar_time)
+                bookmap_fp = None
+        if bookmap_fp is not None and bool(payload.get("closed", False)) and not partial:
+            self._bookmap_incomplete_footprint_times.discard(bar_time)
+            self._bookmap_authoritative_footprint_times.add(bar_time)
+            cutoff = bar_time - 7 * 24 * 60 * 60 * 1_000
+            self._bookmap_authoritative_footprint_times = {
+                t for t in self._bookmap_authoritative_footprint_times if t >= cutoff
+            }
+            self._bookmap_incomplete_footprint_times = {
+                t for t in self._bookmap_incomplete_footprint_times if t >= cutoff
+            }
         self._source_bars["bookmap"].reconcile_bar(
             self._chart_contract(),
             update.tf,
@@ -704,9 +741,11 @@ class Pipeline:
                 closed=rollup.closed,
             )
         self._remember_source_updates("bookmap", updates)
-        was_active = self._active_feed == "bookmap"
         await self._evaluate_source_selection(received)
-        if was_active and self._active_feed == "bookmap":
+        # Evaluate first: this snapshot may be the event that promotes Bookmap
+        # after a reconnect/source switch. Once Bookmap owns the keys, the
+        # authoritative snapshot must be persisted immediately.
+        if self._active_feed == "bookmap":
             async with self._derived_source_lock:
                 if self._active_feed != "bookmap":
                     return
@@ -851,6 +890,42 @@ class Pipeline:
         )
         return volume_delta, footprint_engine.current_update(contract)
 
+    def _rebuild_bookmap_footprint(self, bar_time: int) -> FootprintUpdate | None:
+        """Rebuild one closed Bookmap footprint minute from ordered raw ticks."""
+        physical_contract = self._chart_source_contract or self._active_contract()
+        if not physical_contract:
+            return None
+        engine = FootprintEngine()
+        final: FootprintUpdate | None = None
+        for raw_trade in self._tick_store.read_range(
+            physical_contract,
+            bar_time,
+            bar_time + 60_000 - 1,
+            source="bookmap",
+        ):
+            chart_trade = _trade_for_contract(raw_trade, self._chart_contract())
+            update = engine.on_trade(chart_trade)
+            if update is not None:
+                final = update
+        return final
+
+    @staticmethod
+    def _bookmap_footprint_matches_bar(
+        footprint: FootprintUpdate, bar: OHLCVBar
+    ) -> bool:
+        """Require a raw-tick rebuild to reconcile with Bookmap's OHLCV close."""
+        prices_match = all(
+            math.isclose(left, right, rel_tol=0.0, abs_tol=1e-9)
+            for left, right in (
+                (footprint.open, bar.open),
+                (footprint.high, bar.high),
+                (footprint.low, bar.low),
+                (footprint.close, bar.close),
+            )
+        )
+        volume = sum(row.bid + row.ask for row in footprint.rows)
+        return prices_match and volume == bar.volume
+
     # -- engine fan-out --------------------------------------------------------
 
     async def _run_trade_engines(self, trade: NormalizedTrade, *, source: str) -> None:
@@ -957,7 +1032,15 @@ class Pipeline:
                 # (session-daily histogram) stays current without relying on an
                 # embedded order-flow snapshot from the bridge.
                 fp_persist: list[FootprintUpdate] = []
-                if closed_footprint is not None:
+                if closed_footprint is not None and not (
+                    source == "bookmap"
+                    and (
+                        closed_footprint.time
+                        in self._bookmap_authoritative_footprint_times
+                        or closed_footprint.time
+                        in self._bookmap_incomplete_footprint_times
+                    )
+                ):
                     fp_persist.append(closed_footprint)
                 await asyncio.to_thread(
                     self._persist_derived_batch,

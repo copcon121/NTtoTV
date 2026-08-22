@@ -828,6 +828,10 @@ export class DrawingManager implements IDrawingManager {
       return;
     }
     if (this._placement !== null) return;
+    // When the primary pointer is held and no drawing edit was started,
+    // Lightweight Charts is panning. Drawing hover hit-tests can traverse every
+    // saved primitive, so keep them off this latency-sensitive path.
+    if ((e.buttons & 1) !== 0) return;
     const hit = this._hitAnchor(e.clientX, e.clientY);
     if (hit !== null && this._container) {
       this._container.style.cursor = "grab";

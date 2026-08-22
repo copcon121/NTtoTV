@@ -52,6 +52,22 @@ interface LineStyle {
   dash: number[];
 }
 
+const VIEWPORT_OVERSCAN_PX = 24;
+
+/** True when an SMC object overlaps the currently visible numeric time range. */
+export function smcTimeRangeIntersects(
+  startTime: number,
+  endTime: number | undefined,
+  visibleFrom: number,
+  visibleTo: number,
+): boolean {
+  return startTime <= visibleTo && (endTime ?? Number.POSITIVE_INFINITY) >= visibleFrom;
+}
+
+function clampCoordinate(value: Coordinate, min: number, max: number): Coordinate {
+  return Math.max(min, Math.min(max, value as number)) as Coordinate;
+}
+
 function styleFor(zone: RenderableSmcZone): ZoneStyle {
   if (zone.kind === "pd") {
     if (zone.pdKind === "premium") {
@@ -236,45 +252,117 @@ class SmcOverlayPaneView implements IPrimitivePaneView {
       return;
     }
 
-    const paneWidth = chart.paneSize(0).width;
+    const pane = chart.paneSize(0);
+    const paneWidth = pane.width;
+    const paneHeight = pane.height;
+    const visibleRange = chart.timeScale().getVisibleRange();
+    const visibleFrom =
+      typeof visibleRange?.from === "number" ? visibleRange.from : undefined;
+    const visibleTo =
+      typeof visibleRange?.to === "number" ? visibleRange.to : undefined;
+    let stepEstimate: StepEstimate | undefined;
+    const estimate = () => {
+      stepEstimate ??= estimateSteps(chart, series);
+      return stepEstimate;
+    };
     const nextZones: ViewZone[] = [];
     for (const zone of this.source.zones) {
+      if (
+        visibleFrom !== undefined &&
+        visibleTo !== undefined &&
+        typeof zone.startTime === "number" &&
+        (zone.endTime === undefined || typeof zone.endTime === "number") &&
+        !smcTimeRangeIntersects(
+          zone.startTime,
+          zone.endTime,
+          visibleFrom,
+          visibleTo,
+        )
+      ) {
+        continue;
+      }
       const x1 = chart.timeScale().timeToCoordinate(zone.startTime);
       const x2 = zone.endTime !== undefined
-        ? coordinateForEndTime(chart, series, zone.startTime, zone.endTime, x1)
+        ? coordinateForEndTime(chart, zone.startTime, zone.endTime, x1, estimate)
         : (paneWidth as Coordinate);
       const yTop = series.priceToCoordinate(zone.top);
       const yBottom = series.priceToCoordinate(zone.bottom);
       if (x1 === null || x2 === null || yTop === null || yBottom === null) continue;
+      const left = Math.min(x1 as number, x2 as number);
+      const right = Math.max(x1 as number, x2 as number);
+      const top = Math.min(yTop as number, yBottom as number);
+      const bottom = Math.max(yTop as number, yBottom as number);
+      if (
+        right < -VIEWPORT_OVERSCAN_PX ||
+        left > paneWidth + VIEWPORT_OVERSCAN_PX ||
+        bottom < -VIEWPORT_OVERSCAN_PX ||
+        top > paneHeight + VIEWPORT_OVERSCAN_PX
+      ) {
+        continue;
+      }
       nextZones.push({
         zone,
-        x1,
-        x2,
-        yTop,
-        yBottom,
+        x1: clampCoordinate(x1, -VIEWPORT_OVERSCAN_PX, paneWidth + VIEWPORT_OVERSCAN_PX),
+        x2: clampCoordinate(x2, -VIEWPORT_OVERSCAN_PX, paneWidth + VIEWPORT_OVERSCAN_PX),
+        yTop: clampCoordinate(yTop, -VIEWPORT_OVERSCAN_PX, paneHeight + VIEWPORT_OVERSCAN_PX),
+        yBottom: clampCoordinate(yBottom, -VIEWPORT_OVERSCAN_PX, paneHeight + VIEWPORT_OVERSCAN_PX),
       });
     }
 
     const nextLines: ViewLine[] = [];
     for (const line of this.source.lines) {
+      if (
+        visibleFrom !== undefined &&
+        visibleTo !== undefined &&
+        typeof line.startTime === "number" &&
+        typeof line.endTime === "number" &&
+        !smcTimeRangeIntersects(
+          line.startTime,
+          line.endTime,
+          visibleFrom,
+          visibleTo,
+        )
+      ) {
+        continue;
+      }
       const x1 = chart.timeScale().timeToCoordinate(line.startTime);
       const x2 = coordinateForEndTime(
         chart,
-        series,
         line.startTime,
         line.endTime,
         x1,
+        estimate,
       );
       const labelX = coordinateForEndTime(
         chart,
-        series,
         line.startTime,
         line.labelTime,
         x1,
+        estimate,
       );
       const y = series.priceToCoordinate(line.price);
       if (x1 === null || x2 === null || labelX === null || y === null) continue;
-      nextLines.push({ line, x1, x2, labelX, y });
+      const left = Math.min(x1 as number, x2 as number);
+      const right = Math.max(x1 as number, x2 as number);
+      if (
+        right < -VIEWPORT_OVERSCAN_PX ||
+        left > paneWidth + VIEWPORT_OVERSCAN_PX ||
+        (y as number) < -VIEWPORT_OVERSCAN_PX ||
+        (y as number) > paneHeight + VIEWPORT_OVERSCAN_PX
+      ) {
+        continue;
+      }
+      nextLines.push({
+        line,
+        x1: clampCoordinate(x1, -VIEWPORT_OVERSCAN_PX, paneWidth + VIEWPORT_OVERSCAN_PX),
+        x2: clampCoordinate(x2, -VIEWPORT_OVERSCAN_PX, paneWidth + VIEWPORT_OVERSCAN_PX),
+        labelX: clampCoordinate(
+          labelX,
+          -VIEWPORT_OVERSCAN_PX,
+          paneWidth + VIEWPORT_OVERSCAN_PX,
+        ),
+        y,
+      });
     }
     this.viewZones = nextZones;
     this.viewLines = nextLines;
@@ -293,59 +381,56 @@ function numericTime(data: { time: Time } | null | undefined): number | undefine
   return typeof data?.time === "number" ? data.time : undefined;
 }
 
-function estimateStepSeconds(series: ISeriesApi<"Candlestick", Time>): number {
-  const data = series.data();
-  const diffs: number[] = [];
-  let previous: number | undefined;
-  for (const item of data.slice(Math.max(0, data.length - 80))) {
-    const time = numericTime(item);
-    if (time !== undefined && previous !== undefined && time > previous) {
-      diffs.push(time - previous);
-    }
-    if (time !== undefined) previous = time;
-  }
-  if (diffs.length === 0) return 60;
-  diffs.sort((a, b) => a - b);
-  return diffs[Math.floor(diffs.length / 2)] || 60;
+interface StepEstimate {
+  seconds: number;
+  pixels: number;
 }
 
-function estimateStepPx(
+function estimateSteps(
   chart: IChartApiBase<Time>,
   series: ISeriesApi<"Candlestick", Time>,
-): number {
-  const data = series.data();
-  const diffs: number[] = [];
+): StepEstimate {
+  const data = series.data().slice(-80);
+  const timeDiffs: number[] = [];
+  const pixelDiffs: number[] = [];
+  let previous: number | undefined;
   let previousX: number | undefined;
-  for (const item of data.slice(Math.max(0, data.length - 80))) {
+  for (const item of data) {
     const time = numericTime(item);
+    if (time !== undefined && previous !== undefined && time > previous) {
+      timeDiffs.push(time - previous);
+    }
     if (time === undefined) continue;
     const x = chart.timeScale().timeToCoordinate(time as Time);
     if (x !== null && previousX !== undefined && x > previousX) {
-      diffs.push(x - previousX);
+      pixelDiffs.push(x - previousX);
     }
+    previous = time;
     if (x !== null) previousX = x as number;
   }
-  if (diffs.length === 0) return 10;
-  diffs.sort((a, b) => a - b);
-  return diffs[Math.floor(diffs.length / 2)] || 10;
+  timeDiffs.sort((a, b) => a - b);
+  pixelDiffs.sort((a, b) => a - b);
+  return {
+    seconds: timeDiffs[Math.floor(timeDiffs.length / 2)] || 60,
+    pixels: pixelDiffs[Math.floor(pixelDiffs.length / 2)] || 10,
+  };
 }
 
 function coordinateForEndTime(
   chart: IChartApiBase<Time>,
-  series: ISeriesApi<"Candlestick", Time>,
   startTime: Time,
   endTime: Time,
   startX: Coordinate | null,
+  estimate: () => StepEstimate,
 ): Coordinate | null {
   const direct = chart.timeScale().timeToCoordinate(endTime);
   if (direct !== null) return direct;
   if (startX === null || typeof startTime !== "number" || typeof endTime !== "number") {
     return startX;
   }
-  const stepSeconds = estimateStepSeconds(series);
-  const stepPx = estimateStepPx(chart, series);
-  const bars = Math.max(1, (endTime - startTime) / stepSeconds);
-  return (startX + bars * stepPx) as Coordinate;
+  const step = estimate();
+  const bars = Math.max(1, (endTime - startTime) / step.seconds);
+  return (startX + bars * step.pixels) as Coordinate;
 }
 
 export class SmcOverlayPrimitive implements ISeriesPrimitive<Time> {

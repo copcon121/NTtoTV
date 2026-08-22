@@ -33,6 +33,7 @@ import {
   DEFAULT_MGANN_BREAK_SIGNAL_LIMIT,
   DEFAULT_FOOTPRINT_SETTINGS,
   normalizeEmaSettings,
+  normalizeBigTradeMaxVisible,
   normalizeFvgSignalLimit,
   normalizeMgannBreakSignalHistoryBars,
   normalizeMgannBreakSignalLimit,
@@ -47,8 +48,7 @@ import { SymbolContractLabel } from "./chart/SymbolContractLabel";
 import { Toolbar } from "./chart/Toolbar";
 import {
   type BigTradeMarker,
-  applyBigTrade,
-  reduceBigTrades,
+  reduceBigTradesCapped,
 } from "./chart/indicatorReducer";
 import {
   DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -96,7 +96,9 @@ import { ChartSocket } from "./socket/ChartSocket";
 import {
   type AccountPositionUpdate,
   type AlertEventMessage,
+  type BigTradeMessage,
   type ChartEventType,
+  type FootprintUpdateMessage,
   type FvgSignalUpdateMessage,
   type MarketDataStatusMessage,
   type TradingAccount,
@@ -212,10 +214,16 @@ const DEFERRED_OVERLAY_LOAD_MS = 250;
 const REALTIME_OVERLAY_CATCH_UP_MS = 10_000;
 const FVG_GRADER_CATCH_UP_MS = 30_000;
 const RESUME_REFRESH_THROTTLE_MS = 2_000;
-const INITIAL_HISTORY_LIMIT = 5_000;
-const HISTORY_BACKFILL_LIMIT = 5_000;
+const DEFAULT_INITIAL_HISTORY_LIMIT = 5_000;
+const M1_INITIAL_HISTORY_DAYS = 3;
+const M1_INITIAL_HISTORY_LIMIT = M1_INITIAL_HISTORY_DAYS * 24 * 60;
+const M1_HISTORY_WINDOW_MS = M1_INITIAL_HISTORY_DAYS * 24 * 60 * 60 * 1_000;
+const DEFAULT_HISTORY_BACKFILL_LIMIT = 5_000;
+const M1_HISTORY_BACKFILL_LIMIT = 24 * 60;
 const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
-const INITIAL_BIG_TRADE_LIMIT = DEFAULT_BIG_TRADE_SETTINGS.maxVisible;
+// Keep a wider raw buffer so session-volume filtering can still produce up to
+// 50 qualifying markers, while the custom chart primitive only receives 50.
+const INITIAL_BIG_TRADE_LIMIT = 500;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
 const VOLUME_PROFILE_ROW_TICKS = 1;
 const DELTA_PROFILE_ROW_TICKS = 2;
@@ -224,6 +232,10 @@ const DELTA_PROFILE_VALUE_AREA_PCT = 68;
 const DELTA_PROFILE_REFRESH_DELAY_MS = 1_000;
 const ORDER_REFRESH_INTERVAL_MS = 5_000;
 const ENABLE_REALTIME_FOOTPRINT_UPDATES = true;
+const REALTIME_RENDER_BATCH_MS = 50;
+const MAX_RETAINED_BIG_TRADE_MARKERS = INITIAL_BIG_TRADE_LIMIT;
+const BIG_TRADE_SOUND_COOLDOWN_MS = 250;
+const MARKET_STATUS_RENDER_INTERVAL_MS = 5_000;
 const MARKET_ORDER_SETTINGS_STORAGE_KEY = "gc-chart-platform.market-order-settings";
 const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
   volumeLots: 0.1,
@@ -330,6 +342,28 @@ function toAlertLines(alerts: readonly Alert[]): AlertLine[] {
     });
   }
   return lines;
+}
+
+/** Keep the default M1 chart to roughly three calendar days of minute bars. */
+export function initialHistoryWindow(
+  timeframe: Timeframe,
+  nowMs = Date.now(),
+): { from?: number; to?: number; limit: number } {
+  if (timeframe !== "1m") {
+    return { limit: DEFAULT_INITIAL_HISTORY_LIMIT };
+  }
+  return {
+    from: nowMs - M1_HISTORY_WINDOW_MS,
+    to: nowMs,
+    limit: M1_INITIAL_HISTORY_LIMIT,
+  };
+}
+
+/** Load older M1 history one day at a time after the user reaches the left edge. */
+export function historyBackfillLimit(timeframe: Timeframe): number {
+  return timeframe === "1m"
+    ? M1_HISTORY_BACKFILL_LIMIT
+    : DEFAULT_HISTORY_BACKFILL_LIMIT;
 }
 
 function alertEventToSignalMarker(
@@ -1802,6 +1836,7 @@ export function LiveApp() {
   >([]);
   const [marketDataStatus, setMarketDataStatus] =
     useState<MarketDataStatusMessage>();
+  const [indicatorsVisible, setIndicatorsVisible] = useState(true);
   const [showVolume, setShowVolume] = useState(true);
   const [showDailyVolumeProfile, setShowDailyVolumeProfile] = useState(false);
   const [dailyVolumeProfileWidth, setDailyVolumeProfileWidth] = useState(
@@ -1905,6 +1940,12 @@ export function LiveApp() {
     ReadonlySet<string>
   >(() => new Set());
   const [latestPrice, setLatestPrice] = useState<number | undefined>(undefined);
+  const latestPriceRef = useRef<number | undefined>(undefined);
+  const latestPriceConsumersActiveRef = useRef(false);
+  latestPriceConsumersActiveRef.current =
+    orders.length > 0 ||
+    mt5OpenTrades.positions.length > 0 ||
+    mt5OpenTrades.orders.length > 0;
   const [marketOrderSettings, setMarketOrderSettings] =
     useState<MarketOrderSettings>(() => readMarketOrderSettings());
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(
@@ -1948,15 +1989,25 @@ export function LiveApp() {
   const deltaProfileRefreshTimerRef = useRef<number | undefined>(undefined);
   const latestPriceThrottleRef = useRef<number | undefined>(undefined);
   const latestPricePendingRef = useRef<number | undefined>(undefined);
+  const pendingFootprintRef = useRef<FootprintUpdateMessage | undefined>(undefined);
+  const footprintRenderTimerRef = useRef<number | undefined>(undefined);
+  const pendingBigTradesRef = useRef<BigTradeMessage[]>([]);
+  const bigTradeRenderTimerRef = useRef<number | undefined>(undefined);
+  const lastBigTradeSoundAtRef = useRef(0);
 
   const publishLatestPrice = useCallback((price: number) => {
+    latestPriceRef.current = price;
+    if (!latestPriceConsumersActiveRef.current) {
+      latestPricePendingRef.current = undefined;
+      return;
+    }
     latestPricePendingRef.current = price;
     if (latestPriceThrottleRef.current !== undefined) return;
 
     const flush = () => {
       const pending = latestPricePendingRef.current;
       latestPricePendingRef.current = undefined;
-      if (pending !== undefined) {
+      if (pending !== undefined && latestPriceConsumersActiveRef.current) {
         setLatestPrice(pending);
       }
       latestPriceThrottleRef.current = window.setTimeout(() => {
@@ -2072,6 +2123,15 @@ export function LiveApp() {
     );
   }
   const currentSeriesKey = seriesDataKey(SYMBOL, contract, timeframe);
+  const realtimeFootprintEnabled =
+    ENABLE_REALTIME_FOOTPRINT_UPDATES &&
+    indicatorsVisible &&
+    showFootprint &&
+    timeframe === "1m";
+  const realtimeBigTradesEnabled =
+    indicatorsVisible &&
+    showBigTrades &&
+    bigTradesEnabledForTimeframe(timeframe);
   const activeSeriesKeyRef = useRef(currentSeriesKey);
   activeSeriesKeyRef.current = currentSeriesKey;
   const historyBackfillRef = useRef<{
@@ -2147,7 +2207,11 @@ export function LiveApp() {
   const onChartRealtimeBar = useCallback(
     (bar: Bar) => {
       cache.append({ symbol: SYMBOL, contract, timeframe }, [bar]);
-      setExtendRightLiveBar({ seriesKey: currentSeriesKey, time: bar.time });
+      setExtendRightLiveBar((current) =>
+        current?.seriesKey === currentSeriesKey && current.time === bar.time
+          ? current
+          : { seriesKey: currentSeriesKey, time: bar.time },
+      );
       if (
         fixedRangeDeltaProfileDrawings(drawingsRef.current).some(
           (drawing) => drawing.options?.fixedRangeProfileExtendRight === true,
@@ -2180,6 +2244,7 @@ export function LiveApp() {
     const requestedSeriesKey = currentSeriesKey;
     const requestKey = { symbol: SYMBOL, contract, timeframe };
     const to = firstBar.time - 1;
+    const backfillLimit = historyBackfillLimit(timeframe);
 
     void (async () => {
       try {
@@ -2188,7 +2253,7 @@ export function LiveApp() {
             {
               ...requestKey,
               to,
-              limit: HISTORY_BACKFILL_LIMIT,
+              limit: backfillLimit,
             },
             endpoints.api,
           ),
@@ -2207,7 +2272,7 @@ export function LiveApp() {
           from: fetchedBars[0].time,
           to,
         });
-        if (fetchedBars.length < HISTORY_BACKFILL_LIMIT) {
+        if (fetchedBars.length < backfillLimit) {
           state.exhaustedBefore = fetchedBars[0].time;
         }
         const nextSeries = cache.get(requestKey)?.bars ?? [];
@@ -2593,7 +2658,17 @@ export function LiveApp() {
       }
     });
     const offMarketDataStatus = socket.on("market_data_status", (msg) => {
-      setMarketDataStatus(msg);
+      setMarketDataStatus((current) => {
+        if (
+          current === undefined ||
+          current.activeSource !== msg.activeSource ||
+          current.reason !== msg.reason ||
+          msg.time - current.time >= MARKET_STATUS_RENDER_INTERVAL_MS
+        ) {
+          return msg;
+        }
+        return current;
+      });
     });
     const offOrder = socket.on("order_update", (msg) => {
       setOrders((prev) => {
@@ -2652,30 +2727,34 @@ export function LiveApp() {
     };
   }, [socket]);
 
-  // Keep always-needed global events subscribed once; BigTrade is subscribed
-  // separately only on 1m because rendering those markers is expensive.
+  // Keep always-needed global events subscribed once. Heavy overlays are
+  // subscribed separately only while they are visible.
   useEffect(() => {
     socket.subscribe(SYMBOL, GLOBAL_SUBSCRIBED_EVENTS);
-    if (ENABLE_REALTIME_FOOTPRINT_UPDATES) {
-      socket.subscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
-    }
     return () => {
       socket.unsubscribe(SYMBOL, GLOBAL_SUBSCRIBED_EVENTS);
-      if (ENABLE_REALTIME_FOOTPRINT_UPDATES) {
-        socket.unsubscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
-      }
     };
   }, [socket]);
 
   useEffect(() => {
-    if (!bigTradesEnabledForTimeframe(timeframe)) {
+    if (!realtimeFootprintEnabled) {
+      return;
+    }
+    socket.subscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
+    return () => {
+      socket.unsubscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
+    };
+  }, [socket, realtimeFootprintEnabled]);
+
+  useEffect(() => {
+    if (!realtimeBigTradesEnabled) {
       return;
     }
     socket.subscribe(SYMBOL, BIG_TRADE_SUBSCRIBED_EVENTS);
     return () => {
       socket.unsubscribe(SYMBOL, BIG_TRADE_SUBSCRIBED_EVENTS);
     };
-  }, [socket, timeframe]);
+  }, [socket, realtimeBigTradesEnabled]);
 
   // Resolve profile-scoped alerts when the active profile changes.
   useEffect(() => {
@@ -2778,26 +2857,32 @@ export function LiveApp() {
     let deltaTimer: number | undefined;
     void (async () => {
       try {
+        const initialWindow = initialHistoryWindow(timeframe);
         let history = await historyLoader.current!.load({
           symbol: SYMBOL,
           contract,
           timeframe,
-          limit: INITIAL_HISTORY_LIMIT,
+          ...initialWindow,
         });
         let indicatorTimeframe = timeframe;
         if (timeframe === "15s" && history.bars.length === 0) {
+          const fallbackWindow = initialHistoryWindow(
+            SUB_MINUTE_HISTORY_FALLBACK_TF,
+          );
           history = await historyLoader.current!.load({
             symbol: SYMBOL,
             contract,
             timeframe: SUB_MINUTE_HISTORY_FALLBACK_TF,
-            limit: INITIAL_HISTORY_LIMIT,
+            ...fallbackWindow,
           });
           indicatorTimeframe = SUB_MINUTE_HISTORY_FALLBACK_TF;
         }
         if (!cancelled) {
           setLoadedSeriesKey(requestedSeriesKey);
           setBars(history.bars);
-          setLatestPrice(history.bars[history.bars.length - 1]?.close);
+          const loadedLatestPrice = history.bars[history.bars.length - 1]?.close;
+          latestPriceRef.current = loadedLatestPrice;
+          setLatestPrice(loadedLatestPrice);
           setSmcAiSignals([]);
           deltaTimer = window.setTimeout(() => {
             void (async () => {
@@ -2842,6 +2927,7 @@ export function LiveApp() {
         if (!cancelled) {
           setLoadedSeriesKey(requestedSeriesKey);
           setBars([]);
+          latestPriceRef.current = undefined;
           setLatestPrice(undefined);
           setVolumeDeltaSeriesKey(requestedSeriesKey);
           setVolumeDelta([]);
@@ -2951,9 +3037,8 @@ export function LiveApp() {
   }, [contract]);
 
   useEffect(() => {
-    if (!bigTradesEnabledForTimeframe(timeframe)) {
+    if (!realtimeFootprintEnabled) {
       setLoadedOverlayContract(undefined);
-      setBigTrades((prev) => (prev.length === 0 ? prev : []));
       return;
     }
     if (!hasLoadedCurrentSeries || loadedOverlayContract === contract) {
@@ -2979,16 +3064,16 @@ export function LiveApp() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [api, contract, timeframe, hasLoadedCurrentSeries, loadedOverlayContract]);
+  }, [
+    api,
+    contract,
+    hasLoadedCurrentSeries,
+    loadedOverlayContract,
+    realtimeFootprintEnabled,
+  ]);
 
   useEffect(() => {
-    if (!bigTradesEnabledForTimeframe(timeframe)) {
-      return;
-    }
-    if (!hasLoadedCurrentSeries) {
-      return;
-    }
-    if (!showBigTrades) {
+    if (!realtimeBigTradesEnabled || !hasLoadedCurrentSeries) {
       return;
     }
     let cancelled = false;
@@ -3008,7 +3093,13 @@ export function LiveApp() {
             ? bigTradeResult[0].value
             : undefined;
         if (loadedBigTrades !== undefined) {
-          setBigTrades((prev) => reduceBigTrades(prev, loadedBigTrades));
+          setBigTrades((prev) =>
+            reduceBigTradesCapped(
+              prev,
+              loadedBigTrades,
+              MAX_RETAINED_BIG_TRADE_MARKERS,
+            ),
+          );
         }
       })();
     };
@@ -3028,7 +3119,7 @@ export function LiveApp() {
     timeframe,
     hasLoadedCurrentSeries,
     overlayRefreshNonce,
-    showBigTrades,
+    realtimeBigTradesEnabled,
   ]);
 
   useEffect(() => {
@@ -3089,6 +3180,67 @@ export function LiveApp() {
   useEffect(() => {
     const matchesChartContract = (messageContract: string) =>
       contract === SYMBOL || messageContract === contract;
+    const flushFootprint = () => {
+      footprintRenderTimerRef.current = undefined;
+      const pending = pendingFootprintRef.current;
+      pendingFootprintRef.current = undefined;
+      if (pending === undefined) return;
+      setFootprintBars((prev) => mergeFootprint(prev, pending));
+      if (
+        fixedRangeDeltaProfileDrawings(drawingsRef.current).some((drawing) =>
+          footprintTouchesFixedRange(pending.time, drawing, timeframe),
+        )
+      ) {
+        scheduleDeltaProfileRefresh();
+      }
+    };
+    const queueFootprintRender = (message: FootprintUpdateMessage) => {
+      // Footprint is latest-state data for the forming 1m bar. Replace the
+      // pending snapshot so a burst causes one React render, not one per frame.
+      pendingFootprintRef.current = message;
+      if (footprintRenderTimerRef.current !== undefined) return;
+      footprintRenderTimerRef.current = window.setTimeout(
+        flushFootprint,
+        REALTIME_RENDER_BATCH_MS,
+      );
+    };
+    const flushBigTrades = () => {
+      bigTradeRenderTimerRef.current = undefined;
+      const pending = pendingBigTradesRef.current;
+      pendingBigTradesRef.current = [];
+      if (pending.length === 0) return;
+      setBigTrades((prev) =>
+        reduceBigTradesCapped(
+          prev,
+          pending,
+          MAX_RETAINED_BIG_TRADE_MARKERS,
+        ),
+      );
+
+      // A burst should produce at most one audible notification. Creating an
+      // AudioContext per trade is especially expensive during volatile moves.
+      const bts = bigTradeSettingsRef.current;
+      const now = Date.now();
+      if (
+        bts.soundEnabled &&
+        now - lastBigTradeSoundAtRef.current >= BIG_TRADE_SOUND_COOLDOWN_MS &&
+        pending.some(
+          (message) =>
+            message.volume >= bigTradeMinVolumeForTime(message.time, bts),
+        )
+      ) {
+        lastBigTradeSoundAtRef.current = now;
+        playBigTradeSound();
+      }
+    };
+    const queueBigTradeRender = (message: BigTradeMessage) => {
+      pendingBigTradesRef.current.push(message);
+      if (bigTradeRenderTimerRef.current !== undefined) return;
+      bigTradeRenderTimerRef.current = window.setTimeout(
+        flushBigTrades,
+        REALTIME_RENDER_BATCH_MS,
+      );
+    };
     const offBarPrice = socket.on("bar_update", (msg) => {
       if (
         msg.symbol === SYMBOL &&
@@ -3103,7 +3255,7 @@ export function LiveApp() {
         publishLatestPrice((msg.bid + msg.ask) / 2);
       }
     });
-    const offFootprint = ENABLE_REALTIME_FOOTPRINT_UPDATES
+    const offFootprint = realtimeFootprintEnabled
       ? socket.on("footprint_update", (msg) => {
           if (
             msg.symbol !== SYMBOL ||
@@ -3112,34 +3264,20 @@ export function LiveApp() {
           ) {
             return;
           }
-          setFootprintBars((prev) => mergeFootprint(prev, msg));
-          if (
-            fixedRangeDeltaProfileDrawings(drawingsRef.current).some((drawing) =>
-              footprintTouchesFixedRange(msg.time, drawing, timeframe),
-            )
-          ) {
-            scheduleDeltaProfileRefresh();
-          }
+          queueFootprintRender(msg);
         })
       : () => {};
-    const offBigTrade = socket.on("big_trade", (msg) => {
-      if (
-        !bigTradesEnabledForTimeframe(timeframe) ||
-        msg.symbol !== SYMBOL ||
-        !matchesChartContract(msg.contract)
-      ) {
-        return;
-      }
-      setBigTrades((prev) => applyBigTrade(prev, msg).markers);
-      // Play sound if enabled and volume meets session threshold
-      const bts = bigTradeSettingsRef.current;
-      if (
-        bts.soundEnabled &&
-        msg.volume >= bigTradeMinVolumeForTime(msg.time, bts)
-      ) {
-        playBigTradeSound();
-      }
-    });
+    const offBigTrade = realtimeBigTradesEnabled
+      ? socket.on("big_trade", (msg) => {
+          if (
+            msg.symbol !== SYMBOL ||
+            !matchesChartContract(msg.contract)
+          ) {
+            return;
+          }
+          queueBigTradeRender(msg);
+        })
+      : () => {};
     const offFvgSignal = socket.on("fvg_signal_update", (msg) => {
       if (
         msg.symbol !== SYMBOL ||
@@ -3165,13 +3303,31 @@ export function LiveApp() {
       offFootprint();
       offBigTrade();
       offFvgSignal();
+      if (footprintRenderTimerRef.current !== undefined) {
+        window.clearTimeout(footprintRenderTimerRef.current);
+        footprintRenderTimerRef.current = undefined;
+      }
+      pendingFootprintRef.current = undefined;
+      if (bigTradeRenderTimerRef.current !== undefined) {
+        window.clearTimeout(bigTradeRenderTimerRef.current);
+        bigTradeRenderTimerRef.current = undefined;
+      }
+      pendingBigTradesRef.current = [];
       if (latestPriceThrottleRef.current !== undefined) {
         window.clearTimeout(latestPriceThrottleRef.current);
         latestPriceThrottleRef.current = undefined;
       }
       latestPricePendingRef.current = undefined;
     };
-  }, [socket, contract, timeframe, scheduleDeltaProfileRefresh, publishLatestPrice]);
+  }, [
+    socket,
+    contract,
+    timeframe,
+    scheduleDeltaProfileRefresh,
+    publishLatestPrice,
+    realtimeFootprintEnabled,
+    realtimeBigTradesEnabled,
+  ]);
 
   const onToggleAlert = (id: string, enabled: boolean) => {
     if (!authUser) {
@@ -3452,7 +3608,9 @@ export function LiveApp() {
   };
   const onMarketOrder = (side: "buy" | "sell") => {
     const marketGcReference =
-      latestPrice ?? (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
+      latestPriceRef.current ??
+      latestPrice ??
+      (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
     setOrderPending(true);
     setOrderError("");
     void (async () => {
@@ -4041,7 +4199,9 @@ export function LiveApp() {
     })();
   };
   const currentChartReferencePrice = () =>
-    latestPrice ?? (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
+    latestPriceRef.current ??
+    latestPrice ??
+    (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
 
   const onRequestChartMenu = (info: { price: number; x: number; y: number }) => {
     setChartMenu({
@@ -4158,6 +4318,9 @@ export function LiveApp() {
     setBigTradeSettings({
       ...DEFAULT_BIG_TRADE_SETTINGS,
       ...(payload.bigTradeSettings ?? {}),
+      maxVisible: normalizeBigTradeMaxVisible(
+        payload.bigTradeSettings?.maxVisible,
+      ),
     });
     if (payload.marketOrderSettings) {
       setMarketOrderSettings(sanitizeMarketOrderSettings(payload.marketOrderSettings));
@@ -4448,8 +4611,9 @@ export function LiveApp() {
   const chartFootprintBars = hasLoadedCurrentSeries
     ? footprintBars
     : EMPTY_FOOTPRINT_BARS;
-  const footprintVisible = showFootprint && timeframe === "1m";
+  const footprintVisible = indicatorsVisible && showFootprint && timeframe === "1m";
   const chartFvgSignals =
+    indicatorsVisible &&
     hasLoadedCurrentSeries &&
     showFvgGrader &&
     timeframe === "1m" &&
@@ -4457,15 +4621,15 @@ export function LiveApp() {
       ? fvgSignals
       : EMPTY_FVG_SIGNALS;
   const bigTradeOverlayEnabled = bigTradesEnabledForTimeframe(timeframe);
-  const chartBigTrades = hasLoadedCurrentSeries && showBigTrades && bigTradeOverlayEnabled
+  const chartBigTrades = indicatorsVisible && hasLoadedCurrentSeries && showBigTrades && bigTradeOverlayEnabled
     ? bigTrades
     : EMPTY_BIG_TRADES;
-  const chartSmcAiSignals = hasLoadedCurrentSeries && timeframe === "1m"
+  const chartSmcAiSignals = indicatorsVisible && hasLoadedCurrentSeries && timeframe === "1m"
     ? smcAiSignals
     : EMPTY_SMC_AI_SIGNALS;
   const chartAlertSignals = useMemo(
     () => {
-      if (!hasLoadedCurrentSeries || timeframe !== "1m") {
+      if (!indicatorsVisible || !hasLoadedCurrentSeries || timeframe !== "1m") {
         return EMPTY_ALERT_SIGNAL_MARKERS;
       }
       return alertSignalMarkers;
@@ -4473,12 +4637,31 @@ export function LiveApp() {
     [
       alertSignalMarkers,
       hasLoadedCurrentSeries,
+      indicatorsVisible,
       timeframe,
     ],
   );
   const effectiveOutsideBar = useMemo(
     () => outsideBarSettingsForTimeframe(outsideBar, timeframe),
     [outsideBar, timeframe],
+  );
+  const visibleEma = useMemo(
+    () =>
+      indicatorsVisible
+        ? ema
+        : { ...ema, enabled: false, showEma200: false },
+    [ema, indicatorsVisible],
+  );
+  const visibleSmc = useMemo(
+    () => (indicatorsVisible ? smc : { ...smc, enabled: false }),
+    [indicatorsVisible, smc],
+  );
+  const visibleOutsideBar = useMemo(
+    () =>
+      indicatorsVisible
+        ? effectiveOutsideBar
+        : { ...effectiveOutsideBar, enabled: false },
+    [effectiveOutsideBar, indicatorsVisible],
   );
   const visibleDrawings = useMemo(
     () => visibleDrawingsForTimeframe(drawings, timeframe),
@@ -4585,6 +4768,7 @@ export function LiveApp() {
         </nav>
         <TimeframeSelector value={timeframe} onChange={setTimeframe} />
         <IndicatorToggles
+          indicatorsVisible={indicatorsVisible}
           volume={showVolume}
           volumeDelta={showVolumeDelta}
           mgannSwing={showMgannSwing}
@@ -4607,6 +4791,7 @@ export function LiveApp() {
           dailyVolumeProfile={showDailyVolumeProfile}
           dailyVolumeProfileWidth={dailyVolumeProfileWidth}
           dailyVolumeProfileDevelopingPoc={showDailyVolumeProfileDevelopingPoc}
+          onIndicatorsVisibleChange={setIndicatorsVisible}
           onVolumeChange={setShowVolume}
           onDailyVolumeProfileChange={setShowDailyVolumeProfile}
           onDailyVolumeProfileWidthChange={setDailyVolumeProfileWidth}
@@ -4745,22 +4930,24 @@ export function LiveApp() {
             alertLines={alertLines}
             orderLines={orderLines}
             orderControls={orderControls}
-            ema={ema}
-            smc={smc}
-            outsideBar={effectiveOutsideBar}
-            sessionVolumeProfile={showDailyVolumeProfile ? sessionVolumeProfile : null}
+            ema={visibleEma}
+            smc={visibleSmc}
+            outsideBar={visibleOutsideBar}
+            sessionVolumeProfile={
+              indicatorsVisible && showDailyVolumeProfile ? sessionVolumeProfile : null
+            }
             sessionVolumeProfileWidth={dailyVolumeProfileWidth}
             sessionVolumeProfileDevelopingPoc={
               showDailyVolumeProfileDevelopingPoc
             }
-            showVolume={showVolume}
-            showVolumeDelta={showVolumeDelta}
-            showCvd={showMgannWaveDelta}
-            showMgannSwing={showMgannSwingForTimeframe}
+            showVolume={indicatorsVisible && showVolume}
+            showVolumeDelta={indicatorsVisible && showVolumeDelta}
+            showCvd={indicatorsVisible && showMgannWaveDelta}
+            showMgannSwing={indicatorsVisible && showMgannSwingForTimeframe}
             mgannSwing={mgannSwing}
             showFootprint={footprintVisible}
-            showFvgGrader={showFvgGrader && timeframe === "1m"}
-            showBigTrades={showBigTrades && bigTradeOverlayEnabled}
+            showFvgGrader={indicatorsVisible && showFvgGrader && timeframe === "1m"}
+            showBigTrades={indicatorsVisible && showBigTrades && bigTradeOverlayEnabled}
             bigTradeSettings={bigTradeSettings}
             chartBackgroundColor={chartBackgroundColor}
             timezoneOffsetMinutes={timezoneOffsetMinutes}
@@ -4805,7 +4992,14 @@ export function LiveApp() {
                     ? `Footprint ${footprintVisible ? "on" : "off"}`
                     : "Footprint is available on 1m only"
                 }
-                onClick={() => setShowFootprint((visible) => !visible)}
+                onClick={() => {
+                  if (!indicatorsVisible) {
+                    setIndicatorsVisible(true);
+                    setShowFootprint(true);
+                    return;
+                  }
+                  setShowFootprint((visible) => !visible);
+                }}
               >
                 <span className="footprint-quick-switch" aria-hidden="true" />
               </button>

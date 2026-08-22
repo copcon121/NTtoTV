@@ -494,6 +494,136 @@ def test_bookmap_primary_owns_live_delta_and_footprint_while_nt_stays_warm(tmp_p
 
 
 @pytest.mark.unit
+def test_bookmap_snapshot_that_promotes_source_is_persisted(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(tmp_path)
+    try:
+        now = now_ms()
+        state = pipeline._feed_states["bookmap"]
+        state.connected = True
+        state.last_heartbeat_at = now
+        state.healthy_since = now - 60_000
+        state.contract = _SOURCE
+        state.bar_ready = True
+        pipeline._active_feed = None
+
+        asyncio.run(
+            pipeline.on_bookmap_bar(
+                {
+                    "contract": _SOURCE,
+                    "tf": "1m",
+                    "time": _BASE,
+                    "bridgeTime": now,
+                    "lastEventTimeNanos": (_BASE + 59_000) * 1_000_000,
+                    "open": 2400.0,
+                    "high": 2400.1,
+                    "low": 2399.9,
+                    "close": 2400.1,
+                    "volume": 2,
+                    **_bookmap_orderflow(2, 2400.1),
+                    "closed": True,
+                    "partialStart": False,
+                    "snapshot": False,
+                }
+            )
+        )
+
+        assert pipeline._active_feed == "bookmap"
+        levels = cache.read_footprint_levels(_SYMBOL, _SYMBOL, _BASE, "1m")
+        assert [(row.price, row.bid_volume, row.ask_volume) for row in levels] == [
+            (2400.1, 0, 2)
+        ]
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
+def test_bookmap_tick_close_cannot_overwrite_authoritative_snapshot(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(tmp_path)
+    try:
+        now = now_ms()
+        state = pipeline._feed_states["bookmap"]
+        state.connected = True
+        state.last_heartbeat_at = now
+        state.healthy_since = now - 60_000
+        state.contract = _SOURCE
+        state.bar_ready = True
+        pipeline._active_feed = "bookmap"
+        pipeline._source_switched_at = now - 60_000
+
+        asyncio.run(
+            pipeline.on_bookmap_bar(
+                {
+                    "contract": _SOURCE,
+                    "tf": "1m",
+                    "time": _BASE,
+                    "bridgeTime": now,
+                    "lastEventTimeNanos": (_BASE + 59_000) * 1_000_000,
+                    "open": 2400.0,
+                    "high": 2400.1,
+                    "low": 2399.9,
+                    "close": 2400.1,
+                    "volume": 12,
+                    "buyVolume": 5,
+                    "sellVolume": 7,
+                    "delta": -2,
+                    "deltaHigh": 0,
+                    "deltaLow": -7,
+                    "openDelta": 0,
+                    "closeDelta": -2,
+                    "closed": True,
+                    "partialStart": False,
+                    "snapshot": False,
+                    "rows": [
+                        {"price": 2400.1, "bid": 0, "ask": 5},
+                        {"price": 2400.0, "bid": 7, "ask": 0},
+                    ],
+                }
+            )
+        )
+
+        # Simulate a delayed tick path holding an incomplete pre-snapshot
+        # ladder when the next trade crosses the minute boundary.
+        pipeline._source_footprints["bookmap"].seed_bar(
+            _SYMBOL,
+            symbol=_SYMBOL,
+            time=_BASE,
+            open=2400.0,
+            high=2400.0,
+            low=2400.0,
+            close=2400.0,
+            rows=[(2400.0, 7, 0)],
+        )
+        asyncio.run(
+            pipeline.on_bookmap_trade(
+                NormalizedTrade(
+                    symbol=_SYMBOL,
+                    contract=_SOURCE,
+                    time=_BASE + 60_000,
+                    price=2400.1,
+                    volume=1,
+                    bid=None,
+                    ask=None,
+                    best_bid=None,
+                    best_ask=None,
+                    sequence=1,
+                    source="bookmap",
+                    side=Side.BUY,
+                )
+            )
+        )
+
+        levels = cache.read_footprint_levels(_SYMBOL, _SYMBOL, _BASE, "1m")
+        assert [(row.price, row.bid_volume, row.ask_volume) for row in levels] == [
+            (2400.1, 0, 5),
+            (2400.0, 7, 0),
+        ]
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
 def test_bookmap_closed_bar_footprint_persisted_without_bridge_orderflow(tmp_path):
     """When a Bookmap trade crosses a minute boundary the just-closed bar's
     footprint ladder must be persisted to the delta-profile cache even when the
@@ -567,6 +697,87 @@ def test_bookmap_closed_bar_footprint_persisted_without_bridge_orderflow(tmp_pat
         assert [
             (lvl.price, lvl.bid_volume, lvl.ask_volume) for lvl in levels
         ] == [(2400.0, 7, 0)]
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
+def test_legacy_bookmap_bar_rebuilds_footprint_from_raw_ticks(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(tmp_path)
+    try:
+        now = now_ms()
+        state = pipeline._feed_states["bookmap"]
+        state.connected = True
+        state.last_heartbeat_at = now
+        state.healthy_since = now - 60_000
+        state.contract = _SOURCE
+        state.bar_ready = True
+        pipeline._active_feed = "bookmap"
+        pipeline._source_switched_at = now - 60_000
+
+        async def feed_raw_ticks() -> None:
+            await pipeline.on_bookmap_trade(
+                NormalizedTrade(
+                    symbol=_SYMBOL,
+                    contract=_SOURCE,
+                    time=_BASE + 10_000,
+                    price=2400.0,
+                    volume=7,
+                    bid=None,
+                    ask=None,
+                    best_bid=None,
+                    best_ask=None,
+                    sequence=1,
+                    source="bookmap",
+                    side=Side.SELL,
+                )
+            )
+            await pipeline.on_bookmap_trade(
+                NormalizedTrade(
+                    symbol=_SYMBOL,
+                    contract=_SOURCE,
+                    time=_BASE + 20_000,
+                    price=2399.9,
+                    volume=5,
+                    bid=None,
+                    ask=None,
+                    best_bid=None,
+                    best_ask=None,
+                    sequence=2,
+                    source="bookmap",
+                    side=Side.BUY,
+                )
+            )
+
+        asyncio.run(feed_raw_ticks())
+        asyncio.run(
+            pipeline.on_bookmap_bar(
+                {
+                    "contract": _SOURCE,
+                    "tf": "1m",
+                    "time": _BASE,
+                    "bridgeTime": now,
+                    "lastEventTimeNanos": (_BASE + 59_000) * 1_000_000,
+                    "open": 2400.0,
+                    "high": 2400.0,
+                    "low": 2399.9,
+                    "close": 2399.9,
+                    "volume": 12,
+                    "closed": True,
+                    "partialStart": False,
+                    "snapshot": False,
+                }
+            )
+        )
+
+        fp_bar = cache.read_footprint_bars(_SYMBOL, _SYMBOL, "1m")[0]
+        assert fp_bar.bar_delta == -2
+        levels = cache.read_footprint_levels(_SYMBOL, _SYMBOL, _BASE, "1m")
+        assert [(row.price, row.bid_volume, row.ask_volume) for row in levels] == [
+            (2400.0, 7, 0),
+            (2399.9, 0, 5),
+        ]
     finally:
         ticks.close()
         cache.close()
