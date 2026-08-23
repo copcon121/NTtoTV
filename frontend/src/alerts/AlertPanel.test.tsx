@@ -358,7 +358,7 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     });
   });
 
-  it("on alert_event shows a toast, plays a sound, and logs the event (Req 17.4)", () => {
+  it("on alert_event shows a toast and plays a sound without an event log", () => {
     const playSound = vi.fn();
     const { rerender } = render(
       <AlertPanel alerts={alerts} playSound={playSound} />,
@@ -371,24 +371,14 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
 
     expect(screen.getByTestId("alert-toast")).toHaveTextContent("GC crossed 2345");
     expect(playSound).toHaveBeenCalledTimes(1);
-    expect(screen.getByLabelText("Alert event log")).toHaveTextContent(
-      "GC crossed 2345",
-    );
+    expect(screen.queryByLabelText("Alert event log")).not.toBeInTheDocument();
   });
 
-  it("appends each distinct event to the log newest-first", () => {
-    const playSound = vi.fn();
-    const { rerender } = render(
-      <AlertPanel alerts={alerts} playSound={playSound} lastEvent={event({ message: "first", time: 1 })} />,
-    );
-    rerender(
-      <AlertPanel alerts={alerts} playSound={playSound} lastEvent={event({ message: "second", time: 2 })} />,
-    );
-    const log = screen.getByLabelText("Alert event log");
-    const entries = log.querySelectorAll(".alert-log-entry");
-    expect(entries).toHaveLength(2);
-    expect(entries[0]).toHaveTextContent("second"); // newest first
-    expect(playSound).toHaveBeenCalledTimes(2);
+  it("deletes a price-cross alert after it fires", () => {
+    const onDelete = vi.fn();
+    render(<AlertPanel alerts={alerts} lastEvent={event()} onDelete={onDelete} />);
+
+    expect(onDelete).toHaveBeenCalledWith("a_1");
   });
 
   it("does not re-fire for the same event object on re-render", () => {

@@ -187,6 +187,83 @@ function Get-MarketStatus {
     }
 }
 
+function Skip-BookmapStartupDialogs {
+    param(
+        [int]$ProcessId,
+        [int]$TimeoutSec = 75
+    )
+
+    if ($null -eq ("NTtoTV.BookmapWindow" -as [type])) {
+        Add-Type @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+
+namespace NTtoTV {
+    public static class BookmapWindow {
+        private const uint WM_CLOSE = 0x0010;
+
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam);
+
+        public static bool CloseGpuDialog(uint wantedProcessId) {
+            IntPtr dialog = IntPtr.Zero;
+            EnumWindows((hWnd, lParam) => {
+                uint processId;
+                GetWindowThreadProcessId(hWnd, out processId);
+                if (processId != wantedProcessId || !IsWindowVisible(hWnd)) {
+                    return true;
+                }
+
+                var title = new StringBuilder(256);
+                GetWindowText(hWnd, title, title.Capacity);
+                var windowTitle = title.ToString();
+                if (windowTitle.IndexOf("GPU acceleration test failed", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    windowTitle.Equals("Bookmap update", StringComparison.OrdinalIgnoreCase)) {
+                    dialog = hWnd;
+                    return false;
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            return dialog != IntPtr.Zero && PostMessage(dialog, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        }
+    }
+}
+'@
+    }
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        if ($null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+            return
+        }
+
+        try {
+            if ([NTtoTV.BookmapWindow]::CloseGpuDialog([uint32]$ProcessId)) {
+                Write-MaintenanceLog ("Closed a Bookmap startup dialog for PID {0}." -f $ProcessId)
+            }
+        } catch {
+            Write-MaintenanceLog ("GPU acceleration dialog scan failed for PID {0}: {1}" -f $ProcessId, $_.Exception.Message) "WARN"
+        }
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $deadline)
+}
+
 function Start-Bookmap {
     if (-not (Test-Path -LiteralPath $BookmapExe)) {
         throw "Bookmap executable was not found: $BookmapExe"
@@ -202,26 +279,9 @@ function Start-Bookmap {
         throw "Bookmap exited immediately after restart."
     }
 
-    # Bookmap may show a modal GPU/OpenGL failure dialog even when GPU
-    # acceleration is disabled. It blocks workspace loading until dismissed.
-    # Wait until the check has had time to appear, then dismiss the modal for
-    # this exact Bookmap process. Enter is harmless on the main chart window.
-    Start-Sleep -Seconds 22
-    $liveProcess = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
-    if ($null -ne $liveProcess) {
-        try {
-            $shell = New-Object -ComObject WScript.Shell
-            if ($shell.AppActivate($process.Id)) {
-                Start-Sleep -Milliseconds 250
-                $shell.SendKeys('{ENTER}')
-                Write-MaintenanceLog ("Sent Enter to skip the Bookmap GPU acceleration dialog for PID {0}." -f $process.Id)
-            } else {
-                Write-MaintenanceLog ("Could not activate Bookmap PID {0} to skip the GPU acceleration dialog." -f $process.Id) "WARN"
-            }
-        } catch {
-            Write-MaintenanceLog ("GPU acceleration dialog skip failed for PID {0}: {1}" -f $process.Id, $_.Exception.Message) "WARN"
-        }
-    }
+    # Bookmap may show GPU/OpenGL or connector-update dialogs after startup.
+    # Scan for the exact dialog windows so they cannot block workspace loading.
+    Skip-BookmapStartupDialogs -ProcessId $process.Id
 }
 
 function Wait-ForBookmapBackend {

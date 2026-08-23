@@ -29,6 +29,7 @@ describe("IndicatorToggles", () => {
     const onMgannSwing = vi.fn();
     const onFootprint = vi.fn();
     const onFvgGrader = vi.fn();
+    const onMgannBreak = vi.fn();
     const onBigTrades = vi.fn();
     const onEma = vi.fn();
     const onSmc = vi.fn();
@@ -43,6 +44,7 @@ describe("IndicatorToggles", () => {
         onMgannSwingChange={onMgannSwing}
         onFootprintChange={onFootprint}
         onFvgGraderChange={onFvgGrader}
+        onMgannBreakChange={onMgannBreak}
         onBigTradesChange={onBigTrades}
         onEmaChange={onEma}
         onSmcChange={onSmc}
@@ -63,6 +65,7 @@ describe("IndicatorToggles", () => {
     fireEvent.click(screen.getByLabelText("SMC"));
     fireEvent.click(screen.getByLabelText("Footprint"));
     fireEvent.click(screen.getByLabelText("FVG Grader"));
+    fireEvent.click(screen.getByLabelText("mGann Break L/S"));
     fireEvent.click(screen.getByLabelText("BigTrade"));
 
     expect(onVolumeDelta).toHaveBeenCalledWith(true);
@@ -79,6 +82,7 @@ describe("IndicatorToggles", () => {
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, enabled: true });
     expect(onFootprint).toHaveBeenCalledWith(true);
     expect(onFvgGrader).toHaveBeenCalledWith(true);
+    expect(onMgannBreak).toHaveBeenCalledWith(false);
     expect(onBigTrades).toHaveBeenCalledWith(false);
   });
 
@@ -390,7 +394,7 @@ describe("IndicatorToggles", () => {
         onFootprintSettingsChange={() => {}}
       />,
     );
-    expect(screen.getByText("4")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
   });
 
   it("shows the master visibility state without putting the toggle in the menu", () => {

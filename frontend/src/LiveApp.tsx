@@ -1887,6 +1887,7 @@ export function LiveApp() {
     showMgannSwingForTimeframe && mgannSwing.showWaveDelta;
   const [showFootprint, setShowFootprint] = useState(false);
   const [showFvgGrader, setShowFvgGrader] = useState(true);
+  const [showMgannBreak, setShowMgannBreak] = useState(true);
   const [fvgSignalLimit, setFvgSignalLimit] = useState(DEFAULT_FVG_SIGNAL_LIMIT);
   const [mgannBreakSignalHistoryBars, setMgannBreakSignalHistoryBars] = useState(
     DEFAULT_MGANN_BREAK_SIGNAL_HISTORY_BARS,
@@ -2064,6 +2065,7 @@ export function LiveApp() {
       mgannSwing: { ...mgannSwing },
       showFootprint,
       showFvgGrader,
+      showMgannBreak,
       fvgSignalLimit,
       mgannBreakSignalHistoryBars,
       mgannBreakSignalLimit,
@@ -2095,6 +2097,7 @@ export function LiveApp() {
       showBigTrades,
       showFootprint,
       fvgSignalLimit,
+      showMgannBreak,
       showMgannSwing,
       showVolumeDelta,
       showDailyVolumeProfile,
@@ -2567,46 +2570,6 @@ export function LiveApp() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [api, contract, showDailyVolumeProfile]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadLatest = () => {
-      void api
-        .analystLatest(SYMBOL, contract)
-        .then((report) => {
-          if (!cancelled) setAnalystReport(report ?? undefined);
-        })
-        .catch(() => {
-          if (!cancelled) setAnalystReport(undefined);
-        });
-    };
-    loadLatest();
-    const shouldPoll = analystPanelOpen || analystEventAi?.enabled === true;
-    const timer = shouldPoll ? window.setInterval(loadLatest, 10_000) : undefined;
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearInterval(timer);
-    };
-  }, [api, contract, analystEventAi?.enabled, analystPanelOpen]);
-
-  useEffect(() => {
-    if (!authUser || !profileHydrated) {
-      setAnalystEventAi(undefined);
-      return;
-    }
-    let cancelled = false;
-    void api
-      .analystEventAi(profileId)
-      .then((state) => {
-        if (!cancelled) setAnalystEventAi(state);
-      })
-      .catch(() => {
-        if (!cancelled) setAnalystEventAi(undefined);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api, authUser, profileHydrated, profileId]);
-
   // Connect the socket once and keep it for the component's lifetime. Status
   // + alert handlers are attached here; subscription management lives in its
   // own effect below so status churn never tears down the connection.
@@ -2670,13 +2633,15 @@ export function LiveApp() {
     });
     const offAlert = socket.on("alert_event", (msg) => {
       if ((msg.profileId ?? DEFAULT_PROFILE_ID) === profileIdRef.current) {
-        setAlerts((prev) =>
-          prev.map((alert) =>
-            alert.id === msg.alertId && alert.params.repeat !== true
-              ? { ...alert, enabled: false }
-              : alert,
-          ),
-        );
+        if (msg.alertType !== "price_crosses_level") {
+          setAlerts((prev) =>
+            prev.map((alert) =>
+              alert.id === msg.alertId && alert.params.repeat !== true
+                ? { ...alert, enabled: false }
+                : alert,
+            ),
+          );
+        }
         setLastAlert(msg);
         const marker = alertEventToSignalMarker(msg);
         if (marker !== undefined) {
@@ -4350,6 +4315,7 @@ export function LiveApp() {
       }),
     );
     setShowFvgGrader(payload.showFvgGrader !== false);
+    setShowMgannBreak(payload.showMgannBreak !== false);
     setFvgSignalLimit(normalizeFvgSignalLimit(payload.fvgSignalLimit));
     setMgannBreakSignalHistoryBars(
       normalizeMgannBreakSignalHistoryBars(payload.mgannBreakSignalHistoryBars),
@@ -4686,12 +4652,16 @@ export function LiveApp() {
       if (!indicatorsVisible || !hasLoadedCurrentSeries || timeframe !== "1m") {
         return EMPTY_ALERT_SIGNAL_MARKERS;
       }
+      if (!showMgannBreak) {
+        return EMPTY_ALERT_SIGNAL_MARKERS;
+      }
       return alertSignalMarkers;
     },
     [
       alertSignalMarkers,
       hasLoadedCurrentSeries,
       indicatorsVisible,
+      showMgannBreak,
       timeframe,
     ],
   );
@@ -4829,6 +4799,7 @@ export function LiveApp() {
           mgannSwingSettings={mgannSwing}
           footprint={showFootprint}
           fvgGrader={showFvgGrader}
+          mgannBreak={showMgannBreak}
           fvgSignalLimit={fvgSignalLimit}
           mgannBreakSignalHistoryBars={mgannBreakSignalHistoryBars}
           mgannBreakSignalLimit={mgannBreakSignalLimit}
@@ -4855,6 +4826,7 @@ export function LiveApp() {
           onMgannSwingSettingsChange={setMgannSwing}
           onFootprintChange={setShowFootprint}
           onFvgGraderChange={setShowFvgGrader}
+          onMgannBreakChange={setShowMgannBreak}
           onFvgSignalLimitChange={setFvgSignalLimit}
           onMgannBreakSignalHistoryBarsChange={setMgannBreakSignalHistoryBars}
           onMgannBreakSignalLimitChange={setMgannBreakSignalLimit}
@@ -4894,7 +4866,7 @@ export function LiveApp() {
             onChange={(e) => setChartBackgroundColor(e.currentTarget.value)}
           />
         </label>
-        <div className="analyst-popover">
+        {false && <div className="analyst-popover">
           <button
             type="button"
             className={`analyst-toolbar-button${analystPanelOpen ? " is-open" : ""}`}
@@ -4917,16 +4889,14 @@ export function LiveApp() {
             onToggleEventAi={onToggleAnalystEventAi}
             onClose={() => setAnalystPanelOpen(false)}
           />
-        </div>
+        </div>}
         <div className="alert-popover">
           <AlertToolbarButton
             open={alertPanelOpen}
             alertCount={alerts.length}
             onClick={() =>
               setAlertPanelOpen((open) => {
-                const next = !open;
-                if (next) setAnalystPanelOpen(false);
-                return next;
+                return !open;
               })
             }
           />

@@ -297,6 +297,7 @@ body {
 }
 
 .analyst-popover {
+  display: none !important;
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -2604,6 +2605,10 @@ body {
   }
 
   .timeframe-selector::-webkit-scrollbar {
+    display: none;
+  }
+
+  .toolbar-page-links {
     display: none;
   }
 

@@ -1,22 +1,20 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { type AlertEventMessage } from "../socket/messages";
 import {
   type Alert,
   type AlertType,
-  type AlertLogEntry,
   type TelegramNotificationConfig,
   type TelegramNotificationInput,
   type WebPushNotificationConfig,
-  toLogEntry,
 } from "./types";
 
 /**
- * AlertPanel — alert lines, enable/disable/delete controls, and the event log.
+ * AlertPanel — alert lines and enable/disable/delete controls.
  *
  * Renders each configured alert with an enable/disable toggle and a delete
- * button (Req 16.5). When an `alert_event` arrives the panel shows a toast,
- * plays a sound, and appends the event to the visible event log (Req 17.4).
+ * button (Req 16.5). When an `alert_event` arrives the panel shows a toast and
+ * plays a sound. One-shot price-cross alerts are deleted after firing.
  *
  * Side effects (sound) are injected so the component is testable under jsdom.
  * The parent owns the alert list + CRUD calls and feeds the latest
@@ -26,7 +24,7 @@ import {
 export interface AlertPanelProps {
   /** Configured alerts (from `GET /api/alerts`). */
   alerts: readonly Alert[];
-  /** The most recent `alert_event`, or undefined. Drives toast/sound/log. */
+  /** The most recent `alert_event`, or undefined. Drives toast and sound. */
   lastEvent?: AlertEventMessage;
   /** Enable/disable an alert (parent persists via PATCH). */
   onToggle?: (id: string, enabled: boolean) => void;
@@ -214,8 +212,7 @@ export function AlertPanel({
   toastMs = DEFAULT_TOAST_MS,
   open = true,
 }: AlertPanelProps) {
-  const [log, setLog] = useState<AlertLogEntry[]>([]);
-  const [toast, setToast] = useState<AlertLogEntry | null>(null);
+  const [toast, setToast] = useState<AlertEventMessage | null>(null);
   // Create-form state: the alert type and its single numeric input.
   const [newType, setNewType] = useState<AlertType>("price_crosses_level");
   const [newValue, setNewValue] = useState("");
@@ -233,25 +230,20 @@ export function AlertPanel({
   const [telegramChatId, setTelegramChatId] = useState("");
   const [telegramScreenshot, setTelegramScreenshot] = useState(true);
   // Track the last handled event so re-renders with the same event don't
-  // re-toast / re-log / re-play the sound.
+  // re-toast / re-play the sound or delete it more than once.
   const handledRef = useRef<AlertEventMessage | undefined>(undefined);
-  const alertIds = useMemo(() => new Set(alerts.map((alert) => alert.id)), [alerts]);
 
   useEffect(() => {
     if (lastEvent === undefined || lastEvent === handledRef.current) return;
     handledRef.current = lastEvent;
-    const entry = toLogEntry(lastEvent);
-    setLog((prev) => [entry, ...prev]); // newest first (Req 17.4)
-    setToast(entry);
+    setToast(lastEvent);
     playSound();
+    if (lastEvent.alertType === "price_crosses_level") {
+      onDelete?.(lastEvent.alertId);
+    }
     const handle = setTimeout(() => setToast(null), toastMs);
     return () => clearTimeout(handle);
-  }, [lastEvent, playSound, toastMs]);
-
-  useEffect(() => {
-    setLog((prev) => prev.filter((entry) => alertIds.has(entry.alertId)));
-    setToast((prev) => (prev !== null && alertIds.has(prev.alertId) ? prev : null));
-  }, [alertIds]);
+  }, [lastEvent, onDelete, playSound, toastMs]);
 
   // Whether the selected alert type uses a price `level`, a threshold, or the
   // dynamic SMC strategy's BigTrade threshold.
@@ -534,15 +526,6 @@ export function AlertPanel({
           </li>
         ))}
       </ul>
-
-      <ol className="alert-log" aria-label="Alert event log">
-        {log.map((entry, i) => (
-          <li key={`${entry.alertId}-${entry.time}-${i}`} className="alert-log-entry">
-            <span className="alert-log-time">{entry.time}</span>
-            <span className="alert-log-message">{entry.message}</span>
-          </li>
-        ))}
-      </ol>
 
           <form
             className="telegram-settings"

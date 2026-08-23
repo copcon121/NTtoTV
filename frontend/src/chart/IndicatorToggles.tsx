@@ -160,6 +160,8 @@ export interface IndicatorTogglesProps {
   footprint: boolean;
   fvgGrader?: boolean;
   fvgSignalLimit?: number;
+  /** Whether mGann Break L/S markers are visible on the chart. */
+  mgannBreak?: boolean;
   mgannBreakSignalHistoryBars?: number;
   mgannBreakSignalLimit?: number;
   bigTrades: boolean;
@@ -178,6 +180,7 @@ export interface IndicatorTogglesProps {
   onFootprintChange: (enabled: boolean) => void;
   onFvgGraderChange?: (enabled: boolean) => void;
   onFvgSignalLimitChange?: (limit: number) => void;
+  onMgannBreakChange?: (enabled: boolean) => void;
   onMgannBreakSignalHistoryBarsChange?: (bars: number) => void;
   onMgannBreakSignalLimitChange?: (limit: number) => void;
   dailyVolumeProfile?: boolean;
@@ -240,6 +243,7 @@ export function IndicatorToggles({
   footprint,
   fvgGrader = false,
   fvgSignalLimit = DEFAULT_FVG_SIGNAL_LIMIT,
+  mgannBreak = true,
   mgannBreakSignalHistoryBars = DEFAULT_MGANN_BREAK_SIGNAL_HISTORY_BARS,
   mgannBreakSignalLimit = DEFAULT_MGANN_BREAK_SIGNAL_LIMIT,
   bigTrades,
@@ -261,6 +265,7 @@ export function IndicatorToggles({
   onFootprintChange,
   onFvgGraderChange = () => {},
   onFvgSignalLimitChange = () => {},
+  onMgannBreakChange = () => {},
   onMgannBreakSignalHistoryBarsChange = () => {},
   onMgannBreakSignalLimitChange = () => {},
   onDailyVolumeProfileChange = () => {},
@@ -503,6 +508,7 @@ export function IndicatorToggles({
     (combinedIndicatorActive ? 1 : 0) +
     (footprint ? 1 : 0) +
     (fvgGrader ? 1 : 0) +
+    (mgannBreak ? 1 : 0) +
     (bigTrades ? 1 : 0) +
     (smc.enabled ? 1 : 0);
   const normalizedDailyVolumeProfileWidth =
@@ -1020,18 +1026,22 @@ export function IndicatorToggles({
               </div>
             </div>
           )}
-          <div className="indicator-row">
-            <span className="indicator-row-main">mGann Break L/S</span>
-            <button
-              type="button"
-              className="indicator-gear"
-              aria-label="mGann Break L/S display settings"
-              aria-expanded={mgannBreakSettingsOpen}
-              onClick={() => setMgannBreakSettingsOpen((value) => !value)}
-            >
-              {"\u2699"}
-            </button>
-          </div>
+          <IndicatorRow
+            label="mGann Break L/S"
+            checked={mgannBreak}
+            onChange={onMgannBreakChange}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="mGann Break L/S display settings"
+                aria-expanded={mgannBreakSettingsOpen}
+                onClick={() => setMgannBreakSettingsOpen((value) => !value)}
+              >
+                {"\u2699"}
+              </button>
+            }
+          />
           {mgannBreakSettingsOpen && (
             <div className="ema-settings" aria-label="mGann Break L/S display settings panel">
               <div className="ema-setting-line">
