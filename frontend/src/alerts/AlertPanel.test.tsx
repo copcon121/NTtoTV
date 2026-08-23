@@ -304,6 +304,9 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
         minPivotCuts: 2,
         confirmationBars: 2,
         breakTicks: 0,
+        filterLiquidity: true,
+        liquidityAtrMargin: 4,
+        liquiditySweepLookbackBars: 5,
         repeat: true,
       },
     });
@@ -353,9 +356,37 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
         minPivotCuts: 2,
         confirmationBars: 2,
         breakTicks: 0,
+        filterLiquidity: true,
+        liquidityAtrMargin: 4,
+        liquiditySweepLookbackBars: 5,
         repeat: true,
       },
     });
+  });
+
+  it("can set the CHoCH liquidity pool minimum for mGann Break L/S", () => {
+    const onCreate = vi.fn();
+    render(<AlertPanel alerts={alerts} onCreate={onCreate} />);
+    fireEvent.change(screen.getByLabelText("Alert type"), {
+      target: { value: "mgann_break_ls" },
+    });
+
+    fireEvent.change(screen.getByLabelText("Liquidity pool minimum swings"), {
+      target: { value: "4" },
+    });
+    fireEvent.click(screen.getByText("Add"));
+
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "mgann_break_ls",
+        params: expect.objectContaining({
+          filterLiquidity: true,
+          minPivotCuts: 4,
+          liquidityAtrMargin: 4,
+          liquiditySweepLookbackBars: 5,
+        }),
+      }),
+    );
   });
 
   it("on alert_event shows a toast and plays a sound without an event log", () => {

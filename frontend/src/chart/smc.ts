@@ -6,6 +6,11 @@ export interface SmcSettings {
   internalLength: number;
   showInternal: boolean;
   showZones: boolean;
+  showLiquidity: boolean;
+  liquidityMinSwings: number;
+  liquidityLookbackBars: number;
+  liquidityAtrMargin: number;
+  maxLiquidityPools: number;
   showPremiumDiscount: boolean;
   showSwingOrderBlocks: boolean;
   showInternalOrderBlocks: boolean;
@@ -29,6 +34,13 @@ export const DEFAULT_SMC_SETTINGS: SmcSettings = {
   internalLength: 5,
   showInternal: true,
   showZones: true,
+  showLiquidity: true,
+  // Two matching same-side swings form a pool by default. The user can raise
+  // this threshold when a stricter three-, four-, or higher-touch pool is wanted.
+  liquidityMinSwings: 2,
+  liquidityLookbackBars: 120,
+  liquidityAtrMargin: 4,
+  maxLiquidityPools: 2,
   showPremiumDiscount: true,
   showSwingOrderBlocks: true,
   showInternalOrderBlocks: true,
@@ -53,6 +65,7 @@ const FVG_VOLUME_LOOKBACK = 20;
 const ORDER_BLOCK_WIDE_RANGE_LOOKBACK = 20;
 const ORDER_BLOCK_WIDE_RANGE_MULTIPLIER = 2;
 const DEFAULT_BAR_STEP_MS = 60_000;
+const ICT_LIQUIDITY_ACTIVE_EXTEND_BARS = 3;
 
 export type SmcMarkerKind =
   | "bos"
@@ -69,7 +82,8 @@ export interface SmcMarker {
   kind: SmcMarkerKind;
 }
 
-export type SmcZoneKind = "ob" | "fvg" | "pd";
+export type SmcZoneKind = "ob" | "fvg" | "pd" | "liquidity";
+export type SmcLiquiditySide = "buy" | "sell";
 export type SmcPremiumDiscountKind = "premium" | "equilibrium" | "discount";
 
 export interface SmcZone {
@@ -78,6 +92,11 @@ export interface SmcZone {
   scope: Scope;
   direction: Direction;
   pdKind?: SmcPremiumDiscountKind;
+  liquiditySide?: SmcLiquiditySide;
+  liquidityLinePrice?: number;
+  pivotCount?: number;
+  touched?: boolean;
+  swept?: boolean;
   startTime: number;
   endTime?: number;
   extendBars?: number;
@@ -139,6 +158,22 @@ interface Fvg {
   type: Direction;
   mitigated: boolean;
   active: boolean;
+}
+
+interface LiquidityPool {
+  side: SmcLiquiditySide;
+  top: number;
+  bottom: number;
+  pivotIndices: Set<number>;
+  pivotPrices: number[];
+  pivotTimestamps: number[];
+  linePrice: number;
+  createdBarIndex: number;
+  touched: boolean;
+  swept: boolean;
+  touchedTime?: number;
+  sweptBarIndex?: number;
+  sweptTime?: number;
 }
 
 class StructureState {
@@ -220,6 +255,9 @@ class LuxSmc {
   private readonly swingLength: number;
   private readonly internalLength: number;
   private readonly maxZoneAge: number;
+  private readonly liquidityMinSwings: number;
+  private readonly liquidityLookbackBars: number;
+  private readonly liquidityAtrMargin: number;
   private readonly fvgAutoThreshold: boolean;
   private readonly fvgThresholdLookback: number;
   private readonly fvgThresholdMultiplier: number;
@@ -232,6 +270,8 @@ class LuxSmc {
   private readonly opens: number[] = [];
   private readonly volumes: number[] = [];
   private readonly bodyDeltaPercents: number[] = [];
+  private readonly trueRanges: number[] = [];
+  private readonly atrValues: Array<number | undefined> = [];
   private readonly timestamps: number[] = [];
   private readonly indices: number[] = [];
 
@@ -239,6 +279,9 @@ class LuxSmc {
   readonly swingObs: OrderBlock[] = [];
   readonly internalObs: OrderBlock[] = [];
   readonly fvgs: Fvg[] = [];
+  readonly liquidityPools: LiquidityPool[] = [];
+  private readonly swingHighs: SwingPoint[] = [];
+  private readonly swingLows: SwingPoint[] = [];
   private readonly swingObStack: OrderBlockCandidate[] = [];
 
   private lastSwingLeg = 0;
@@ -250,6 +293,9 @@ class LuxSmc {
       | "swingLength"
       | "internalLength"
       | "maxZoneAge"
+      | "liquidityMinSwings"
+      | "liquidityLookbackBars"
+      | "liquidityAtrMargin"
       | "fvgAutoThreshold"
       | "fvgThresholdLookback"
       | "fvgThresholdMultiplier"
@@ -259,6 +305,9 @@ class LuxSmc {
     this.swingLength = Math.max(1, Math.round(settings.swingLength));
     this.internalLength = Math.max(1, Math.round(settings.internalLength));
     this.maxZoneAge = Math.max(1, Math.round(settings.maxZoneAge));
+    this.liquidityMinSwings = Math.max(2, Math.round(settings.liquidityMinSwings));
+    this.liquidityLookbackBars = Math.max(1, Math.round(settings.liquidityLookbackBars));
+    this.liquidityAtrMargin = Math.max(0, settings.liquidityAtrMargin);
     this.fvgAutoThreshold = settings.fvgAutoThreshold;
     this.fvgThresholdLookback = settings.fvgThresholdLookback;
     this.fvgThresholdMultiplier = settings.fvgThresholdMultiplier;
@@ -267,16 +316,22 @@ class LuxSmc {
       2000,
       this.maxZoneAge + Math.max(this.swingLength, this.internalLength) * 4,
       this.fvgThresholdLookback + FVG_VOLUME_LOOKBACK + 10,
+      this.liquidityLookbackBars + 20,
     );
   }
 
   update(bar: Bar, barIndex: number): StructureState {
+    const previousClose = this.closes[this.closes.length - 1];
     this.highs.push(bar.high);
     this.lows.push(bar.low);
     this.closes.push(bar.close);
     this.opens.push(bar.open);
     this.volumes.push(bar.volume);
     this.bodyDeltaPercents.push(candleBodyDeltaPercent(bar.open, bar.close));
+    const range = trueRange(bar.high, bar.low, previousClose);
+    this.trueRanges.push(range);
+    const previousAtr = this.atrValues[this.atrValues.length - 1];
+    this.atrValues.push(wilderAtr(this.trueRanges, previousAtr, 10));
     this.timestamps.push(bar.time);
     this.indices.push(barIndex);
 
@@ -287,6 +342,8 @@ class LuxSmc {
       this.opens.shift();
       this.volumes.shift();
       this.bodyDeltaPercents.shift();
+      this.trueRanges.shift();
+      this.atrValues.shift();
       this.timestamps.shift();
       this.indices.shift();
     }
@@ -303,6 +360,10 @@ class LuxSmc {
     this.detectFvgs(barIndex);
     this.maintainZones(bar.high, bar.low, bar.close, barIndex);
     this.detectSweeps(bar.high, bar.low);
+    // Registering a new pivot can create a liquidity pool on this same bar.
+    // Evaluate close-through after structure registration so that a pool is
+    // never left active when its creation bar already closed beyond the box.
+    this.updateLiquidityState(bar.close, bar.time, barIndex);
 
     return this.state;
   }
@@ -400,6 +461,33 @@ class LuxSmc {
         this.state.trailingTop = candidateHigh;
         this.addSwingOrderBlockCandidate(pivot, -1, barIndex);
       }
+    }
+
+    // Keep liquidity pivots independent from the external swing length. The
+    // latter is intentionally wide in this SMC overlay (50 by default), while
+    // the ICT liquidity source confirms shorter pivots (len=5 by default).
+    // Registering only internal pivots keeps the BOS/CHoCH state and its zones
+    // unchanged.
+    if (isInternal) {
+      this.registerLiquidityPivot(
+        leg === 1 ? "sell" : "buy",
+        leg === 1
+          ? this.state.internalLow ?? {
+              price: candidateLow,
+              barIndex: pivotBarIndex,
+              timestamp: pivotTimestamp,
+              type: -1,
+              crossed: false,
+            }
+          : this.state.internalHigh ?? {
+              price: candidateHigh,
+              barIndex: pivotBarIndex,
+              timestamp: pivotTimestamp,
+              type: 1,
+              crossed: false,
+            },
+        barIndex,
+      );
     }
 
     this.checkBosChoch(isInternal, barIndex);
@@ -846,6 +934,119 @@ class LuxSmc {
     return candidate.bottom < broken.bottom && close >= candidate.bottom;
   }
 
+  private registerLiquidityPivot(
+    side: SmcLiquiditySide,
+    pivot: SwingPoint,
+    currentBarIndex: number,
+  ): void {
+    const pivots = side === "buy" ? this.swingHighs : this.swingLows;
+    pivots.push(pivot);
+    const oldestAllowed = currentBarIndex - this.liquidityLookbackBars;
+    while (pivots[0] && pivots[0].barIndex < oldestAllowed) {
+      pivots.shift();
+    }
+
+    const atr = this.atrValues[this.atrValues.length - 1];
+    const width = atr === undefined ? 0 : (atr * this.liquidityAtrMargin) / 10;
+    if (!Number.isFinite(width) || width <= 0) return;
+
+    const sweptPivotIndices = new Set<number>();
+    for (const pool of this.liquidityPools) {
+      if (pool.side !== side || !pool.swept) continue;
+      for (const index of pool.pivotIndices) sweptPivotIndices.add(index);
+    }
+    // Build one local liquidity cluster, newest-to-oldest. The first same-side
+    // swing outside the current ATR band separates clusters in either
+    // direction. Without this boundary, the scan can skip an unrelated swing,
+    // then merge much older equal-price pivots and pull the current box left.
+    const cluster: SwingPoint[] = [];
+    for (let index = pivots.length - 1; index >= 0; index -= 1) {
+      const candidate = pivots[index];
+      const crossedClusterBoundary =
+        Math.abs(candidate.price - pivot.price) > width;
+      if (crossedClusterBoundary) break;
+      if (
+        !sweptPivotIndices.has(candidate.barIndex) &&
+        Math.abs(candidate.price - pivot.price) <= width
+      ) {
+        cluster.push(candidate);
+      }
+    }
+    cluster.reverse();
+    if (cluster.length < this.liquidityMinSwings) return;
+
+    const pivotIndices = new Set(cluster.map((candidate) => candidate.barIndex));
+    const pivotPrices = cluster.map((candidate) => candidate.price);
+    const pivotTimestamps = cluster.map((candidate) => candidate.timestamp);
+    const center =
+      (Math.min(...pivotPrices) + Math.max(...pivotPrices)) / 2;
+    const existing = this.liquidityPools.find(
+      (pool) =>
+        pool.side === side &&
+        !pool.swept &&
+        [...pool.pivotIndices].some((index) => pivotIndices.has(index)),
+    );
+
+    if (existing) {
+      existing.pivotIndices = pivotIndices;
+      existing.pivotPrices = pivotPrices;
+      existing.pivotTimestamps = pivotTimestamps;
+      existing.linePrice = cluster[0]?.price ?? pivot.price;
+      existing.top = center + width;
+      existing.bottom = center - width;
+      return;
+    }
+
+    this.liquidityPools.push({
+      side,
+      top: center + width,
+      bottom: center - width,
+      pivotIndices,
+      pivotPrices,
+      pivotTimestamps,
+      linePrice: cluster[0]?.price ?? pivot.price,
+      createdBarIndex: currentBarIndex,
+      touched: false,
+      swept: false,
+    });
+    if (this.liquidityPools.length > 80) this.liquidityPools.shift();
+  }
+
+  private updateLiquidityState(
+    close: number,
+    time: number,
+    currentBarIndex: number,
+  ): void {
+    for (const pool of this.liquidityPools) {
+      if (pool.swept) continue;
+      if (pool.side === "buy") {
+        if (close > pool.bottom) {
+          pool.touched = true;
+          pool.touchedTime ??= time;
+        }
+        if (close > pool.top) {
+          pool.touched = true;
+          pool.touchedTime ??= time;
+          pool.swept = true;
+          pool.sweptBarIndex = currentBarIndex;
+          pool.sweptTime = time;
+        }
+      } else {
+        if (close < pool.top) {
+          pool.touched = true;
+          pool.touchedTime ??= time;
+        }
+        if (close < pool.bottom) {
+          pool.touched = true;
+          pool.touchedTime ??= time;
+          pool.swept = true;
+          pool.sweptBarIndex = currentBarIndex;
+          pool.sweptTime = time;
+        }
+      }
+    }
+  }
+
   private detectSweeps(high: number, low: number): void {
     const prevHigh =
       this.highs.length > 1
@@ -885,6 +1086,28 @@ class LuxSmc {
       this.state.sweptPrevIntLow = true;
     }
   }
+}
+
+function trueRange(high: number, low: number, previousClose: number | undefined): number {
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return 0;
+  if (previousClose === undefined || !Number.isFinite(previousClose)) {
+    return Math.max(0, high - low);
+  }
+  return Math.max(high - low, Math.abs(high - previousClose), Math.abs(low - previousClose));
+}
+
+function wilderAtr(
+  trueRanges: readonly number[],
+  previousAtr: number | undefined,
+  period: number,
+): number | undefined {
+  if (trueRanges.length < period) return undefined;
+  if (previousAtr === undefined) {
+    const seed = trueRanges.slice(-period);
+    return seed.reduce((sum, value) => sum + value, 0) / period;
+  }
+  const current = trueRanges[trueRanges.length - 1] ?? 0;
+  return previousAtr + (current - previousAtr) / period;
 }
 
 function candleBodyDeltaPercent(open: number, close: number): number {
@@ -927,6 +1150,14 @@ function settingsWithDefaults(settings?: Partial<SmcSettings>): SmcSettings {
   const rawFvgThresholdMultiplier =
     settings?.fvgThresholdMultiplier ??
     DEFAULT_SMC_SETTINGS.fvgThresholdMultiplier;
+  const rawLiquidityMinSwings =
+    settings?.liquidityMinSwings ?? DEFAULT_SMC_SETTINGS.liquidityMinSwings;
+  const rawLiquidityLookback =
+    settings?.liquidityLookbackBars ?? DEFAULT_SMC_SETTINGS.liquidityLookbackBars;
+  const rawLiquidityAtrMargin =
+    settings?.liquidityAtrMargin ?? DEFAULT_SMC_SETTINGS.liquidityAtrMargin;
+  const rawMaxLiquidityPools =
+    settings?.maxLiquidityPools ?? DEFAULT_SMC_SETTINGS.maxLiquidityPools;
   return {
     ...DEFAULT_SMC_SETTINGS,
     ...settings,
@@ -971,6 +1202,43 @@ function settingsWithDefaults(settings?: Partial<SmcSettings>): SmcSettings {
     ),
     showPremiumDiscount:
       settings?.showPremiumDiscount ?? DEFAULT_SMC_SETTINGS.showPremiumDiscount,
+    showLiquidity:
+      settings?.showLiquidity ?? DEFAULT_SMC_SETTINGS.showLiquidity,
+    liquidityMinSwings: Math.min(
+      20,
+      Math.max(
+        2,
+        Number.isFinite(rawLiquidityMinSwings)
+          ? Math.round(rawLiquidityMinSwings)
+          : DEFAULT_SMC_SETTINGS.liquidityMinSwings,
+      ),
+    ),
+    liquidityLookbackBars: Math.min(
+      500,
+      Math.max(
+        1,
+        Number.isFinite(rawLiquidityLookback)
+          ? Math.round(rawLiquidityLookback)
+          : DEFAULT_SMC_SETTINGS.liquidityLookbackBars,
+      ),
+    ),
+    liquidityAtrMargin: Math.min(
+      100,
+      Math.max(
+        0,
+        Number.isFinite(rawLiquidityAtrMargin)
+          ? rawLiquidityAtrMargin
+          : DEFAULT_SMC_SETTINGS.liquidityAtrMargin,
+      ),
+    ),
+    maxLiquidityPools: Math.max(
+      0,
+      Math.round(
+        Number.isFinite(rawMaxLiquidityPools)
+          ? rawMaxLiquidityPools
+          : DEFAULT_SMC_SETTINGS.maxLiquidityPools,
+      ),
+    ),
     fvgAutoThreshold:
       settings?.fvgAutoThreshold ?? DEFAULT_SMC_SETTINGS.fvgAutoThreshold,
     fvgThresholdLookback: Math.min(
@@ -1337,6 +1605,35 @@ function fvgToZone(
   };
 }
 
+function liquidityToZone(
+  pool: LiquidityPool,
+  activeEndTime: number | undefined,
+): SmcZone {
+  const startTime = Math.min(...pool.pivotTimestamps);
+  // Match the TradingView lifecycle: a close inside the box only marks it as
+  // touched. The zone remains active until a candle closes through the far
+  // edge (above BSL.top / below SSL.bottom), then it must end on that candle.
+  const endTime = pool.swept ? pool.sweptTime : activeEndTime;
+  const count = pool.pivotIndices.size;
+  const side = pool.side === "buy" ? "BSL" : "SSL";
+  return {
+    id: `liquidity:${pool.side}:${pool.createdBarIndex}:${pool.top}:${pool.bottom}`,
+    kind: "liquidity",
+    scope: "swing",
+    direction: pool.side === "buy" ? -1 : 1,
+    liquiditySide: pool.side,
+    liquidityLinePrice: pool.linePrice,
+    pivotCount: count,
+    touched: pool.touched,
+    swept: pool.swept,
+    startTime,
+    endTime,
+    top: pool.top,
+    bottom: pool.bottom,
+    label: `${side} x${count}`,
+  };
+}
+
 function premiumDiscountZones(
   state: StructureState,
   bars: readonly Bar[],
@@ -1413,7 +1710,8 @@ function premiumDiscountZones(
 function zoneSortRank(zone: SmcZone): number {
   if (zone.kind === "pd") return 0;
   if (zone.kind === "ob") return 1;
-  return 2;
+  if (zone.kind === "fvg") return 2;
+  return 3;
 }
 
 export function computeSmcOverlay(
@@ -1444,6 +1742,14 @@ export function computeSmcOverlay(
 
   const zones: SmcZone[] = [];
   if (cfg.showZones) {
+    const liquidityActiveEndTime =
+      bars.length > 0
+        ? extendedStructureEndTime(
+            bars,
+            bars.length - 1,
+            ICT_LIQUIDITY_ACTIVE_EXTEND_BARS,
+          )
+        : undefined;
     if (cfg.showPremiumDiscount) {
       zones.push(...premiumDiscountZones(detector.state, bars));
     }
@@ -1459,6 +1765,18 @@ export function computeSmcOverlay(
     }
     for (const fvg of detector.fvgs.filter((fvg) => fvg.active).slice(0, cfg.maxFairValueGaps)) {
       zones.push(fvgToZone(fvg, bars, cfg.fvgExtendBars));
+    }
+    if (cfg.showLiquidity) {
+      const pools = detector.liquidityPools
+        .slice()
+        .sort((a, b) => b.createdBarIndex - a.createdBarIndex);
+      for (const side of ["buy", "sell"] as const) {
+        for (const pool of pools
+          .filter((candidate) => candidate.side === side)
+          .slice(0, cfg.maxLiquidityPools)) {
+          zones.push(liquidityToZone(pool, liquidityActiveEndTime));
+        }
+      }
     }
   }
 

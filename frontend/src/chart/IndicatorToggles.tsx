@@ -1407,6 +1407,86 @@ export function IndicatorToggles({
                 <label className="fp-toggle-label">
                   <input
                     type="checkbox"
+                    aria-label="SMC show liquidity"
+                    checked={smc.showLiquidity}
+                    onChange={(e) =>
+                      onSmcChange({ ...smc, showLiquidity: e.currentTarget.checked })
+                    }
+                  />
+                  <span>Show liquidity</span>
+                </label>
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Liquidity pool</span>
+                <input
+                  type="number"
+                  min={2}
+                  max={20}
+                  step={1}
+                  className="ema-length-input"
+                  aria-label="SMC liquidity pool minimum swings"
+                  value={smc.liquidityMinSwings}
+                  onChange={(e) => {
+                    const value = Number(e.currentTarget.value);
+                    if (Number.isFinite(value)) {
+                      onSmcChange({
+                        ...smc,
+                        liquidityMinSwings: Math.min(20, Math.max(2, Math.round(value))),
+                      });
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Liquidity ATR</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.5}
+                  className="ema-length-input"
+                  aria-label="SMC liquidity ATR margin"
+                  value={smc.liquidityAtrMargin}
+                  onChange={(e) => {
+                    const value = Number(e.currentTarget.value);
+                    if (Number.isFinite(value)) onSmcChange({ ...smc, liquidityAtrMargin: value });
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Liquidity lookback</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  className="ema-length-input"
+                  aria-label="SMC liquidity lookback bars"
+                  value={smc.liquidityLookbackBars}
+                  onChange={(e) => {
+                    const value = Number(e.currentTarget.value);
+                    if (Number.isFinite(value)) onSmcChange({ ...smc, liquidityLookbackBars: value });
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Liquidity limit</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={80}
+                  className="ema-length-input"
+                  aria-label="SMC liquidity display limit"
+                  value={smc.maxLiquidityPools}
+                  onChange={(e) => {
+                    const value = Number(e.currentTarget.value);
+                    if (Number.isFinite(value)) onSmcChange({ ...smc, maxLiquidityPools: value });
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
                     checked={smc.showPremiumDiscount}
                     onChange={(e) =>
                       onSmcChange({

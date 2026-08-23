@@ -20,6 +20,8 @@ __all__ = [
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK",
@@ -44,6 +46,8 @@ MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS = 120
 MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS = 2
 MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS = 5
 MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS = 2
+MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN = 4.0
+MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS = 5
 MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS = 2
 MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS = 0
 
@@ -78,6 +82,8 @@ class _BreakCandidate:
     pivot_time: CanonicalTimestamp
     pivot_price: float
     structure_kind: str
+    liquidity_count: int
+    liquidity_levels: tuple[float, ...]
 
 
 @dataclass(slots=True)
@@ -127,6 +133,9 @@ class MgannBigTradeSweepState:
         min_pivot_cuts: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
         pivot_tolerance_ticks: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
         min_pivot_wick_ticks: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
+        filter_liquidity: bool = False,
+        liquidity_atr_margin: float = MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+        liquidity_sweep_lookback_bars: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
         confirmation_bars: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
         break_ticks: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
         require_big_trade: bool = True,
@@ -145,6 +154,13 @@ class MgannBigTradeSweepState:
         self._swing_size = max(1, int(swing_size))
         self._confirmation_bars = max(0, int(confirmation_bars))
         self._break_distance = max(0, int(break_ticks)) * float(tick_size)
+        self._filter_liquidity = bool(filter_liquidity)
+        self._liquidity_atr_margin = max(0.0, float(liquidity_atr_margin))
+        self._liquidity_sweep_lookback_bars = max(
+            1, int(liquidity_sweep_lookback_bars)
+        )
+        self._min_pivot_cuts = max(2, int(min_pivot_cuts))
+        self._pivot_lookback_bars = max(1, int(pivot_lookback_bars))
         self._max_bars = max(
             500,
             int(pivot_lookback_bars)
@@ -156,7 +172,14 @@ class MgannBigTradeSweepState:
             + int(min_pivot_wick_ticks)
             + 40,
         )
-        self._detector = SmcExternalDetector(self._swing_size)
+        self._detector = SmcExternalDetector(
+            self._swing_size,
+            liquidity_filter=self._filter_liquidity,
+            liquidity_min_pivots=self._min_pivot_cuts,
+            liquidity_lookback_bars=self._pivot_lookback_bars,
+            liquidity_atr_margin=self._liquidity_atr_margin,
+            liquidity_sweep_lookback_bars=self._liquidity_sweep_lookback_bars,
+        )
         self._bars: list[MgannBigTradeSweepBar] = []
         self._big_trades: dict[CanonicalTimestamp, _BigTradeBucket] = {}
         self._candidates: list[_BreakCandidate] = []
@@ -213,6 +236,12 @@ class MgannBigTradeSweepState:
     def _add_candidate(self, index: int, event: SmcBreakEvent) -> None:
         if event.direction not in (-1, 1):
             return
+        if (
+            self._filter_liquidity
+            and event.kind == "CHoCH"
+            and not event.liquidity_swept
+        ):
+            return
         if self._regime_direction != event.direction:
             self._regime_direction = event.direction
             self._candidates = [
@@ -228,6 +257,16 @@ class MgannBigTradeSweepState:
             pivot_time=event.pivot_time,
             pivot_price=float(event.level),
             structure_kind=event.kind,
+            liquidity_count=(
+                event.liquidity_count
+                if event.kind == "CHoCH" and event.liquidity_swept
+                else 1
+            ),
+            liquidity_levels=(
+                event.liquidity_levels
+                if event.kind == "CHoCH" and event.liquidity_swept
+                else (float(event.level),)
+            ),
         )
         self._candidates.append(candidate)
 
@@ -266,8 +305,8 @@ class MgannBigTradeSweepState:
             signal_price=signal_price,
             cut_time=candidate.pivot_time,
             cut_price=candidate.pivot_price,
-            cut_count=1,
-            cut_levels=(candidate.pivot_price,),
+            cut_count=candidate.liquidity_count,
+            cut_levels=candidate.liquidity_levels,
             big_trade_volume=liquidity.big_trade_volume,
             big_trade_price=liquidity.big_trade_price,
             bar_volume=liquidity.bar_volume,

@@ -65,6 +65,8 @@ from .mgann_big_trade_sweep import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
@@ -110,6 +112,8 @@ __all__ = [
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS",
@@ -913,6 +917,11 @@ class AlertEngine:
             min_pivot_cuts=self._mgann_sweep_min_pivot_cuts(alert),
             pivot_tolerance_ticks=self._mgann_sweep_pivot_tolerance_ticks(alert),
             min_pivot_wick_ticks=self._mgann_sweep_min_pivot_wick_ticks(alert),
+            filter_liquidity=self._mgann_sweep_filter_liquidity(alert),
+            liquidity_atr_margin=self._mgann_sweep_liquidity_atr_margin(alert),
+            liquidity_sweep_lookback_bars=self._mgann_sweep_liquidity_sweep_lookback_bars(
+                alert
+            ),
             confirmation_bars=self._mgann_sweep_confirmation_bars(alert),
             break_ticks=self._mgann_sweep_break_ticks(alert),
             require_big_trade=self._mgann_sweep_require_big_trade(alert),
@@ -1140,6 +1149,24 @@ class AlertEngine:
         return _nonnegative_int_param(
             alert.params.get("minPivotWickTicks"),
             MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
+        )
+
+    @staticmethod
+    def _mgann_sweep_filter_liquidity(alert: Alert) -> bool:
+        return alert.params.get("filterLiquidity") is True
+
+    @staticmethod
+    def _mgann_sweep_liquidity_atr_margin(alert: Alert) -> float:
+        return _positive_float_param(
+            alert.params.get("liquidityAtrMargin"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+        )
+
+    @staticmethod
+    def _mgann_sweep_liquidity_sweep_lookback_bars(alert: Alert) -> int:
+        return _positive_int_param(
+            alert.params.get("liquiditySweepLookbackBars"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
         )
 
     @staticmethod

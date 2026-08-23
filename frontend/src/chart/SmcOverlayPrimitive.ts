@@ -30,6 +30,7 @@ interface ViewZone {
   x2: Coordinate;
   yTop: Coordinate;
   yBottom: Coordinate;
+  yLiquidityLine: Coordinate | null;
 }
 
 interface ViewLine {
@@ -44,6 +45,7 @@ interface ZoneStyle {
   fill: string;
   stroke: string;
   label?: string;
+  line?: string;
 }
 
 interface LineStyle {
@@ -89,6 +91,23 @@ function styleFor(zone: RenderableSmcZone): ZoneStyle {
       stroke: "rgba(170, 170, 170, 0.40)",
       label: "rgba(215, 215, 215, 0.78)",
     };
+  }
+
+  if (zone.kind === "liquidity") {
+    const faded = zone.touched === true || zone.swept === true;
+    return zone.liquiditySide === "sell"
+      ? {
+          fill: `rgba(35, 195, 220, ${faded ? 0.10 : 0})`,
+          stroke: "rgba(80, 225, 240, 0)",
+          label: `rgba(135, 235, 245, ${faded ? 0.58 : 0.92})`,
+          line: faded ? undefined : "rgba(80, 225, 240, 0.96)",
+        }
+      : {
+          fill: `rgba(245, 105, 45, ${faded ? 0.10 : 0})`,
+          stroke: "rgba(255, 145, 80, 0)",
+          label: `rgba(255, 180, 125, ${faded ? 0.58 : 0.92})`,
+          line: faded ? undefined : "rgba(255, 145, 80, 0.96)",
+        };
   }
 
   if (zone.kind === "fvg") {
@@ -196,6 +215,23 @@ class SmcOverlayRenderer implements IPrimitivePaneRenderer {
           vertical.length,
         );
 
+        if (
+          view.zone.kind === "liquidity" &&
+          style.line &&
+          view.yLiquidityLine !== null
+        ) {
+          ctx.setLineDash([]);
+          ctx.strokeStyle = style.line;
+          ctx.lineWidth = Math.max(1, Math.floor(scope.horizontalPixelRatio));
+          const lineY = Math.round(
+            (view.yLiquidityLine as number) * scope.verticalPixelRatio,
+          );
+          ctx.beginPath();
+          ctx.moveTo(horizontal.position, lineY);
+          ctx.lineTo(horizontal.position + horizontal.length, lineY);
+          ctx.stroke();
+        }
+
         if (view.zone.kind === "pd" && style.label) {
           const labelX =
             horizontal.position +
@@ -205,6 +241,15 @@ class SmcOverlayRenderer implements IPrimitivePaneRenderer {
           ctx.fillStyle = style.label;
           ctx.textAlign =
             view.zone.pdKind === "equilibrium" ? "right" : "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(view.zone.label, labelX, labelY);
+        }
+        if (view.zone.kind === "liquidity" && style.label) {
+          const labelX = horizontal.position + 6 * scope.horizontalPixelRatio;
+          const labelY = vertical.position + vertical.length / 2;
+          ctx.setLineDash([]);
+          ctx.fillStyle = style.label;
+          ctx.textAlign = "left";
           ctx.textBaseline = "middle";
           ctx.fillText(view.zone.label, labelX, labelY);
         }
@@ -287,6 +332,10 @@ class SmcOverlayPaneView implements IPrimitivePaneView {
         : (paneWidth as Coordinate);
       const yTop = series.priceToCoordinate(zone.top);
       const yBottom = series.priceToCoordinate(zone.bottom);
+      const yLiquidityLine =
+        zone.kind === "liquidity" && zone.liquidityLinePrice !== undefined
+          ? series.priceToCoordinate(zone.liquidityLinePrice)
+          : null;
       if (x1 === null || x2 === null || yTop === null || yBottom === null) continue;
       const left = Math.min(x1 as number, x2 as number);
       const right = Math.max(x1 as number, x2 as number);
@@ -306,6 +355,14 @@ class SmcOverlayPaneView implements IPrimitivePaneView {
         x2: clampCoordinate(x2, -VIEWPORT_OVERSCAN_PX, paneWidth + VIEWPORT_OVERSCAN_PX),
         yTop: clampCoordinate(yTop, -VIEWPORT_OVERSCAN_PX, paneHeight + VIEWPORT_OVERSCAN_PX),
         yBottom: clampCoordinate(yBottom, -VIEWPORT_OVERSCAN_PX, paneHeight + VIEWPORT_OVERSCAN_PX),
+        yLiquidityLine:
+          yLiquidityLine === null
+            ? null
+            : clampCoordinate(
+                yLiquidityLine,
+                -VIEWPORT_OVERSCAN_PX,
+                paneHeight + VIEWPORT_OVERSCAN_PX,
+              ),
       });
     }
 

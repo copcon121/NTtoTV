@@ -15,6 +15,8 @@ from ..engines.mgann_big_trade_sweep import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
@@ -324,6 +326,15 @@ def _mgann_sweep_state_from_alert(alert: AlertRecord) -> MgannBigTradeSweepState
         min_pivot_cuts=_positive_int_param(
             params.get("minPivotCuts"),
             MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+        ),
+        filter_liquidity=params.get("filterLiquidity") is True,
+        liquidity_atr_margin=_positive_float_param(
+            params.get("liquidityAtrMargin"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+        ),
+        liquidity_sweep_lookback_bars=_positive_int_param(
+            params.get("liquiditySweepLookbackBars"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
         ),
         confirmation_bars=_nonnegative_int_param(
             params.get("confirmationBars"),

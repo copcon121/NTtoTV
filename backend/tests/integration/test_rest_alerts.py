@@ -17,6 +17,8 @@ from app.engines.alert_engine import (
     MGANN_SWEEP,
     MGANN_BIG_TRADE_SWEEP,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
@@ -208,6 +210,9 @@ def test_rest_alerts_accept_and_normalize_mgann_break_ls_params(
                 body["params"]["minPivotCuts"]
                 == MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS
             )
+            assert "filterLiquidity" not in body["params"]
+            assert "liquidityAtrMargin" not in body["params"]
+            assert "liquiditySweepLookbackBars" not in body["params"]
             assert (
                 body["params"]["confirmationBars"]
                 == MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS
@@ -229,6 +234,29 @@ def test_rest_alerts_accept_and_normalize_mgann_break_ls_params(
             assert (
                 legacy.json()["params"]["swingSize"]
                 == MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE
+            )
+
+            configured = client.post(
+                "/api/alerts",
+                json={
+                    "symbol": "GC",
+                    "type": MGANN_BREAK_LS,
+                    "params": {
+                        "bigTradeThreshold": 70,
+                        "filterLiquidity": True,
+                    },
+                },
+            )
+            assert configured.status_code == 201
+            configured_params = configured.json()["params"]
+            assert configured_params["filterLiquidity"] is True
+            assert (
+                configured_params["liquidityAtrMargin"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN
+            )
+            assert (
+                configured_params["liquiditySweepLookbackBars"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS
             )
     finally:
         cache.close()

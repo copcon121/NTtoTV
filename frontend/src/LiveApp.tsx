@@ -2937,20 +2937,12 @@ export function LiveApp() {
   }, [api, socket, contract, timeframe, socketGeneration, profileHydrated]);
 
   useEffect(() => {
-    const enabledMgannSweepAlerts = alerts.filter(
-      (alert) =>
-        alert.symbol === SYMBOL &&
-        MGANN_SWEEP_ALERT_TYPES.has(alert.type) &&
-        alert.enabled,
-    );
     if (
-      !authUser ||
       !profileHydrated ||
       !hasLoadedCurrentSeries ||
       timeframe !== "1m" ||
       firstLoadedBarTime === undefined ||
-      latestLoadedBarTime === undefined ||
-      enabledMgannSweepAlerts.length === 0
+      latestLoadedBarTime === undefined
     ) {
       setAlertSignalMarkers((prev) =>
         prev.some((marker) => marker.id.includes(":hist:"))
@@ -3006,8 +2998,6 @@ export function LiveApp() {
     };
   }, [
     api,
-    alerts,
-    authUser,
     contract,
     firstLoadedBarTime,
     hasLoadedCurrentSeries,

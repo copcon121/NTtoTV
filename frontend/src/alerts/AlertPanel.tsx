@@ -87,8 +87,11 @@ const MGANN_SWEEP_SPREAD_LOOKBACK = 20;
 const MGANN_SWEEP_SWING_SIZE = 5;
 const MGANN_SWEEP_PIVOT_LOOKBACK_BARS = 120;
 const MGANN_SWEEP_MIN_PIVOT_CUTS = 2;
+const MGANN_SWEEP_MAX_PIVOT_CUTS = 20;
 const MGANN_SWEEP_CONFIRMATION_BARS = 2;
 const MGANN_SWEEP_BREAK_TICKS = 0;
+const MGANN_SWEEP_LIQUIDITY_ATR_MARGIN = 4;
+const MGANN_SWEEP_LIQUIDITY_LOOKBACK_BARS = 5;
 
 function defaultPlaySound(): void {
   // Best-effort: a short beep via the Web Audio API when available. Wrapped so
@@ -178,11 +181,17 @@ function alertDescription(alert: Alert): string {
     const bigTrade = mgannBreakRequiresBigTrade(alert)
       ? `, BT > ${String(alert.params.bigTradeThreshold)}`
       : "";
+    const liquidity =
+      alert.params.filterLiquidity === true
+        ? `, liquidity CHoCH x${String(
+            alert.params.minPivotCuts ?? MGANN_SWEEP_MIN_PIVOT_CUTS,
+          )}`
+        : "";
     return `mGann Break L/S${bigTrade}, vol x${String(
       alert.params.volumeMultiplier ?? MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT,
     )}, spread x${String(
       alert.params.spreadMultiplier ?? MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT,
-    )}${repeat}`;
+    )}${liquidity}${repeat}`;
   }
   return [
     alert.type,
@@ -221,6 +230,10 @@ export function AlertPanel({
     MGANN_FVG_DEFAULT_TIMEFRAME,
   );
   const [newMgannRequireBigTrade, setNewMgannRequireBigTrade] = useState(false);
+  const [newMgannFilterLiquidity, setNewMgannFilterLiquidity] = useState(true);
+  const [newMgannLiquidityMinSwings, setNewMgannLiquidityMinSwings] = useState(
+    String(MGANN_SWEEP_MIN_PIVOT_CUTS),
+  );
   const [newMgannSweepVolumeMultiplier, setNewMgannSweepVolumeMultiplier] =
     useState(MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT);
   const [newMgannSweepSpreadMultiplier, setNewMgannSweepSpreadMultiplier] =
@@ -273,6 +286,8 @@ export function AlertPanel({
       setNewRepeat(true);
     } else if (isMgannBreakType(type)) {
       setNewMgannRequireBigTrade(type === MGANN_BIG_TRADE_SWEEP_TYPE);
+      setNewMgannFilterLiquidity(true);
+      setNewMgannLiquidityMinSwings(String(MGANN_SWEEP_MIN_PIVOT_CUTS));
       setNewValue((value) => value || MGANN_SWEEP_BIG_TRADE_DEFAULT);
       setNewMgannSweepVolumeMultiplier(MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT);
       setNewMgannSweepSpreadMultiplier(MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT);
@@ -301,17 +316,24 @@ export function AlertPanel({
       );
       const volumeMultiplier = Number(newMgannSweepVolumeMultiplier);
       const spreadMultiplier = Number(newMgannSweepSpreadMultiplier);
+      const rawLiquidityMinSwings = Number(newMgannLiquidityMinSwings);
       if (
         !Number.isFinite(bigTradeThreshold) ||
         !Number.isFinite(volumeMultiplier) ||
-        !Number.isFinite(spreadMultiplier)
+        !Number.isFinite(spreadMultiplier) ||
+        !Number.isFinite(rawLiquidityMinSwings)
       ) {
         return;
       }
+      const liquidityMinSwings = Math.min(
+        MGANN_SWEEP_MAX_PIVOT_CUTS,
+        Math.max(MGANN_SWEEP_MIN_PIVOT_CUTS, Math.round(rawLiquidityMinSwings)),
+      );
       onCreate?.({
         type: MGANN_BREAK_LS_TYPE,
         params: {
           requireBigTrade: newMgannRequireBigTrade,
+          filterLiquidity: newMgannFilterLiquidity,
           bigTradeThreshold,
           timeframe: "1m",
           minVolume: 0,
@@ -322,9 +344,11 @@ export function AlertPanel({
           spreadMultiplier,
           swingSize: MGANN_SWEEP_SWING_SIZE,
           pivotLookbackBars: MGANN_SWEEP_PIVOT_LOOKBACK_BARS,
-          minPivotCuts: MGANN_SWEEP_MIN_PIVOT_CUTS,
+          minPivotCuts: liquidityMinSwings,
           confirmationBars: MGANN_SWEEP_CONFIRMATION_BARS,
           breakTicks: MGANN_SWEEP_BREAK_TICKS,
+          liquidityAtrMargin: MGANN_SWEEP_LIQUIDITY_ATR_MARGIN,
+          liquiditySweepLookbackBars: MGANN_SWEEP_LIQUIDITY_LOOKBACK_BARS,
           repeat: newRepeat,
         },
       });
@@ -448,6 +472,29 @@ export function AlertPanel({
               />
               <span>BigTrade</span>
             </label>
+            <label className="alert-param alert-param-checkbox">
+              <input
+                type="checkbox"
+                aria-label="Filter CHoCH by liquidity"
+                checked={newMgannFilterLiquidity}
+                onChange={(e) => setNewMgannFilterLiquidity(e.target.checked)}
+              />
+              <span>Liquidity CHoCH</span>
+            </label>
+            {newMgannFilterLiquidity && (
+              <label className="alert-param">
+                <span>Liquidity pool</span>
+                <input
+                  type="number"
+                  min={MGANN_SWEEP_MIN_PIVOT_CUTS}
+                  max={MGANN_SWEEP_MAX_PIVOT_CUTS}
+                  step={1}
+                  aria-label="Liquidity pool minimum swings"
+                  value={newMgannLiquidityMinSwings}
+                  onChange={(e) => setNewMgannLiquidityMinSwings(e.target.value)}
+                />
+              </label>
+            )}
             {isMgannSweepWithBigTrade && (
               <label className="alert-param">
                 <span>BigTrade &gt;</span>

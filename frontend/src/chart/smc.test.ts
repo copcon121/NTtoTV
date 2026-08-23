@@ -15,6 +15,72 @@ function bar(
 }
 
 describe("SMC overlay", () => {
+  it("establishes a liquidity pool from two matching swings", () => {
+    expect(DEFAULT_SMC_SETTINGS.liquidityMinSwings).toBe(2);
+  });
+
+  it("honors a configurable three- or four-swing liquidity threshold", () => {
+    const rows = Array.from({ length: 10 }, (_, index) =>
+      bar(index * 60_000, 95, 99, 91, 95),
+    );
+    const sequence: [number, number, number, number][] = [
+      [95, 100, 90, 95],
+      [100, 105, 94, 100],
+      [97, 100, 96, 97],
+      [100, 105, 97, 100],
+      [92, 100, 90.1, 92],
+      [100, 105, 94, 100],
+      [92, 100, 90.2, 92],
+      [100, 105, 94, 100],
+      [92, 100, 90.15, 92],
+      [100, 105, 94, 100],
+    ];
+    sequence.forEach(([open, high, low, close], offset) => {
+      rows.push(bar((10 + offset) * 60_000, open, high, low, close));
+    });
+    const settings = {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      swingLength: 1,
+      internalLength: 1,
+      showInternal: false,
+      showPremiumDiscount: false,
+      showSwingOrderBlocks: false,
+      showInternalOrderBlocks: false,
+      showLiquidity: true,
+      liquidityLookbackBars: 120,
+      liquidityAtrMargin: 4,
+    };
+
+    const threeSwingOverlay = computeSmcOverlay(rows, {
+      ...settings,
+      liquidityMinSwings: 3,
+    });
+    expect(threeSwingOverlay.zones).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "liquidity",
+          liquiditySide: "sell",
+          startTime: 14 * 60_000,
+          pivotCount: 3,
+        }),
+      ]),
+    );
+
+    const fourSwingOverlay = computeSmcOverlay(rows, {
+      ...settings,
+      liquidityMinSwings: 4,
+    });
+    expect(
+      fourSwingOverlay.zones.some(
+        (zone) =>
+          zone.kind === "liquidity" &&
+          zone.liquiditySide === "sell" &&
+          zone.startTime === 14 * 60_000,
+      ),
+    ).toBe(false);
+  });
+
   it("detects a bullish BOS and keeps the created bullish order block active", () => {
     const overlay = computeSmcOverlay(
       [
@@ -52,6 +118,242 @@ describe("SMC overlay", () => {
         }),
       ]),
     );
+  });
+
+  it("builds BSL/SSL from two equal confirmed swings and marks close-through sweeps", () => {
+    const rows = Array.from({ length: 10 }, (_, index) =>
+      bar(index * 60_000, 95, 99, 91, 95),
+    );
+    const sequence: [number, number, number, number][] = [
+      [98, 100, 95, 98],
+      [96, 99, 94, 96],
+      [92, 94, 90, 92],
+      [93, 95, 91, 93],
+      [99, 100.2, 94, 99],
+      [96, 99, 93, 96],
+      [93, 94, 90.2, 93],
+      [94, 95, 91.2, 94],
+      [85.5, 91, 85, 85.5],
+      [92, 95, 88, 92],
+      [101.3, 101.5, 96, 101.3],
+    ];
+    sequence.forEach(([open, high, low, close], offset) => {
+      rows.push(bar((10 + offset) * 60_000, open, high, low, close));
+    });
+
+    const overlay = computeSmcOverlay(rows, {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      swingLength: 1,
+      internalLength: 1,
+      showInternal: false,
+      showPremiumDiscount: false,
+      showSwingOrderBlocks: false,
+      showInternalOrderBlocks: false,
+      showLiquidity: true,
+      liquidityMinSwings: 2,
+      liquidityLookbackBars: 120,
+      liquidityAtrMargin: 4,
+    });
+
+    expect(overlay.zones).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "liquidity",
+          liquiditySide: "buy",
+          pivotCount: expect.any(Number),
+        }),
+        expect.objectContaining({
+          kind: "liquidity",
+          liquiditySide: "sell",
+          pivotCount: expect.any(Number),
+          touched: true,
+          swept: true,
+          endTime: 18 * 60_000,
+        }),
+      ]),
+    );
+  });
+
+  it("keeps a partially touched liquidity box unswept until the opposite edge closes", () => {
+    const rows = Array.from({ length: 10 }, (_, index) =>
+      bar(index * 60_000, 95, 99, 91, 95),
+    );
+    const sequence: [number, number, number, number][] = [
+      [98, 100, 95, 98],
+      [96, 99, 94, 96],
+      [92, 94, 90, 92],
+      [93, 95, 91, 93],
+      [99, 100.2, 94, 99],
+      [96, 99, 93, 96],
+      [93, 94, 90.2, 93],
+      [94, 95, 91.2, 94],
+      [89, 91, 88, 89],
+      [92, 95, 88, 92],
+      [101.3, 101.5, 96, 101.3],
+    ];
+    sequence.forEach(([open, high, low, close], offset) => {
+      rows.push(bar((10 + offset) * 60_000, open, high, low, close));
+    });
+
+    const overlay = computeSmcOverlay(rows, {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      swingLength: 1,
+      internalLength: 1,
+      showInternal: false,
+      showPremiumDiscount: false,
+      showSwingOrderBlocks: false,
+      showInternalOrderBlocks: false,
+      showLiquidity: true,
+    });
+    const sellPool = overlay.zones.find(
+      (zone) => zone.kind === "liquidity" && zone.liquiditySide === "sell",
+    );
+    expect(sellPool).toEqual(
+      expect.objectContaining({
+        touched: true,
+        swept: false,
+        endTime: 23 * 60_000,
+      }),
+    );
+  });
+
+  it("ends BSL on the candle that closes above the zone", () => {
+    const rows = Array.from({ length: 10 }, (_, index) =>
+      bar(index * 60_000, 95, 99, 91, 95),
+    );
+    const sequence: [number, number, number, number][] = [
+      [98, 100, 95, 98],
+      [96, 99, 94, 96],
+      [92, 94, 90, 92],
+      [93, 95, 91, 93],
+      [99, 100.2, 94, 99],
+      [96, 99, 93, 96],
+      [93, 94, 90.2, 93],
+      [94, 95, 91.2, 94],
+      [89, 91, 88, 89],
+      [92, 95, 88, 92],
+    ];
+    sequence.forEach(([open, high, low, close], offset) => {
+      rows.push(bar((10 + offset) * 60_000, open, high, low, close));
+    });
+
+    const settings = {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      swingLength: 1,
+      internalLength: 1,
+      showInternal: false,
+      showPremiumDiscount: false,
+      showSwingOrderBlocks: false,
+      showInternalOrderBlocks: false,
+      showLiquidity: true,
+      liquidityMinSwings: 2,
+      liquidityLookbackBars: 120,
+      liquidityAtrMargin: 4,
+    };
+    const activeOverlay = computeSmcOverlay(rows, settings);
+    const activeBuyPool = activeOverlay.zones.find(
+      (zone) => zone.kind === "liquidity" && zone.liquiditySide === "buy",
+    );
+    expect(activeBuyPool).toEqual(
+      expect.objectContaining({ swept: false }),
+    );
+
+    const invalidationTime = 20 * 60_000;
+    const zoneTop = activeBuyPool?.top ?? 100;
+    rows.push(
+      bar(
+        invalidationTime,
+        zoneTop - 1,
+        zoneTop + 3,
+        zoneTop - 2,
+        zoneTop + 2,
+      ),
+    );
+    rows.push(
+      bar(
+        21 * 60_000,
+        zoneTop + 1,
+        zoneTop + 2,
+        zoneTop - 1,
+        zoneTop + 1,
+      ),
+    );
+
+    const invalidatedOverlay = computeSmcOverlay(rows, settings);
+    const invalidatedBuyPool = invalidatedOverlay.zones.find(
+      (zone) =>
+        zone.kind === "liquidity" &&
+        zone.liquiditySide === "buy" &&
+        zone.startTime === activeBuyPool?.startTime,
+    );
+    expect(invalidatedBuyPool).toEqual(
+      expect.objectContaining({
+        touched: true,
+        swept: true,
+        endTime: invalidationTime,
+      }),
+    );
+  });
+
+  it("starts a new SSL at the first local low instead of merging lows across an unrelated swing", () => {
+    const rows = Array.from({ length: 10 }, (_, index) =>
+      bar(index * 60_000, 95, 99, 91, 95),
+    );
+    const sequence: [number, number, number, number][] = [
+      [95, 100, 90, 95],
+      [96, 105, 94, 100],
+      [97, 100, 96, 97],
+      [98, 105, 97, 100],
+      [95, 100, 90.1, 92],
+      [94, 105, 94, 100],
+      [95, 100, 90.2, 92],
+      [94, 105, 94, 100],
+      [92, 95, 75, 80],
+    ];
+    sequence.forEach(([open, high, low, close], offset) => {
+      rows.push(bar((10 + offset) * 60_000, open, high, low, close));
+    });
+
+    const overlay = computeSmcOverlay(rows, {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      swingLength: 1,
+      internalLength: 1,
+      showInternal: false,
+      showPremiumDiscount: false,
+      showSwingOrderBlocks: false,
+      showInternalOrderBlocks: false,
+      showLiquidity: true,
+      liquidityLookbackBars: 120,
+      liquidityAtrMargin: 4,
+    });
+    const localSellPool = overlay.zones.find(
+      (zone) =>
+        zone.kind === "liquidity" &&
+        zone.liquiditySide === "sell" &&
+        zone.startTime === 14 * 60_000,
+    );
+
+    expect(localSellPool).toEqual(
+      expect.objectContaining({
+        pivotCount: 2,
+        touched: true,
+        swept: true,
+        endTime: 18 * 60_000,
+      }),
+    );
+    expect(
+      overlay.zones.some(
+        (zone) =>
+          zone.kind === "liquidity" &&
+          zone.liquiditySide === "sell" &&
+          zone.startTime === 10 * 60_000 &&
+          (zone.pivotCount ?? 0) >= 3,
+      ),
+    ).toBe(false);
   });
 
   it("anchors bearish BOS order blocks to the lower high after the broken low", () => {

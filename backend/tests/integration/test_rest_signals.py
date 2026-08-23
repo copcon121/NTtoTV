@@ -197,3 +197,91 @@ def test_mgann_sweep_signals_replay_without_big_trade(env):
     assert signal["alertId"] == "a_mgann_no_bt"
     assert signal["bigTradeVolume"] == 0
     assert signal["barVolume"] == 500
+
+
+@pytest.mark.integration
+def test_mgann_break_ls_replay_applies_close_through_liquidity_filter(env):
+    client, cache = env
+    cache.upsert_alert(
+        AlertRecord(
+            id="a_mgann_liquidity",
+            profile_id="hieu",
+            symbol=_SYMBOL,
+            type=MGANN_BREAK_LS,
+            params={
+                "requireBigTrade": True,
+                "bigTradeThreshold": 70,
+                "timeframe": "1m",
+                "minVolume": 0,
+                "volumeLookback": 2,
+                "volumeMultiplier": 1,
+                "minSpreadTicks": 0,
+                "spreadLookback": 2,
+                "spreadMultiplier": 1,
+                "swingSize": 1,
+                "pivotLookbackBars": 120,
+                "minPivotCuts": 2,
+                "confirmationBars": 2,
+                "breakTicks": 0,
+                "filterLiquidity": True,
+                "liquidityAtrMargin": 4,
+                "liquiditySweepLookbackBars": 5,
+                "repeat": True,
+            },
+            enabled=True,
+            created_at=1,
+            updated_at=1,
+        )
+    )
+    rows = [
+        _bar(i, 95, 99, 91, 95, 10)
+        for i in range(10)
+    ]
+    sequence = [
+        (98, 100, 95, 98),
+        (96, 99, 94, 96),
+        (92, 94, 90, 92),
+        (93, 95, 91, 93),
+        (99, 100.2, 94, 99),
+        (96, 99, 93, 96),
+        (93, 94, 90.2, 93),
+        (94, 95, 91.2, 94),
+        (85.5, 91, 85, 85.5),
+        (92, 95, 88, 92),
+        (96, 101.5, 96, 101.3),
+    ]
+    rows.extend(
+        _bar(10 + index, open_, high, low, close, 10)
+        for index, (open_, high, low, close) in enumerate(sequence)
+    )
+    cache.upsert_bars(rows)
+    cache.upsert_big_trade(
+        BigTradeRecord(
+            symbol=_SYMBOL,
+            contract=_CONTRACT,
+            time=20 * _STEP + 10_000,
+            price=101,
+            volume=80,
+            side=Side.BUY,
+            trade_id=99,
+        )
+    )
+
+    resp = client.get(
+        "/api/signals/mgann-break-ls",
+        params={
+            "symbol": _SYMBOL,
+            "contract": _CONTRACT,
+            "tf": "1m",
+            "profileId": "hieu",
+            "from": 20 * _STEP,
+            "to": 20 * _STEP,
+            "warmupBars": 20,
+        },
+    )
+
+    assert resp.status_code == 200
+    signals = resp.json()["signals"]
+    assert len(signals) == 1
+    assert signals[0]["text"] == "Break L"
+    assert signals[0]["cutCount"] >= 2

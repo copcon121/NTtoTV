@@ -575,6 +575,9 @@ describe("IndicatorToggles", () => {
     fireEvent.click(screen.getByLabelText("SMC settings"));
     const swing = screen.getByLabelText("SMC swing length");
     const internal = screen.getByLabelText("SMC internal length");
+    const liquidityPool = screen.getByLabelText(
+      "SMC liquidity pool minimum swings",
+    );
     const structureLine = screen.getByLabelText("SMC structure line extend bars");
     const fvgLookback = screen.getByLabelText("SMC FVG threshold lookback");
     const fvgExtend = screen.getByLabelText("SMC FVG extend bars");
@@ -586,6 +589,7 @@ describe("IndicatorToggles", () => {
     fireEvent.blur(swing);
     fireEvent.change(internal, { target: { value: "3" } });
     fireEvent.blur(internal);
+    fireEvent.change(liquidityPool, { target: { value: "4" } });
     fireEvent.change(structureLine, { target: { value: "44" } });
     fireEvent.blur(structureLine);
     fireEvent.change(fvgLookback, { target: { value: "90" } });
@@ -601,6 +605,7 @@ describe("IndicatorToggles", () => {
 
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, swingLength: 21 });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, internalLength: 3 });
+    expect(onSmc).toHaveBeenCalledWith({ ...SMC, liquidityMinSwings: 4 });
     expect(onSmc).toHaveBeenCalledWith({
       ...SMC,
       structureLineExtendBars: 44,
