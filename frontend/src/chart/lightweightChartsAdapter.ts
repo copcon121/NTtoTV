@@ -341,6 +341,19 @@ const ORDER_LINE_COLORS: Record<OrderLineField | "entrySell", string> = {
   tpGc: "#0f766e",
 };
 
+const ORDER_LINE_OPACITY = {
+  normal: 0.34,
+  selected: 0.72,
+} as const;
+
+function colorWithAlpha(hex: string, alpha: number): string {
+  const value = hex.replace("#", "");
+  const red = Number.parseInt(value.slice(0, 2), 16);
+  const green = Number.parseInt(value.slice(2, 4), 16);
+  const blue = Number.parseInt(value.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
 /** EMA overlay line color (TradingView-style blue). */
 const EMA_LINE_COLOR = "#2962ff";
 
@@ -2148,10 +2161,16 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const color = this.orderLineColor(line);
     return {
       price: line.price,
-      color,
+      color: colorWithAlpha(
+        color,
+        selected ? ORDER_LINE_OPACITY.selected : ORDER_LINE_OPACITY.normal,
+      ),
       lineWidth: (selected ? 2 : 1) as 1 | 2,
       lineStyle: isEntry ? LineStyle.Solid : LineStyle.Dashed,
       axisLabelVisible: true,
+      // Keep the price tag legible while de-emphasising the line across the chart.
+      axisLabelColor: color,
+      axisLabelTextColor: "#ffffff",
       title: "",
     };
   }
@@ -2483,11 +2502,20 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const config = this.priceLineDragConfigs.get(kind);
     const line = config?.linesById.get(id);
     if (line === undefined) return;
+    const meta = config?.metaById.get(id);
     line.applyOptions({
       lineWidth: (selected ? (kind === "order" ? 2 : 3) : 1) as
         | 1
         | 2
         | 3,
+      ...(kind === "order" && meta !== undefined
+        ? {
+            color: colorWithAlpha(
+              meta.color,
+              selected ? ORDER_LINE_OPACITY.selected : ORDER_LINE_OPACITY.normal,
+            ),
+          }
+        : {}),
     });
   }
 
