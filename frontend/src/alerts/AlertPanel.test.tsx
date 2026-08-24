@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type AlertEventMessage } from "../socket/messages";
@@ -7,6 +7,7 @@ import { type Alert } from "./types";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 const alerts: Alert[] = [
@@ -473,6 +474,26 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     );
     rerender(<AlertPanel alerts={alerts} playSound={playSound} lastEvent={ev} />);
     expect(playSound).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-dismisses the toast when parent callbacks change during live renders", () => {
+    vi.useFakeTimers();
+    const ev = event();
+    const { rerender } = render(
+      <AlertPanel alerts={alerts} lastEvent={ev} onDelete={vi.fn()} />,
+    );
+    expect(screen.getByTestId("alert-toast")).toBeInTheDocument();
+
+    rerender(
+      <AlertPanel
+        alerts={alerts.filter((alert) => alert.id !== ev.alertId)}
+        lastEvent={ev}
+        onDelete={vi.fn()}
+      />,
+    );
+    act(() => vi.advanceTimersByTime(4_000));
+
+    expect(screen.queryByTestId("alert-toast")).not.toBeInTheDocument();
   });
 
   it("raises onTelegramSave with the notification config", () => {

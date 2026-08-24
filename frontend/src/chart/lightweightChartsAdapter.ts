@@ -328,10 +328,15 @@ export function chartContrastPalette(backgroundColor: string): ChartContrastPale
   };
 }
 
-/** Colors for alert level lines (Req 16.5): bright when enabled, dim when off. */
+/** Keep alert strokes subtle while preserving a readable price-axis badge. */
 const ALERT_LINE_COLORS = {
+  enabled: "rgba(224, 179, 65, 0.42)",
+  disabled: "rgba(224, 179, 65, 0.16)",
+};
+
+const ALERT_LABEL_COLORS = {
   enabled: "#e0b341",
-  disabled: "rgba(224, 179, 65, 0.35)",
+  disabled: "rgba(224, 179, 65, 0.48)",
 };
 
 const ORDER_LINE_COLORS: Record<OrderLineField | "entrySell", string> = {
@@ -2098,14 +2103,18 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   /** Shared price-line options for an alert line (light dashed style). */
-  private alertLineOptions(line: AlertLine, selected = false) {
+  private alertLineOptions(line: AlertLine, _selected = false) {
     const color = this.alertLineColor(line);
     return {
       price: line.price,
       color,
-      lineWidth: (selected ? 3 : 1) as 1 | 3,
+      lineWidth: 1 as const,
       lineStyle: LineStyle.Dashed,
       axisLabelVisible: true,
+      axisLabelColor:
+        line.enabled === false
+          ? ALERT_LABEL_COLORS.disabled
+          : ALERT_LABEL_COLORS.enabled,
       title: line.title ?? "",
     };
   }

@@ -316,7 +316,7 @@ const LEVEL_ALERT_TYPES = new Set<Alert["type"]>([
 
 /** Short axis label per level-based alert type. */
 const ALERT_LINE_TITLES: Record<string, string> = {
-  price_crosses_level: "cross",
+  price_crosses_level: "\u25B6",
   bar_closes_above: "close >",
   bar_closes_below: "close <",
 };

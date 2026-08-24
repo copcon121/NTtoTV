@@ -275,9 +275,17 @@ export function AlertPanel({
     if (lastEvent.alertType === "price_crosses_level") {
       onDelete?.(lastEvent.alertId);
     }
+  }, [lastEvent, onDelete, playSound]);
+
+  // Keep dismissal independent from parent callback identities. Live chart
+  // renders can recreate onDelete while this toast is visible; coupling that
+  // callback to this timer would cancel the timeout without scheduling a new
+  // one for an event that has already been handled.
+  useEffect(() => {
+    if (toast === null) return;
     const handle = setTimeout(() => setToast(null), toastMs);
     return () => clearTimeout(handle);
-  }, [lastEvent, onDelete, playSound, toastMs]);
+  }, [toast, toastMs]);
 
   // Whether the selected alert type uses a price `level`, a threshold, or the
   // dynamic SMC strategy's BigTrade threshold.
