@@ -14,6 +14,7 @@ from ..models.timestamp import CanonicalTimestamp
 __all__ = [
     "SmcBar",
     "SmcBreakEvent",
+    "SmcLiquidityBreakEvent",
     "SmcStrategyTrigger",
     "SmcExternalDetector",
     "SmcExternalBreakState",
@@ -44,6 +45,19 @@ class SmcBreakEvent:
     liquidity_swept: bool = False
     liquidity_count: int = 0
     liquidity_levels: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SmcLiquidityBreakEvent:
+    """A candle close that invalidates one confirmed liquidity pool."""
+
+    side: str
+    break_time: CanonicalTimestamp
+    close: float
+    top: float
+    bottom: float
+    pivot_count: int
+    pivot_levels: tuple[float, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,11 +149,13 @@ class SmcExternalDetector:
         self._swing_highs: list[_SwingPoint] = []
         self._swing_lows: list[_SwingPoint] = []
         self._liquidity_pools: list[_LiquidityPool] = []
+        self._last_liquidity_breaks: tuple[SmcLiquidityBreakEvent, ...] = ()
         self._swing_trend = 0
         self._bar_index = -1
         self._max_buffer = max(2_000, self._swing_length * 4 + 32)
 
     def update(self, bar: SmcBar) -> SmcBreakEvent | None:
+        self._last_liquidity_breaks = ()
         self._bar_index += 1
         self._highs.append(float(bar.high))
         self._lows.append(float(bar.low))
@@ -176,7 +192,7 @@ class SmcExternalDetector:
         # A structure update can register a new liquidity pool on this bar.
         # Evaluate close-through after registration, then enrich a CHoCH event
         # from the same close so live and historical replay use one rule.
-        self._update_liquidity_state(bar)
+        self._last_liquidity_breaks = tuple(self._update_liquidity_state(bar))
         if (
             event is not None
             and event.kind == "CHoCH"
@@ -198,6 +214,12 @@ class SmcExternalDetector:
                     liquidity_levels=liquidity[2],
                 )
         return event
+
+    @property
+    def liquidity_breaks(self) -> tuple[SmcLiquidityBreakEvent, ...]:
+        """Liquidity pools broken by the most recently processed closed bar."""
+
+        return self._last_liquidity_breaks
 
     def _process_structure(self, bar: SmcBar) -> SmcBreakEvent | None:
         length = self._swing_length
@@ -376,10 +398,13 @@ class SmcExternalDetector:
         if len(self._liquidity_pools) > 80:
             self._liquidity_pools = self._liquidity_pools[-80:]
 
-    def _update_liquidity_state(self, bar: SmcBar) -> None:
+    def _update_liquidity_state(
+        self, bar: SmcBar
+    ) -> list[SmcLiquidityBreakEvent]:
         if not self._liquidity_filter:
-            return
+            return []
         close = float(bar.close)
+        breaks: list[SmcLiquidityBreakEvent] = []
         for pool in self._liquidity_pools:
             if pool.broken:
                 continue
@@ -390,6 +415,17 @@ class SmcExternalDetector:
                     pool.broken = True
                     pool.broken_index = self._bar_index
                     pool.broken_time = bar.time
+                    breaks.append(
+                        SmcLiquidityBreakEvent(
+                            side=pool.side,
+                            break_time=bar.time,
+                            close=close,
+                            top=pool.top,
+                            bottom=pool.bottom,
+                            pivot_count=len(pool.pivot_indices),
+                            pivot_levels=pool.pivot_prices,
+                        )
+                    )
             else:
                 if close < pool.top:
                     pool.touched = True
@@ -397,6 +433,18 @@ class SmcExternalDetector:
                     pool.broken = True
                     pool.broken_index = self._bar_index
                     pool.broken_time = bar.time
+                    breaks.append(
+                        SmcLiquidityBreakEvent(
+                            side=pool.side,
+                            break_time=bar.time,
+                            close=close,
+                            top=pool.top,
+                            bottom=pool.bottom,
+                            pivot_count=len(pool.pivot_indices),
+                            pivot_levels=pool.pivot_prices,
+                        )
+                    )
+        return breaks
 
     def _liquidity_for_break(
         self, direction: int

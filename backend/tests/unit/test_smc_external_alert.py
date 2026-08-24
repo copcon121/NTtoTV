@@ -1,4 +1,5 @@
 from app.engines.alert_engine import (
+    LIQUIDITY_POOL_BREAK,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
     Alert,
     AlertEngine,
@@ -296,6 +297,89 @@ def test_liquidity_pool_honors_configurable_three_or_four_pivot_minimum():
         for pool in four_pivot_detector._liquidity_pools
         if pool.side == "sell"
     ] == []
+
+
+def test_standalone_liquidity_pool_break_alert_fires_on_close_through_ssl():
+    engine = AlertEngine()
+    engine.upsert(
+        Alert(
+            id="liquidity-break",
+            symbol=_SYMBOL,
+            type=LIQUIDITY_POOL_BREAK,
+            params={
+                "side": "both",
+                "swingSize": 1,
+                "pivotLookbackBars": 120,
+                "minPivotCuts": 2,
+                "liquidityAtrMargin": 4,
+                "repeat": True,
+            },
+        )
+    )
+    bars = [_bar(i, high=99, low=91, close=95) for i in range(10)]
+    sequence = [
+        (100, 90, 95),
+        (105, 94, 100),
+        (100, 96, 97),
+        (105, 97, 100),
+        (100, 90.1, 92),
+        (105, 94, 100),
+        (100, 90.2, 92),
+        (105, 94, 100),
+        (95, 75, 80),
+    ]
+    bars.extend(
+        _bar(10 + index, high=high, low=low, close=close, open_=close)
+        for index, (high, low, close) in enumerate(sequence)
+    )
+
+    events = _feed_bars(engine, bars)
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.alert_type == LIQUIDITY_POOL_BREAK
+    assert event.time == 18 * _STEP
+    assert event.price == 80
+    assert event.direction == -1
+    assert "Liquidity Pool Break SSL x2" in event.message
+    assert engine.evaluate(_bar_ctx(bars[-1])) == []
+
+
+def test_standalone_liquidity_pool_break_alert_respects_side_filter():
+    engine = AlertEngine()
+    engine.upsert(
+        Alert(
+            id="liquidity-break-bsl",
+            symbol=_SYMBOL,
+            type=LIQUIDITY_POOL_BREAK,
+            params={
+                "side": "bsl",
+                "swingSize": 1,
+                "pivotLookbackBars": 120,
+                "minPivotCuts": 2,
+                "liquidityAtrMargin": 4,
+                "repeat": True,
+            },
+        )
+    )
+    bars = [_bar(i, high=99, low=91, close=95) for i in range(10)]
+    sequence = [
+        (100, 90, 95),
+        (105, 94, 100),
+        (100, 96, 97),
+        (105, 97, 100),
+        (100, 90.1, 92),
+        (105, 94, 100),
+        (100, 90.2, 92),
+        (105, 94, 100),
+        (95, 75, 80),
+    ]
+    bars.extend(
+        _bar(10 + index, high=high, low=low, close=close, open_=close)
+        for index, (high, low, close) in enumerate(sequence)
+    )
+
+    assert _feed_bars(engine, bars) == []
 
 
 def test_mgann_live_filter_keeps_bos_but_rejects_unswept_choch():

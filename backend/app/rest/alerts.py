@@ -28,6 +28,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from ..engines.alert_engine import (
     ALERT_TYPES,
     LEVEL_ALERT_TYPES,
+    LIQUIDITY_POOL_BREAK,
     MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
     MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
     MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
@@ -191,6 +192,54 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         params["maxBars"] = SMC_DEFAULT_MAX_BARS
         params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
         params["retestToleranceTicks"] = SMC_DEFAULT_RETEST_TOLERANCE_TICKS
+    elif alert_type == LIQUIDITY_POOL_BREAK:
+        side = params.get("side", "both")
+        if side not in ("both", "bsl", "ssl"):
+            raise validation_error(
+                "'side' must be one of: both, bsl, ssl",
+                field="side",
+            )
+        timeframe = params.get("timeframe", "1m")
+        if timeframe != "1m":
+            raise validation_error(
+                "'timeframe' must be 1m",
+                field="timeframe",
+            )
+        for key in (
+            "swingSize",
+            "pivotLookbackBars",
+            "minPivotCuts",
+            "liquidityAtrMargin",
+        ):
+            _validate_optional_positive_number(params, key)
+        raw_min_pivots = params.get(
+            "minPivotCuts",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+        )
+        if isinstance(raw_min_pivots, bool) or float(raw_min_pivots) < 2:
+            raise validation_error(
+                "'minPivotCuts' must be at least 2",
+                field="minPivotCuts",
+            )
+        params["side"] = side
+        params["timeframe"] = "1m"
+        params["swingSize"] = _normalize_mgann_swing_size(
+            params,
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+        )
+        params["pivotLookbackBars"] = params.get(
+            "pivotLookbackBars",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+        )
+        params["minPivotCuts"] = int(raw_min_pivots)
+        params["liquidityAtrMargin"] = params.get(
+            "liquidityAtrMargin",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+        )
+        params["liquiditySweepLookbackBars"] = params.get(
+            "liquiditySweepLookbackBars",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
+        )
     elif alert_type == MGANN_FVG_RETEST:
         timeframe = params.get("timeframe", MGANN_FVG_RETEST_TIMEFRAME)
         if not isinstance(timeframe, str) or timeframe not in MGANN_FVG_RETEST_TIMEFRAMES:

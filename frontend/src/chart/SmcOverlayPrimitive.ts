@@ -13,9 +13,14 @@ import {
 
 import { type SmcLine, type SmcZone } from "./smc";
 
-export interface RenderableSmcZone extends Omit<SmcZone, "startTime" | "endTime"> {
+export interface RenderableSmcZone
+  extends Omit<
+    SmcZone,
+    "startTime" | "endTime" | "liquidityReferenceEndTime"
+  > {
   startTime: Time;
   endTime?: Time;
+  liquidityReferenceEndTime?: Time;
 }
 
 export interface RenderableSmcLine extends Omit<SmcLine, "startTime" | "endTime" | "labelTime"> {
@@ -31,6 +36,7 @@ interface ViewZone {
   yTop: Coordinate;
   yBottom: Coordinate;
   yLiquidityLine: Coordinate | null;
+  xLiquidityReferenceEnd: Coordinate | null;
 }
 
 interface ViewLine {
@@ -228,7 +234,20 @@ class SmcOverlayRenderer implements IPrimitivePaneRenderer {
           );
           ctx.beginPath();
           ctx.moveTo(horizontal.position, lineY);
-          ctx.lineTo(horizontal.position + horizontal.length, lineY);
+          const referenceEnd =
+            view.xLiquidityReferenceEnd === null
+              ? horizontal.position
+              : Math.round(
+                  (view.xLiquidityReferenceEnd as number) *
+                    scope.horizontalPixelRatio,
+                );
+          ctx.lineTo(
+            Math.max(
+              horizontal.position,
+              Math.min(horizontal.position + horizontal.length, referenceEnd),
+            ),
+            lineY,
+          );
           ctx.stroke();
         }
 
@@ -336,6 +355,17 @@ class SmcOverlayPaneView implements IPrimitivePaneView {
         zone.kind === "liquidity" && zone.liquidityLinePrice !== undefined
           ? series.priceToCoordinate(zone.liquidityLinePrice)
           : null;
+      const xLiquidityReferenceEnd =
+        zone.kind === "liquidity" &&
+        zone.liquidityReferenceEndTime !== undefined
+          ? coordinateForEndTime(
+              chart,
+              zone.startTime,
+              zone.liquidityReferenceEndTime,
+              x1,
+              estimate,
+            )
+          : null;
       if (x1 === null || x2 === null || yTop === null || yBottom === null) continue;
       const left = Math.min(x1 as number, x2 as number);
       const right = Math.max(x1 as number, x2 as number);
@@ -362,6 +392,14 @@ class SmcOverlayPaneView implements IPrimitivePaneView {
                 yLiquidityLine,
                 -VIEWPORT_OVERSCAN_PX,
                 paneHeight + VIEWPORT_OVERSCAN_PX,
+              ),
+        xLiquidityReferenceEnd:
+          xLiquidityReferenceEnd === null
+            ? null
+            : clampCoordinate(
+                xLiquidityReferenceEnd,
+                -VIEWPORT_OVERSCAN_PX,
+                paneWidth + VIEWPORT_OVERSCAN_PX,
               ),
       });
     }

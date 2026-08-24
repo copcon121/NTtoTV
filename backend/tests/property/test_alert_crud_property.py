@@ -33,6 +33,7 @@ from app.config import Settings
 from app.engines.alert_engine import (
     ALERT_TYPES,
     LEVEL_ALERT_TYPES,
+    LIQUIDITY_POOL_BREAK,
     MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
     MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
     MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
@@ -48,6 +49,8 @@ from app.engines.alert_engine import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
@@ -120,6 +123,20 @@ def _params_for(alert_type: str):
             params["level"] = draw(_numbers)
         elif alert_type in _THRESHOLD_TYPES:
             params["threshold"] = draw(_numbers)
+        elif alert_type == LIQUIDITY_POOL_BREAK:
+            params["side"] = draw(st.sampled_from(("both", "bsl", "ssl")))
+            params["timeframe"] = "1m"
+            params["swingSize"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE
+            params["pivotLookbackBars"] = (
+                MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS
+            )
+            params["minPivotCuts"] = draw(st.integers(min_value=2, max_value=20))
+            params["liquidityAtrMargin"] = (
+                MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN
+            )
+            params["liquiditySweepLookbackBars"] = (
+                MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS
+            )
         elif alert_type == SMC_EXTERNAL_BREAK_BIG_TRADE:
             params["bigTradeThreshold"] = draw(_positive_numbers)
             params["swingLength"] = SMC_DEFAULT_SWING_LENGTH

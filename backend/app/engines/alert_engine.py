@@ -85,6 +85,8 @@ from .mgann_big_trade_sweep import (
 from .smc_external import (
     SmcBar,
     SmcExternalBreakState,
+    SmcExternalDetector,
+    SmcLiquidityBreakEvent,
     SmcStrategyTrigger,
 )
 
@@ -97,6 +99,7 @@ __all__ = [
     "SMC_DEFAULT_RETEST_TOLERANCE_TICKS",
     "SMC_DEFAULT_SWING_LENGTH",
     "SMC_EXTERNAL_BREAK_BIG_TRADE",
+    "LIQUIDITY_POOL_BREAK",
     "MGANN_FVG_RETEST",
     "MGANN_FVG_RETEST_TIMEFRAME",
     "MGANN_FVG_RETEST_TIMEFRAMES",
@@ -138,6 +141,7 @@ VOLUME_DELTA_THRESHOLD = "volume_delta_threshold"
 BIG_TRADE_THRESHOLD = "big_trade_threshold"
 STACKED_IMBALANCE = "stacked_imbalance"
 SMC_EXTERNAL_BREAK_BIG_TRADE = "smc_external_break_big_trade"
+LIQUIDITY_POOL_BREAK = "liquidity_pool_break"
 MGANN_FVG_RETEST = "mgann_fvg_retest"
 MGANN_BREAK_LS = "mgann_break_ls"
 MGANN_SWEEP = "mgann_sweep"
@@ -162,6 +166,7 @@ ALERT_TYPES: frozenset[str] = frozenset(
         BIG_TRADE_THRESHOLD,
         STACKED_IMBALANCE,
         SMC_EXTERNAL_BREAK_BIG_TRADE,
+        LIQUIDITY_POOL_BREAK,
         MGANN_FVG_RETEST,
         MGANN_BREAK_LS,
         MGANN_SWEEP,
@@ -279,6 +284,21 @@ class _BarState:
     armed: bool = True
 
 
+@dataclass(slots=True)
+class _LiquidityPoolBreakState:
+    detector: SmcExternalDetector
+    last_bar_time: CanonicalTimestamp | None = None
+
+    def on_closed_bar(
+        self, bar: SmcBar
+    ) -> tuple[SmcLiquidityBreakEvent, ...]:
+        if self.last_bar_time is not None and bar.time <= self.last_bar_time:
+            return ()
+        self.last_bar_time = bar.time
+        self.detector.update(bar)
+        return self.detector.liquidity_breaks
+
+
 def _is_repeat_alert(alert: Alert) -> bool:
     """Whether a fired alert should stay enabled after emission."""
     return alert.params.get("repeat") is True
@@ -305,6 +325,7 @@ class AlertEngine:
         self._price_state: dict[str, _PriceCrossState] = {}
         self._bar_state: dict[str, _BarState] = {}
         self._smc_state: dict[str, SmcExternalBreakState] = {}
+        self._liquidity_break_state: dict[str, _LiquidityPoolBreakState] = {}
         self._mgann_fvg_state: dict[str, MgannFvgRetestState] = {}
         self._mgann_sweep_state: dict[str, MgannBigTradeSweepState] = {}
         if store is not None:
@@ -324,6 +345,7 @@ class AlertEngine:
         self._price_state.pop(alert.id, None)
         self._bar_state.pop(alert.id, None)
         self._smc_state.pop(alert.id, None)
+        self._liquidity_break_state.pop(alert.id, None)
         self._mgann_fvg_state.pop(alert.id, None)
         self._mgann_sweep_state.pop(alert.id, None)
         if self._store is not None:
@@ -354,6 +376,7 @@ class AlertEngine:
         self._price_state.pop(alert_id, None)
         self._bar_state.pop(alert_id, None)
         self._smc_state.pop(alert_id, None)
+        self._liquidity_break_state.pop(alert_id, None)
         self._mgann_fvg_state.pop(alert_id, None)
         self._mgann_sweep_state.pop(alert_id, None)
         if self._store is not None:
@@ -367,6 +390,7 @@ class AlertEngine:
         alert.enabled = enabled
         if enabled:
             self._smc_state.pop(alert.id, None)
+            self._liquidity_break_state.pop(alert.id, None)
             self._mgann_fvg_state.pop(alert.id, None)
             self._mgann_sweep_state.pop(alert.id, None)
             self._warm_smc_alert(alert)
@@ -438,6 +462,8 @@ class AlertEngine:
             return self._eval_stacked_imbalance(alert, ctx)
         if alert.type == SMC_EXTERNAL_BREAK_BIG_TRADE:
             return self._eval_smc_external_break_big_trade(alert, ctx)
+        if alert.type == LIQUIDITY_POOL_BREAK:
+            return self._eval_liquidity_pool_break(alert, ctx)
         if alert.type == MGANN_FVG_RETEST:
             return self._eval_mgann_fvg_retest(alert, ctx)
         if alert.type in MGANN_BREAK_LS_TYPES:
@@ -564,6 +590,45 @@ class AlertEngine:
         if trigger is None:
             return None
         return self._make_smc_event(alert, ctx, trigger)
+
+    # -- standalone liquidity_pool_break -------------------------------------
+
+    def _eval_liquidity_pool_break(
+        self, alert: Alert, ctx: MarketContext
+    ) -> list[AlertEvent]:
+        if ctx.bar_tf not in (None, "1m") or not ctx.bar_closed:
+            return []
+        bar = self._smc_bar_from_context(ctx)
+        if bar is None:
+            return []
+
+        configured_side = self._liquidity_break_side(alert)
+        breaks = self._liquidity_break_state_for(alert).on_closed_bar(bar)
+        events: list[AlertEvent] = []
+        for trigger in breaks:
+            label = "BSL" if trigger.side == "buy" else "SSL"
+            if configured_side != "both" and configured_side != label.lower():
+                continue
+            level = trigger.top if trigger.side == "buy" else trigger.bottom
+            direction = 1 if trigger.side == "buy" else -1
+            events.append(
+                AlertEvent(
+                    alert_id=alert.id,
+                    alert_type=alert.type,
+                    symbol=ctx.symbol,
+                    contract=ctx.contract,
+                    time=trigger.break_time,
+                    price=trigger.close,
+                    message=(
+                        f"{alert.symbol} Liquidity Pool Break {label} "
+                        f"x{trigger.pivot_count} @ {_fmt_num(level)}"
+                    ),
+                    level=level,
+                    profile_id=alert.profile_id,
+                    direction=direction,
+                )
+            )
+        return events
 
     # -- mgann_fvg_retest -----------------------------------------------------
 
@@ -778,6 +843,15 @@ class AlertEngine:
             self._smc_state[alert.id] = state
         return state
 
+    def _liquidity_break_state_for(
+        self, alert: Alert
+    ) -> _LiquidityPoolBreakState:
+        state = self._liquidity_break_state.get(alert.id)
+        if state is None:
+            state = self._new_liquidity_break_state(alert)
+            self._liquidity_break_state[alert.id] = state
+        return state
+
 
     def _mgann_fvg_state_for(self, alert: Alert) -> MgannFvgRetestState:
         state = self._mgann_fvg_state.get(alert.id)
@@ -794,6 +868,9 @@ class AlertEngine:
         return state
 
     def _warm_smc_alert(self, alert: Alert) -> None:
+        if alert.type == LIQUIDITY_POOL_BREAK:
+            self._warm_liquidity_break_alert(alert)
+            return
         if alert.type == MGANN_FVG_RETEST:
             self._warm_mgann_fvg_alert(alert)
             return
@@ -836,6 +913,35 @@ class AlertEngine:
 
         if break_state is not None:
             self._smc_state[alert.id] = break_state
+
+    def _warm_liquidity_break_alert(self, alert: Alert) -> None:
+        state = self._new_liquidity_break_state(alert)
+        if self._store is not None:
+            limit = max(
+                _SMC_WARMUP_MIN_BARS,
+                self._mgann_sweep_pivot_lookback_bars(alert)
+                + self._mgann_sweep_swing_size(alert) * 4
+                + 40,
+            )
+            for rec in self._store.read_bars(
+                alert.symbol,
+                alert.symbol,
+                "1m",
+                limit=limit,
+            ):
+                if not rec.closed:
+                    continue
+                state.on_closed_bar(
+                    SmcBar(
+                        time=rec.time,
+                        open=rec.open,
+                        high=rec.high,
+                        low=rec.low,
+                        close=rec.close,
+                        volume=rec.volume,
+                    )
+                )
+        self._liquidity_break_state[alert.id] = state
 
 
     def _warm_mgann_fvg_alert(self, alert: Alert) -> None:
@@ -891,6 +997,22 @@ class AlertEngine:
             max_bars=self._smc_max_bars(alert),
             pause_on_inside_bars=self._smc_pause_on_inside_bars(alert),
             retest_tolerance_ticks=self._smc_retest_tolerance_ticks(alert),
+        )
+
+    def _new_liquidity_break_state(
+        self, alert: Alert
+    ) -> _LiquidityPoolBreakState:
+        return _LiquidityPoolBreakState(
+            detector=SmcExternalDetector(
+                self._mgann_sweep_swing_size(alert),
+                liquidity_filter=True,
+                liquidity_min_pivots=self._mgann_sweep_min_pivot_cuts(alert),
+                liquidity_lookback_bars=self._mgann_sweep_pivot_lookback_bars(alert),
+                liquidity_atr_margin=self._mgann_sweep_liquidity_atr_margin(alert),
+                liquidity_sweep_lookback_bars=self._mgann_sweep_liquidity_sweep_lookback_bars(
+                    alert
+                ),
+            )
         )
 
 
@@ -995,6 +1117,11 @@ class AlertEngine:
         except (TypeError, ValueError):
             return 50.0
         return threshold if threshold > 0 else 50.0
+
+    @staticmethod
+    def _liquidity_break_side(alert: Alert) -> str:
+        side = alert.params.get("side", "both")
+        return side if side in ("both", "bsl", "ssl") else "both"
 
 
     def _mgann_fvg_warmup_bars(self, alert: Alert) -> int:

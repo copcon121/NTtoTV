@@ -11,6 +11,7 @@ export type AlertType =
   | "volume_delta_threshold"
   | "big_trade_threshold"
   | "stacked_imbalance"
+  | "liquidity_pool_break"
   | "smc_external_break_big_trade"
   | "mgann_fvg_retest"
   | "mgann_break_ls"

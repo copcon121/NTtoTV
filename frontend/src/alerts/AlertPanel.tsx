@@ -67,6 +67,7 @@ export interface AlertPanelProps {
 
 const DEFAULT_TOAST_MS = 4000;
 const SMC_EXTERNAL_BREAK_TYPE: AlertType = "smc_external_break_big_trade";
+const LIQUIDITY_POOL_BREAK_TYPE: AlertType = "liquidity_pool_break";
 const MGANN_FVG_RETEST_TYPE: AlertType = "mgann_fvg_retest";
 const MGANN_BREAK_LS_TYPE: AlertType = "mgann_break_ls";
 const MGANN_SWEEP_TYPE: AlertType = "mgann_sweep";
@@ -92,6 +93,9 @@ const MGANN_SWEEP_CONFIRMATION_BARS = 2;
 const MGANN_SWEEP_BREAK_TICKS = 0;
 const MGANN_SWEEP_LIQUIDITY_ATR_MARGIN = 4;
 const MGANN_SWEEP_LIQUIDITY_LOOKBACK_BARS = 5;
+const LIQUIDITY_POOL_BREAK_SWING_SIZE = 5;
+const LIQUIDITY_POOL_BREAK_LOOKBACK_BARS = 120;
+const LIQUIDITY_POOL_BREAK_ATR_MARGIN = 4;
 
 function defaultPlaySound(): void {
   // Best-effort: a short beep via the Web Audio API when available. Wrapped so
@@ -133,6 +137,10 @@ function isMgannFvgRetestType(type: AlertType): boolean {
   return type === MGANN_FVG_RETEST_TYPE;
 }
 
+function isLiquidityPoolBreakType(type: AlertType): boolean {
+  return type === LIQUIDITY_POOL_BREAK_TYPE;
+}
+
 function isMgannBreakType(type: AlertType): boolean {
   return (
     type === MGANN_BREAK_LS_TYPE ||
@@ -166,6 +174,15 @@ function mgannTimeframeLabel(value: unknown): string {
 }
 
 function alertDescription(alert: Alert): string {
+  if (alert.type === LIQUIDITY_POOL_BREAK_TYPE) {
+    const side = String(alert.params.side ?? "both").toUpperCase();
+    const sideLabel = side === "BOTH" ? "BSL/SSL" : side;
+    const swings = String(
+      alert.params.minPivotCuts ?? MGANN_SWEEP_MIN_PIVOT_CUTS,
+    );
+    const repeat = alert.params.repeat === true ? " (repeat)" : "";
+    return `Liquidity Pool Break ${sideLabel} x${swings}${repeat}`;
+  }
   if (alert.type === SMC_EXTERNAL_BREAK_TYPE) {
     const threshold = alert.params.bigTradeThreshold;
     const repeat = alert.params.repeat === true ? " (repeat)" : "";
@@ -234,6 +251,10 @@ export function AlertPanel({
   const [newMgannLiquidityMinSwings, setNewMgannLiquidityMinSwings] = useState(
     String(MGANN_SWEEP_MIN_PIVOT_CUTS),
   );
+  const [newLiquidityBreakSide, setNewLiquidityBreakSide] = useState("both");
+  const [newLiquidityBreakMinSwings, setNewLiquidityBreakMinSwings] = useState(
+    String(MGANN_SWEEP_MIN_PIVOT_CUTS),
+  );
   const [newMgannSweepVolumeMultiplier, setNewMgannSweepVolumeMultiplier] =
     useState(MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT);
   const [newMgannSweepSpreadMultiplier, setNewMgannSweepSpreadMultiplier] =
@@ -264,12 +285,15 @@ export function AlertPanel({
   const isThresholdType = isThresholdAlertType(newType);
   const isExternalBreakType = newType === SMC_EXTERNAL_BREAK_TYPE;
   const isMgannFvgRetest = newType === MGANN_FVG_RETEST_TYPE;
+  const isLiquidityPoolBreak = isLiquidityPoolBreakType(newType);
   const isMgannSweep = isMgannBreakType(newType);
   const isMgannSweepWithBigTrade = isMgannSweep && newMgannRequireBigTrade;
-  const showNumericInput = !isMgannFvgRetest && !isMgannSweep;
+  const showNumericInput =
+    !isMgannFvgRetest && !isLiquidityPoolBreak && !isMgannSweep;
   const showRepeat =
     isThresholdType ||
     isSmcAlertType(newType) ||
+    isLiquidityPoolBreak ||
     isMgannFvgRetest ||
     isMgannSweep;
   const paramKey = isLevelType ? "level" : "threshold";
@@ -279,6 +303,11 @@ export function AlertPanel({
     setNewType(type);
     if (type === SMC_EXTERNAL_BREAK_TYPE) {
       setNewValue((value) => value || SMC_EXTERNAL_BIG_TRADE_DEFAULT);
+      setNewRepeat(true);
+    } else if (type === LIQUIDITY_POOL_BREAK_TYPE) {
+      setNewValue("");
+      setNewLiquidityBreakSide("both");
+      setNewLiquidityBreakMinSwings(String(MGANN_SWEEP_MIN_PIVOT_CUTS));
       setNewRepeat(true);
     } else if (type === MGANN_FVG_RETEST_TYPE) {
       setNewValue("");
@@ -297,6 +326,27 @@ export function AlertPanel({
 
   const submitCreate = (e: FormEvent) => {
     e.preventDefault();
+    if (isLiquidityPoolBreak) {
+      const rawMinSwings = Number(newLiquidityBreakMinSwings);
+      if (!Number.isFinite(rawMinSwings)) return;
+      const minPivotCuts = Math.min(
+        MGANN_SWEEP_MAX_PIVOT_CUTS,
+        Math.max(MGANN_SWEEP_MIN_PIVOT_CUTS, Math.round(rawMinSwings)),
+      );
+      onCreate?.({
+        type: LIQUIDITY_POOL_BREAK_TYPE,
+        params: {
+          side: newLiquidityBreakSide,
+          timeframe: "1m",
+          swingSize: LIQUIDITY_POOL_BREAK_SWING_SIZE,
+          pivotLookbackBars: LIQUIDITY_POOL_BREAK_LOOKBACK_BARS,
+          minPivotCuts,
+          liquidityAtrMargin: LIQUIDITY_POOL_BREAK_ATR_MARGIN,
+          repeat: newRepeat,
+        },
+      });
+      return;
+    }
     if (isMgannFvgRetest) {
       onCreate?.({
         type: newType,
@@ -431,6 +481,9 @@ export function AlertPanel({
           <option value="bar_closes_below">Bar closes below</option>
           <option value="volume_delta_threshold">Volume delta ≥</option>
           <option value="big_trade_threshold">Big trade ≥</option>
+          <option value="liquidity_pool_break">
+            Liquidity Pool Break
+          </option>
           <option value="smc_external_break_big_trade">
             External BOS/CHoCH + BigTrade
           </option>
@@ -460,6 +513,31 @@ export function AlertPanel({
             <option value="5m">M5</option>
             <option value="1m">M1</option>
           </select>
+        )}
+        {isLiquidityPoolBreak && (
+          <>
+            <select
+              aria-label="Liquidity pool break side"
+              value={newLiquidityBreakSide}
+              onChange={(e) => setNewLiquidityBreakSide(e.target.value)}
+            >
+              <option value="both">BSL + SSL</option>
+              <option value="bsl">BSL only</option>
+              <option value="ssl">SSL only</option>
+            </select>
+            <label className="alert-param">
+              <span>Liquidity pool</span>
+              <input
+                type="number"
+                min={MGANN_SWEEP_MIN_PIVOT_CUTS}
+                max={MGANN_SWEEP_MAX_PIVOT_CUTS}
+                step={1}
+                aria-label="Liquidity break minimum swings"
+                value={newLiquidityBreakMinSwings}
+                onChange={(e) => setNewLiquidityBreakMinSwings(e.target.value)}
+              />
+            </label>
+          </>
         )}
         {isMgannSweep && (
           <>

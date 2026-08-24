@@ -56,15 +56,20 @@ describe("SMC overlay", () => {
       ...settings,
       liquidityMinSwings: 3,
     });
-    expect(threeSwingOverlay.zones).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "liquidity",
-          liquiditySide: "sell",
-          startTime: 14 * 60_000,
-          pivotCount: 3,
-        }),
-      ]),
+    const threeSwingPool = threeSwingOverlay.zones.find(
+      (zone) =>
+        zone.kind === "liquidity" &&
+        zone.liquiditySide === "sell" &&
+        zone.startTime === 14 * 60_000,
+    );
+    expect(threeSwingPool).toEqual(
+      expect.objectContaining({
+        pivotCount: 3,
+        liquidityReferenceEndTime: 18 * 60_000,
+      }),
+    );
+    expect(threeSwingPool?.endTime).toBeGreaterThan(
+      threeSwingPool?.liquidityReferenceEndTime ?? Number.POSITIVE_INFINITY,
     );
 
     const fourSwingOverlay = computeSmcOverlay(rows, {
@@ -79,6 +84,27 @@ describe("SMC overlay", () => {
           zone.startTime === 14 * 60_000,
       ),
     ).toBe(false);
+
+    const rowsWithFourthTouch = [
+      ...rows,
+      bar(20 * 60_000, 92, 100, 90.25, 92),
+      bar(21 * 60_000, 100, 105, 94, 100),
+    ];
+    const extendedPool = computeSmcOverlay(rowsWithFourthTouch, {
+      ...settings,
+      liquidityMinSwings: 3,
+    }).zones.find(
+      (zone) =>
+        zone.kind === "liquidity" &&
+        zone.liquiditySide === "sell" &&
+        zone.startTime === 14 * 60_000,
+    );
+    expect(extendedPool).toEqual(
+      expect.objectContaining({
+        pivotCount: 4,
+        liquidityReferenceEndTime: 20 * 60_000,
+      }),
+    );
   });
 
   it("detects a bullish BOS and keeps the created bullish order block active", () => {

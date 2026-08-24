@@ -94,6 +94,7 @@ export interface SmcZone {
   pdKind?: SmcPremiumDiscountKind;
   liquiditySide?: SmcLiquiditySide;
   liquidityLinePrice?: number;
+  liquidityReferenceEndTime?: number;
   pivotCount?: number;
   touched?: boolean;
   swept?: boolean;
@@ -1623,6 +1624,10 @@ function liquidityToZone(
     direction: pool.side === "buy" ? -1 : 1,
     liquiditySide: pool.side,
     liquidityLinePrice: pool.linePrice,
+    // Keep the thin reference line local to the equal-high/equal-low touches.
+    // The liquidity box has its own lifecycle and may continue until a later
+    // close-through invalidates it.
+    liquidityReferenceEndTime: Math.max(...pool.pivotTimestamps),
     pivotCount: count,
     touched: pool.touched,
     swept: pool.swept,

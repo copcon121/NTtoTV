@@ -2751,13 +2751,21 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.smcMarkers.setMarkers(markers);
 
     const zones: RenderableSmcZone[] = this.smcOverlay.zones.map(
-      ({ startTime, endTime, ...zone }) => ({
+      ({ startTime, endTime, liquidityReferenceEndTime, ...zone }) => ({
         ...zone,
         startTime: toUtcTimestamp(startTime, this.displayTimeOffsetMs),
         ...(endTime !== undefined
           ? {
               endTime: toUtcTimestamp(
                 endTime,
+                this.displayTimeOffsetMs,
+              ) as UTCTimestamp,
+            }
+          : {}),
+        ...(liquidityReferenceEndTime !== undefined
+          ? {
+              liquidityReferenceEndTime: toUtcTimestamp(
+                liquidityReferenceEndTime,
                 this.displayTimeOffsetMs,
               ) as UTCTimestamp,
             }

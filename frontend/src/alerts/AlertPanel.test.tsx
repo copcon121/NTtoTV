@@ -97,6 +97,21 @@ const alerts: Alert[] = [
     },
     enabled: true,
   },
+  {
+    id: "a_8",
+    symbol: "GC",
+    type: "liquidity_pool_break",
+    params: {
+      side: "both",
+      timeframe: "1m",
+      swingSize: 5,
+      pivotLookbackBars: 120,
+      minPivotCuts: 3,
+      liquidityAtrMargin: 4,
+      repeat: true,
+    },
+    enabled: true,
+  },
 ];
 
 function event(overrides: Partial<AlertEventMessage> = {}): AlertEventMessage {
@@ -127,6 +142,9 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     );
     expect(screen.getByTestId("alert-a_6")).toHaveTextContent(
       "mGann Break L/S, BT > 70, vol x2, spread x2 (repeat)",
+    );
+    expect(screen.getByTestId("alert-a_8")).toHaveTextContent(
+      "Liquidity Pool Break BSL/SSL x3 (repeat)",
     );
     expect(screen.getByTestId("alert-a_7")).toHaveTextContent(
       "mGann Break L/S, vol x2, spread x2 (repeat)",
@@ -387,6 +405,41 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
         }),
       }),
     );
+  });
+
+  it("creates a standalone liquidity pool break alert", () => {
+    const onCreate = vi.fn();
+    render(<AlertPanel alerts={alerts} onCreate={onCreate} />);
+    fireEvent.change(screen.getByLabelText("Alert type"), {
+      target: { value: "liquidity_pool_break" },
+    });
+
+    expect(screen.getByLabelText("Liquidity pool break side")).toHaveValue(
+      "both",
+    );
+    expect(screen.getByLabelText("Liquidity break minimum swings")).toHaveValue(
+      2,
+    );
+    fireEvent.change(screen.getByLabelText("Liquidity pool break side"), {
+      target: { value: "ssl" },
+    });
+    fireEvent.change(screen.getByLabelText("Liquidity break minimum swings"), {
+      target: { value: "4" },
+    });
+    fireEvent.click(screen.getByText("Add"));
+
+    expect(onCreate).toHaveBeenCalledWith({
+      type: "liquidity_pool_break",
+      params: {
+        side: "ssl",
+        timeframe: "1m",
+        swingSize: 5,
+        pivotLookbackBars: 120,
+        minPivotCuts: 4,
+        liquidityAtrMargin: 4,
+        repeat: true,
+      },
+    });
   });
 
   it("on alert_event shows a toast and plays a sound without an event log", () => {

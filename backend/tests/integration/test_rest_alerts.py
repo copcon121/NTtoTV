@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.app import create_app
 from app.config import Settings
 from app.engines.alert_engine import (
+    LIQUIDITY_POOL_BREAK,
     MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
     MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
     MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
@@ -36,6 +37,54 @@ from app.engines.alert_engine import (
 )
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
+
+
+@pytest.mark.integration
+def test_rest_alerts_accept_liquidity_pool_break_options(tmp_path: Path):
+    settings = Settings(
+        data_dir=tmp_path,
+        supported_symbols=("GC",),
+        gc_candidate_contracts=("GC 08-26",),
+    )
+    cache = CacheStore(tmp_path / "app.sqlite")
+    app = create_app()
+    app.state.contract_state = ContractStateStore(cache, settings=settings)
+    try:
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/alerts",
+                json={
+                    "symbol": "GC",
+                    "type": LIQUIDITY_POOL_BREAK,
+                    "params": {
+                        "side": "ssl",
+                        "minPivotCuts": 4,
+                        "repeat": True,
+                    },
+                },
+            )
+
+            assert created.status_code == 201
+            body = created.json()
+            assert body["type"] == LIQUIDITY_POOL_BREAK
+            assert body["params"]["side"] == "ssl"
+            assert body["params"]["timeframe"] == "1m"
+            assert body["params"]["minPivotCuts"] == 4
+            assert (
+                body["params"]["swingSize"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE
+            )
+            assert (
+                body["params"]["pivotLookbackBars"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS
+            )
+            assert (
+                body["params"]["liquidityAtrMargin"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN
+            )
+            assert body["params"]["repeat"] is True
+    finally:
+        cache.close()
 
 
 @pytest.mark.integration
