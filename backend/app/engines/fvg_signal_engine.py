@@ -1,9 +1,9 @@
 """FVG Signal Grader engine.
 
 This ports the timing signal from the local NinjaTrader ``FvgSignalGrader``
-into backend state.  The engine is intentionally 1m-only and keeps its own
-footprint state so the chart footprint panel can keep different display
-settings without changing FVG grading.
+into backend state. The engine is intentionally 1m-only and consumes finalized
+footprint bars from the active market-data source (Bookmap primary, NT native
+fallback), keeping grading independent from chart display settings.
 """
 
 from __future__ import annotations
@@ -151,9 +151,9 @@ class FvgSignalEngine:
         return events
 
     def on_preview_trade(self, t: NormalizedTrade) -> list[FvgSignalUpdate]:
-        """Use a live trade only to preview the right bar of a native FVG.
+        """Use a live trade only to preview the right bar of an FVG.
 
-        Closed/native bars remain authoritative for footprints and confirmed
+        Closed footprint bars remain authoritative for footprints and confirmed
         signals. This path only maintains a provisional current bar's OHLC so a
         three-bar FVG can color the source bar while the right bar is forming.
         """
@@ -207,12 +207,11 @@ class FvgSignalEngine:
         rows: Iterable[tuple[float, int, int]],
         emit_clear: bool = True,
     ) -> list[FvgSignalUpdate]:
-        """Fold one finalized native footprint bar and grade the prior bar.
+        """Fold one finalized footprint bar and grade the prior bar.
 
-        The native chart bridge posts complete M1 bars after NinjaTrader closes
-        them. Once a right bar arrives, the source bar is final, so this path
-        emits only confirmed/clear updates; provisional source-bar colors are
-        handled separately by :meth:`on_preview_trade`.
+        Once a right bar arrives, the source bar is final, so this path emits
+        only confirmed/clear updates; provisional source-bar colors are handled
+        separately by :meth:`on_preview_trade`.
         """
         state = self._state.setdefault(contract, _ContractState())
         bucket = self.bucket_start(time)
@@ -220,7 +219,7 @@ class FvgSignalEngine:
             return []
         if state.order and bucket == state.order[-1]:
             was_provisional = bucket in state.provisional_times
-            state.bars[bucket] = self._bar_from_native(
+            state.bars[bucket] = self._bar_from_footprint(
                 bucket, open, high, low, close, rows
             )
             state.current = state.bars[bucket]
@@ -236,7 +235,7 @@ class FvgSignalEngine:
                 emit_clear_without_preview=emit_clear,
             )
 
-        bar = self._bar_from_native(bucket, open, high, low, close, rows)
+        bar = self._bar_from_footprint(bucket, open, high, low, close, rows)
         state.current = bar
         state.bars[bucket] = bar
         state.order.append(bucket)
@@ -302,7 +301,7 @@ class FvgSignalEngine:
             return [self._clear_update(symbol, contract, source_time)]
         return []
 
-    def _bar_from_native(
+    def _bar_from_footprint(
         self,
         time: int,
         open: float,

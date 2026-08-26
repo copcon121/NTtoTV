@@ -34,12 +34,7 @@ from app.engines.alert_engine import (
     ALERT_TYPES,
     LEVEL_ALERT_TYPES,
     LIQUIDITY_POOL_BREAK,
-    MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
-    MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
-    MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
-    MGANN_FVG_DEFAULT_SWING_SIZE,
-    MGANN_FVG_RETEST,
-    MGANN_FVG_RETEST_TIMEFRAME,
+    LIQUIDITY_POOL_BREAK_TIMEFRAMES,
     MGANN_BREAK_LS,
     MGANN_SWEEP,
     MGANN_BIG_TRADE_SWEEP,
@@ -125,7 +120,9 @@ def _params_for(alert_type: str):
             params["threshold"] = draw(_numbers)
         elif alert_type == LIQUIDITY_POOL_BREAK:
             params["side"] = draw(st.sampled_from(("both", "bsl", "ssl")))
-            params["timeframe"] = "1m"
+            params["timeframe"] = draw(
+                st.sampled_from(LIQUIDITY_POOL_BREAK_TIMEFRAMES)
+            )
             params["swingSize"] = MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE
             params["pivotLookbackBars"] = (
                 MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS
@@ -145,12 +142,6 @@ def _params_for(alert_type: str):
             params["maxBars"] = SMC_DEFAULT_MAX_BARS
             params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
             params["retestToleranceTicks"] = SMC_DEFAULT_RETEST_TOLERANCE_TICKS
-        elif alert_type == MGANN_FVG_RETEST:
-            params["timeframe"] = MGANN_FVG_RETEST_TIMEFRAME
-            params["swingSize"] = MGANN_FVG_DEFAULT_SWING_SIZE
-            params["maxZoneAge"] = MGANN_FVG_DEFAULT_MAX_ZONE_AGE
-            params["minGapTicks"] = MGANN_FVG_DEFAULT_MIN_GAP_TICKS
-            params["retestToleranceTicks"] = MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS
         elif alert_type == MGANN_BREAK_LS:
             params["requireBigTrade"] = draw(st.booleans())
             params["bigTradeThreshold"] = draw(_positive_numbers)

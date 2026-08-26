@@ -49,16 +49,6 @@ from ..models.timestamp import CanonicalTimestamp
 from ..storage.cache_store import CacheStore
 from ..storage.records import AlertEventRecord, AlertRecord
 from .breakout_box_engine import BreakoutBoxEvent
-from .mgann_fvg_retest import (
-    MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
-    MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
-    MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
-    MGANN_FVG_DEFAULT_SWING_SIZE,
-    MGANN_FVG_RETEST_TIMEFRAME,
-    MGANN_FVG_RETEST_TIMEFRAMES,
-    MgannFvgRetestBar,
-    MgannFvgRetestState,
-)
 from .mgann_big_trade_sweep import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
@@ -100,13 +90,8 @@ __all__ = [
     "SMC_DEFAULT_SWING_LENGTH",
     "SMC_EXTERNAL_BREAK_BIG_TRADE",
     "LIQUIDITY_POOL_BREAK",
-    "MGANN_FVG_RETEST",
-    "MGANN_FVG_RETEST_TIMEFRAME",
-    "MGANN_FVG_RETEST_TIMEFRAMES",
-    "MGANN_FVG_DEFAULT_SWING_SIZE",
-    "MGANN_FVG_DEFAULT_MAX_ZONE_AGE",
-    "MGANN_FVG_DEFAULT_MIN_GAP_TICKS",
-    "MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS",
+    "LIQUIDITY_POOL_BREAK_TIMEFRAME",
+    "LIQUIDITY_POOL_BREAK_TIMEFRAMES",
     "MGANN_BREAK_LS",
     "MGANN_SWEEP",
     "MGANN_BIG_TRADE_SWEEP",
@@ -142,7 +127,8 @@ BIG_TRADE_THRESHOLD = "big_trade_threshold"
 STACKED_IMBALANCE = "stacked_imbalance"
 SMC_EXTERNAL_BREAK_BIG_TRADE = "smc_external_break_big_trade"
 LIQUIDITY_POOL_BREAK = "liquidity_pool_break"
-MGANN_FVG_RETEST = "mgann_fvg_retest"
+LIQUIDITY_POOL_BREAK_TIMEFRAME = "1m"
+LIQUIDITY_POOL_BREAK_TIMEFRAMES = ("1m", "5m")
 MGANN_BREAK_LS = "mgann_break_ls"
 MGANN_SWEEP = "mgann_sweep"
 MGANN_BIG_TRADE_SWEEP = "mgann_big_trade_sweep"
@@ -167,7 +153,6 @@ ALERT_TYPES: frozenset[str] = frozenset(
         STACKED_IMBALANCE,
         SMC_EXTERNAL_BREAK_BIG_TRADE,
         LIQUIDITY_POOL_BREAK,
-        MGANN_FVG_RETEST,
         MGANN_BREAK_LS,
         MGANN_SWEEP,
         MGANN_BIG_TRADE_SWEEP,
@@ -326,7 +311,6 @@ class AlertEngine:
         self._bar_state: dict[str, _BarState] = {}
         self._smc_state: dict[str, SmcExternalBreakState] = {}
         self._liquidity_break_state: dict[str, _LiquidityPoolBreakState] = {}
-        self._mgann_fvg_state: dict[str, MgannFvgRetestState] = {}
         self._mgann_sweep_state: dict[str, MgannBigTradeSweepState] = {}
         if store is not None:
             for rec in store.read_alerts(profile_id=None):
@@ -346,7 +330,6 @@ class AlertEngine:
         self._bar_state.pop(alert.id, None)
         self._smc_state.pop(alert.id, None)
         self._liquidity_break_state.pop(alert.id, None)
-        self._mgann_fvg_state.pop(alert.id, None)
         self._mgann_sweep_state.pop(alert.id, None)
         if self._store is not None:
             from ..models.timestamp import now_ms
@@ -377,7 +360,6 @@ class AlertEngine:
         self._bar_state.pop(alert_id, None)
         self._smc_state.pop(alert_id, None)
         self._liquidity_break_state.pop(alert_id, None)
-        self._mgann_fvg_state.pop(alert_id, None)
         self._mgann_sweep_state.pop(alert_id, None)
         if self._store is not None:
             self._store.delete_alert(alert_id)
@@ -391,7 +373,6 @@ class AlertEngine:
         if enabled:
             self._smc_state.pop(alert.id, None)
             self._liquidity_break_state.pop(alert.id, None)
-            self._mgann_fvg_state.pop(alert.id, None)
             self._mgann_sweep_state.pop(alert.id, None)
             self._warm_smc_alert(alert)
         self._persist_enabled(alert)
@@ -464,8 +445,6 @@ class AlertEngine:
             return self._eval_smc_external_break_big_trade(alert, ctx)
         if alert.type == LIQUIDITY_POOL_BREAK:
             return self._eval_liquidity_pool_break(alert, ctx)
-        if alert.type == MGANN_FVG_RETEST:
-            return self._eval_mgann_fvg_retest(alert, ctx)
         if alert.type in MGANN_BREAK_LS_TYPES:
             return self._eval_mgann_big_trade_sweep(alert, ctx)
         return None
@@ -596,7 +575,11 @@ class AlertEngine:
     def _eval_liquidity_pool_break(
         self, alert: Alert, ctx: MarketContext
     ) -> list[AlertEvent]:
-        if ctx.bar_tf not in (None, "1m") or not ctx.bar_closed:
+        timeframe = self._liquidity_break_timeframe(alert)
+        if (
+            (ctx.bar_tf or LIQUIDITY_POOL_BREAK_TIMEFRAME) != timeframe
+            or not ctx.bar_closed
+        ):
             return []
         bar = self._smc_bar_from_context(ctx)
         if bar is None:
@@ -620,67 +603,13 @@ class AlertEngine:
                     time=trigger.break_time,
                     price=trigger.close,
                     message=(
-                        f"{alert.symbol} Liquidity Pool Break {label} "
+                        f"{alert.symbol} {_timeframe_label(timeframe)} "
+                        f"Liquidity Pool Break {label} "
                         f"x{trigger.pivot_count} @ {_fmt_num(level)}"
                     ),
                     level=level,
                     profile_id=alert.profile_id,
                     direction=direction,
-                )
-            )
-        return events
-
-    # -- mgann_fvg_retest -----------------------------------------------------
-
-    def _eval_mgann_fvg_retest(
-        self, alert: Alert, ctx: MarketContext
-    ) -> list[AlertEvent]:
-        timeframe = self._mgann_fvg_timeframe(alert)
-        if ctx.bar_tf != timeframe:
-            return []
-        if (
-            not ctx.bar_closed
-            or ctx.bar_time is None
-            or ctx.bar_open is None
-            or ctx.bar_high is None
-            or ctx.bar_low is None
-            or ctx.bar_close is None
-        ):
-            return []
-
-        state = self._mgann_fvg_state_for(alert)
-        triggers = state.on_closed_bar(
-            MgannFvgRetestBar(
-                time=ctx.bar_time,
-                open=float(ctx.bar_open),
-                high=float(ctx.bar_high),
-                low=float(ctx.bar_low),
-                close=float(ctx.bar_close),
-                volume=int(ctx.bar_volume or 0),
-            )
-        )
-        events: list[AlertEvent] = []
-        for trigger in triggers:
-            direction = "bullish" if trigger.direction == 1 else "bearish"
-            tf_label = _timeframe_label(timeframe)
-            message = (
-                f"{alert.symbol} {tf_label} {direction} FVG retest by mGann wave "
-                f"@ {trigger.price:g} zone "
-                f"{trigger.zone_bottom:g}-{trigger.zone_top:g} "
-                f"(wave {trigger.fvg_wave_index + 1} -> "
-                f"{trigger.retest_wave_index + 1})"
-            )
-            events.append(
-                AlertEvent(
-                    alert_id=alert.id,
-                    alert_type=alert.type,
-                    symbol=ctx.symbol,
-                    contract=ctx.contract,
-                    time=ctx.time,
-                    price=trigger.price,
-                    message=message,
-                    level=(trigger.zone_top + trigger.zone_bottom) / 2,
-                    profile_id=alert.profile_id,
                 )
             )
         return events
@@ -852,14 +781,6 @@ class AlertEngine:
             self._liquidity_break_state[alert.id] = state
         return state
 
-
-    def _mgann_fvg_state_for(self, alert: Alert) -> MgannFvgRetestState:
-        state = self._mgann_fvg_state.get(alert.id)
-        if state is None:
-            state = self._new_mgann_fvg_state(alert)
-            self._mgann_fvg_state[alert.id] = state
-        return state
-
     def _mgann_sweep_state_for(self, alert: Alert) -> MgannBigTradeSweepState:
         state = self._mgann_sweep_state.get(alert.id)
         if state is None:
@@ -870,9 +791,6 @@ class AlertEngine:
     def _warm_smc_alert(self, alert: Alert) -> None:
         if alert.type == LIQUIDITY_POOL_BREAK:
             self._warm_liquidity_break_alert(alert)
-            return
-        if alert.type == MGANN_FVG_RETEST:
-            self._warm_mgann_fvg_alert(alert)
             return
         if alert.type in MGANN_BREAK_LS_TYPES:
             self._warm_mgann_sweep_alert(alert)
@@ -926,7 +844,7 @@ class AlertEngine:
             for rec in self._store.read_bars(
                 alert.symbol,
                 alert.symbol,
-                "1m",
+                self._liquidity_break_timeframe(alert),
                 limit=limit,
             ):
                 if not rec.closed:
@@ -943,29 +861,6 @@ class AlertEngine:
                 )
         self._liquidity_break_state[alert.id] = state
 
-
-    def _warm_mgann_fvg_alert(self, alert: Alert) -> None:
-        state = self._new_mgann_fvg_state(alert)
-        if self._store is not None:
-            for rec in self._store.read_bars(
-                alert.symbol,
-                alert.symbol,
-                self._mgann_fvg_timeframe(alert),
-                limit=self._mgann_fvg_warmup_bars(alert),
-            ):
-                if not rec.closed:
-                    continue
-                state.on_closed_bar(
-                    MgannFvgRetestBar(
-                        time=rec.time,
-                        open=rec.open,
-                        high=rec.high,
-                        low=rec.low,
-                        close=rec.close,
-                        volume=rec.volume,
-                    )
-                )
-        self._mgann_fvg_state[alert.id] = state
 
     def _warm_mgann_sweep_alert(self, alert: Alert) -> None:
         state = self._new_mgann_sweep_state(alert)
@@ -1013,15 +908,6 @@ class AlertEngine:
                     alert
                 ),
             )
-        )
-
-
-    def _new_mgann_fvg_state(self, alert: Alert) -> MgannFvgRetestState:
-        return MgannFvgRetestState(
-            swing_size=self._mgann_fvg_swing_size(alert),
-            max_zone_age=self._mgann_fvg_max_zone_age(alert),
-            min_gap_ticks=self._mgann_fvg_min_gap_ticks(alert),
-            retest_tolerance_ticks=self._mgann_fvg_retest_tolerance_ticks(alert),
         )
 
     def _new_mgann_sweep_state(self, alert: Alert) -> MgannBigTradeSweepState:
@@ -1123,51 +1009,12 @@ class AlertEngine:
         side = alert.params.get("side", "both")
         return side if side in ("both", "bsl", "ssl") else "both"
 
-
-    def _mgann_fvg_warmup_bars(self, alert: Alert) -> int:
-        max_zone_age = self._mgann_fvg_max_zone_age(alert)
-        if max_zone_age <= 0:
-            return max(2_000, self._mgann_fvg_swing_size(alert) * 8 + 40)
-        return max(
-            max_zone_age + 80,
-            self._mgann_fvg_swing_size(alert) * 8 + 40,
-        )
-
     @staticmethod
-    def _mgann_fvg_swing_size(alert: Alert) -> int:
-        return _mgann_swing_size_param(
-            alert.params.get("swingSize"),
-            MGANN_FVG_DEFAULT_SWING_SIZE,
-        )
-
-    @staticmethod
-    def _mgann_fvg_max_zone_age(alert: Alert) -> int:
-        return _nonnegative_int_param(
-            alert.params.get("maxZoneAge"),
-            MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
-        )
-
-    @staticmethod
-    def _mgann_fvg_min_gap_ticks(alert: Alert) -> int:
-        return _nonnegative_int_param(
-            alert.params.get("minGapTicks"),
-            MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
-        )
-
-    @staticmethod
-    def _mgann_fvg_retest_tolerance_ticks(alert: Alert) -> int:
-        return _nonnegative_int_param(
-            alert.params.get("retestToleranceTicks"),
-            MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
-        )
-
-    @staticmethod
-    def _mgann_fvg_timeframe(alert: Alert) -> str:
-        raw = alert.params.get("timeframe", MGANN_FVG_RETEST_TIMEFRAME)
-        if isinstance(raw, str) and raw in MGANN_FVG_RETEST_TIMEFRAMES:
+    def _liquidity_break_timeframe(alert: Alert) -> str:
+        raw = alert.params.get("timeframe", LIQUIDITY_POOL_BREAK_TIMEFRAME)
+        if isinstance(raw, str) and raw in LIQUIDITY_POOL_BREAK_TIMEFRAMES:
             return raw
-        return MGANN_FVG_RETEST_TIMEFRAME
-
+        return LIQUIDITY_POOL_BREAK_TIMEFRAME
     def _mgann_sweep_warmup_bars(self, alert: Alert) -> int:
         return max(
             500,

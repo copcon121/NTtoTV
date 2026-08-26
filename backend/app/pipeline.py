@@ -38,7 +38,7 @@ import asyncio
 import inspect
 import logging
 import math
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
@@ -223,6 +223,7 @@ class Pipeline:
         volume_delta: VolumeDeltaEngine | None = None,
         fvg_signal: FvgSignalEngine | None = None,
         native_fvg_signal: FvgSignalEngine | None = None,
+        native_fvg_seeded: set[tuple[str, str]] | None = None,
         big_trade: BigTradeEngine | None = None,
         breakout_box: BreakoutBoxEngine | None = None,
         alert_engine: AlertEngine | None = None,
@@ -276,6 +277,9 @@ class Pipeline:
         self._source_footprints = {"bookmap": FootprintEngine()}
         self._fvg = fvg_signal or FvgSignalEngine()
         self._native_fvg_signal = native_fvg_signal
+        self._native_fvg_seeded = (
+            native_fvg_seeded if native_fvg_seeded is not None else set()
+        )
         self._enable_tick_fvg_signal = enable_tick_fvg_signal
         self._bt = big_trade or BigTradeEngine(dedupe_repeated_timestamp_runs=True)
         self._source_big_trades: dict[str, BigTradeEngine | BookmapBigTradeEngine] = {
@@ -749,11 +753,16 @@ class Pipeline:
             async with self._derived_source_lock:
                 if self._active_feed != "bookmap":
                     return
+                bookmap_fvg_updates = self._grade_bookmap_fvg(
+                    update,
+                    bookmap_fp,
+                    snapshot=snapshot,
+                )
                 await asyncio.to_thread(
                     self._persist_derived_batch,
                     updates,
                     bookmap_vds,
-                    [],
+                    bookmap_fvg_updates,
                     [],
                     [] if bookmap_fp is None else [bookmap_fp],
                     bookmap_fp is not None,
@@ -764,6 +773,8 @@ class Pipeline:
                     await self._enqueue(OutboundEvent.from_message(delta_update))
                 if bookmap_fp is not None:
                     await self._enqueue(OutboundEvent.from_message(bookmap_fp))
+                for fvg_update in bookmap_fvg_updates:
+                    await self._enqueue(OutboundEvent.from_message(fvg_update))
             if not snapshot:
                 await self._evaluate_bookmap_bar_alerts(
                     updates,
@@ -926,6 +937,131 @@ class Pipeline:
         volume = sum(row.bid + row.ask for row in footprint.rows)
         return prices_match and volume == bar.volume
 
+    def _grade_bookmap_fvg(
+        self,
+        bar_update: BarUpdate,
+        footprint_update: FootprintUpdate | None,
+        *,
+        snapshot: bool,
+    ) -> list[FvgSignalUpdate]:
+        """Grade one authoritative closed Bookmap M1 footprint bar."""
+        engine = self._native_fvg_signal
+        if (
+            engine is None
+            or snapshot
+            or not bar_update.closed
+            or bar_update.tf != FOOTPRINT_TIMEFRAME
+            or footprint_update is None
+        ):
+            return []
+
+        catchup_updates = self._seed_shared_fvg_engine(
+            symbol=bar_update.symbol,
+            contract=bar_update.contract,
+            before_time_ms=bar_update.bar.time,
+        )
+        bar = bar_update.bar
+        live_updates = engine.on_closed_bar(
+            symbol=bar_update.symbol,
+            contract=bar_update.contract,
+            time=bar.time,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            rows=[(row.price, row.bid, row.ask) for row in footprint_update.rows],
+            emit_clear=True,
+        )
+        return [*catchup_updates, *live_updates]
+
+    def _seed_shared_fvg_engine(
+        self,
+        *,
+        symbol: str,
+        contract: str,
+        before_time_ms: int,
+    ) -> list[FvgSignalUpdate]:
+        """Hydrate the shared grader and return missed confirmed signals.
+
+        The latest cached signal is not a processing checkpoint: a quiet grader
+        can legitimately go many bars without a match. Replaying up to 3,000
+        recent finalized bars both restores engine state and repairs the signal
+        gap left while the former NT-only source was offline.
+        """
+        engine = self._native_fvg_signal
+        seed_key = (symbol, contract)
+        if engine is None or seed_key in self._native_fvg_seeded:
+            return []
+
+        existing = self._cache.read_fvg_signals(
+            symbol,
+            contract,
+            FOOTPRINT_TIMEFRAME,
+            limit=1,
+        )
+        persist_after = existing[-1].time if existing else -1
+        replay_from = (
+            max(0, persist_after - 30 * 60_000)
+            if persist_after >= 0
+            else None
+        )
+
+        bars = self._cache.read_bars(
+            symbol,
+            contract,
+            FOOTPRINT_TIMEFRAME,
+            replay_from,
+            before_time_ms - 1,
+            3_000,
+        )
+        levels_by_time: dict[int, list[tuple[float, int, int]]] = defaultdict(list)
+        if bars:
+            levels = self._cache.read_footprint_levels_range(
+                symbol,
+                contract,
+                FOOTPRINT_TIMEFRAME,
+                bars[0].time,
+                bars[-1].time,
+            )
+            for level in levels:
+                levels_by_time[level.time].append(
+                    (level.price, level.bid_volume, level.ask_volume)
+                )
+
+        catchup_updates: list[FvgSignalUpdate] = []
+        for bar in bars:
+            if not bar.closed:
+                continue
+            rows = levels_by_time.get(bar.time)
+            if not rows:
+                continue
+            updates = engine.on_closed_bar(
+                symbol=symbol,
+                contract=contract,
+                time=bar.time,
+                open=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                rows=rows,
+                emit_clear=False,
+            )
+            catchup_updates.extend(
+                update
+                for update in updates
+                if update.phase == "confirmed"
+                and update.pulse != 0
+                and update.time > persist_after
+            )
+        self._native_fvg_seeded.add(seed_key)
+        if catchup_updates:
+            logger.info(
+                "FVG grader recovered %s Bookmap signals after %s",
+                len(catchup_updates),
+                persist_after,
+            )
+        return catchup_updates
+
     # -- engine fan-out --------------------------------------------------------
 
     async def _run_trade_engines(self, trade: NormalizedTrade, *, source: str) -> None:
@@ -967,15 +1103,17 @@ class Pipeline:
                     closed_footprint = prev_fp
             source_fp_update = footprint_engine.on_trade(trade)
 
-        # 3) Tick FVG remains internal for breakout/FVG confluence. Confirmed
-        # FVG cache rows come only from finalized NT native bars; the shared
-        # native engine can stream provisional source-bar colors while the
-        # right bar is forming.
+        # 3) Legacy NT tick FVG remains internal for breakout/FVG confluence.
+        # The shared grader confirms from authoritative Bookmap footprint bars
+        # and uses active Bookmap trades only for provisional source-bar color.
+        # When Bookmap is unavailable, finalized NT native bars drive the same
+        # shared engine through the HTTP fallback route.
         raw_fvg_updates = self._fvg.on_trade(trade) if source == "nt" else []
         fvg_updates = raw_fvg_updates if self._enable_tick_fvg_signal else []
         native_fvg_preview_updates: list[FvgSignalUpdate] = []
         if (
-            source == "nt"
+            source == "bookmap"
+            and self._active_feed == "bookmap"
             and self._native_fvg_signal is not None
             and not self._enable_tick_fvg_signal
         ):
@@ -1085,9 +1223,9 @@ class Pipeline:
                 fvg_confirmed_level = u.level
                 fvg_confirmed_direction = u.direction
 
-        # FVG remains NT-owned even while Bookmap is the selected market-data
-        # feed, so preserve its independent persistence/preview path when this
-        # trade came from an inactive NT source.
+        # Preserve the legacy injected tick-FVG path for tests/replay. Shared
+        # Bookmap grader previews are active-source-only and never leak from an
+        # inactive feed.
         if not active:
             await asyncio.to_thread(
                 self._persist_derived_batch, [], [], fvg_updates, []
@@ -1098,8 +1236,6 @@ class Pipeline:
                 except Exception as exc:
                     logger.warning("analyst event enqueue failed: %s", exc)
             for update in fvg_updates:
-                await self._enqueue(OutboundEvent.from_message(update))
-            for update in native_fvg_preview_updates:
                 await self._enqueue(OutboundEvent.from_message(update))
         # 6) Alerts: last-trade-price crossings + per-bar / big-trade conditions.
         if active and self._active_feed == source:

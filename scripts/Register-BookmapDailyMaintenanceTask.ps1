@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$TaskName = "NTtoTV Bookmap Daily Maintenance",
-    [string]$UtcTime = "04:30"
+    [string]$UtcPlus7Time = "04:30"
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,22 +17,28 @@ if (-not (Test-Path -LiteralPath $maintenanceScript)) {
 
 $timeZone = Get-TimeZone
 if ($timeZone.BaseUtcOffset -ne [TimeSpan]::Zero -or $timeZone.SupportsDaylightSavingTime) {
-    throw "The Windows time zone must remain UTC for an exact daily UTC trigger. Current zone: $($timeZone.Id)"
+    throw "The Windows time zone must remain UTC so the UTC+7 maintenance time can be converted exactly. Current zone: $($timeZone.Id)"
 }
 
 $parsedTime = [TimeSpan]::Zero
-if (-not [TimeSpan]::TryParseExact($UtcTime, "hh\:mm", [Globalization.CultureInfo]::InvariantCulture, [ref]$parsedTime)) {
-    throw "UtcTime must use HH:mm format, for example 04:30."
+if (-not [TimeSpan]::TryParseExact($UtcPlus7Time, "hh\:mm", [Globalization.CultureInfo]::InvariantCulture, [ref]$parsedTime)) {
+    throw "UtcPlus7Time must use HH:mm format, for example 04:30."
 }
 if ($parsedTime.TotalHours -ge 24) {
-    throw "UtcTime must be within one day."
+    throw "UtcPlus7Time must be within one day."
+}
+
+$utcPlus7Offset = [TimeSpan]::FromHours(7)
+$triggerUtcTime = $parsedTime.Subtract($utcPlus7Offset)
+if ($triggerUtcTime -lt [TimeSpan]::Zero) {
+    $triggerUtcTime = $triggerUtcTime.Add([TimeSpan]::FromDays(1))
 }
 
 $action = New-ScheduledTaskAction `
     -Execute $powershell `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$maintenanceScript`"" `
     -WorkingDirectory $repoRoot
-$trigger = New-ScheduledTaskTrigger -Daily -At ([DateTime]::Today.Add($parsedTime))
+$trigger = New-ScheduledTaskTrigger -Daily -At ([DateTime]::Today.Add($triggerUtcTime))
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $principal = New-ScheduledTaskPrincipal `
     -UserId $identity `
@@ -48,7 +54,7 @@ $settings = New-ScheduledTaskSettingsSet `
 
 Register-ScheduledTask `
     -TaskName $TaskName `
-    -Description "Restart Bookmap, clear disposable cache/recordings, and verify the NTtoTV Bookmap source daily at $UtcTime UTC." `
+    -Description "Restart Bookmap, clear disposable cache/recordings, and verify the NTtoTV Bookmap source daily at $UtcPlus7Time UTC+7 ($($triggerUtcTime.ToString('hh\:mm')) UTC)." `
     -Action $action `
     -Trigger $trigger `
     -Principal $principal `
@@ -62,7 +68,9 @@ $info = Get-ScheduledTaskInfo -TaskName $TaskName
     State = $task.State
     RunAs = $task.Principal.UserId
     LogonType = $task.Principal.LogonType
+    TargetTimeUtcPlus7 = $UtcPlus7Time
     TriggerUtc = $task.Triggers[0].StartBoundary
     NextRunTimeUtc = $info.NextRunTime.ToUniversalTime().ToString("o")
+    NextRunTimeUtcPlus7 = $info.NextRunTime.ToUniversalTime().Add($utcPlus7Offset).ToString("yyyy-MM-dd HH:mm:ss 'UTC+7'")
     Script = $maintenanceScript
 }

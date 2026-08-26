@@ -210,6 +210,8 @@ def test_native_realtime_orderflow_is_ignored_while_bookmap_is_primary(tmp_path)
         assert response.status_code == 200
         assert response.json()["ignored"] == "inactive_market_source"
         assert response.json()["orderFlowAccepted"] is False
+        assert response.json()["fvgSignals"] == 0
+        assert runtime.native_fvg_seeded == set()
         assert cache.read_volume_delta(_SYMBOL, _ACTIVE, "1m", limit=1) == []
         assert cache.read_footprint_bars(_SYMBOL, _ACTIVE, "1m", limit=1) == []
         assert not any(
@@ -224,6 +226,8 @@ def test_native_realtime_orderflow_is_ignored_while_bookmap_is_primary(tmp_path)
             historical = client.post("/api/nt/native-bar", json=payload)
         assert historical.status_code == 200
         assert historical.json()["orderFlowAccepted"] is False
+        assert historical.json()["fvgSignals"] == 0
+        assert runtime.native_fvg_seeded == set()
         assert cache.read_volume_delta(_SYMBOL, _ACTIVE, "1m", limit=1) == []
         assert cache.read_footprint_bars(_SYMBOL, _ACTIVE, "1m", limit=1) == []
     finally:

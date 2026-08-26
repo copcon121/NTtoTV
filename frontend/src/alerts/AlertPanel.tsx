@@ -68,12 +68,11 @@ export interface AlertPanelProps {
 const DEFAULT_TOAST_MS = 4000;
 const SMC_EXTERNAL_BREAK_TYPE: AlertType = "smc_external_break_big_trade";
 const LIQUIDITY_POOL_BREAK_TYPE: AlertType = "liquidity_pool_break";
-const MGANN_FVG_RETEST_TYPE: AlertType = "mgann_fvg_retest";
 const MGANN_BREAK_LS_TYPE: AlertType = "mgann_break_ls";
 const MGANN_SWEEP_TYPE: AlertType = "mgann_sweep";
 const MGANN_BIG_TRADE_SWEEP_TYPE: AlertType = "mgann_big_trade_sweep";
 const SMC_EXTERNAL_BIG_TRADE_DEFAULT = "50";
-const MGANN_FVG_DEFAULT_TIMEFRAME = "5m";
+const LIQUIDITY_POOL_BREAK_DEFAULT_TIMEFRAME = "1m";
 const MGANN_SWEEP_BIG_TRADE_DEFAULT = "70";
 const MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT = "2";
 const MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT = "2";
@@ -82,7 +81,6 @@ const SMC_LOOKAHEAD_BARS = 5;
 const SMC_MAX_BARS = 20;
 const SMC_PAUSE_ON_INSIDE_BARS = true;
 const SMC_RETEST_TOLERANCE_TICKS = 50;
-const MGANN_FVG_SWING_SIZE = 5;
 const MGANN_SWEEP_VOLUME_LOOKBACK = 20;
 const MGANN_SWEEP_SPREAD_LOOKBACK = 20;
 const MGANN_SWEEP_SWING_SIZE = 5;
@@ -133,10 +131,6 @@ function isSmcAlertType(type: AlertType): boolean {
   return type === SMC_EXTERNAL_BREAK_TYPE;
 }
 
-function isMgannFvgRetestType(type: AlertType): boolean {
-  return type === MGANN_FVG_RETEST_TYPE;
-}
-
 function isLiquidityPoolBreakType(type: AlertType): boolean {
   return type === LIQUIDITY_POOL_BREAK_TYPE;
 }
@@ -158,40 +152,30 @@ function mgannBreakRequiresBigTrade(alert: Alert): boolean {
 function alertInputLabel(type: AlertType): string {
   if (isLevelAlertType(type)) return "Alert level";
   if (isSmcAlertType(type)) return "BigTrade threshold";
-  if (isMgannFvgRetestType(type)) return "mGann FVG timeframe";
   return "Alert threshold";
 }
 
 function alertInputPlaceholder(type: AlertType): string {
   if (isLevelAlertType(type)) return "level";
   if (isSmcAlertType(type)) return "BT threshold";
-  if (isMgannFvgRetestType(type)) return "";
   return "threshold";
-}
-
-function mgannTimeframeLabel(value: unknown): string {
-  return value === "1m" ? "M1" : "M5";
 }
 
 function alertDescription(alert: Alert): string {
   if (alert.type === LIQUIDITY_POOL_BREAK_TYPE) {
+    const timeframe = alert.params.timeframe === "5m" ? "M5" : "M1";
     const side = String(alert.params.side ?? "both").toUpperCase();
     const sideLabel = side === "BOTH" ? "BSL/SSL" : side;
     const swings = String(
       alert.params.minPivotCuts ?? MGANN_SWEEP_MIN_PIVOT_CUTS,
     );
     const repeat = alert.params.repeat === true ? " (repeat)" : "";
-    return `Liquidity Pool Break ${sideLabel} x${swings}${repeat}`;
+    return `${timeframe} Liquidity Pool Break ${sideLabel} x${swings}${repeat}`;
   }
   if (alert.type === SMC_EXTERNAL_BREAK_TYPE) {
     const threshold = alert.params.bigTradeThreshold;
     const repeat = alert.params.repeat === true ? " (repeat)" : "";
     return `External BOS/CHoCH, BT > ${String(threshold)}${repeat}`;
-  }
-  if (alert.type === MGANN_FVG_RETEST_TYPE) {
-    const repeat = alert.params.repeat === true ? " (repeat)" : "";
-    const timeframe = mgannTimeframeLabel(alert.params.timeframe);
-    return `${timeframe} FVG retest by mGann wave${repeat}`;
   }
   if (isMgannBreakType(alert.type)) {
     const repeat = alert.params.repeat === true ? " (repeat)" : "";
@@ -243,15 +227,15 @@ export function AlertPanel({
   const [newType, setNewType] = useState<AlertType>("price_crosses_level");
   const [newValue, setNewValue] = useState("");
   const [newRepeat, setNewRepeat] = useState(false);
-  const [newMgannTimeframe, setNewMgannTimeframe] = useState(
-    MGANN_FVG_DEFAULT_TIMEFRAME,
-  );
   const [newMgannRequireBigTrade, setNewMgannRequireBigTrade] = useState(false);
   const [newMgannFilterLiquidity, setNewMgannFilterLiquidity] = useState(true);
   const [newMgannLiquidityMinSwings, setNewMgannLiquidityMinSwings] = useState(
     String(MGANN_SWEEP_MIN_PIVOT_CUTS),
   );
   const [newLiquidityBreakSide, setNewLiquidityBreakSide] = useState("both");
+  const [newLiquidityBreakTimeframe, setNewLiquidityBreakTimeframe] = useState(
+    LIQUIDITY_POOL_BREAK_DEFAULT_TIMEFRAME,
+  );
   const [newLiquidityBreakMinSwings, setNewLiquidityBreakMinSwings] = useState(
     String(MGANN_SWEEP_MIN_PIVOT_CUTS),
   );
@@ -292,17 +276,15 @@ export function AlertPanel({
   const isLevelType = isLevelAlertType(newType);
   const isThresholdType = isThresholdAlertType(newType);
   const isExternalBreakType = newType === SMC_EXTERNAL_BREAK_TYPE;
-  const isMgannFvgRetest = newType === MGANN_FVG_RETEST_TYPE;
   const isLiquidityPoolBreak = isLiquidityPoolBreakType(newType);
   const isMgannSweep = isMgannBreakType(newType);
   const isMgannSweepWithBigTrade = isMgannSweep && newMgannRequireBigTrade;
   const showNumericInput =
-    !isMgannFvgRetest && !isLiquidityPoolBreak && !isMgannSweep;
+    !isLiquidityPoolBreak && !isMgannSweep;
   const showRepeat =
     isThresholdType ||
     isSmcAlertType(newType) ||
     isLiquidityPoolBreak ||
-    isMgannFvgRetest ||
     isMgannSweep;
   const paramKey = isLevelType ? "level" : "threshold";
   const hasWebPushPublicKey = Boolean(webPush?.publicKey);
@@ -315,11 +297,8 @@ export function AlertPanel({
     } else if (type === LIQUIDITY_POOL_BREAK_TYPE) {
       setNewValue("");
       setNewLiquidityBreakSide("both");
+      setNewLiquidityBreakTimeframe(LIQUIDITY_POOL_BREAK_DEFAULT_TIMEFRAME);
       setNewLiquidityBreakMinSwings(String(MGANN_SWEEP_MIN_PIVOT_CUTS));
-      setNewRepeat(true);
-    } else if (type === MGANN_FVG_RETEST_TYPE) {
-      setNewValue("");
-      setNewMgannTimeframe(MGANN_FVG_DEFAULT_TIMEFRAME);
       setNewRepeat(true);
     } else if (isMgannBreakType(type)) {
       setNewMgannRequireBigTrade(type === MGANN_BIG_TRADE_SWEEP_TYPE);
@@ -345,22 +324,11 @@ export function AlertPanel({
         type: LIQUIDITY_POOL_BREAK_TYPE,
         params: {
           side: newLiquidityBreakSide,
-          timeframe: "1m",
+          timeframe: newLiquidityBreakTimeframe,
           swingSize: LIQUIDITY_POOL_BREAK_SWING_SIZE,
           pivotLookbackBars: LIQUIDITY_POOL_BREAK_LOOKBACK_BARS,
           minPivotCuts,
           liquidityAtrMargin: LIQUIDITY_POOL_BREAK_ATR_MARGIN,
-          repeat: newRepeat,
-        },
-      });
-      return;
-    }
-    if (isMgannFvgRetest) {
-      onCreate?.({
-        type: newType,
-        params: {
-          timeframe: newMgannTimeframe,
-          swingSize: MGANN_FVG_SWING_SIZE,
           repeat: newRepeat,
         },
       });
@@ -495,9 +463,6 @@ export function AlertPanel({
           <option value="smc_external_break_big_trade">
             External BOS/CHoCH + BigTrade
           </option>
-          <option value="mgann_fvg_retest">
-            FVG retest by mGann
-          </option>
           <option value="mgann_break_ls">
             mGann Break L/S
           </option>
@@ -512,16 +477,6 @@ export function AlertPanel({
             onChange={(e) => setNewValue(e.target.value)}
           />
         )}
-        {isMgannFvgRetest && (
-          <select
-            aria-label={alertInputLabel(newType)}
-            value={newMgannTimeframe}
-            onChange={(e) => setNewMgannTimeframe(e.target.value)}
-          >
-            <option value="5m">M5</option>
-            <option value="1m">M1</option>
-          </select>
-        )}
         {isLiquidityPoolBreak && (
           <>
             <select
@@ -532,6 +487,14 @@ export function AlertPanel({
               <option value="both">BSL + SSL</option>
               <option value="bsl">BSL only</option>
               <option value="ssl">SSL only</option>
+            </select>
+            <select
+              aria-label="Liquidity pool break timeframe"
+              value={newLiquidityBreakTimeframe}
+              onChange={(e) => setNewLiquidityBreakTimeframe(e.target.value)}
+            >
+              <option value="1m">M1</option>
+              <option value="5m">M5</option>
             </select>
             <label className="alert-param">
               <span>Liquidity pool</span>

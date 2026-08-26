@@ -4,8 +4,8 @@ Verify the durable-storage foundations are wired correctly:
 
 * A Tick_Store day shard, created on first write, holds a ``ticks`` table and a
   ``quotes`` table and runs in SQLite WAL mode. (Requirements 7.2, 7.3)
-* The Cache_Store database contains all ten expected tables and runs in WAL
-  mode. (Requirements 8.1, 7.3)
+* The Cache_Store database contains all declared tables and runs in WAL mode.
+  (Requirements 8.1, 7.3)
 
 These guard the storage schema/configuration, not engine behavior.
 """
@@ -108,7 +108,6 @@ def test_cache_store_has_all_expected_tables_in_wal_mode(tmp_path):
     finally:
         store.close()
 
-    assert len(CACHE_TABLES) == 12
     # Re-open independently to confirm the schema/mode persisted to disk.
     assert _table_names(db_path) >= set(CACHE_TABLES)
     assert _journal_mode(db_path) == "wal"

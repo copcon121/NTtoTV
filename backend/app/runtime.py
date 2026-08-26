@@ -121,6 +121,7 @@ class AppRuntime:
             settings=s,
             symbol=self._symbol,
             native_fvg_signal=self._native_fvg,
+            native_fvg_seeded=self._native_fvg_seeded,
             basis_engine=self._basis_engine,
             analyst_event_sink=(
                 None if self._poi_scanner is None else self._poi_scanner.enqueue_latest

@@ -29,10 +29,8 @@ from ..engines.alert_engine import (
     ALERT_TYPES,
     LEVEL_ALERT_TYPES,
     LIQUIDITY_POOL_BREAK,
-    MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
-    MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
-    MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
-    MGANN_FVG_DEFAULT_SWING_SIZE,
+    LIQUIDITY_POOL_BREAK_TIMEFRAME,
+    LIQUIDITY_POOL_BREAK_TIMEFRAMES,
     MGANN_BREAK_LS,
     MGANN_SWEEP,
     MGANN_BIG_TRADE_SWEEP,
@@ -54,9 +52,6 @@ from ..engines.alert_engine import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
     MGANN_BIG_TRADE_SWEEP_TIMEFRAMES,
-    MGANN_FVG_RETEST,
-    MGANN_FVG_RETEST_TIMEFRAME,
-    MGANN_FVG_RETEST_TIMEFRAMES,
     SMC_DEFAULT_LOOKAHEAD_BARS,
     SMC_DEFAULT_MAX_BARS,
     SMC_DEFAULT_PAUSE_ON_INSIDE_BARS,
@@ -199,10 +194,14 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 "'side' must be one of: both, bsl, ssl",
                 field="side",
             )
-        timeframe = params.get("timeframe", "1m")
-        if timeframe != "1m":
+        timeframe = params.get("timeframe", LIQUIDITY_POOL_BREAK_TIMEFRAME)
+        if (
+            not isinstance(timeframe, str)
+            or timeframe not in LIQUIDITY_POOL_BREAK_TIMEFRAMES
+        ):
+            allowed = ", ".join(LIQUIDITY_POOL_BREAK_TIMEFRAMES)
             raise validation_error(
-                "'timeframe' must be 1m",
+                f"'timeframe' must be one of: {allowed}",
                 field="timeframe",
             )
         for key in (
@@ -222,7 +221,7 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 field="minPivotCuts",
             )
         params["side"] = side
-        params["timeframe"] = "1m"
+        params["timeframe"] = timeframe
         params["swingSize"] = _normalize_mgann_swing_size(
             params,
             MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
@@ -240,25 +239,6 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
             "liquiditySweepLookbackBars",
             MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
         )
-    elif alert_type == MGANN_FVG_RETEST:
-        timeframe = params.get("timeframe", MGANN_FVG_RETEST_TIMEFRAME)
-        if not isinstance(timeframe, str) or timeframe not in MGANN_FVG_RETEST_TIMEFRAMES:
-            allowed = ", ".join(MGANN_FVG_RETEST_TIMEFRAMES)
-            raise validation_error(
-                f"'timeframe' must be one of: {allowed}",
-                field="timeframe",
-            )
-        _validate_optional_positive_number(params, "swingSize")
-        for key in ("maxZoneAge", "minGapTicks", "retestToleranceTicks"):
-            _validate_optional_nonnegative_number(params, key)
-        params["timeframe"] = timeframe
-        params["swingSize"] = _normalize_mgann_swing_size(
-            params,
-            MGANN_FVG_DEFAULT_SWING_SIZE,
-        )
-        params["maxZoneAge"] = MGANN_FVG_DEFAULT_MAX_ZONE_AGE
-        params["minGapTicks"] = MGANN_FVG_DEFAULT_MIN_GAP_TICKS
-        params["retestToleranceTicks"] = MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS
     elif alert_type in (MGANN_BREAK_LS, MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP):
         params.pop("direction", None)
         params.pop("historySignalLimit", None)

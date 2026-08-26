@@ -56,12 +56,13 @@ def _bearish_then_bullish_choch_bars(length: int = 50) -> list[SmcBar]:
     return bars
 
 
-def _bar_ctx(bar: SmcBar) -> MarketContext:
+def _bar_ctx(bar: SmcBar, timeframe: str | None = None) -> MarketContext:
     return MarketContext(
         symbol=_SYMBOL,
         contract=_CONTRACT,
         time=bar.time,
         bar_closed=True,
+        bar_tf=timeframe,
         bar_time=bar.time,
         bar_open=bar.open,
         bar_high=bar.high,
@@ -104,10 +105,14 @@ def _engine(repeat: bool = True) -> AlertEngine:
     return engine
 
 
-def _feed_bars(engine: AlertEngine, bars: list[SmcBar]):
+def _feed_bars(
+    engine: AlertEngine,
+    bars: list[SmcBar],
+    timeframe: str | None = None,
+):
     events = []
     for bar in bars:
-        events.extend(engine.evaluate(_bar_ctx(bar)))
+        events.extend(engine.evaluate(_bar_ctx(bar, timeframe)))
     return events
 
 
@@ -343,6 +348,49 @@ def test_standalone_liquidity_pool_break_alert_fires_on_close_through_ssl():
     assert event.direction == -1
     assert "Liquidity Pool Break SSL x2" in event.message
     assert engine.evaluate(_bar_ctx(bars[-1])) == []
+
+
+def test_standalone_liquidity_pool_break_alert_runs_on_configured_m5_only():
+    engine = AlertEngine()
+    engine.upsert(
+        Alert(
+            id="liquidity-break-m5",
+            symbol=_SYMBOL,
+            type=LIQUIDITY_POOL_BREAK,
+            params={
+                "side": "both",
+                "timeframe": "5m",
+                "swingSize": 1,
+                "pivotLookbackBars": 120,
+                "minPivotCuts": 2,
+                "liquidityAtrMargin": 4,
+                "repeat": True,
+            },
+        )
+    )
+    bars = [_bar(i, high=99, low=91, close=95) for i in range(10)]
+    sequence = [
+        (100, 90, 95),
+        (105, 94, 100),
+        (100, 96, 97),
+        (105, 97, 100),
+        (100, 90.1, 92),
+        (105, 94, 100),
+        (100, 90.2, 92),
+        (105, 94, 100),
+        (95, 75, 80),
+    ]
+    bars.extend(
+        _bar(10 + index, high=high, low=low, close=close, open_=close)
+        for index, (high, low, close) in enumerate(sequence)
+    )
+
+    assert _feed_bars(engine, bars, timeframe="1m") == []
+    events = _feed_bars(engine, bars, timeframe="5m")
+
+    assert len(events) == 1
+    assert events[0].alert_id == "liquidity-break-m5"
+    assert "M5 Liquidity Pool Break SSL x2" in events[0].message
 
 
 def test_standalone_liquidity_pool_break_alert_respects_side_filter():

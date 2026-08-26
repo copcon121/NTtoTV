@@ -13,7 +13,6 @@ export type AlertType =
   | "stacked_imbalance"
   | "liquidity_pool_break"
   | "smc_external_break_big_trade"
-  | "mgann_fvg_retest"
   | "mgann_break_ls"
   | "mgann_sweep"
   | "mgann_big_trade_sweep";

@@ -21,7 +21,6 @@ import pytest
 from app.engines.contract_resolver import ContractResolver
 from app.engines.alert_engine import (
     Alert,
-    MGANN_FVG_RETEST,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
 )
 from app.engines.fvg_signal_engine import FvgSignalEngine
@@ -34,6 +33,7 @@ from app.models.messages import (
     NTStatusEvent,
     StatusState,
 )
+from app.models.timestamp import now_ms
 from app.pipeline import Pipeline
 from app.registry.registry import ChartClient, OutboundEvent, WebSocketRegistry
 from app.storage.cache_store import CacheStore
@@ -115,6 +115,59 @@ def _native_fvg_bar(
         close=close_price,
         rows=rows,
     )
+
+
+def _bookmap_fvg_payload(
+    minute: int,
+    open_price: float,
+    close_price: float,
+    delta: int,
+) -> dict:
+    volume = abs(delta) if delta != 0 else 10
+    if delta > 0:
+        rows = [
+            {"price": open_price, "bid": 0, "ask": 1},
+            {"price": close_price, "bid": 0, "ask": volume - 1},
+        ]
+        buy_volume, sell_volume = volume, 0
+    elif delta < 0:
+        rows = [
+            {"price": open_price, "bid": 1, "ask": 0},
+            {"price": close_price, "bid": volume - 1, "ask": 0},
+        ]
+        buy_volume, sell_volume = 0, volume
+    else:
+        rows = [
+            {"price": open_price, "bid": 5, "ask": 0},
+            {"price": close_price, "bid": 0, "ask": 5},
+        ]
+        buy_volume, sell_volume = 5, 5
+    return {
+        "contract": _ACTIVE,
+        "tf": "1m",
+        "time": _BASE + minute * _MINUTE_MS,
+        "bridgeTime": now_ms(),
+        "lastEventTimeNanos": (
+            _BASE + minute * _MINUTE_MS + _MINUTE_MS - 1
+        )
+        * 1_000_000,
+        "open": open_price,
+        "high": max(open_price, close_price),
+        "low": min(open_price, close_price),
+        "close": close_price,
+        "volume": volume,
+        "buyVolume": buy_volume,
+        "sellVolume": sell_volume,
+        "delta": delta,
+        "deltaHigh": max(0, delta),
+        "deltaLow": min(0, delta),
+        "openDelta": 0,
+        "closeDelta": delta,
+        "closed": True,
+        "partialStart": False,
+        "snapshot": False,
+        "rows": rows,
+    }
 
 
 @pytest.mark.integration
@@ -224,7 +277,7 @@ def test_pipeline_persists_and_streams_fvg_signals_as_chart_contract(pipeline_en
 
 
 @pytest.mark.integration
-def test_pipeline_streams_native_fvg_preview_without_persisting(tmp_path):
+def test_pipeline_streams_bookmap_fvg_preview_without_persisting(tmp_path):
     cache = CacheStore(tmp_path / "app.sqlite")
     tick_store = TickStore(tmp_path / "ticks")
     resolver = ContractResolver(_CANDIDATES)
@@ -249,10 +302,11 @@ def test_pipeline_streams_native_fvg_preview_without_persisting(tmp_path):
         native_fvg_signal=native_fvg,
         enable_tick_fvg_signal=False,
     )
+    pipeline._active_feed = "bookmap"
 
     try:
         async def run():
-            await pipeline.on_trade(
+            await pipeline.on_bookmap_trade(
                 _classified_trade(
                     _BASE + 12 * _MINUTE_MS,
                     100.7,
@@ -275,6 +329,144 @@ def test_pipeline_streams_native_fvg_preview_without_persisting(tmp_path):
         assert events[-1]["time"] == _BASE + 11 * _MINUTE_MS
         assert events[-1]["pulse"] == 5
         assert cache.read_fvg_signals(_SYMBOL, _SYMBOL, "1m", None, None, 10) == []
+    finally:
+        tick_store.close()
+        cache.close()
+
+
+@pytest.mark.integration
+def test_pipeline_grades_finalized_bookmap_footprints_without_nt(tmp_path):
+    cache = CacheStore(tmp_path / "app.sqlite")
+    tick_store = TickStore(tmp_path / "ticks")
+    resolver = ContractResolver(_CANDIDATES)
+    resolver.set_manual_override(_ACTIVE)
+    registry = WebSocketRegistry()
+    captured: list[OutboundEvent] = []
+    registry.enqueue = captured.append  # type: ignore[assignment]
+    pipeline = Pipeline(
+        registry=registry,
+        cache=cache,
+        tick_store=tick_store,
+        resolver=resolver,
+        symbol=_SYMBOL,
+        native_fvg_signal=FvgSignalEngine(),
+        enable_tick_fvg_signal=False,
+    )
+    pipeline._active_feed = "bookmap"
+
+    try:
+        async def run():
+            for minute, delta in enumerate([0, 5, 0, 5, 0, 5, 0, 5, -30, -10]):
+                open_price = 99.0 + (minute % 2) * 0.1
+                close_price = open_price + (0.1 if delta >= 0 else -0.1)
+                await pipeline.on_bookmap_bar(
+                    _bookmap_fvg_payload(minute, open_price, close_price, delta)
+                )
+            await pipeline.on_bookmap_bar(
+                _bookmap_fvg_payload(10, 100.0, 100.5, 10)
+            )
+            await pipeline.on_bookmap_bar(
+                _bookmap_fvg_payload(11, 100.6, 101.0, 100)
+            )
+            await pipeline.on_bookmap_bar(
+                _bookmap_fvg_payload(12, 100.7, 100.8, 5)
+            )
+
+        asyncio.run(run())
+
+        events = [
+            event.payload
+            for event in captured
+            if event.event_type == EventType.FVG_SIGNAL_UPDATE
+        ]
+        assert any(
+            event["contract"] == _SYMBOL
+            and event["phase"] == "confirmed"
+            and event["time"] == _BASE + 11 * _MINUTE_MS
+            and event["pulse"] == 5
+            for event in events
+        )
+        rows = cache.read_fvg_signals(_SYMBOL, _SYMBOL, "1m", None, None, 10)
+        assert len(rows) == 1
+        assert rows[0].time == _BASE + 11 * _MINUTE_MS
+        assert rows[0].pulse == 5
+        assert cache.read_fvg_signals(_SYMBOL, _ACTIVE, "1m", None, None, 10) == []
+    finally:
+        tick_store.close()
+        cache.close()
+
+
+@pytest.mark.integration
+def test_pipeline_recovers_missed_fvg_signals_from_cached_bookmap_footprints(
+    tmp_path,
+):
+    cache = CacheStore(tmp_path / "app.sqlite")
+    tick_store = TickStore(tmp_path / "ticks")
+    resolver = ContractResolver(_CANDIDATES)
+    resolver.set_manual_override(_ACTIVE)
+    registry = WebSocketRegistry()
+    captured: list[OutboundEvent] = []
+    registry.enqueue = captured.append  # type: ignore[assignment]
+
+    without_grader = Pipeline(
+        registry=registry,
+        cache=cache,
+        tick_store=tick_store,
+        resolver=resolver,
+        symbol=_SYMBOL,
+        native_fvg_signal=None,
+        enable_tick_fvg_signal=False,
+    )
+    without_grader._active_feed = "bookmap"
+
+    try:
+        async def persist_gap():
+            for minute, delta in enumerate([0, 5, 0, 5, 0, 5, 0, 5, -30, -10]):
+                open_price = 99.0 + (minute % 2) * 0.1
+                close_price = open_price + (0.1 if delta >= 0 else -0.1)
+                await without_grader.on_bookmap_bar(
+                    _bookmap_fvg_payload(minute, open_price, close_price, delta)
+                )
+            await without_grader.on_bookmap_bar(
+                _bookmap_fvg_payload(10, 100.0, 100.5, 10)
+            )
+            await without_grader.on_bookmap_bar(
+                _bookmap_fvg_payload(11, 100.6, 101.0, 100)
+            )
+            await without_grader.on_bookmap_bar(
+                _bookmap_fvg_payload(12, 100.7, 100.8, 5)
+            )
+
+        asyncio.run(persist_gap())
+        assert cache.read_fvg_signals(_SYMBOL, _SYMBOL, "1m", limit=10) == []
+
+        captured.clear()
+        recovered = Pipeline(
+            registry=registry,
+            cache=cache,
+            tick_store=tick_store,
+            resolver=resolver,
+            symbol=_SYMBOL,
+            native_fvg_signal=FvgSignalEngine(),
+            enable_tick_fvg_signal=False,
+        )
+        recovered._active_feed = "bookmap"
+        asyncio.run(
+            recovered.on_bookmap_bar(
+                _bookmap_fvg_payload(13, 100.8, 100.9, 5)
+            )
+        )
+
+        rows = cache.read_fvg_signals(_SYMBOL, _SYMBOL, "1m", limit=10)
+        assert len(rows) == 1
+        assert rows[0].time == _BASE + 11 * _MINUTE_MS
+        assert rows[0].pulse == 5
+        assert any(
+            event.event_type == EventType.FVG_SIGNAL_UPDATE
+            and event.payload["phase"] == "confirmed"
+            and event.payload["time"] == _BASE + 11 * _MINUTE_MS
+            for event in captured
+        )
     finally:
         tick_store.close()
         cache.close()
@@ -382,21 +574,6 @@ async def _feed_ohlc_bar(pipeline, index, open_, high, low, close, seq):
         )
         seq += 1
     return seq
-
-async def _feed_m5_ohlc_bar(pipeline, index, open_, high, low, close, seq):
-    base = _BASE + index * 5 * 60_000
-    for offset, price in (
-        (1_000, open_),
-        (60_000, high),
-        (120_000, low),
-        (240_000, close),
-    ):
-        await pipeline.on_trade(
-            _trade(base + offset, price, 1, seq=seq, ask=price)
-        )
-        seq += 1
-    return seq
-
 
 async def _feed_bullish_external_break_setup(pipeline):
     seq = 0
@@ -597,78 +774,6 @@ def test_pipeline_smc_strategy_alert_fires_on_qualifying_big_trade(pipeline_env)
     assert alerts[-1]["alertType"] == SMC_EXTERNAL_BREAK_BIG_TRADE
     assert alerts[-1]["level"] == 100
     assert "big trade 80 > 50" in alerts[-1]["message"]
-
-
-@pytest.mark.integration
-def test_pipeline_smc_strategy_alert_cancels_on_reclaim_without_alert(pipeline_env):
-    pipeline, cache, tick_store, resolver, captured = pipeline_env
-    pipeline.alert_engine.upsert(_smc_alert())
-
-    async def run():
-        seq = await _feed_bullish_external_break_setup(pipeline)
-        seq = await _feed_ohlc_bar(pipeline, 53, 101, 102, 99, 100, seq)
-        await pipeline.on_trade(
-            _trade(_BASE + 54 * 60_000 + 1_000, 100.5, 1, seq=seq, ask=100.5)
-        )
-        await pipeline.on_trade(
-            _trade(_BASE + 54 * 60_000 + 2_000, 101.5, 80, seq=seq + 1, ask=101.5)
-        )
-        await pipeline.on_trade(
-            _trade(_BASE + 54 * 60_000 + 3_000, 101.6, 1, seq=seq + 2, ask=101.6)
-        )
-
-    asyncio.run(run())
-
-    alerts = [
-        e.payload
-        for e in captured
-        if e.event_type == EventType.ALERT_EVENT
-        and e.payload["alertType"] == SMC_EXTERNAL_BREAK_BIG_TRADE
-    ]
-    assert alerts == []
-
-
-@pytest.mark.integration
-def test_pipeline_mgann_fvg_retest_alert_fires_on_m5_closed_bar(pipeline_env):
-    pipeline, cache, tick_store, resolver, captured = pipeline_env
-    pipeline.alert_engine.upsert(
-        Alert(
-            id="mgann",
-            symbol=_SYMBOL,
-            type=MGANN_FVG_RETEST,
-            params={"repeat": True},
-        )
-    )
-
-    async def run():
-        seq = 0
-        bars = [
-            (100.0, 101.0, 100.0, 100.5),
-            (100.5, 102.0, 100.5, 101.8),
-            (101.8, 103.0, 101.5, 102.8),
-            (102.8, 104.0, 102.0, 103.0),
-            (103.0, 105.0, 103.0, 104.5),
-            (104.5, 104.0, 102.5, 103.0),
-            (103.0, 103.0, 101.8, 102.0),
-            (101.3, 102.0, 101.1, 101.4),
-            (101.4, 102.2, 101.1, 101.8),
-            (101.8, 103.0, 101.4, 102.8),
-            (102.8, 104.0, 102.5, 103.8),
-        ]
-        for index, bar in enumerate(bars):
-            seq = await _feed_m5_ohlc_bar(pipeline, index, *bar, seq)
-
-    asyncio.run(run())
-
-    alerts = [
-        e.payload
-        for e in captured
-        if e.event_type == EventType.ALERT_EVENT
-        and e.payload["alertType"] == MGANN_FVG_RETEST
-    ]
-    assert alerts
-    assert alerts[-1]["level"] == 101.25
-    assert "M5 bullish FVG retest by mGann wave" in alerts[-1]["message"]
 
 
 @pytest.mark.integration

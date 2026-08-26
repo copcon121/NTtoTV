@@ -3,8 +3,8 @@
 Receives finalized chart-side bars from the NTtoTVNativeDiagnostics/bridge.
 Realtime NT delta/footprint is authoritative only while NT is the selected
 fallback feed. Historical gaps continue through the existing NT-export import
-workflow, which writes cache rows directly. FVG grading continues to use NT
-native footprint rows.
+workflow, which writes cache rows directly. FVG grading uses Bookmap while it
+is primary and these NT native footprint rows only during fallback.
 """
 
 from __future__ import annotations
@@ -162,6 +162,7 @@ async def ingest_native_bar(
     pipeline = runtime.pipeline
     acceptor = getattr(pipeline, "accept_nt_native_orderflow", None)
     lock = getattr(pipeline, "derived_source_lock", None)
+    fvg_updates: list[FvgSignalUpdate] = []
     if lock is not None:
         await lock.acquire()
     try:
@@ -199,30 +200,28 @@ async def ingest_native_bar(
                 runtime.registry.enqueue(OutboundEvent.from_message(footprint_update))
             for update in rollup_delta_updates:
                 runtime.registry.enqueue(OutboundEvent.from_message(update))
+
+            # Grade while holding the same source-ownership lock as order-flow
+            # persistence so a concurrent Bookmap promotion cannot let a late
+            # NT bar mutate or publish the shared grader afterward.
+            if footprint_update is not None:
+                fvg_updates = _update_native_fvg(
+                    runtime,
+                    symbol=symbol,
+                    contract=contract,
+                    time_ms=time_ms,
+                    open_price=open_price,
+                    high_price=high_price,
+                    low_price=low_price,
+                    close_price=close_price,
+                    footprint_update=footprint_update,
+                )
+                _persist_native_fvg_updates(runtime.cache, fvg_updates)
+                for update in fvg_updates:
+                    runtime.registry.enqueue(OutboundEvent.from_message(update))
     finally:
         if lock is not None:
             lock.release()
-
-    fvg_updates: list[FvgSignalUpdate] = []
-    # FVG grading uses only finalized native footprint rows. If NT does not
-    # provide rows, skip footprint-based grading for this bar.
-    fvg_footprint = footprint_update
-
-    if fvg_footprint is not None:
-        fvg_updates = _update_native_fvg(
-            runtime,
-            symbol=symbol,
-            contract=contract,
-            time_ms=time_ms,
-            open_price=open_price,
-            high_price=high_price,
-            low_price=low_price,
-            close_price=close_price,
-            footprint_update=fvg_footprint,
-        )
-        _persist_native_fvg_updates(runtime.cache, fvg_updates)
-        for update in fvg_updates:
-            runtime.registry.enqueue(OutboundEvent.from_message(update))
 
     response = {
         "ok": True,
@@ -297,6 +296,8 @@ def _seed_native_fvg_engine(
         200,
     )
     for bar in bars:
+        if not bar.closed:
+            continue
         levels = cache.read_footprint_levels(
             symbol,
             contract,

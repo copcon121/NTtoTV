@@ -41,20 +41,6 @@ const alerts: Alert[] = [
     enabled: true,
   },
   {
-    id: "a_5",
-    symbol: "GC",
-    type: "mgann_fvg_retest",
-    params: {
-      timeframe: "5m",
-      swingSize: 5,
-      maxZoneAge: 0,
-      minGapTicks: 1,
-      retestToleranceTicks: 0,
-      repeat: true,
-    },
-    enabled: true,
-  },
-  {
     id: "a_6",
     symbol: "GC",
     type: "mgann_break_ls",
@@ -138,14 +124,11 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(screen.getByTestId("alert-a_3")).toHaveTextContent(
       "External BOS/CHoCH, BT > 50 (repeat)",
     );
-    expect(screen.getByTestId("alert-a_5")).toHaveTextContent(
-      "M5 FVG retest by mGann wave (repeat)",
-    );
     expect(screen.getByTestId("alert-a_6")).toHaveTextContent(
       "mGann Break L/S, BT > 70, vol x2, spread x2 (repeat)",
     );
     expect(screen.getByTestId("alert-a_8")).toHaveTextContent(
-      "Liquidity Pool Break BSL/SSL x3 (repeat)",
+      "M1 Liquidity Pool Break BSL/SSL x3 (repeat)",
     );
     expect(screen.getByTestId("alert-a_7")).toHaveTextContent(
       "mGann Break L/S, vol x2, spread x2 (repeat)",
@@ -247,29 +230,12 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     });
   });
 
-  it("raises onCreate with selected mGann FVG retest timeframe", () => {
-    const onCreate = vi.fn();
-    render(<AlertPanel alerts={alerts} onCreate={onCreate} />);
-    fireEvent.change(screen.getByLabelText("Alert type"), {
-      target: { value: "mgann_fvg_retest" },
-    });
+  it("does not offer the removed mGann FVG retest alert", () => {
+    render(<AlertPanel alerts={alerts} />);
 
-    expect(screen.getByLabelText("mGann FVG timeframe")).toHaveValue("5m");
-    expect(screen.getByLabelText("Repeat alert")).toBeChecked();
-
-    fireEvent.change(screen.getByLabelText("mGann FVG timeframe"), {
-      target: { value: "1m" },
-    });
-    fireEvent.click(screen.getByText("Add"));
-
-    expect(onCreate).toHaveBeenCalledWith({
-      type: "mgann_fvg_retest",
-      params: {
-        timeframe: "1m",
-        swingSize: 5,
-        repeat: true,
-      },
-    });
+    expect(
+      screen.queryByRole("option", { name: "FVG retest by mGann" }),
+    ).not.toBeInTheDocument();
   });
 
   it("raises onCreate with mGann Break L/S BigTrade option params", () => {
@@ -418,11 +384,17 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(screen.getByLabelText("Liquidity pool break side")).toHaveValue(
       "both",
     );
+    expect(screen.getByLabelText("Liquidity pool break timeframe")).toHaveValue(
+      "1m",
+    );
     expect(screen.getByLabelText("Liquidity break minimum swings")).toHaveValue(
       2,
     );
     fireEvent.change(screen.getByLabelText("Liquidity pool break side"), {
       target: { value: "ssl" },
+    });
+    fireEvent.change(screen.getByLabelText("Liquidity pool break timeframe"), {
+      target: { value: "5m" },
     });
     fireEvent.change(screen.getByLabelText("Liquidity break minimum swings"), {
       target: { value: "4" },
@@ -433,7 +405,7 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
       type: "liquidity_pool_break",
       params: {
         side: "ssl",
-        timeframe: "1m",
+        timeframe: "5m",
         swingSize: 5,
         pivotLookbackBars: 120,
         minPivotCuts: 4,

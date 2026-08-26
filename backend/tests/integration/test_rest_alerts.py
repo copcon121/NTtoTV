@@ -7,13 +7,7 @@ from app.app import create_app
 from app.config import Settings
 from app.engines.alert_engine import (
     LIQUIDITY_POOL_BREAK,
-    MGANN_FVG_DEFAULT_MAX_ZONE_AGE,
-    MGANN_FVG_DEFAULT_MIN_GAP_TICKS,
-    MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS,
-    MGANN_FVG_DEFAULT_SWING_SIZE,
-    MGANN_FVG_RETEST,
-    MGANN_FVG_RETEST_TIMEFRAME,
-    MGANN_FVG_RETEST_TIMEFRAMES,
+    LIQUIDITY_POOL_BREAK_TIMEFRAMES,
     MGANN_BREAK_LS,
     MGANN_SWEEP,
     MGANN_BIG_TRADE_SWEEP,
@@ -58,6 +52,7 @@ def test_rest_alerts_accept_liquidity_pool_break_options(tmp_path: Path):
                     "type": LIQUIDITY_POOL_BREAK,
                     "params": {
                         "side": "ssl",
+                        "timeframe": "5m",
                         "minPivotCuts": 4,
                         "repeat": True,
                     },
@@ -68,7 +63,8 @@ def test_rest_alerts_accept_liquidity_pool_break_options(tmp_path: Path):
             body = created.json()
             assert body["type"] == LIQUIDITY_POOL_BREAK
             assert body["params"]["side"] == "ssl"
-            assert body["params"]["timeframe"] == "1m"
+            assert body["params"]["timeframe"] == "5m"
+            assert set(LIQUIDITY_POOL_BREAK_TIMEFRAMES) == {"1m", "5m"}
             assert body["params"]["minPivotCuts"] == 4
             assert (
                 body["params"]["swingSize"]
@@ -83,6 +79,33 @@ def test_rest_alerts_accept_liquidity_pool_break_options(tmp_path: Path):
                 == MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN
             )
             assert body["params"]["repeat"] is True
+    finally:
+        cache.close()
+
+
+@pytest.mark.integration
+def test_rest_alerts_reject_invalid_liquidity_pool_break_timeframe(tmp_path: Path):
+    settings = Settings(
+        data_dir=tmp_path,
+        supported_symbols=("GC",),
+        gc_candidate_contracts=("GC 08-26",),
+    )
+    cache = CacheStore(tmp_path / "app.sqlite")
+    app = create_app()
+    app.state.contract_state = ContractStateStore(cache, settings=settings)
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/alerts",
+                json={
+                    "symbol": "GC",
+                    "type": LIQUIDITY_POOL_BREAK,
+                    "params": {"timeframe": "15m"},
+                },
+            )
+
+            assert response.status_code == 422
+            assert response.json()["error"]["field"] == "timeframe"
     finally:
         cache.close()
 
@@ -395,7 +418,7 @@ def test_rest_alerts_accept_legacy_mgann_aliases_as_break_ls(
 
 
 @pytest.mark.integration
-def test_rest_alerts_accept_and_normalize_mgann_fvg_retest_params(tmp_path: Path):
+def test_rest_alerts_reject_removed_mgann_fvg_retest_type(tmp_path: Path):
     settings = Settings(
         data_dir=tmp_path,
         supported_symbols=("GC",),
@@ -406,80 +429,16 @@ def test_rest_alerts_accept_and_normalize_mgann_fvg_retest_params(tmp_path: Path
     app.state.contract_state = ContractStateStore(cache, settings=settings)
     try:
         with TestClient(app) as client:
-            created = client.post(
+            response = client.post(
                 "/api/alerts",
                 json={
                     "symbol": "GC",
-                    "type": MGANN_FVG_RETEST,
-                    "params": {
-                        "repeat": True,
-                    },
+                    "type": "mgann_fvg_retest",
+                    "params": {"timeframe": "5m"},
                 },
             )
 
-            assert created.status_code == 201
-            body = created.json()
-            assert body["type"] == MGANN_FVG_RETEST
-            assert body["params"]["timeframe"] == MGANN_FVG_RETEST_TIMEFRAME
-            assert body["params"]["swingSize"] == MGANN_FVG_DEFAULT_SWING_SIZE
-            assert body["params"]["maxZoneAge"] == MGANN_FVG_DEFAULT_MAX_ZONE_AGE
-            assert body["params"]["minGapTicks"] == MGANN_FVG_DEFAULT_MIN_GAP_TICKS
-            assert (
-                body["params"]["retestToleranceTicks"]
-                == MGANN_FVG_DEFAULT_RETEST_TOLERANCE_TICKS
-            )
-            assert body["params"]["repeat"] is True
-
-            legacy = client.post(
-                "/api/alerts",
-                json={
-                    "symbol": "GC",
-                    "type": MGANN_FVG_RETEST,
-                    "params": {
-                        "swingSize": 2,
-                    },
-                },
-            )
-            assert legacy.status_code == 201
-            assert legacy.json()["params"]["swingSize"] == MGANN_FVG_DEFAULT_SWING_SIZE
-
-            created_m1 = client.post(
-                "/api/alerts",
-                json={
-                    "symbol": "GC",
-                    "type": MGANN_FVG_RETEST,
-                    "params": {
-                        "timeframe": "1m",
-                        "repeat": True,
-                    },
-                },
-            )
-            assert created_m1.status_code == 201
-            assert created_m1.json()["params"]["timeframe"] == "1m"
-            assert set(MGANN_FVG_RETEST_TIMEFRAMES) == {"1m", "5m"}
-    finally:
-        cache.close()
-
-@pytest.mark.integration
-def test_rest_alerts_reject_invalid_mgann_fvg_retest_timeframe(tmp_path: Path):
-    settings = Settings(
-        data_dir=tmp_path,
-        supported_symbols=("GC",),
-        gc_candidate_contracts=("GC 08-26",),
-    )
-    cache = CacheStore(tmp_path / "app.sqlite")
-    app = create_app()
-    app.state.contract_state = ContractStateStore(cache, settings=settings)
-    try:
-        with TestClient(app) as client:
-            resp = client.post(
-                "/api/alerts",
-                json={
-                    "symbol": "GC",
-                    "type": MGANN_FVG_RETEST,
-                    "params": {"timeframe": "15m"},
-                },
-            )
-            assert resp.status_code == 422
+            assert response.status_code == 422
+            assert response.json()["error"]["field"] == "type"
     finally:
         cache.close()
