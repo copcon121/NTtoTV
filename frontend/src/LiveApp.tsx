@@ -120,6 +120,7 @@ import type {
 } from "./chart/drawings/types";
 import {
   displayOffsetForTimeframe,
+  footprintEnabledForTimeframe,
   fixedRangeMsFromAnchors,
 } from "./chart/timeframeRange";
 import {
@@ -2157,7 +2158,7 @@ export function LiveApp() {
     ENABLE_REALTIME_FOOTPRINT_UPDATES &&
     indicatorsVisible &&
     showFootprint &&
-    timeframe === "1m";
+    footprintEnabledForTimeframe(timeframe);
   const realtimeBigTradesEnabled =
     indicatorsVisible &&
     showBigTrades &&
@@ -4621,7 +4622,10 @@ export function LiveApp() {
   const chartFootprintBars = hasLoadedCurrentSeries
     ? footprintBars
     : EMPTY_FOOTPRINT_BARS;
-  const footprintVisible = indicatorsVisible && showFootprint && timeframe === "1m";
+  const footprintVisible =
+    indicatorsVisible &&
+    showFootprint &&
+    footprintEnabledForTimeframe(timeframe);
   const chartFvgSignals =
     indicatorsVisible &&
     hasLoadedCurrentSeries &&
@@ -4800,7 +4804,7 @@ export function LiveApp() {
           footprintSettings={footprintSettings}
           bigTradeSettings={bigTradeSettings}
           mgannSwingDisabled={mgannSwingDisabled}
-          footprintDisabled={timeframe !== "1m"}
+          footprintDisabled={!footprintEnabledForTimeframe(timeframe)}
           fvgGraderDisabled={timeframe !== "1m"}
           bigTradeDisabled={!bigTradeOverlayEnabled}
           dailyVolumeProfile={showDailyVolumeProfile}
@@ -4997,11 +5001,11 @@ export function LiveApp() {
                 role="switch"
                 aria-checked={footprintVisible}
                 aria-label="Footprint"
-                disabled={timeframe !== "1m"}
+                disabled={!footprintEnabledForTimeframe(timeframe)}
                 title={
-                  timeframe === "1m"
+                  footprintEnabledForTimeframe(timeframe)
                     ? `Footprint ${footprintVisible ? "on" : "off"}`
-                    : "Footprint is available on 1m only"
+                    : "Footprint uses 1m data and is available on 15s/1m charts"
                 }
                 onClick={() => {
                   if (!indicatorsVisible) {

@@ -93,7 +93,10 @@ import {
   formatUtcOffset,
   normalizeTimezoneOffsetMinutes,
 } from "./timezone";
-import { displayOffsetForTimeframe } from "./timeframeRange";
+import {
+  displayOffsetForTimeframe,
+  footprintEnabledForTimeframe,
+} from "./timeframeRange";
 import type { DeltaProfileData, DeltaProfileLoadState } from "../orderflow/deltaProfile";
 import { DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX } from "./sessionVolumeProfileSettings";
 
@@ -277,7 +280,7 @@ export interface ChartContainerProps {
    * added overlay). `color` restyles the line.
    */
   ema?: Partial<EmaSettings>;
-  /** Show the footprint canvas overlay. Footprint is M1-only. */
+  /** Show the M1 footprint overlay on the supported 15s/1m chart timeframes. */
   showFootprint?: boolean;
   /** Session volume profile data for the right-edge histogram. */
   sessionVolumeProfile?: DeltaProfileData | null;
@@ -1302,7 +1305,9 @@ export function ChartContainer({
         offsetMinutes={timezoneOffsetMinutes}
         onChange={onTimezoneOffsetChange}
       />
-      {showFootprint && timeframe === "1m" && footprintViewport !== null && (
+      {showFootprint &&
+        footprintEnabledForTimeframe(timeframe) &&
+        footprintViewport !== null && (
         <FootprintCanvas
           bars={footprintBars ?? new Map()}
           viewport={footprintViewport}

@@ -3,6 +3,7 @@ import type { AnchorPoint } from "./drawings/types";
 import {
   displayOffsetForTimeframe,
   fixedRangeMsFromAnchors,
+  footprintEnabledForTimeframe,
 } from "./timeframeRange";
 
 function ts(value: number): AnchorPoint["time"] {
@@ -51,5 +52,14 @@ describe("fixedRangeMsFromAnchors", () => {
     expect(
       fixedRangeMsFromAnchors([{ time: ts(1_780_358_460), price: 4514.1 }], "1m"),
     ).toBeNull();
+  });
+});
+
+describe("footprintEnabledForTimeframe", () => {
+  it("allows the M1 footprint overlay on both 15s and 1m charts", () => {
+    expect(footprintEnabledForTimeframe("15s")).toBe(true);
+    expect(footprintEnabledForTimeframe("1m")).toBe(true);
+    expect(footprintEnabledForTimeframe("5m")).toBe(false);
+    expect(footprintEnabledForTimeframe("1D")).toBe(false);
   });
 });

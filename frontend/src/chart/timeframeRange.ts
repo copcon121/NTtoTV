@@ -18,6 +18,15 @@ export function displayOffsetForTimeframe(timeframe: Timeframe): number {
   return TIMEFRAME_DISPLAY_OFFSET_MS[timeframe];
 }
 
+/**
+ * The footprint data source remains M1, but the overlay can also be viewed on
+ * the 15s chart so the four 15s candles under each footprint minute stay
+ * visible for context.
+ */
+export function footprintEnabledForTimeframe(timeframe: Timeframe): boolean {
+  return timeframe === "15s" || timeframe === "1m";
+}
+
 export function fixedRangeMsFromAnchors(
   anchors: readonly AnchorPoint[],
   timeframe: Timeframe,
