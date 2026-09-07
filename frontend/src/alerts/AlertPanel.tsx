@@ -74,14 +74,14 @@ const MGANN_BIG_TRADE_SWEEP_TYPE: AlertType = "mgann_big_trade_sweep";
 const SMC_EXTERNAL_BIG_TRADE_DEFAULT = "50";
 const LIQUIDITY_POOL_BREAK_DEFAULT_TIMEFRAME = "1m";
 const MGANN_SWEEP_BIG_TRADE_DEFAULT = "70";
-const MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT = "2";
+const MGANN_SWEEP_VOLUME_DELTA_MULTIPLIER_DEFAULT = "2";
 const MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT = "2";
 const SMC_SWING_LENGTH = 50;
 const SMC_LOOKAHEAD_BARS = 5;
 const SMC_MAX_BARS = 20;
 const SMC_PAUSE_ON_INSIDE_BARS = true;
 const SMC_RETEST_TOLERANCE_TICKS = 50;
-const MGANN_SWEEP_VOLUME_LOOKBACK = 20;
+const MGANN_SWEEP_VOLUME_DELTA_LOOKBACK = 20;
 const MGANN_SWEEP_SPREAD_LOOKBACK = 20;
 const MGANN_SWEEP_SWING_SIZE = 5;
 const MGANN_SWEEP_PIVOT_LOOKBACK_BARS = 120;
@@ -188,8 +188,10 @@ function alertDescription(alert: Alert): string {
             alert.params.minPivotCuts ?? MGANN_SWEEP_MIN_PIVOT_CUTS,
           )}`
         : "";
-    return `mGann Break L/S${bigTrade}, vol x${String(
-      alert.params.volumeMultiplier ?? MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT,
+    return `mGann Break L/S${bigTrade}, delta x${String(
+      alert.params.volumeDeltaMultiplier ??
+        alert.params.volumeMultiplier ??
+        MGANN_SWEEP_VOLUME_DELTA_MULTIPLIER_DEFAULT,
     )}, spread x${String(
       alert.params.spreadMultiplier ?? MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT,
     )}${liquidity}${repeat}`;
@@ -239,8 +241,8 @@ export function AlertPanel({
   const [newLiquidityBreakMinSwings, setNewLiquidityBreakMinSwings] = useState(
     String(MGANN_SWEEP_MIN_PIVOT_CUTS),
   );
-  const [newMgannSweepVolumeMultiplier, setNewMgannSweepVolumeMultiplier] =
-    useState(MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT);
+  const [newMgannSweepVolumeDeltaMultiplier, setNewMgannSweepVolumeDeltaMultiplier] =
+    useState(MGANN_SWEEP_VOLUME_DELTA_MULTIPLIER_DEFAULT);
   const [newMgannSweepSpreadMultiplier, setNewMgannSweepSpreadMultiplier] =
     useState(MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT);
   const [telegramEnabled, setTelegramEnabled] = useState(false);
@@ -305,7 +307,9 @@ export function AlertPanel({
       setNewMgannFilterLiquidity(true);
       setNewMgannLiquidityMinSwings(String(MGANN_SWEEP_MIN_PIVOT_CUTS));
       setNewValue((value) => value || MGANN_SWEEP_BIG_TRADE_DEFAULT);
-      setNewMgannSweepVolumeMultiplier(MGANN_SWEEP_VOLUME_MULTIPLIER_DEFAULT);
+      setNewMgannSweepVolumeDeltaMultiplier(
+        MGANN_SWEEP_VOLUME_DELTA_MULTIPLIER_DEFAULT,
+      );
       setNewMgannSweepSpreadMultiplier(MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT);
       setNewRepeat(true);
     }
@@ -340,12 +344,12 @@ export function AlertPanel({
           ? newValue || MGANN_SWEEP_BIG_TRADE_DEFAULT
           : MGANN_SWEEP_BIG_TRADE_DEFAULT,
       );
-      const volumeMultiplier = Number(newMgannSweepVolumeMultiplier);
+      const volumeDeltaMultiplier = Number(newMgannSweepVolumeDeltaMultiplier);
       const spreadMultiplier = Number(newMgannSweepSpreadMultiplier);
       const rawLiquidityMinSwings = Number(newMgannLiquidityMinSwings);
       if (
         !Number.isFinite(bigTradeThreshold) ||
-        !Number.isFinite(volumeMultiplier) ||
+        !Number.isFinite(volumeDeltaMultiplier) ||
         !Number.isFinite(spreadMultiplier) ||
         !Number.isFinite(rawLiquidityMinSwings)
       ) {
@@ -362,9 +366,8 @@ export function AlertPanel({
           filterLiquidity: newMgannFilterLiquidity,
           bigTradeThreshold,
           timeframe: "1m",
-          minVolume: 0,
-          volumeLookback: MGANN_SWEEP_VOLUME_LOOKBACK,
-          volumeMultiplier,
+          volumeDeltaLookback: MGANN_SWEEP_VOLUME_DELTA_LOOKBACK,
+          volumeDeltaMultiplier,
           minSpreadTicks: 0,
           spreadLookback: MGANN_SWEEP_SPREAD_LOOKBACK,
           spreadMultiplier,
@@ -558,15 +561,15 @@ export function AlertPanel({
               </label>
             )}
             <label className="alert-param">
-              <span>Vol x</span>
+              <span>Delta x</span>
               <input
                 type="number"
                 step="0.1"
-                aria-label="Volume multiplier"
+                aria-label="Volume Delta multiplier"
                 placeholder="2"
-                value={newMgannSweepVolumeMultiplier}
+                value={newMgannSweepVolumeDeltaMultiplier}
                 onChange={(e) =>
-                  setNewMgannSweepVolumeMultiplier(e.target.value)
+                  setNewMgannSweepVolumeDeltaMultiplier(e.target.value)
                 }
               />
             </label>

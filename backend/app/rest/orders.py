@@ -340,6 +340,11 @@ async def patch_order(
             raise conflict(f"MT5 symbol lookup failed: {exc}", field="symbolBroker")
         symbol_map = SymbolMap.from_info(symbol_info)
         basis = _basis(request)
+        try:
+            tick = mt5.symbol_tick(user.id, account.id, account.symbol_broker)
+        except Exception as exc:
+            raise conflict(f"MT5 tick lookup failed: {exc}", field="symbolBroker")
+        basis.update_broker_mid((tick.bid + tick.ask) / 2, tick.time)
         entry_broker = None if candidate.entry_gc is None else basis.to_broker(candidate.entry_gc, symbol_map)
         sl_broker = None if candidate.sl_gc is None else basis.to_broker(candidate.sl_gc, symbol_map)
         tp_broker = None if candidate.tp_gc is None else basis.to_broker(candidate.tp_gc, symbol_map)

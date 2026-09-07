@@ -20,6 +20,7 @@ import type {
 import { DRAWING_TOOLS } from "./types";
 import { anchorFromPoint, anchorToPoint } from "./coordinates";
 import { TrendLinePrimitive } from "./TrendLinePrimitive";
+import { PathPrimitive } from "./PathPrimitive";
 import { BrushPrimitive } from "./BrushPrimitive";
 import {
   DEFAULT_FIB_RETRACEMENT_LEVELS,
@@ -39,6 +40,7 @@ import type { DeltaProfileLoadState } from "../../orderflow/deltaProfile";
 
 type DrawingPrimitive =
   | TrendLinePrimitive
+  | PathPrimitive
   | BrushPrimitive
   | FibRetracementPrimitive
   | DateRangePrimitive
@@ -51,6 +53,7 @@ type DrawingPrimitive =
 
 type DrawingSelectionActionToolType =
   | "trendline"
+  | "path"
   | "brush"
   | "fib_retracement"
   | "date_range"
@@ -262,6 +265,12 @@ export class DrawingManager implements IDrawingManager {
         this._selectDrawing(null);
         return;
       }
+      if (e.key === "Enter" && this._placement?.tool === "path") {
+        this._finishPathPlacement();
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (
         (e.key === "Delete" || e.key === "Backspace") &&
         this._selectedDrawingId !== null &&
@@ -345,7 +354,7 @@ export class DrawingManager implements IDrawingManager {
     this._chart.subscribeClick(this._onClick);
 
     // Mouse move for preview of the second anchor (for 2-anchor tools)
-    if (def.anchors >= 2) {
+    if (def.anchors >= 2 || tool === "path") {
       this._onMouseMove = (param: MouseEventParams) => {
         if (!this._placement || this._placement.anchors.length < 1) return;
         if (!this._series || !this._chart) return;
@@ -365,10 +374,14 @@ export class DrawingManager implements IDrawingManager {
         );
 
         // Update or create preview
-        const previewAnchors = [
-          ...this._placement.anchors,
-          previewAnchor,
-        ];
+        const lastAnchor =
+          this._placement.anchors[this._placement.anchors.length - 1];
+        const previewAnchors =
+          this._placement.tool === "path" &&
+          lastAnchor !== undefined &&
+          anchorsNearlyEqual(lastAnchor, previewAnchor)
+            ? [...this._placement.anchors]
+            : [...this._placement.anchors, previewAnchor];
         if (this._placement.preview) {
           this._placement.preview.setAnchors(previewAnchors);
         } else {
@@ -562,12 +575,42 @@ export class DrawingManager implements IDrawingManager {
   private _addAnchor(anchor: AnchorPoint, shiftKey = false): void {
     if (!this._placement || !this._series) return;
 
-    this._placement.anchors.push(this._constrainPlacementAnchor(anchor, shiftKey));
+    const constrainedAnchor = this._constrainPlacementAnchor(anchor, shiftKey);
+    const previousAnchor = this._placement.anchors[this._placement.anchors.length - 1];
+    if (
+      this._placement.tool === "path" &&
+      previousAnchor !== undefined &&
+      anchorsNearlyEqual(previousAnchor, constrainedAnchor)
+    ) {
+      this._updatePathPreview();
+      return;
+    }
+    this._placement.anchors.push(constrainedAnchor);
+    if (this._placement.tool === "path") {
+      this._updatePathPreview();
+    }
 
     // Check if all anchors are placed
-    if (this._placement.anchors.length >= this._placement.anchorsNeeded) {
+    if (
+      this._placement.tool !== "path" &&
+      this._placement.anchors.length >= this._placement.anchorsNeeded
+    ) {
       this._finishPlacement();
     }
+  }
+
+  private _updatePathPreview(): void {
+    const placement = this._placement;
+    if (!placement || placement.tool !== "path" || !placement.preview) return;
+    const lastAnchor = placement.anchors[placement.anchors.length - 1];
+    const previewAnchor = placement.rawPreviewAnchor;
+    placement.preview.setAnchors(
+      previewAnchor &&
+        lastAnchor !== undefined &&
+        !anchorsNearlyEqual(lastAnchor, previewAnchor)
+        ? [...placement.anchors, previewAnchor]
+        : placement.anchors,
+    );
   }
 
   private _anchorFromMouseParam(param: MouseEventParams): AnchorPoint | null {
@@ -1055,6 +1098,11 @@ export class DrawingManager implements IDrawingManager {
             return { drawingId };
           }
           break;
+        case "path":
+          if (hitPolyline(point, points, HIT_PX)) {
+            return { drawingId };
+          }
+          break;
         case "fib_retracement":
           if (
             drawing instanceof FibRetracementPrimitive &&
@@ -1130,6 +1178,13 @@ export class DrawingManager implements IDrawingManager {
     this._selectDrawing(null);
   }
 
+  private _finishPathPlacement(): void {
+    if (this._placement?.tool !== "path" || this._placement.anchors.length < 2) {
+      return;
+    }
+    this._finishPlacement();
+  }
+
   private _createPrimitive(
     tool: DrawingToolType,
     id: string,
@@ -1139,6 +1194,8 @@ export class DrawingManager implements IDrawingManager {
     switch (tool) {
       case "trendline":
         return new TrendLinePrimitive(id, anchors, options);
+      case "path":
+        return new PathPrimitive(id, anchors, options);
       case "brush":
         return new BrushPrimitive(id, anchors, options);
       case "fib_retracement":
@@ -1244,6 +1301,21 @@ export class DrawingManager implements IDrawingManager {
     if (!this._chart || !this._series || !this._container) return;
     const point = this._localPoint(e.clientX, e.clientY);
     if (point === null || !this._isInCandlePane(point.y)) return;
+
+    // Path placement is completed by double-clicking the final vertex. Add
+    // the double-click point when the browser/chart did not already deliver
+    // its preceding click events, then finish once at least two vertices exist.
+    if (this._placement?.tool === "path") {
+      const anchor = anchorFromPoint(this._chart, this._series, point);
+      if (anchor !== null) {
+        this._addAnchor(anchor);
+      }
+      this._finishPathPlacement();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
     const profileHit = this._hitProfileBox(point);
     if (profileHit !== null) {
       e.preventDefault();
@@ -1905,12 +1977,14 @@ export class DrawingManager implements IDrawingManager {
 
   private _selectedStyleDrawing():
     | TrendLinePrimitive
+    | PathPrimitive
     | HorizontalRayPrimitive
     | null {
     const id = this._selectedDrawingId;
     if (id === null) return null;
     const drawing = this._drawings.get(id);
     return drawing instanceof TrendLinePrimitive ||
+      drawing instanceof PathPrimitive ||
       drawing instanceof HorizontalRayPrimitive
       ? drawing
       : null;
@@ -1966,6 +2040,7 @@ export class DrawingManager implements IDrawingManager {
     const paneSize = this._chart.paneSize(0);
     const styleDrawing =
       drawing instanceof TrendLinePrimitive ||
+      drawing instanceof PathPrimitive ||
       drawing instanceof HorizontalRayPrimitive
         ? drawing
         : null;
@@ -2003,7 +2078,14 @@ export class DrawingManager implements IDrawingManager {
       styleButton.innerHTML = fibLevelsIconSvg();
     }
 
-    const actionWidth = styleDrawing !== null ? 190 : fibDrawing !== null ? 118 : 82;
+    const actionWidth =
+      styleDrawing !== null
+        ? drawing instanceof PathPrimitive
+          ? 154
+          : 190
+        : fibDrawing !== null
+          ? 118
+          : 82;
     const actionHeight = 38;
     const left = clamp(position.x - actionWidth / 2, 8, paneSize.width - actionWidth - 8);
     let top = position.y - actionHeight - 10;
@@ -2040,6 +2122,7 @@ export class DrawingManager implements IDrawingManager {
 function isActionTool(tool: DrawingToolType): tool is DrawingSelectionActionToolType {
   return (
     tool === "trendline" ||
+    tool === "path" ||
     tool === "brush" ||
     tool === "fib_retracement" ||
     tool === "date_range" ||
@@ -2074,6 +2157,14 @@ function selectionActionPosition(
         y: top,
       };
     }
+    case "path": {
+      if (points.length < 2) return null;
+      const middle = points[Math.floor(points.length / 2)];
+      return {
+        x: middle.x,
+        y: Math.min(...points.map((point) => point.y)),
+      };
+    }
     case "fib_retracement":
       if (points.length < 2) return null;
       return {
@@ -2104,6 +2195,17 @@ function selectionActionPosition(
     default:
       return null;
   }
+}
+
+function anchorsNearlyEqual(left: AnchorPoint, right: AnchorPoint): boolean {
+  const leftX = left.logical ?? Number(left.time);
+  const rightX = right.logical ?? Number(right.time);
+  return (
+    Number.isFinite(leftX) &&
+    Number.isFinite(rightX) &&
+    Math.abs(leftX - rightX) <= 0.25 &&
+    Math.abs(left.price - right.price) <= 1e-8
+  );
 }
 
 function clamp(value: number, min: number, max: number): number {

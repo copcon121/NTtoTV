@@ -21,6 +21,18 @@
   box-sizing: border-box;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 html,
 body,
 #root {
@@ -296,6 +308,12 @@ body {
   align-items: center;
 }
 
+.toolbar-alert-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .analyst-popover {
   display: none !important;
   position: relative;
@@ -324,7 +342,8 @@ body {
   border-color: #008b8b99;
 }
 
-.alert-toolbar-button {
+.alert-toolbar-button,
+.bar-replay-toolbar-button {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -339,9 +358,21 @@ body {
 }
 
 .alert-toolbar-button:hover,
-.alert-toolbar-button.is-open {
+.alert-toolbar-button.is-open,
+.bar-replay-toolbar-button:hover:not(:disabled),
+.bar-replay-toolbar-button.is-active {
   background: #242424;
   border-color: #008b8b99;
+}
+
+.bar-replay-toolbar-button:disabled {
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.bar-replay-toolbar-button.is-active {
+  color: #e0b341;
 }
 
 .alert-toolbar-badge {
@@ -605,6 +636,86 @@ body {
 
 .chart-host * {
   touch-action: none;
+}
+
+.chart-container.is-replay-selecting .chart-host,
+.chart-container.is-replay-selecting .chart-host * {
+  cursor: crosshair !important;
+}
+
+.bar-replay-controls {
+  position: absolute;
+  left: 50%;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  z-index: 18;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 32px);
+  padding: 5px;
+  color: #f3f3f3;
+  background: rgba(18, 18, 18, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 7px;
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(7px);
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+
+.bar-replay-controls button,
+.bar-replay-controls select {
+  height: 30px;
+  padding: 0 9px;
+  color: #f3f3f3;
+  background: #242424;
+  border: 1px solid #454545;
+  border-radius: 5px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bar-replay-controls button:hover:not(:disabled),
+.bar-replay-controls select:hover {
+  border-color: rgba(38, 166, 154, 0.9);
+  background: #2c3434;
+}
+
+.bar-replay-controls button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.bar-replay-controls .bar-replay-main {
+  min-width: 58px;
+  background: rgba(13, 66, 62, 0.98);
+  border-color: rgba(38, 166, 154, 0.9);
+  font-weight: 700;
+}
+
+.bar-replay-controls.is-selecting {
+  bottom: auto;
+  top: 14px;
+  color: #fff0b3;
+  border-color: rgba(224, 179, 65, 0.72);
+}
+
+.bar-replay-live-lock {
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  color: #101010;
+  background: #e0b341;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.bar-replay-speed select {
+  width: 62px;
+  padding-right: 4px;
 }
 
 .drawing-selection-actions {
@@ -2673,9 +2784,14 @@ body {
     opacity: 0;
   }
 
-  .alert-popover {
+  .toolbar-alert-group {
     grid-area: alerts;
     justify-self: end;
+  }
+
+  .bar-replay-toolbar-button,
+  .bar-replay-controls {
+    display: none !important;
   }
 
   .analyst-popover {
@@ -2857,6 +2973,23 @@ body {
 
   .chart-quick-controls {
     gap: 6px;
+  }
+
+  .bar-replay-controls {
+    max-width: calc(100vw - 20px);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .bar-replay-controls::-webkit-scrollbar {
+    display: none;
+  }
+
+  .bar-replay-controls.is-selecting {
+    top: 54px;
+    bottom: auto;
+    width: max-content;
+    max-width: calc(100vw - 24px);
   }
 
   .app-shell.chart-focus .chart-area {

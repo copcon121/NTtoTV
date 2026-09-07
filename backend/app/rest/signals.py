@@ -14,20 +14,19 @@ from ..engines.mgann_big_trade_sweep import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
-    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
-    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
-    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
     MgannBigTradeSweepBar,
     MgannBigTradeSweepState,
 )
 from ..storage.cache_store import CacheStore
-from ..storage.records import AlertRecord, BarRecord, BigTradeRecord
+from ..storage.records import AlertRecord, BarRecord, BigTradeRecord, VolumeDeltaRecord
 from .contract_state import ContractStateStore
 from .errors import bad_request, not_found
 from .orderflow import get_cache
@@ -222,10 +221,18 @@ def _load_mgann_sweep_signals(
         frm=bars[0].time,
         to=last_time + _M1_MS - 1,
     )
+    volume_deltas = cache.read_volume_delta(
+        symbol,
+        contract,
+        timeframe,
+        frm=bars[0].time,
+        to=last_time,
+    )
     return _mgann_sweep_signals_from_history(
         alerts=alerts,
         bars=bars,
         big_trades=big_trades,
+        volume_deltas=volume_deltas,
         from_time=first_time,
         to_time=last_time,
     )
@@ -235,6 +242,7 @@ def _mgann_sweep_signals_from_history(
     alerts: list[AlertRecord],
     bars: list[BarRecord],
     big_trades: list[BigTradeRecord],
+    volume_deltas: list[VolumeDeltaRecord],
     from_time: int,
     to_time: int,
 ) -> list[dict[str, Any]]:
@@ -242,6 +250,7 @@ def _mgann_sweep_signals_from_history(
     for trade in big_trades:
         bucket = int(trade.time) - (int(trade.time) % _M1_MS)
         trades_by_bucket.setdefault(bucket, []).append(trade)
+    volume_delta_by_time = {row.time: row.delta for row in volume_deltas}
 
     by_id: dict[str, dict[str, Any]] = {}
     for alert in alerts:
@@ -261,6 +270,7 @@ def _mgann_sweep_signals_from_history(
                     low=bar.low,
                     close=bar.close,
                     volume=bar.volume,
+                    volume_delta=volume_delta_by_time.get(bar.time),
                 )
             )
             if bar.time < from_time or bar.time > to_time:
@@ -278,8 +288,9 @@ def _mgann_sweep_signals_from_history(
                     "cutCount": trigger.cut_count,
                     "bigTradeVolume": trigger.big_trade_volume,
                     "barVolume": trigger.bar_volume,
+                    "barVolumeDelta": trigger.bar_volume_delta,
                     "barSpread": trigger.bar_spread,
-                    "avgVolume": trigger.avg_volume,
+                    "avgVolumeDelta": trigger.avg_volume_delta,
                     "avgSpread": trigger.avg_spread,
                 }
     return sorted(by_id.values(), key=lambda item: (item["time"], item["id"]))
@@ -291,17 +302,13 @@ def _mgann_sweep_state_from_alert(alert: AlertRecord) -> MgannBigTradeSweepState
             params.get("bigTradeThreshold"),
             MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
         ),
-        min_volume=_nonnegative_int_param(
-            params.get("minVolume"),
-            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
+        volume_delta_lookback=_positive_int_param(
+            params.get("volumeDeltaLookback", params.get("volumeLookback")),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
         ),
-        volume_lookback=_positive_int_param(
-            params.get("volumeLookback"),
-            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
-        ),
-        volume_multiplier=_positive_float_param(
-            params.get("volumeMultiplier"),
-            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+        volume_delta_multiplier=_positive_float_param(
+            params.get("volumeDeltaMultiplier", params.get("volumeMultiplier")),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
         ),
         min_spread_ticks=_nonnegative_int_param(
             params.get("minSpreadTicks"),

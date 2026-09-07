@@ -203,7 +203,7 @@ def _big_trade_for_contract(bt: BigTrade, contract: str) -> BigTrade:
 
 AlertTextSender = Callable[[AlertEvent], Awaitable[None] | None]
 AnalystEventSink = Callable[[], None]
-AutoTradeClosedBarSink = Callable[[OHLCVBar], Awaitable[None] | None]
+AutoTradeClosedBarSink = Callable[[OHLCVBar, int | None], Awaitable[None] | None]
 AutoTradePriceSink = Callable[[float, int], Awaitable[None] | None]
 
 
@@ -1391,7 +1391,7 @@ class Pipeline:
             await self._run_auto_trade_closed_bar(ctx)
 
     async def _run_auto_trade_closed_bar(self, ctx: MarketContext) -> None:
-        """Pass only live finalized M1 OHLCV bars to opted-in auto execution."""
+        """Pass only live finalized M1 bars and their volume delta to auto execution."""
         if (
             self._auto_trade_closed_bar_sink is None
             or not ctx.bar_closed
@@ -1413,7 +1413,8 @@ class Pipeline:
                     low=ctx.bar_low,
                     close=ctx.bar_close,
                     volume=ctx.bar_volume,
-                )
+                ),
+                ctx.bar_volume_delta,
             )
         )
 

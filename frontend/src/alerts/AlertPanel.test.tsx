@@ -48,9 +48,8 @@ const alerts: Alert[] = [
       requireBigTrade: true,
       bigTradeThreshold: 70,
       timeframe: "1m",
-      minVolume: 0,
-      volumeLookback: 20,
-      volumeMultiplier: 2,
+      volumeDeltaLookback: 20,
+      volumeDeltaMultiplier: 2,
       minSpreadTicks: 0,
       spreadLookback: 20,
       spreadMultiplier: 2,
@@ -69,9 +68,8 @@ const alerts: Alert[] = [
     type: "mgann_sweep",
     params: {
       timeframe: "1m",
-      minVolume: 0,
-      volumeLookback: 20,
-      volumeMultiplier: 2,
+      volumeDeltaLookback: 20,
+      volumeDeltaMultiplier: 2,
       minSpreadTicks: 0,
       spreadLookback: 20,
       spreadMultiplier: 2,
@@ -125,13 +123,13 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
       "External BOS/CHoCH, BT > 50 (repeat)",
     );
     expect(screen.getByTestId("alert-a_6")).toHaveTextContent(
-      "mGann Break L/S, BT > 70, vol x2, spread x2 (repeat)",
+      "mGann Break L/S, BT > 70, delta x2, spread x2 (repeat)",
     );
     expect(screen.getByTestId("alert-a_8")).toHaveTextContent(
       "M1 Liquidity Pool Break BSL/SSL x3 (repeat)",
     );
     expect(screen.getByTestId("alert-a_7")).toHaveTextContent(
-      "mGann Break L/S, vol x2, spread x2 (repeat)",
+      "mGann Break L/S, delta x2, spread x2 (repeat)",
     );
     expect(screen.getByLabelText("Enable a_1")).toBeChecked();
     expect(screen.getByLabelText("Enable a_2")).not.toBeChecked();
@@ -251,10 +249,10 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(screen.getByLabelText("Require BigTrade")).toBeChecked();
     expect(screen.getByLabelText("BigTrade threshold")).toHaveValue(70);
     expect(screen.getByText("BigTrade >")).toBeInTheDocument();
-    expect(screen.getByText("Vol x")).toBeInTheDocument();
+    expect(screen.getByText("Delta x")).toBeInTheDocument();
     expect(screen.getByText("Spread x")).toBeInTheDocument();
     expect(screen.queryByLabelText("mGann break direction")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Volume multiplier")).toHaveValue(2);
+    expect(screen.getByLabelText("Volume Delta multiplier")).toHaveValue(2);
     expect(screen.getByLabelText("Spread multiplier")).toHaveValue(2);
     expect(
       screen.queryByLabelText("mGann Break L/S history limit"),
@@ -264,7 +262,7 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     fireEvent.change(screen.getByLabelText("BigTrade threshold"), {
       target: { value: "85" },
     });
-    fireEvent.change(screen.getByLabelText("Volume multiplier"), {
+    fireEvent.change(screen.getByLabelText("Volume Delta multiplier"), {
       target: { value: "2.5" },
     });
     fireEvent.change(screen.getByLabelText("Spread multiplier"), {
@@ -278,9 +276,8 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
         requireBigTrade: true,
         bigTradeThreshold: 85,
         timeframe: "1m",
-        minVolume: 0,
-        volumeLookback: 20,
-        volumeMultiplier: 2.5,
+        volumeDeltaLookback: 20,
+        volumeDeltaMultiplier: 2.5,
         minSpreadTicks: 0,
         spreadLookback: 20,
         spreadMultiplier: 2.2,
@@ -307,16 +304,16 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(screen.getByLabelText("Require BigTrade")).not.toBeChecked();
     expect(screen.queryByLabelText("BigTrade threshold")).not.toBeInTheDocument();
     expect(screen.queryByText("BigTrade >")).not.toBeInTheDocument();
-    expect(screen.getByText("Vol x")).toBeInTheDocument();
+    expect(screen.getByText("Delta x")).toBeInTheDocument();
     expect(screen.getByText("Spread x")).toBeInTheDocument();
-    expect(screen.getByLabelText("Volume multiplier")).toHaveValue(2);
+    expect(screen.getByLabelText("Volume Delta multiplier")).toHaveValue(2);
     expect(screen.getByLabelText("Spread multiplier")).toHaveValue(2);
     expect(
       screen.queryByLabelText("mGann Break L/S history limit"),
     ).not.toBeInTheDocument();
     expect(screen.getByLabelText("Repeat alert")).toBeChecked();
 
-    fireEvent.change(screen.getByLabelText("Volume multiplier"), {
+    fireEvent.change(screen.getByLabelText("Volume Delta multiplier"), {
       target: { value: "2.5" },
     });
     fireEvent.change(screen.getByLabelText("Spread multiplier"), {
@@ -330,9 +327,8 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
         requireBigTrade: false,
         bigTradeThreshold: 70,
         timeframe: "1m",
-        minVolume: 0,
-        volumeLookback: 20,
-        volumeMultiplier: 2.5,
+        volumeDeltaLookback: 20,
+        volumeDeltaMultiplier: 2.5,
         minSpreadTicks: 0,
         spreadLookback: 20,
         spreadMultiplier: 2.2,

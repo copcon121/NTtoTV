@@ -926,6 +926,7 @@ export class ApiClient {
     contract: string,
     timeframe: string,
     limit?: number,
+    range?: { from?: number; to?: number },
   ): Promise<VolumeDeltaBar[]> {
     const params = new URLSearchParams({
       symbol,
@@ -935,6 +936,8 @@ export class ApiClient {
     if (limit !== undefined) {
       params.set("limit", String(limit));
     }
+    if (range?.from !== undefined) params.set("from", String(range.from));
+    if (range?.to !== undefined) params.set("to", String(range.to));
     const body = await this.getJson<{ bars: VolumeDeltaBar[] }>(
       `/orderflow/volume-delta?${params.toString()}`,
     );
@@ -989,6 +992,7 @@ export class ApiClient {
     symbol: string,
     contract: string,
     limit?: number,
+    range?: { from?: number; to?: number },
   ): Promise<FvgSignalUpdateMessage[]> {
     const params = new URLSearchParams({
       symbol,
@@ -998,6 +1002,8 @@ export class ApiClient {
     if (limit !== undefined) {
       params.set("limit", String(limit));
     }
+    if (range?.from !== undefined) params.set("from", String(range.from));
+    if (range?.to !== undefined) params.set("to", String(range.to));
     const body = await this.getJson<{
       symbol: string;
       contract: string;
@@ -1062,11 +1068,14 @@ export class ApiClient {
     symbol: string,
     contract: string,
     limit?: number,
+    range?: { from?: number; to?: number },
   ): Promise<BigTradeMessage[]> {
     const params = new URLSearchParams({ symbol, contract });
     if (limit !== undefined) {
       params.set("limit", String(limit));
     }
+    if (range?.from !== undefined) params.set("from", String(range.from));
+    if (range?.to !== undefined) params.set("to", String(range.to));
     const body = await this.getJson<{
       symbol: string;
       contract: string;

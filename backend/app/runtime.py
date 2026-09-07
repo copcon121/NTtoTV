@@ -301,8 +301,12 @@ class AppRuntime:
                 logger.warning("anchored sync failed: %s", exc)
             await asyncio.sleep(2.0)
 
-    async def _on_auto_mgann_closed_bar(self, bar) -> None:
-        await asyncio.to_thread(self._auto_mgann_trade.on_closed_bar, bar)
+    async def _on_auto_mgann_closed_bar(self, bar, volume_delta: int | None) -> None:
+        await asyncio.to_thread(
+            self._auto_mgann_trade.on_closed_bar,
+            bar,
+            volume_delta,
+        )
 
     async def _on_auto_mgann_price(self, price: float, at: int) -> None:
         if not self._auto_mgann_trade.should_scan_open_order_management(at):

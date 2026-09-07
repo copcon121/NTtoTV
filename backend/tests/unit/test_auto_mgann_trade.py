@@ -96,6 +96,31 @@ def test_auto_mgann_submits_one_idempotent_long_market_bracket(tmp_path, structu
 
 
 @pytest.mark.unit
+def test_auto_mgann_passes_closed_bar_volume_delta_to_detector(tmp_path):
+    cache, _, _, _, _, engine = _setup(tmp_path)
+    try:
+        seen = []
+        engine._signals = SimpleNamespace(  # type: ignore[assignment]
+            on_closed_bar=lambda signal_bar: seen.append(signal_bar) or []
+        )
+        engine.on_closed_bar(
+            OHLCVBar(
+                time=1_000_010,
+                open=99.0,
+                high=101.2,
+                low=98.8,
+                close=101.1,
+                volume=500,
+            ),
+            volume_delta=-250,
+        )
+
+        assert [bar.volume_delta for bar in seen] == [-250]
+    finally:
+        cache.close()
+
+
+@pytest.mark.unit
 def test_auto_mgann_validates_bracket_in_broker_price_scale(tmp_path):
     cache, _, basis, user, _, engine = _setup(tmp_path)
     try:

@@ -166,6 +166,15 @@ function pressRedo() {
   );
 }
 
+function pressEnter() {
+  document.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      bubbles: true,
+      key: "Enter",
+    }),
+  );
+}
+
 function pressShift() {
   document.dispatchEvent(
     new KeyboardEvent("keydown", {
@@ -857,6 +866,60 @@ describe("DrawingManager brush tool", () => {
     const [brush] = manager.exportState();
     expect(brush.tool).toBe("brush");
     expect(brush.anchors).toHaveLength(2);
+
+    manager.dispose();
+    container.remove();
+  });
+});
+
+describe("DrawingManager path tool", () => {
+  it("places an open-ended polyline and finishes it with Enter", () => {
+    const { attached, clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("path");
+
+    placeAnchors(clickHandlers, [
+      { x: 10, y: 20 },
+      { x: 40, y: 60 },
+      { x: 80, y: 30 },
+    ]);
+
+    expect(manager.exportState()).toEqual([]);
+    pressEnter();
+
+    const [path] = manager.exportState();
+    expect(attached).toHaveLength(1);
+    expect(path.tool).toBe("path");
+    expect(
+      path.anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 10, price: 20 },
+      { logical: 40, price: 60 },
+      { logical: 80, price: 30 },
+    ]);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("shows a live segment preview and finishes on double-click", () => {
+    const { attached, clickHandlers, container, crosshairHandlers, manager } =
+      makeHarness();
+    manager.startDrawing("path");
+    clickHandlers[0]({ point: { x: 10, y: 20 }, paneIndex: 0 });
+
+    crosshairHandlers[0]({ point: { x: 40, y: 60 }, paneIndex: 0 });
+    expect(attached).toHaveLength(1);
+    expect((attached[0] as { id: string }).id.startsWith("preview-")).toBe(true);
+
+    clickHandlers[0]({ point: { x: 40, y: 60 }, paneIndex: 0 });
+    doubleClick(container, 40, 60);
+
+    const [path] = manager.exportState();
+    expect(path.tool).toBe("path");
+    expect(path.anchors).toHaveLength(2);
 
     manager.dispose();
     container.remove();

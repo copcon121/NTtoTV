@@ -16,6 +16,7 @@ import type { Timeframe } from "../../socket/messages";
 
 export type DrawingToolType =
   | "trendline"
+  | "path"
   | "brush"
   | "fib_retracement"
   | "date_range"
@@ -51,6 +52,13 @@ export const DRAWING_TOOLS: readonly DrawingToolDef[] = [
     label: "Trend Line",
     anchors: 2,
     icon: "M4 20 L20 4",
+  },
+  {
+    type: "path",
+    label: "Path",
+    // Path is open-ended: click to add vertices and double-click/Enter to finish.
+    anchors: 0,
+    icon: "M3 18 L9 12 L14 15 L21 6 M17 6 h4 v4",
   },
   {
     type: "fib_retracement",

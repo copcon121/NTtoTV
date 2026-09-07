@@ -1091,6 +1091,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private chartBackgroundColor: string;
   private readonly barCountdownElement: HTMLDivElement;
   private barCountdownDurationMs: number;
+  private barCountdownVisible = true;
   private barCountdownTimer: number | undefined;
   private latestBar: Bar | undefined;
   private latestBarFirstSeenAtMs: number | undefined;
@@ -1380,6 +1381,15 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderCandleSeries();
     this.renderBigTradeMarkers();
     this.updateBarCountdown();
+  }
+
+  setBarCountdownVisible(visible: boolean): void {
+    this.barCountdownVisible = visible;
+    this.updateBarCountdown();
+  }
+
+  scrollToLatest(): void {
+    this.chart.timeScale().scrollToRealTime();
   }
 
   /** Restyle the chart background without rebuilding the chart instance. */
@@ -1779,7 +1789,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   private updateBarCountdown(): void {
     const bar = this.latestBar;
-    if (bar === undefined || this.barCountdownDurationMs <= 0) {
+    if (!this.barCountdownVisible || bar === undefined || this.barCountdownDurationMs <= 0) {
       this.barCountdownElement.hidden = true;
       return;
     }
@@ -2867,6 +2877,31 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     };
     this.chart.subscribeCrosshairMove(listener);
     return () => this.chart.unsubscribeCrosshairMove(listener);
+  }
+
+  /** Subscribe to clicks on loaded candles (used by the Bar Replay picker). */
+  subscribeBarClick(handler: (bar: Bar | undefined) => void): () => void {
+    const listener = (param: MouseEventParams) => {
+      const point = param.seriesData.get(this.candleSeries) as
+        | CandlestickData
+        | undefined;
+      if (param.time === undefined || point === undefined) {
+        handler(undefined);
+        return;
+      }
+      const displayTime = param.time as number;
+      const source = this.barsByTime.get(displayTime);
+      handler({
+        time: source?.time ?? displayTime * 1000 - this.displayTimeOffsetMs,
+        open: point.open,
+        high: point.high,
+        low: point.low,
+        close: point.close,
+        volume: source?.volume ?? 0,
+      });
+    };
+    this.chart.subscribeClick(listener);
+    return () => this.chart.unsubscribeClick(listener);
   }
 
   /**

@@ -40,7 +40,6 @@ from ..engines.alert_engine import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
-    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
@@ -49,8 +48,8 @@ from ..engines.alert_engine import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME,
-    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
-    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
     MGANN_BIG_TRADE_SWEEP_TIMEFRAMES,
     SMC_DEFAULT_LOOKAHEAD_BARS,
     SMC_DEFAULT_MAX_BARS,
@@ -242,6 +241,13 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
     elif alert_type in (MGANN_BREAK_LS, MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP):
         params.pop("direction", None)
         params.pop("historySignalLimit", None)
+        legacy_volume_lookback = params.pop("volumeLookback", None)
+        legacy_volume_multiplier = params.pop("volumeMultiplier", None)
+        params.pop("minVolume", None)
+        if "volumeDeltaLookback" not in params and legacy_volume_lookback is not None:
+            params["volumeDeltaLookback"] = legacy_volume_lookback
+        if "volumeDeltaMultiplier" not in params and legacy_volume_multiplier is not None:
+            params["volumeDeltaMultiplier"] = legacy_volume_multiplier
         require_big_trade = params.get("requireBigTrade", False)
         if alert_type == MGANN_BIG_TRADE_SWEEP:
             require_big_trade = True
@@ -298,7 +304,7 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
             params["filterLiquidity"] = filter_liquidity
         params["bigTradeThreshold"] = threshold
         for key in (
-            "volumeLookback",
+            "volumeDeltaLookback",
             "spreadLookback",
             "swingSize",
             "pivotLookbackBars",
@@ -308,7 +314,6 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         ):
             _validate_optional_positive_number(params, key)
         for key in (
-            "minVolume",
             "minSpreadTicks",
             "pivotToleranceTicks",
             "minPivotWickTicks",
@@ -316,20 +321,16 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
             "breakTicks",
         ):
             _validate_optional_nonnegative_number(params, key)
-        for key in ("volumeMultiplier", "spreadMultiplier"):
+        for key in ("volumeDeltaMultiplier", "spreadMultiplier"):
             _validate_optional_positive_number(params, key)
         params["timeframe"] = timeframe
-        params["minVolume"] = params.get(
-            "minVolume",
-            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
+        params["volumeDeltaLookback"] = params.get(
+            "volumeDeltaLookback",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
         )
-        params["volumeLookback"] = params.get(
-            "volumeLookback",
-            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
-        )
-        params["volumeMultiplier"] = params.get(
-            "volumeMultiplier",
-            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+        params["volumeDeltaMultiplier"] = params.get(
+            "volumeDeltaMultiplier",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
         )
         params["minSpreadTicks"] = params.get(
             "minSpreadTicks",

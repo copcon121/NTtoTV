@@ -66,13 +66,13 @@ class AutoMgannTradeEngine:
         self._registry = registry
         self._settings = settings or default_settings
         # Exact requested strategy: M1 internal BOS/CHoCH, body from 2x through
-        # 8x the prior 20 bodies, volume >= 2x the prior 20 volumes, without
-        # BigTrade gate.
+        # 8x the prior 20 bodies, direction-aligned volume delta >= 2x the
+        # prior 20 absolute deltas, without a BigTrade gate.
         self._signals = MgannBigTradeSweepState(
             timeframe="1m",
             require_big_trade=False,
-            volume_lookback=20,
-            volume_multiplier=2.0,
+            volume_delta_lookback=20,
+            volume_delta_multiplier=2.0,
             spread_lookback=20,
             spread_multiplier=2.0,
             swing_size=5,
@@ -87,18 +87,32 @@ class AutoMgannTradeEngine:
     def seed(self, *, symbol: str = "GC", contract: str = "GC", count: int = 500) -> None:
         """Warm the detector from recent closed bars without submitting orders."""
         bars = self._cache.read_bars(symbol, contract, "1m", limit=max(1, count))
+        deltas_by_time = {
+            row.time: row.delta
+            for row in self._cache.read_volume_delta(
+                symbol,
+                contract,
+                "1m",
+                frm=bars[0].time if bars else None,
+                to=bars[-1].time if bars else None,
+            )
+        }
         for bar in bars:
             if not bar.closed:
                 continue
-            self._signals.on_closed_bar(_to_signal_bar(bar))
+            self._signals.on_closed_bar(
+                _to_signal_bar(bar, volume_delta=deltas_by_time.get(bar.time))
+            )
             self._advance_ema21(bar)
 
-    def on_closed_bar(self, bar: OHLCVBar) -> int:
+    def on_closed_bar(self, bar: OHLCVBar, volume_delta: int | None = None) -> int:
         """Process one live closed M1 bar and return submitted/rejected order count."""
         ema21 = self._advance_ema21(bar)
         if ema21 is not None:
             self._manage_ema21_trailing_on_closed_bar(bar, ema21)
-        triggers = self._signals.on_closed_bar(_to_signal_bar(bar))
+        triggers = self._signals.on_closed_bar(
+            _to_signal_bar(bar, volume_delta=volume_delta)
+        )
         if not triggers:
             return 0
 
@@ -595,7 +609,7 @@ class AutoMgannTradeEngine:
         )
 
 
-def _to_signal_bar(bar) -> MgannBigTradeSweepBar:
+def _to_signal_bar(bar, *, volume_delta: int | None = None) -> MgannBigTradeSweepBar:
     return MgannBigTradeSweepBar(
         time=bar.time,
         open=float(bar.open),
@@ -603,6 +617,7 @@ def _to_signal_bar(bar) -> MgannBigTradeSweepBar:
         low=float(bar.low),
         close=float(bar.close),
         volume=int(bar.volume),
+        volume_delta=volume_delta,
     )
 
 

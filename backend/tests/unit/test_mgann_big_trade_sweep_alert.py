@@ -19,6 +19,7 @@ def _bar_ctx(
     low: float,
     close: float,
     volume: int = 100,
+    volume_delta: int | None = None,
 ) -> MarketContext:
     time = index * _STEP
     return MarketContext(
@@ -33,6 +34,11 @@ def _bar_ctx(
         bar_low=low,
         bar_close=close,
         bar_volume=volume,
+        bar_volume_delta=(
+            volume_delta
+            if volume_delta is not None
+            else (volume if close >= open_ else -volume)
+        ),
     )
 
 
@@ -63,9 +69,8 @@ def _engine(
                 "requireBigTrade": require_big_trade,
                 "bigTradeThreshold": 70,
                 "timeframe": "1m",
-                "minVolume": 0,
-                "volumeLookback": 2,
-                "volumeMultiplier": 2,
+                "volumeDeltaLookback": 2,
+                "volumeDeltaMultiplier": 2,
                 "minSpreadTicks": 0,
                 "spreadLookback": 2,
                 "spreadMultiplier": 2,
@@ -150,6 +155,17 @@ def test_mgann_break_ls_requires_close_beyond_pivot_not_wick_only():
     assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
 
     events = engine.evaluate(_bar_ctx(5, 96.5, 102.5, 96.0, 99.8, 500))
+
+    assert events == []
+
+
+def test_mgann_break_ls_requires_direction_aligned_volume_delta():
+    engine = _engine()
+    assert _feed(engine, _BULLISH_CHOCH_SETUP) == []
+
+    events = engine.evaluate(
+        _bar_ctx(5, 96.5, 102.5, 96.0, 102.2, 5_000, volume_delta=-5_000)
+    )
 
     assert events == []
 

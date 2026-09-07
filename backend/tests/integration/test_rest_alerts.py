@@ -20,8 +20,8 @@ from app.engines.alert_engine import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME,
-    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
-    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
     SMC_DEFAULT_LOOKAHEAD_BARS,
     SMC_DEFAULT_MAX_BARS,
     SMC_DEFAULT_PAUSE_ON_INSIDE_BARS,
@@ -255,12 +255,12 @@ def test_rest_alerts_accept_and_normalize_mgann_break_ls_params(
             assert body["params"]["bigTradeThreshold"] == 70
             assert body["params"]["timeframe"] == MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME
             assert (
-                body["params"]["volumeLookback"]
-                == MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK
+                body["params"]["volumeDeltaLookback"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK
             )
             assert (
-                body["params"]["volumeMultiplier"]
-                == MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER
+                body["params"]["volumeDeltaMultiplier"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER
             )
             assert (
                 body["params"]["spreadLookback"]
@@ -367,12 +367,12 @@ def test_rest_alerts_accept_legacy_mgann_aliases_as_break_ls(
             assert body["params"]["bigTradeThreshold"] == 70
             assert body["params"]["timeframe"] == MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME
             assert (
-                body["params"]["volumeLookback"]
-                == MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK
+                body["params"]["volumeDeltaLookback"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK
             )
             assert (
-                body["params"]["volumeMultiplier"]
-                == MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER
+                body["params"]["volumeDeltaMultiplier"]
+                == MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER
             )
             assert (
                 body["params"]["spreadLookback"]

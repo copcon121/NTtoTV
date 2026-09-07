@@ -90,7 +90,7 @@ export interface BigTradeSettings {
 }
 
 /** Hard rendering budget for the custom BigTrade canvas primitive. */
-export const MAX_BIG_TRADE_VISIBLE = 50;
+export const MAX_BIG_TRADE_VISIBLE = 500;
 
 export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
   showVA: false,

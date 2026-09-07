@@ -111,6 +111,8 @@ export interface DisposableChartPort extends ChartSeriesPort {
   setTimezoneOffsetMinutes?(offsetMinutes: number): void;
   takeScreenshotDataUrl?(): string | undefined;
   setBarCountdownDuration?(durationMs: number): void;
+  setBarCountdownVisible?(visible: boolean): void;
+  scrollToLatest?(): void;
   setVolumeVisible?(visible: boolean): void;
   setVolumeDeltaVisible?(visible: boolean): void;
   setCvdVisible?(visible: boolean): void;
@@ -163,6 +165,7 @@ export interface DisposableChartPort extends ChartSeriesPort {
   subscribeCrosshairPosition?(
     handler: (position: CrosshairPosition | undefined) => void,
   ): () => void;
+  subscribeBarClick?(handler: (bar: Bar | undefined) => void): () => void;
 }
 
 /** Factory that builds the rendering port for a container element. */
@@ -345,6 +348,16 @@ export interface ChartContainerProps {
   onAlertDelete?: (id: string) => void;
   /** Fired after a matching realtime bar update is applied to the chart. */
   onRealtimeBar?: (bar: Bar) => void;
+  /** Fired when a loaded candle is clicked, used to choose a replay start. */
+  onBarClick?: (bar: Bar) => void;
+  /** Keep receiving realtime bars without painting them over replay history. */
+  suspendRealtime?: boolean;
+  /** Keep the newest revealed replay candle in view. */
+  followLatestBar?: boolean;
+  /** Fired when the user manually pans/zooms the chart surface. */
+  onChartNavigate?: () => void;
+  /** Applies replay selection cursor styling to the chart surface. */
+  replaySelecting?: boolean;
   /** Fired when the visible range gets close to the oldest loaded bars. */
   onRequestMoreHistory?: () => void;
   /** Fired when an order line is dragged and released. */
@@ -522,6 +535,11 @@ export function ChartContainer({
   onAlertDragCommit,
   onAlertDelete,
   onRealtimeBar,
+  onBarClick,
+  suspendRealtime = false,
+  followLatestBar = false,
+  onChartNavigate,
+  replaySelecting = false,
   onRequestMoreHistory,
   onOrderDragCommit,
   onOrderDragBatchCommit,
@@ -577,6 +595,12 @@ export function ChartContainer({
   alertDeleteRef.current = onAlertDelete;
   const realtimeBarRef = useRef<((bar: Bar) => void) | undefined>(onRealtimeBar);
   realtimeBarRef.current = onRealtimeBar;
+  const barClickRef = useRef<((bar: Bar) => void) | undefined>(onBarClick);
+  barClickRef.current = onBarClick;
+  const suspendRealtimeRef = useRef(suspendRealtime);
+  suspendRealtimeRef.current = suspendRealtime;
+  const chartNavigateRef = useRef(onChartNavigate);
+  chartNavigateRef.current = onChartNavigate;
   const requestMoreHistoryRef = useRef<(() => void) | undefined>(
     onRequestMoreHistory,
   );
@@ -717,13 +741,17 @@ export function ChartContainer({
     // idle SMC pass catches up after the gesture.
     let wheelIdleTimer: number | undefined;
     const onChartPointerDown = (event: PointerEvent) => {
-      if (event.button === 0) chartInteractionActiveRef.current = true;
+      if (event.button === 0) {
+        chartInteractionActiveRef.current = true;
+        chartNavigateRef.current?.();
+      }
     };
     const onChartPointerEnd = () => {
       chartInteractionActiveRef.current = false;
     };
     const onChartWheel = () => {
       chartInteractionActiveRef.current = true;
+      chartNavigateRef.current?.();
       if (wheelIdleTimer !== undefined) window.clearTimeout(wheelIdleTimer);
       wheelIdleTimer = window.setTimeout(() => {
         wheelIdleTimer = undefined;
@@ -754,6 +782,12 @@ export function ChartContainer({
     const disposeCrosshairPosition =
       typeof maybe.subscribeCrosshairPosition === "function"
         ? maybe.subscribeCrosshairPosition(setCrosshairTime)
+        : undefined;
+    const disposeBarClick =
+      typeof port.subscribeBarClick === "function"
+        ? port.subscribeBarClick((bar) => {
+            if (bar !== undefined) barClickRef.current?.(bar);
+          })
         : undefined;
 
     let disposeVisibleRange: (() => void) | undefined;
@@ -833,6 +867,7 @@ export function ChartContainer({
       chartInteractionActiveRef.current = false;
       disposeCrosshair?.();
       disposeCrosshairPosition?.();
+      disposeBarClick?.();
       setCrosshairTime(undefined);
       disposeVisibleRange?.();
       disposeContextMenu?.();
@@ -900,6 +935,10 @@ export function ChartContainer({
   }, [timeframe]);
 
   useEffect(() => {
+    portRef.current?.setBarCountdownVisible?.(!suspendRealtime);
+  }, [suspendRealtime]);
+
+  useEffect(() => {
     portRef.current?.setOutsideBar?.(outsideBar);
   }, [outsideBar]);
 
@@ -950,6 +989,9 @@ export function ChartContainer({
     }
     portRef.current?.setDisplayTimeOffset?.(displayOffsetForTimeframe(timeframe));
     controller.load(bars ?? []);
+    if (followLatestBar) {
+      portRef.current?.scrollToLatest?.();
+    }
     drawingManagerRef.current?.requestUpdateAll();
     refreshFootprintViewport();
     const frame = window.requestAnimationFrame(() => {
@@ -1095,6 +1137,10 @@ export function ChartContainer({
       if (!matchesSeries(message, symbol, contract, timeframe)) {
         return;
       }
+      if (suspendRealtimeRef.current) {
+        realtimeBarRef.current?.(message.bar);
+        return;
+      }
       const outcome = controller.apply(message.bar);
       realtimeBarRef.current?.(message.bar);
 
@@ -1168,6 +1214,9 @@ export function ChartContainer({
         return;
       }
       if (!matchesVolumeDeltaSeries(message, symbol, contract, timeframe)) {
+        return;
+      }
+      if (suspendRealtimeRef.current) {
         return;
       }
       port.updateVolumeDelta({
@@ -1272,7 +1321,7 @@ export function ChartContainer({
 
   return (
     <div
-      className="chart-container"
+      className={`chart-container${replaySelecting ? " is-replay-selecting" : ""}`}
       aria-label="Chart"
       data-symbol={symbol}
       data-contract={contract}

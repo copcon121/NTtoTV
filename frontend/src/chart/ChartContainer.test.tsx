@@ -95,6 +95,7 @@ class FakePort implements DisposableChartPort {
   ) => void)[] = [];
   selectedPriceLine: PriceLineSelection | undefined;
   screenshotDataUrl = "data:image/png;base64,abc";
+  scrollToLatestCalls = 0;
   disposed = false;
 
   setBars(bars: BarSeries): void {
@@ -240,6 +241,9 @@ class FakePort implements DisposableChartPort {
   }
   clearSelectedPriceLine(): void {
     this.selectedPriceLine = undefined;
+  }
+  scrollToLatest(): void {
+    this.scrollToLatestCalls += 1;
   }
   dispose(): void {
     this.disposed = true;
@@ -920,8 +924,8 @@ describe("ChartContainer", () => {
     ).toEqual(markers.slice(2));
   });
 
-  it("hard-caps legacy BigTrade profiles to 50 canvas bubbles", () => {
-    const markers: BigTradeMarker[] = Array.from({ length: 80 }, (_, index) => ({
+  it("hard-caps BigTrade profiles to 500 canvas bubbles", () => {
+    const markers: BigTradeMarker[] = Array.from({ length: 600 }, (_, index) => ({
       tradeId: index + 1,
       time: Date.UTC(2026, 5, 16, 14, index),
       price: 4500 + index / 10,
@@ -933,8 +937,8 @@ describe("ChartContainer", () => {
       minVolume: 0,
       maxVisible: 500,
     });
-    expect(filtered).toHaveLength(50);
-    expect(filtered).toEqual(markers.slice(-50));
+    expect(filtered).toHaveLength(500);
+    expect(filtered).toEqual(markers.slice(-500));
   });
 
   it("filters BigTrade markers by New York session thresholds", () => {
@@ -1332,6 +1336,53 @@ describe("ChartContainer", () => {
       barsAfter: 100,
     });
     expect(onRequestMoreHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops replay auto-follow after manual chart navigation without reloading bars", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const onChartNavigate = vi.fn();
+    const replayBars = [bar(10), bar(20)];
+
+    const { container, rerender } = render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC"
+        timeframe="1m"
+        bars={replayBars}
+        portFactory={factory}
+        followLatestBar
+        onChartNavigate={onChartNavigate}
+      />,
+    );
+
+    expect(port.scrollToLatestCalls).toBe(1);
+    const initialLoads = port.setBarsCalls.length;
+    const host = container.querySelector(".chart-host") as Element;
+
+    const pointerDown = new Event("pointerdown", { bubbles: true });
+    Object.defineProperty(pointerDown, "button", { value: 0 });
+    fireEvent(host, pointerDown);
+    expect(onChartNavigate).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ChartContainer
+        symbol="GC"
+        contract="GC"
+        timeframe="1m"
+        bars={replayBars}
+        portFactory={factory}
+        followLatestBar={false}
+        onChartNavigate={onChartNavigate}
+      />,
+    );
+
+    // Disabling follow mode must not reload the same bars or snap the viewport.
+    expect(port.setBarsCalls).toHaveLength(initialLoads);
+    expect(port.scrollToLatestCalls).toBe(1);
+
+    fireEvent.wheel(host);
+    expect(onChartNavigate).toHaveBeenCalledTimes(2);
   });
 
   it("disposes the port on unmount", () => {

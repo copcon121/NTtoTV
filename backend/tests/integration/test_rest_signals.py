@@ -7,7 +7,7 @@ from app.engines.alert_engine import MGANN_BREAK_LS, MGANN_SWEEP
 from app.models import Side
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
-from app.storage.records import AlertRecord, BarRecord, BigTradeRecord
+from app.storage.records import AlertRecord, BarRecord, BigTradeRecord, VolumeDeltaRecord
 
 _SYMBOL = "GC"
 _CONTRACT = "GC"
@@ -47,6 +47,23 @@ def _bar(index: int, open_: float, high: float, low: float, close: float, volume
     )
 
 
+def _volume_delta(index: int, delta: int) -> VolumeDeltaRecord:
+    return VolumeDeltaRecord(
+        symbol=_SYMBOL,
+        contract=_CONTRACT,
+        timeframe="1m",
+        time=index * _STEP,
+        volume=abs(delta),
+        buy_volume=max(0, delta),
+        sell_volume=max(0, -delta),
+        delta=delta,
+        delta_high=max(0, delta),
+        delta_low=min(0, delta),
+        open_delta=0,
+        close_delta=delta,
+    )
+
+
 @pytest.mark.integration
 def test_mgann_break_ls_signals_replays_profile_alert(env):
     client, cache = env
@@ -60,9 +77,8 @@ def test_mgann_break_ls_signals_replays_profile_alert(env):
                 "requireBigTrade": True,
                 "bigTradeThreshold": 70,
                 "timeframe": "1m",
-                "minVolume": 0,
-                "volumeLookback": 2,
-                "volumeMultiplier": 2,
+                "volumeDeltaLookback": 2,
+                "volumeDeltaMultiplier": 2,
                 "minSpreadTicks": 0,
                 "spreadLookback": 2,
                 "spreadMultiplier": 2,
@@ -89,6 +105,9 @@ def test_mgann_break_ls_signals_replays_profile_alert(env):
             _bar(4, 98.8, 99.0, 96.0, 96.5, 100),
             _bar(5, 96.5, 102.5, 96.0, 102.2, 500),
         ]
+    )
+    cache.upsert_volume_deltas(
+        [_volume_delta(index, 500 if index == 5 else 100) for index in range(6)]
     )
     cache.upsert_big_trade(
         BigTradeRecord(
@@ -129,8 +148,9 @@ def test_mgann_break_ls_signals_replays_profile_alert(env):
     assert signal["cutCount"] == 1
     assert signal["bigTradeVolume"] == 80
     assert signal["barVolume"] == 500
+    assert signal["barVolumeDelta"] == 500
     assert signal["barSpread"] == pytest.approx(5.7)
-    assert signal["avgVolume"] == 100.0
+    assert signal["avgVolumeDelta"] == 100.0
     assert signal["avgSpread"] == pytest.approx(1.55)
 
 
@@ -145,9 +165,8 @@ def test_mgann_sweep_signals_replay_without_big_trade(env):
             type=MGANN_SWEEP,
             params={
                 "timeframe": "1m",
-                "minVolume": 0,
-                "volumeLookback": 2,
-                "volumeMultiplier": 2,
+                "volumeDeltaLookback": 2,
+                "volumeDeltaMultiplier": 2,
                 "minSpreadTicks": 0,
                 "spreadLookback": 2,
                 "spreadMultiplier": 2,
@@ -175,6 +194,9 @@ def test_mgann_sweep_signals_replay_without_big_trade(env):
             _bar(5, 96.5, 102.5, 96.0, 102.2, 500),
         ]
     )
+    cache.upsert_volume_deltas(
+        [_volume_delta(index, 500 if index == 5 else 100) for index in range(6)]
+    )
 
     resp = client.get(
         "/api/signals/mgann-big-trade-sweep",
@@ -197,6 +219,7 @@ def test_mgann_sweep_signals_replay_without_big_trade(env):
     assert signal["alertId"] == "a_mgann_no_bt"
     assert signal["bigTradeVolume"] == 0
     assert signal["barVolume"] == 500
+    assert signal["barVolumeDelta"] == 500
 
 
 @pytest.mark.integration
@@ -212,9 +235,8 @@ def test_mgann_break_ls_replay_applies_close_through_liquidity_filter(env):
                 "requireBigTrade": True,
                 "bigTradeThreshold": 70,
                 "timeframe": "1m",
-                "minVolume": 0,
-                "volumeLookback": 2,
-                "volumeMultiplier": 1,
+                "volumeDeltaLookback": 2,
+                "volumeDeltaMultiplier": 1,
                 "minSpreadTicks": 0,
                 "spreadLookback": 2,
                 "spreadMultiplier": 1,
@@ -255,6 +277,7 @@ def test_mgann_break_ls_replay_applies_close_through_liquidity_filter(env):
         for index, (open_, high, low, close) in enumerate(sequence)
     )
     cache.upsert_bars(rows)
+    cache.upsert_volume_deltas([_volume_delta(index, 10) for index in range(len(rows))])
     cache.upsert_big_trade(
         BigTradeRecord(
             symbol=_SYMBOL,

@@ -437,7 +437,7 @@ def test_mgann_live_filter_keeps_bos_but_rejects_unswept_choch():
             pivot_lookback_bars=120,
             min_pivot_cuts=2,
             filter_liquidity=True,
-            volume_multiplier=0,
+            volume_delta_multiplier=0,
             spread_multiplier=0,
             require_big_trade=True,
         )
@@ -450,6 +450,7 @@ def test_mgann_live_filter_keeps_bos_but_rejects_unswept_choch():
                 low=source.low,
                 close=source.close,
                 volume=10,
+                volume_delta=10,
             )
             if index == 20:
                 state.on_big_trade(time=bar.time, price=101, volume=80)
@@ -467,7 +468,7 @@ def test_mgann_liquidity_filter_does_not_change_bos_break_ls():
     state = MgannBigTradeSweepState(
         swing_size=50,
         filter_liquidity=True,
-        volume_multiplier=0,
+        volume_delta_multiplier=0,
         spread_multiplier=0,
         require_big_trade=False,
     )
@@ -484,6 +485,7 @@ def test_mgann_liquidity_filter_does_not_change_bos_break_ls():
                     low=source.low,
                     close=source.close,
                     volume=500 if is_break_bar else 100,
+                    volume_delta=500 if is_break_bar else 100,
                 )
             )
         )

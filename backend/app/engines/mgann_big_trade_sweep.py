@@ -14,7 +14,6 @@ __all__ = [
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS",
-    "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK",
@@ -24,8 +23,8 @@ __all__ = [
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME",
-    "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK",
-    "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER",
     "MGANN_BIG_TRADE_SWEEP_TIMEFRAMES",
     "MgannBigTradeSweepBar",
     "MgannBigTradeSweepState",
@@ -35,9 +34,8 @@ __all__ = [
 MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME = "1m"
 MGANN_BIG_TRADE_SWEEP_TIMEFRAMES = ("1m",)
 MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD = 70.0
-MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME = 0
-MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK = 20
-MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER = 2.0
+MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK = 20
+MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER = 2.0
 MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS = 0
 MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK = 20
 MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER = 2.0
@@ -64,6 +62,7 @@ class MgannBigTradeSweepBar:
     low: float
     close: float
     volume: int
+    volume_delta: int | None = None
 
 
 @dataclass(slots=True)
@@ -91,8 +90,9 @@ class _Liquidity:
     big_trade_volume: int
     big_trade_price: float
     bar_volume: int
+    bar_volume_delta: int
     bar_spread: float
-    avg_volume: float | None
+    avg_volume_delta: float | None
     avg_spread: float | None
 
 
@@ -108,8 +108,9 @@ class MgannBigTradeSweepTrigger:
     big_trade_volume: int
     big_trade_price: float
     bar_volume: int
+    bar_volume_delta: int
     bar_spread: float
-    avg_volume: float | None
+    avg_volume_delta: float | None
     avg_spread: float | None
     structure_kind: str
 
@@ -122,9 +123,8 @@ class MgannBigTradeSweepState:
         *,
         timeframe: str = MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME,
         big_trade_threshold: float = MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
-        min_volume: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
-        volume_lookback: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
-        volume_multiplier: float = MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+        volume_delta_lookback: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
+        volume_delta_multiplier: float = MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
         min_spread_ticks: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
         spread_lookback: int = MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
         spread_multiplier: float = MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
@@ -145,9 +145,8 @@ class MgannBigTradeSweepState:
         self._duration_ms = _TIMEFRAME_MS[self._timeframe]
         self._big_trade_threshold = max(0.0, float(big_trade_threshold))
         self._require_big_trade = bool(require_big_trade)
-        self._min_volume = max(0, int(min_volume))
-        self._volume_lookback = max(1, int(volume_lookback))
-        self._volume_multiplier = max(0.0, float(volume_multiplier))
+        self._volume_delta_lookback = max(1, int(volume_delta_lookback))
+        self._volume_delta_multiplier = max(0.0, float(volume_delta_multiplier))
         self._min_spread = max(0, int(min_spread_ticks)) * float(tick_size)
         self._spread_lookback = max(1, int(spread_lookback))
         self._spread_multiplier = max(0.0, float(spread_multiplier))
@@ -164,7 +163,7 @@ class MgannBigTradeSweepState:
         self._max_bars = max(
             500,
             int(pivot_lookback_bars)
-            + max(self._volume_lookback, self._spread_lookback)
+            + max(self._volume_delta_lookback, self._spread_lookback)
             + self._confirmation_bars
             + self._swing_size * 8
             + int(min_pivot_cuts)
@@ -310,8 +309,9 @@ class MgannBigTradeSweepState:
             big_trade_volume=liquidity.big_trade_volume,
             big_trade_price=liquidity.big_trade_price,
             bar_volume=liquidity.bar_volume,
+            bar_volume_delta=liquidity.bar_volume_delta,
             bar_spread=liquidity.bar_spread,
-            avg_volume=liquidity.avg_volume,
+            avg_volume_delta=liquidity.avg_volume_delta,
             avg_spread=liquidity.avg_spread,
             structure_kind=candidate.structure_kind,
         )
@@ -358,15 +358,17 @@ class MgannBigTradeSweepState:
             big_trade_volume = big_trade.volume
             big_trade_price = big_trade.price
 
-        if int(bar.volume) < self._min_volume:
+        volume_delta = bar.volume_delta
+        if volume_delta is None or direction * int(volume_delta) <= 0:
             return None
 
-        avg_volume = self._average_volume_before(index)
+        avg_volume_delta = self._average_volume_delta_before(index)
         if (
-            avg_volume is not None
-            and avg_volume > 0
-            and self._volume_multiplier > 0
-            and float(bar.volume) < avg_volume * self._volume_multiplier
+            avg_volume_delta is not None
+            and avg_volume_delta > 0
+            and self._volume_delta_multiplier > 0
+            and abs(float(volume_delta))
+            < avg_volume_delta * self._volume_delta_multiplier
         ):
             return None
 
@@ -385,15 +387,19 @@ class MgannBigTradeSweepState:
             big_trade_volume=big_trade_volume,
             big_trade_price=big_trade_price,
             bar_volume=int(bar.volume),
+            bar_volume_delta=int(volume_delta),
             bar_spread=body,
-            avg_volume=avg_volume,
+            avg_volume_delta=avg_volume_delta,
             avg_spread=avg_spread,
         )
 
-    def _average_volume_before(self, index: int) -> float | None:
+    def _average_volume_delta_before(self, index: int) -> float | None:
         values = [
-            float(bar.volume)
-            for bar in self._bars[max(0, index - self._volume_lookback):index]
+            abs(float(bar.volume_delta))
+            for bar in self._bars[
+                max(0, index - self._volume_delta_lookback):index
+            ]
+            if bar.volume_delta is not None
         ]
         return _average(values)
 

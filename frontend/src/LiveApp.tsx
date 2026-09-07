@@ -14,6 +14,7 @@ import {
   type Mt5PendingOrder,
   type Mt5Symbol,
   type Mt5Terminal,
+  type VolumeDeltaBar,
 } from "./api/client";
 import { AlertPanel } from "./alerts/AlertPanel";
 import {
@@ -46,6 +47,20 @@ import type {
 import { TimeframeSelector } from "./chart/TimeframeSelector";
 import { SymbolContractLabel } from "./chart/SymbolContractLabel";
 import { Toolbar } from "./chart/Toolbar";
+import {
+  BarReplayControls,
+  type BarReplayPhase,
+} from "./chart/BarReplayControls";
+import {
+  barReplayDelayMs,
+  findReplayBarIndex,
+  replayBarsThrough,
+  replayCursorBeforeSelection,
+  timedMapThrough,
+  timedValuesBefore,
+  type BarReplaySpeed,
+} from "./chart/barReplay";
+import { barDurationForTimeframe } from "./chart/barCountdown";
 import {
   type BigTradeMarker,
   reduceBigTradesCapped,
@@ -220,8 +235,8 @@ const M1_HISTORY_WINDOW_MS = M1_INITIAL_HISTORY_DAYS * 24 * 60 * 60 * 1_000;
 const DEFAULT_HISTORY_BACKFILL_LIMIT = 5_000;
 const M1_HISTORY_BACKFILL_LIMIT = 24 * 60;
 const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
-// Keep a wider raw buffer so session-volume filtering can still produce up to
-// 50 qualifying markers, while the custom chart primitive only receives 50.
+// Keep enough raw markers for session-volume filtering and the chart primitive
+// to render up to its 500-marker display budget.
 const INITIAL_BIG_TRADE_LIMIT = 500;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
 const VOLUME_PROFILE_ROW_TICKS = 1;
@@ -233,6 +248,19 @@ const ORDER_REFRESH_INTERVAL_MS = 5_000;
 const ENABLE_REALTIME_FOOTPRINT_UPDATES = true;
 const REALTIME_RENDER_BATCH_MS = 50;
 const MAX_RETAINED_BIG_TRADE_MARKERS = INITIAL_BIG_TRADE_LIMIT;
+const BAR_REPLAY_HISTORY_LIMIT = 5_000;
+
+interface BarReplayDataset {
+  id: string;
+  seriesKey: string;
+  bars: readonly Bar[];
+  volumeDelta: readonly VolumeDeltaDatum[];
+  footprintBars: ReadonlyMap<number, FootprintBar>;
+  fvgSignals: ReadonlyMap<number, FvgSignalUpdateMessage>;
+  bigTrades: readonly BigTradeMarker[];
+  smcAiSignals: readonly SmcAiSignalMarker[];
+  alertSignals: readonly AlertSignalMarker[];
+}
 const BIG_TRADE_SOUND_COOLDOWN_MS = 250;
 const MARKET_STATUS_RENDER_INTERVAL_MS = 5_000;
 const MARKET_ORDER_SETTINGS_STORAGE_KEY = "gc-chart-platform.market-order-settings";
@@ -1648,6 +1676,27 @@ function fvgSignalsEqual(
   return true;
 }
 
+function replayVolumeDelta(rows: readonly VolumeDeltaBar[]): readonly VolumeDeltaDatum[] {
+  let runningCvd = 0;
+  return rows.map((point) => {
+    const explicit = point.cumulativeDelta;
+    const cumulativeDelta =
+      explicit !== undefined && Number.isFinite(explicit)
+        ? explicit
+        : runningCvd + point.closeDelta;
+    runningCvd = cumulativeDelta;
+    return {
+      time: point.time,
+      delta: point.delta,
+      deltaHigh: point.deltaHigh,
+      deltaLow: point.deltaLow,
+      openDelta: point.openDelta,
+      closeDelta: point.closeDelta,
+      cumulativeDelta,
+    };
+  });
+}
+
 export function drawingVisibleOnTimeframe(
   drawing: DrawingState,
   timeframe: Timeframe,
@@ -1663,6 +1712,51 @@ export function visibleDrawingsForTimeframe(
 ): DrawingState[] {
   return cloneDrawings(
     drawings.filter((drawing) => drawingVisibleOnTimeframe(drawing, timeframe)),
+  );
+}
+
+function ReplayToolbarButton({
+  phase,
+  disabled,
+  onClick,
+}: {
+  phase: BarReplayPhase;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const active = phase !== "idle";
+  return (
+    <button
+      type="button"
+      className={`bar-replay-toolbar-button${active ? " is-active" : ""}`}
+      title={
+        phase === "active"
+          ? "Exit Bar Replay and return to live chart"
+          : phase === "selecting"
+            ? "Cancel replay selection"
+            : "Bar Replay"
+      }
+      aria-label={phase === "active" ? "Exit Bar Replay" : "Bar Replay"}
+      aria-pressed={active}
+      disabled={disabled && phase === "idle"}
+      onClick={onClick}
+    >
+      <svg
+        width="19"
+        height="19"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+        <path d="M20 4v7h-7" />
+        <path d="m10 8 5 4-5 4z" fill="currentColor" stroke="none" />
+      </svg>
+    </button>
   );
 }
 
@@ -1864,6 +1958,13 @@ export function LiveApp() {
   const [alertSignalMarkers, setAlertSignalMarkers] = useState<
     readonly AlertSignalMarker[]
   >([]);
+  const [replaySelecting, setReplaySelecting] = useState(false);
+  const [replaySelectionError, setReplaySelectionError] = useState("");
+  const [replayDataset, setReplayDataset] = useState<BarReplayDataset>();
+  const [replayCursorIndex, setReplayCursorIndex] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState<BarReplaySpeed>(1);
+  const [replayFollowLatest, setReplayFollowLatest] = useState(true);
   const [marketDataStatus, setMarketDataStatus] =
     useState<MarketDataStatusMessage>();
   const [indicatorsVisible, setIndicatorsVisible] = useState(true);
@@ -2180,6 +2281,202 @@ export function LiveApp() {
     };
   }
   const hasLoadedCurrentSeries = loadedSeriesKey === currentSeriesKey;
+  const replayActive = replayDataset?.seriesKey === currentSeriesKey;
+  const replayPhase: BarReplayPhase = replayActive
+    ? "active"
+    : replaySelecting
+      ? "selecting"
+      : "idle";
+
+  const exitBarReplay = useCallback(() => {
+    setReplaySelecting(false);
+    setReplaySelectionError("");
+    setReplayPlaying(false);
+    setReplayFollowLatest(true);
+    setReplayDataset(undefined);
+    const live = cache.get({ symbol: SYMBOL, contract, timeframe });
+    if (live !== undefined) {
+      setLoadedSeriesKey(currentSeriesKey);
+      setBars(live.bars.slice());
+    }
+    // Catch up Volume Delta/FVG and any REST overlays that changed during replay.
+    setSocketGeneration((generation) => generation + 1);
+    setOverlayRefreshNonce((nonce) => nonce + 1);
+  }, [cache, contract, currentSeriesKey, timeframe]);
+
+  const beginBarReplaySelection = useCallback(() => {
+    const loaded = cache.get({ symbol: SYMBOL, contract, timeframe })?.bars ?? bars;
+    if (loaded.length < 3) {
+      setReplaySelectionError("Load at least three candles before starting replay");
+      return;
+    }
+    setReplayDataset(undefined);
+    setReplayPlaying(false);
+    setReplayFollowLatest(true);
+    setReplaySelectionError("");
+    setActiveTool(null);
+    setReplaySelecting(true);
+  }, [bars, cache, contract, timeframe]);
+
+  const cancelBarReplaySelection = useCallback(() => {
+    setReplaySelecting(false);
+    setReplaySelectionError("");
+  }, []);
+
+  const selectBarReplayStart = useCallback(
+    (selectedBar: Bar) => {
+      if (!replaySelecting) return;
+      const sourceBars = (
+        cache.get({ symbol: SYMBOL, contract, timeframe })?.bars ?? bars
+      ).slice();
+      const selectedIndex = findReplayBarIndex(sourceBars, selectedBar.time);
+      if (selectedIndex <= 0) {
+        setReplaySelectionError("Choose a candle after the first loaded candle");
+        return;
+      }
+      if (selectedIndex >= sourceBars.length - 1) {
+        setReplaySelectionError("Choose an earlier candle so replay has future bars");
+        return;
+      }
+
+      const id = `${currentSeriesKey}:${Date.now()}:${selectedBar.time}`;
+      const snapshot: BarReplayDataset = {
+        id,
+        seriesKey: currentSeriesKey,
+        bars: sourceBars,
+        volumeDelta: volumeDelta.slice(),
+        footprintBars: new Map(footprintBars),
+        fvgSignals: new Map(fvgSignals),
+        bigTrades: bigTrades.slice(),
+        smcAiSignals: smcAiSignals.slice(),
+        alertSignals: alertSignalMarkers.slice(),
+      };
+      setReplayDataset(snapshot);
+      setReplayCursorIndex(replayCursorBeforeSelection(selectedIndex));
+      setReplayPlaying(false);
+      setReplayFollowLatest(true);
+      setReplaySelecting(false);
+      setReplaySelectionError("");
+
+      const range = {
+        from: sourceBars[0].time,
+        to: sourceBars[sourceBars.length - 1].time + barDurationForTimeframe(timeframe) - 1,
+      };
+      void Promise.allSettled([
+        api.volumeDelta(
+          SYMBOL,
+          contract,
+          timeframe,
+          BAR_REPLAY_HISTORY_LIMIT,
+          range,
+        ),
+        timeframe === "1m"
+          ? api.fvgSignals(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range)
+          : Promise.resolve<FvgSignalUpdateMessage[]>([]),
+        api.bigTrades(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range),
+      ]).then(([deltaResult, fvgResult, bigTradeResult]) => {
+        setReplayDataset((current) => {
+          if (current?.id !== id) return current;
+          const nextFvg = new Map<number, FvgSignalUpdateMessage>();
+          const loadedFvg = fvgResult.status === "fulfilled" ? fvgResult.value : undefined;
+          if (loadedFvg !== undefined) {
+            for (const signal of loadedFvg) {
+              if (signal.phase !== "clear" && signal.pulse !== 0) {
+                nextFvg.set(signal.time, signal);
+              }
+            }
+          }
+          return {
+            ...current,
+            volumeDelta:
+              deltaResult.status === "fulfilled"
+                ? replayVolumeDelta(deltaResult.value)
+                : current.volumeDelta,
+            fvgSignals: loadedFvg === undefined ? current.fvgSignals : nextFvg,
+            bigTrades:
+              bigTradeResult.status === "fulfilled"
+                ? bigTradeResult.value
+                : current.bigTrades,
+          };
+        });
+      });
+    },
+    [
+      alertSignalMarkers,
+      api,
+      bars,
+      bigTrades,
+      cache,
+      contract,
+      currentSeriesKey,
+      footprintBars,
+      fvgSignals,
+      replaySelecting,
+      smcAiSignals,
+      timeframe,
+      volumeDelta,
+    ],
+  );
+
+  const stepBarReplay = useCallback((direction: -1 | 1) => {
+    setReplayPlaying(false);
+    setReplayCursorIndex((current) => {
+      const last = Math.max(0, (replayDataset?.bars.length ?? 1) - 1);
+      return Math.min(last, Math.max(0, current + direction));
+    });
+  }, [replayDataset]);
+
+  useEffect(() => {
+    if (!replayActive || !replayPlaying || replayDataset === undefined) return;
+    if (replayCursorIndex >= replayDataset.bars.length - 1) {
+      setReplayPlaying(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setReplayCursorIndex((current) => Math.min(current + 1, replayDataset.bars.length - 1));
+    }, barReplayDelayMs(replaySpeed));
+    return () => window.clearTimeout(timer);
+  }, [replayActive, replayCursorIndex, replayDataset, replayPlaying, replaySpeed]);
+
+  useEffect(() => {
+    if (!replayActive && !replaySelecting) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches("input, select, textarea, button, [contenteditable='true']")) return;
+      if (event.key === "Escape") {
+        if (replayActive) exitBarReplay();
+        else cancelBarReplaySelection();
+        event.preventDefault();
+      } else if (replayActive && event.code === "Space") {
+        setReplayPlaying((playing) => !playing);
+        event.preventDefault();
+      } else if (replayActive && event.key === "ArrowRight") {
+        stepBarReplay(1);
+        event.preventDefault();
+      } else if (replayActive && event.key === "ArrowLeft") {
+        stepBarReplay(-1);
+        event.preventDefault();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [
+    cancelBarReplaySelection,
+    exitBarReplay,
+    replayActive,
+    replaySelecting,
+    stepBarReplay,
+  ]);
+
+  useEffect(() => {
+    if (replayDataset !== undefined && replayDataset.seriesKey !== currentSeriesKey) {
+      setReplayDataset(undefined);
+      setReplayPlaying(false);
+    }
+    setReplaySelecting(false);
+    setReplaySelectionError("");
+  }, [currentSeriesKey, replayDataset]);
+
   const firstLoadedBarTime = hasLoadedCurrentSeries ? bars[0]?.time : undefined;
   const latestLoadedBarTime = hasLoadedCurrentSeries
     ? bars[bars.length - 1]?.time
@@ -4615,13 +4912,27 @@ export function LiveApp() {
       cancellingOrderIds,
     ],
   );
-  const chartBars = hasLoadedCurrentSeries ? bars : EMPTY_BARS;
-  const chartVolumeDelta = hasLoadedCurrentSeries && volumeDeltaSeriesKey === currentSeriesKey
-    ? volumeDelta
-    : EMPTY_VOLUME_DELTA;
-  const chartFootprintBars = hasLoadedCurrentSeries
-    ? footprintBars
-    : EMPTY_FOOTPRINT_BARS;
+  const replayCurrentBar = replayActive
+    ? replayDataset?.bars[replayCursorIndex]
+    : undefined;
+  const replayCutoffExclusive = replayCurrentBar === undefined
+    ? undefined
+    : replayCurrentBar.time + barDurationForTimeframe(timeframe);
+  const chartBars = replayActive && replayDataset !== undefined
+    ? replayBarsThrough(replayDataset.bars, replayCursorIndex)
+    : hasLoadedCurrentSeries
+      ? bars
+      : EMPTY_BARS;
+  const chartVolumeDelta = replayActive && replayDataset !== undefined && replayCurrentBar !== undefined
+    ? timedValuesBefore(replayDataset.volumeDelta, replayCurrentBar.time + 1)
+    : hasLoadedCurrentSeries && volumeDeltaSeriesKey === currentSeriesKey
+      ? volumeDelta
+      : EMPTY_VOLUME_DELTA;
+  const chartFootprintBars = replayActive && replayDataset !== undefined && replayCurrentBar !== undefined
+    ? timedMapThrough(replayDataset.footprintBars, replayCurrentBar.time)
+    : hasLoadedCurrentSeries
+      ? footprintBars
+      : EMPTY_FOOTPRINT_BARS;
   const footprintVisible =
     indicatorsVisible &&
     showFootprint &&
@@ -4631,15 +4942,21 @@ export function LiveApp() {
     hasLoadedCurrentSeries &&
     showFvgGrader &&
     timeframe === "1m" &&
-    fvgSignalSeriesKey === currentSeriesKey
-      ? fvgSignals
+    (replayActive || fvgSignalSeriesKey === currentSeriesKey)
+      ? replayActive && replayDataset !== undefined && replayCurrentBar !== undefined
+        ? timedMapThrough(replayDataset.fvgSignals, replayCurrentBar.time)
+        : fvgSignals
       : EMPTY_FVG_SIGNALS;
   const bigTradeOverlayEnabled = bigTradesEnabledForTimeframe(timeframe);
   const chartBigTrades = indicatorsVisible && hasLoadedCurrentSeries && showBigTrades && bigTradeOverlayEnabled
-    ? bigTrades
+    ? replayActive && replayDataset !== undefined && replayCutoffExclusive !== undefined
+      ? timedValuesBefore(replayDataset.bigTrades, replayCutoffExclusive)
+      : bigTrades
     : EMPTY_BIG_TRADES;
   const chartSmcAiSignals = indicatorsVisible && hasLoadedCurrentSeries && timeframe === "1m"
-    ? smcAiSignals
+    ? replayActive && replayDataset !== undefined && replayCutoffExclusive !== undefined
+      ? timedValuesBefore(replayDataset.smcAiSignals, replayCutoffExclusive)
+      : smcAiSignals
     : EMPTY_SMC_AI_SIGNALS;
   const chartAlertSignals = useMemo(
     () => {
@@ -4649,12 +4966,18 @@ export function LiveApp() {
       if (!showMgannBreak) {
         return EMPTY_ALERT_SIGNAL_MARKERS;
       }
+      if (replayActive && replayDataset !== undefined && replayCutoffExclusive !== undefined) {
+        return timedValuesBefore(replayDataset.alertSignals, replayCutoffExclusive);
+      }
       return alertSignalMarkers;
     },
     [
       alertSignalMarkers,
       hasLoadedCurrentSeries,
       indicatorsVisible,
+      replayActive,
+      replayCutoffExclusive,
+      replayDataset,
       showMgannBreak,
       timeframe,
     ],
@@ -4785,7 +5108,16 @@ export function LiveApp() {
           <a href="/fp">FP</a>
           <a href="/mp">MP</a>
         </nav>
-        <TimeframeSelector value={timeframe} onChange={setTimeframe} />
+        <TimeframeSelector
+          value={timeframe}
+          onChange={(nextTimeframe) => {
+            setReplaySelecting(false);
+            setReplaySelectionError("");
+            setReplayPlaying(false);
+            setReplayDataset(undefined);
+            setTimeframe(nextTimeframe);
+          }}
+        />
         <IndicatorToggles
           indicatorsVisible={indicatorsVisible}
           volumeDelta={showVolumeDelta}
@@ -4884,34 +5216,49 @@ export function LiveApp() {
             onClose={() => setAnalystPanelOpen(false)}
           />
         </div>}
-        <div className="alert-popover">
-          <AlertToolbarButton
-            open={alertPanelOpen}
-            alertCount={alerts.length}
-            onClick={() =>
-              setAlertPanelOpen((open) => {
-                return !open;
-              })
-            }
+        <div className="toolbar-alert-group">
+          <ReplayToolbarButton
+            phase={replayPhase}
+            disabled={!hasLoadedCurrentSeries || bars.length < 3}
+            onClick={() => {
+              if (replayActive) {
+                exitBarReplay();
+              } else if (replaySelecting) {
+                cancelBarReplaySelection();
+              } else {
+                beginBarReplaySelection();
+              }
+            }}
           />
-          <AlertPanel
-            open={alertPanelOpen}
-            alerts={alerts}
-            lastEvent={lastAlert}
-            onToggle={onToggleAlert}
-            onDelete={onDeleteAlert}
-            onCreate={onCreateAlert}
-            telegram={telegramConfig}
-            onTelegramSave={onSaveTelegram}
-            onTelegramTest={onTestTelegram}
-            telegramStatus={telegramStatus}
-            webPush={webPushConfig}
-            onWebPushEnable={onEnableWebPush}
-            onWebPushDisable={onDisableWebPush}
-            onWebPushTest={onTestWebPush}
-            webPushStatus={webPushStatus}
-            webPushSupported={webPushSupported}
-          />
+          <div className="alert-popover">
+            <AlertToolbarButton
+              open={alertPanelOpen}
+              alertCount={alerts.length}
+              onClick={() =>
+                setAlertPanelOpen((open) => {
+                  return !open;
+                })
+              }
+            />
+            <AlertPanel
+              open={alertPanelOpen}
+              alerts={alerts}
+              lastEvent={lastAlert}
+              onToggle={onToggleAlert}
+              onDelete={onDeleteAlert}
+              onCreate={onCreateAlert}
+              telegram={telegramConfig}
+              onTelegramSave={onSaveTelegram}
+              onTelegramTest={onTestTelegram}
+              telegramStatus={telegramStatus}
+              webPush={webPushConfig}
+              onWebPushEnable={onEnableWebPush}
+              onWebPushDisable={onDisableWebPush}
+              onWebPushTest={onTestWebPush}
+              webPushStatus={webPushStatus}
+              webPushSupported={webPushSupported}
+            />
+          </div>
         </div>
         <StatusIndicator
           state={connection}
@@ -4941,14 +5288,16 @@ export function LiveApp() {
             bigTrades={chartBigTrades}
             smcAiSignals={chartSmcAiSignals}
             alertSignals={chartAlertSignals}
-            alertLines={alertLines}
-            orderLines={orderLines}
-            orderControls={orderControls}
+            alertLines={replayActive ? [] : alertLines}
+            orderLines={replayActive ? [] : orderLines}
+            orderControls={replayActive ? [] : orderControls}
             ema={visibleEma}
             smc={visibleSmc}
             outsideBar={visibleOutsideBar}
             sessionVolumeProfile={
-              indicatorsVisible && showDailyVolumeProfile ? sessionVolumeProfile : null
+              indicatorsVisible && showDailyVolumeProfile && !replayActive
+                ? sessionVolumeProfile
+                : null
             }
             sessionVolumeProfileWidth={dailyVolumeProfileWidth}
             sessionVolumeProfileDevelopingPoc={
@@ -4967,15 +5316,22 @@ export function LiveApp() {
             timezoneOffsetMinutes={timezoneOffsetMinutes}
             onTimezoneOffsetChange={setTimezoneOffsetMinutes}
             socket={socket}
-            onRequestAlertAtPrice={onRequestChartMenu}
+            suspendRealtime={replayActive}
+            followLatestBar={replayActive && replayFollowLatest}
+            onChartNavigate={
+              replayActive ? () => setReplayFollowLatest(false) : undefined
+            }
+            replaySelecting={replaySelecting}
+            onBarClick={replaySelecting ? selectBarReplayStart : undefined}
+            onRequestAlertAtPrice={replayActive ? undefined : onRequestChartMenu}
             onRealtimeBar={onChartRealtimeBar}
-            onRequestMoreHistory={requestMoreHistory}
-            onAlertDragCommit={onAlertDragCommit}
-            onAlertDelete={onDeleteAlert}
-            onOrderDragCommit={onOrderDragCommit}
-            onOrderDragBatchCommit={onOrderDragBatchCommit}
-            onOrderClose={onOrderRowClose}
-            onOrderCancel={onOrderRowCancel}
+            onRequestMoreHistory={replayActive ? undefined : requestMoreHistory}
+            onAlertDragCommit={replayActive ? undefined : onAlertDragCommit}
+            onAlertDelete={replayActive ? undefined : onDeleteAlert}
+            onOrderDragCommit={replayActive ? undefined : onOrderDragCommit}
+            onOrderDragBatchCommit={replayActive ? undefined : onOrderDragBatchCommit}
+            onOrderClose={replayActive ? undefined : onOrderRowClose}
+            onOrderCancel={replayActive ? undefined : onOrderRowCancel}
             priceSnap={roundGcPrice}
             activeTool={activeTool}
             fixedRangeProfileMode={fixedRangeProfileMode}
@@ -4992,6 +5348,27 @@ export function LiveApp() {
               screenshotCaptureRef.current = capture;
             }}
           >
+            <BarReplayControls
+              phase={replayPhase}
+              playing={replayPlaying}
+              speed={replaySpeed}
+              currentBar={replayActive ? replayCursorIndex + 1 : 0}
+              totalBars={replayDataset?.bars.length ?? 0}
+              selectionError={replaySelectionError}
+              onCancelSelection={cancelBarReplaySelection}
+              onTogglePlaying={() => {
+                if (
+                  replayDataset !== undefined &&
+                  replayCursorIndex < replayDataset.bars.length - 1
+                ) {
+                  setReplayPlaying((playing) => !playing);
+                }
+              }}
+              onStepBack={() => stepBarReplay(-1)}
+              onStepForward={() => stepBarReplay(1)}
+              onSpeedChange={setReplaySpeed}
+              onExit={exitBarReplay}
+            />
             <div className="chart-quick-controls" aria-label="Quick chart controls">
               <button
                 type="button"
@@ -5037,7 +5414,7 @@ export function LiveApp() {
               onIndicatorsVisibleChange={setIndicatorsVisible}
             />
           </ChartContainer>
-          {authUser && (
+          {authUser && !replayActive && (
             <MarketOrderBar
               account={mt5Account}
               pending={orderPending}

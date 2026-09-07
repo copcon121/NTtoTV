@@ -696,3 +696,43 @@ def test_pending_order_patch_uses_expected_version(client: TestClient):
         json={"slGc": 2347.0, "expectedVersion": order["version"]},
     )
     assert conflict.status_code == 409
+
+
+@pytest.mark.integration
+def test_order_patch_refreshes_basis_from_current_broker_tick(client: TestClient):
+    backend = _StrictSymbolBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    _login_and_connect(client)
+
+    created = client.post(
+        "/api/orders",
+        json={
+            "source": "chart_bracket",
+            "side": "buy",
+            "kind": "limit",
+            "volumeLots": 0.1,
+            "entryGc": 2349.0,
+            "slGc": 2346.0,
+            "tpGc": 2355.0,
+            "idempotencyKey": "idem-stale-before-patch",
+        },
+    )
+    assert created.status_code == 200
+    order = created.json()["order"]
+
+    # Reproduce a drag after the five-second basis window has expired. The
+    # patch endpoint must refresh XAU from MT5 instead of waiting for the next
+    # open-trades poll before it accepts the modification.
+    client.app.state.basis_engine.update_gc(2350.0, 1)
+    assert client.app.state.basis_engine.snapshot().stale is True
+
+    patched = client.patch(
+        f"/api/orders/{order['id']}",
+        json={"slGc": 2346.5, "expectedVersion": order["version"]},
+    )
+
+    assert patched.status_code == 200
+    updated = patched.json()["order"]
+    assert updated["slGc"] == 2346.5
+    assert updated["slBroker"] == pytest.approx(2346.55)
+    assert client.app.state.basis_engine.snapshot().stale is False

@@ -14,7 +14,7 @@ Supported alert types (Req 16.1):
 * ``volume_delta_threshold`` — a closed bar's volume delta meets a threshold.
 * ``big_trade_threshold``    — a reconstructed big trade meets a volume threshold.
 * ``stacked_imbalance``      — a closed footprint bar exhibits a stacked imbalance.
-* ``mgann_break_ls``         — SMC internal mGann Break L/S by body/volume.
+* ``mgann_break_ls``         — SMC internal mGann Break L/S by body/volume delta.
 
 Price source and evaluation timing (Req 16.6, 16.7):
 
@@ -58,15 +58,14 @@ from .mgann_big_trade_sweep import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
-    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME,
-    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
-    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
     MGANN_BIG_TRADE_SWEEP_TIMEFRAMES,
     MgannBigTradeSweepBar,
     MgannBigTradeSweepState,
@@ -103,15 +102,14 @@ __all__ = [
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS",
-    "MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE",
     "MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME",
-    "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK",
-    "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK",
+    "MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER",
     "MGANN_BIG_TRADE_SWEEP_TIMEFRAMES",
     "Alert",
     "MarketContext",
@@ -654,6 +652,7 @@ class AlertEngine:
                 low=float(ctx.bar_low),
                 close=float(ctx.bar_close),
                 volume=int(ctx.bar_volume or 0),
+                volume_delta=ctx.bar_volume_delta,
             )
         )
         events: list[AlertEvent] = []
@@ -743,14 +742,14 @@ class AlertEngine:
                 f"{'L' if trigger.direction > 0 else 'S'} "
                 f"internal {trigger.structure_kind} + BigTrade "
                 f"{_fmt_num(trigger.big_trade_volume)} > {threshold}; "
-                f"vol {trigger.bar_volume}, body {trigger.bar_spread:.1f}"
+                f"delta {trigger.bar_volume_delta:+d}, body {trigger.bar_spread:.1f}"
             )
         else:
             message = (
                 f"{alert.symbol} {tf_label} mGann Break "
                 f"{'L' if trigger.direction > 0 else 'S'} "
                 f"internal {trigger.structure_kind}; "
-                f"vol {trigger.bar_volume}, body {trigger.bar_spread:.1f}"
+                f"delta {trigger.bar_volume_delta:+d}, body {trigger.bar_spread:.1f}"
             )
         return AlertEvent(
             alert_id=alert.id,
@@ -865,12 +864,24 @@ class AlertEngine:
     def _warm_mgann_sweep_alert(self, alert: Alert) -> None:
         state = self._new_mgann_sweep_state(alert)
         if self._store is not None:
-            for rec in self._store.read_bars(
+            timeframe = self._mgann_sweep_timeframe(alert)
+            bars = self._store.read_bars(
                 alert.symbol,
                 alert.symbol,
-                self._mgann_sweep_timeframe(alert),
+                timeframe,
                 limit=self._mgann_sweep_warmup_bars(alert),
-            ):
+            )
+            deltas_by_time = {
+                rec.time: rec.delta
+                for rec in self._store.read_volume_delta(
+                    alert.symbol,
+                    alert.symbol,
+                    timeframe,
+                    frm=bars[0].time if bars else None,
+                    to=bars[-1].time if bars else None,
+                )
+            }
+            for rec in bars:
                 if not rec.closed:
                     continue
                 state.on_closed_bar(
@@ -881,6 +892,7 @@ class AlertEngine:
                         low=rec.low,
                         close=rec.close,
                         volume=rec.volume,
+                        volume_delta=deltas_by_time.get(rec.time),
                     )
                 )
         self._mgann_sweep_state[alert.id] = state
@@ -914,9 +926,8 @@ class AlertEngine:
         return MgannBigTradeSweepState(
             timeframe=self._mgann_sweep_timeframe(alert),
             big_trade_threshold=self._mgann_sweep_big_trade_threshold(alert),
-            min_volume=self._mgann_sweep_min_volume(alert),
-            volume_lookback=self._mgann_sweep_volume_lookback(alert),
-            volume_multiplier=self._mgann_sweep_volume_multiplier(alert),
+            volume_delta_lookback=self._mgann_sweep_volume_delta_lookback(alert),
+            volume_delta_multiplier=self._mgann_sweep_volume_delta_multiplier(alert),
             min_spread_ticks=self._mgann_sweep_min_spread_ticks(alert),
             spread_lookback=self._mgann_sweep_spread_lookback(alert),
             spread_multiplier=self._mgann_sweep_spread_multiplier(alert),
@@ -1019,7 +1030,7 @@ class AlertEngine:
         return max(
             500,
             self._mgann_sweep_pivot_lookback_bars(alert)
-            + self._mgann_sweep_volume_lookback(alert)
+            + self._mgann_sweep_volume_delta_lookback(alert)
             + self._mgann_sweep_spread_lookback(alert)
             + self._mgann_sweep_confirmation_bars(alert)
             + self._mgann_sweep_swing_size(alert) * 8
@@ -1049,24 +1060,23 @@ class AlertEngine:
         return alert.params.get("requireBigTrade") is True
 
     @staticmethod
-    def _mgann_sweep_min_volume(alert: Alert) -> int:
-        return _nonnegative_int_param(
-            alert.params.get("minVolume"),
-            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_VOLUME,
-        )
-
-    @staticmethod
-    def _mgann_sweep_volume_lookback(alert: Alert) -> int:
+    def _mgann_sweep_volume_delta_lookback(alert: Alert) -> int:
         return _positive_int_param(
-            alert.params.get("volumeLookback"),
-            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_LOOKBACK,
+            alert.params.get(
+                "volumeDeltaLookback",
+                alert.params.get("volumeLookback"),
+            ),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
         )
 
     @staticmethod
-    def _mgann_sweep_volume_multiplier(alert: Alert) -> float:
+    def _mgann_sweep_volume_delta_multiplier(alert: Alert) -> float:
         return _positive_float_param(
-            alert.params.get("volumeMultiplier"),
-            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_MULTIPLIER,
+            alert.params.get(
+                "volumeDeltaMultiplier",
+                alert.params.get("volumeMultiplier"),
+            ),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
         )
 
     @staticmethod
