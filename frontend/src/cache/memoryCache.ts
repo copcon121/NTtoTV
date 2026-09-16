@@ -44,6 +44,18 @@ function mergeBars(existing: readonly Bar[], incoming: readonly Bar[]): Bar[] {
   return normalizeBars([...existing, ...incoming]);
 }
 
+/** Lower bound in a cache-owned, sorted bar array. */
+function lowerBoundByTime(bars: readonly Bar[], time: number): number {
+  let low = 0;
+  let high = bars.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (bars[middle].time < time) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
 /**
  * Compute the covered range that results from extending `base` (if any) to
  * include every bar time plus an optional explicitly-fetched range. Returns
@@ -155,7 +167,31 @@ export class MemoryCache {
    * of adding newer realtime bars on top of loaded history (Req 11.2, 11.3).
    */
   append(key: SeriesKey, bars: readonly Bar[], range?: CoveredRange): void {
-    this.merge(key, bars, range);
+    const id = serializeKey(key);
+    const existing = this.store.get(id);
+    if (!existing) {
+      this.set(key, bars, range);
+      return;
+    }
+
+    // Realtime append batches are normally one overwrite of the live bar or
+    // one new trailing bar. Update the private sorted array in place instead of
+    // rebuilding a Map and sorting the entire history for every websocket tick.
+    for (const bar of bars) {
+      const at = lowerBoundByTime(existing.bars, bar.time);
+      if (at < existing.bars.length && existing.bars[at].time === bar.time) {
+        existing.bars[at] = bar;
+      } else {
+        existing.bars.splice(at, 0, bar);
+      }
+    }
+    const covered = extendRange(
+      { from: existing.coveredFrom, to: existing.coveredTo },
+      bars,
+      range,
+    );
+    existing.coveredFrom = covered?.from ?? existing.coveredFrom;
+    existing.coveredTo = covered?.to ?? existing.coveredTo;
   }
 
   /**

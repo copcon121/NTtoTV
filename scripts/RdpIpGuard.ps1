@@ -1,11 +1,14 @@
 ﻿[CmdletBinding()]
 param(
-    [string[]]$WhitelistOverride
+    [string[]]$WhitelistOverride,
+    [ValidateRange(1, 65535)]
+    [int]$RdpPort = 3389
 )
 
 # RDP brute-force guard for Windows Server.
 # Three RDP credential failures from one public IP within ten minutes cause a
-# temporary TCP/3389 firewall block for one hour. Keep the operator's current
+# temporary firewall block on the configured RDP TCP port for one hour. Keep
+# the operator's current
 # public IP in this list so a changing failure count cannot lock out the owner.
 
 $ErrorActionPreference = 'Stop'
@@ -112,8 +115,8 @@ function Add-GuardRule {
     $rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
     if ($null -eq $rule) {
         New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Block `
-            -Protocol TCP -LocalPort 3389 -RemoteAddress $Ip -Profile Any | Out-Null
-        Write-GuardLog "Blocked IP $Ip for $BlockMinutes minutes after $Threshold RDP failures"
+            -Protocol TCP -LocalPort $RdpPort -RemoteAddress $Ip -Profile Any | Out-Null
+        Write-GuardLog "Blocked IP $Ip on TCP/$RdpPort for $BlockMinutes minutes after $Threshold RDP failures"
     }
 }
 
@@ -160,6 +163,11 @@ $existingGuardRules = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Wher
 })
 foreach ($rule in $existingGuardRules) {
     $ruleIp = Normalize-Ip ($rule.DisplayName.Substring($RulePrefix.Length))
+    $portFilter = $rule | Get-NetFirewallPortFilter
+    if ($portFilter.LocalPort -ne [string]$RdpPort) {
+        $portFilter | Set-NetFirewallPortFilter -LocalPort $RdpPort | Out-Null
+        Write-GuardLog "Moved existing block for $ruleIp to TCP/$RdpPort"
+    }
     if ($ruleIp -and -not $blocks.ContainsKey($ruleIp)) {
         $blocks[$ruleIp] = $NowUtc.AddMinutes($BlockMinutes)
         Write-GuardLog "Recovered firewall rule state for $ruleIp"

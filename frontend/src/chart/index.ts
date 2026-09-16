@@ -38,6 +38,16 @@ export {
 } from "./ema";
 
 export {
+  type GcPushMomentumDelta,
+  type GcPushMomentumFlowState,
+  type GcPushMomentumPoint,
+  type GcPushMomentumSettings,
+  DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
+  calculateGcPushMomentum,
+  normalizeGcPushMomentumSettings,
+} from "./gcPushMomentum";
+
+export {
   type SmcMarker,
   type SmcMarkerKind,
   type SmcLine,
@@ -94,6 +104,8 @@ export {
   CVD_OVERLAY_SCALE_MARGINS,
   VOLUME_OVERLAY_PRICE_SCALE_ID,
   VOLUME_OVERLAY_SCALE_MARGINS,
+  gcPushMomentumColor,
+  toGcPushMomentumHistogram,
   toUtcTimestamp,
 } from "./lightweightChartsAdapter";
 

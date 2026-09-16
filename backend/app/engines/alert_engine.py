@@ -47,7 +47,7 @@ from ..models.canonical import Side
 from ..models.messages import AlertEvent
 from ..models.timestamp import CanonicalTimestamp
 from ..storage.cache_store import CacheStore
-from ..storage.records import AlertEventRecord, AlertRecord
+from ..storage.records import AlertEventRecord, AlertRecord, BigTradeRecord
 from .breakout_box_engine import BreakoutBoxEvent
 from .mgann_big_trade_sweep import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
@@ -140,6 +140,7 @@ SMC_DEFAULT_MAX_BARS = 20
 SMC_DEFAULT_PAUSE_ON_INSIDE_BARS = True
 SMC_DEFAULT_RETEST_TOLERANCE_TICKS = 50
 _SMC_WARMUP_MIN_BARS = 300
+_M1_MS = 60_000
 
 ALERT_TYPES: frozenset[str] = frozenset(
     {
@@ -411,19 +412,122 @@ class AlertEngine:
         # Persist emitted events (audit log). (Req 17.3)
         if self._store is not None:
             for ev in events:
-                self._store.insert_alert_event(
-                    AlertEventRecord(
-                        alert_id=ev.alert_id,
-                        profile_id=ev.profile_id,
-                        symbol=ev.symbol,
-                        contract=ev.contract,
-                        time=ev.time,
-                        price=ev.price,
-                        message=ev.message,
-                    )
-                )
+                self._persist_event(ev)
             for alert in one_shot_fired_alerts:
                 self._persist_enabled(alert)
+        return events
+
+    def reconcile_mgann_closed_bar(self, ctx: MarketContext) -> list[AlertEvent]:
+        """Recover a live mGann event by replaying authoritative cached data.
+
+        Reconnect snapshots intentionally do not emit alerts, but that can leave
+        an incremental detector behind the cached chart history. After each
+        authoritative M1 close, rebuild enabled mGann states from the same
+        persisted bars/order-flow used by historical markers. Only a signal on
+        the current bar that is absent from the audit log is emitted.
+        """
+        if (
+            self._store is None
+            or not ctx.bar_closed
+            or ctx.bar_tf != MGANN_BIG_TRADE_SWEEP_DEFAULT_TIMEFRAME
+            or ctx.bar_time is None
+        ):
+            return []
+
+        alerts = [
+            alert
+            for alert in self._alerts.values()
+            if alert.enabled
+            and alert.symbol == ctx.symbol
+            and alert.type in MGANN_BREAK_LS_TYPES
+            and self._mgann_sweep_timeframe(alert) == ctx.bar_tf
+        ]
+        if not alerts:
+            return []
+
+        bar_time = int(ctx.bar_time)
+        warmup_limit = max(
+            self._mgann_sweep_warmup_bars(alert) for alert in alerts
+        )
+        bars = [
+            rec
+            for rec in self._store.read_bars(
+                ctx.symbol,
+                ctx.contract,
+                ctx.bar_tf,
+                to=bar_time,
+                limit=warmup_limit,
+            )
+            if rec.closed and rec.time <= bar_time
+        ]
+        if not bars or bars[-1].time != bar_time:
+            return []
+
+        deltas_by_time = {
+            rec.time: rec.delta
+            for rec in self._store.read_volume_delta(
+                ctx.symbol,
+                ctx.contract,
+                ctx.bar_tf,
+                frm=bars[0].time,
+                to=bar_time,
+            )
+        }
+        trades_by_bucket: dict[int, list[BigTradeRecord]] = {}
+        for trade in self._store.read_big_trades(
+            ctx.symbol,
+            ctx.contract,
+            frm=bars[0].time,
+            to=bar_time + _M1_MS - 1,
+        ):
+            bucket = int(trade.time) - (int(trade.time) % _M1_MS)
+            trades_by_bucket.setdefault(bucket, []).append(trade)
+
+        events: list[AlertEvent] = []
+        one_shot_fired_alerts: list[Alert] = []
+        for alert in alerts:
+            state = self._new_mgann_sweep_state(alert)
+            current_triggers: list[MgannBigTradeSweepTrigger] = []
+            for rec in bars:
+                for trade in trades_by_bucket.get(rec.time, []):
+                    state.on_big_trade(
+                        time=trade.time,
+                        price=trade.price,
+                        volume=trade.volume,
+                    )
+                triggers = state.on_closed_bar(
+                    MgannBigTradeSweepBar(
+                        time=rec.time,
+                        open=rec.open,
+                        high=rec.high,
+                        low=rec.low,
+                        close=rec.close,
+                        volume=rec.volume,
+                        volume_delta=deltas_by_time.get(rec.time),
+                    )
+                )
+                if rec.time == bar_time:
+                    current_triggers = triggers
+
+            # Replace the incremental state even when normal live evaluation
+            # already fired, keeping the next bar aligned after reconnects.
+            self._mgann_sweep_state[alert.id] = state
+            if not current_triggers or self._store.alert_event_exists(
+                alert.id,
+                alert.profile_id,
+                bar_time,
+            ):
+                continue
+            for trigger in current_triggers:
+                event = self._make_mgann_sweep_event(alert, ctx, trigger)
+                events.append(event)
+                self._persist_event(event)
+            if not _is_repeat_alert(alert):
+                alert.enabled = False
+                one_shot_fired_alerts.append(alert)
+
+        for alert in one_shot_fired_alerts:
+            self._persist_enabled(alert)
         return events
 
     def _evaluate_one(
@@ -1165,6 +1269,21 @@ class AlertEngine:
         return _nonnegative_int_param(
             alert.params.get("breakTicks"),
             MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
+        )
+
+    def _persist_event(self, event: AlertEvent) -> None:
+        if self._store is None:
+            return
+        self._store.insert_alert_event(
+            AlertEventRecord(
+                alert_id=event.alert_id,
+                profile_id=event.profile_id,
+                symbol=event.symbol,
+                contract=event.contract,
+                time=event.time,
+                price=event.price,
+                message=event.message,
+            )
         )
 
     def _persist_enabled(self, alert: Alert) -> None:

@@ -7,6 +7,7 @@ import type { FixedRangeProfileMode } from "../chart/drawings/types";
 import type { DrawingState } from "../chart/drawings/types";
 import type { OutsideBarSettings } from "../chart/outsideBar";
 import type { MgannSwingSettings } from "../chart/mgannSwing";
+import type { GcPushMomentumSettings } from "../chart/gcPushMomentum";
 import type { SmcSettings } from "../chart/smc";
 import type { Timeframe } from "../socket/messages";
 
@@ -28,6 +29,10 @@ export interface ChartProfilePayload {
   showVolume?: boolean;
   /** Optional for backwards compatibility with profiles saved before this toggle existed. */
   showVolumeDelta?: boolean;
+  /** Optional for profiles saved before GC Push Momentum existed. */
+  showGcPushMomentum?: boolean;
+  /** Optional volatility/threshold configuration for GC Push Momentum. */
+  gcPushMomentum?: GcPushMomentumSettings;
   /** Optional for backwards compatibility with profiles saved before this toggle existed. */
   showCvd?: boolean;
   /** Optional for backwards compatibility with profiles saved before this toggle existed. */

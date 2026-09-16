@@ -1085,7 +1085,15 @@ def test_authoritative_bookmap_rollup_survives_next_raw_trade(tmp_path):
 
 
 @pytest.mark.unit
-def test_authoritative_bookmap_closed_bar_emits_mgann_break_alert(tmp_path):
+@pytest.mark.parametrize(
+    "reconnect_snapshots",
+    [False, True],
+    ids=["incremental-state", "replayed-after-reconnect"],
+)
+def test_authoritative_bookmap_closed_bar_emits_mgann_break_alert(
+    tmp_path,
+    reconnect_snapshots,
+):
     pipeline, cache, ticks, captured = _pipeline(tmp_path)
     try:
         pipeline.alert_engine.upsert(
@@ -1127,6 +1135,8 @@ def test_authoritative_bookmap_closed_bar_emits_mgann_break_alert(tmp_path):
             low: float,
             close: float,
             volume: int,
+            *,
+            snapshot: bool = False,
         ) -> None:
             bar_time = _BASE + index * 60_000
             await pipeline.on_bookmap_bar(
@@ -1144,7 +1154,7 @@ def test_authoritative_bookmap_closed_bar_emits_mgann_break_alert(tmp_path):
                     **_bookmap_orderflow(volume, close),
                     "closed": True,
                     "partialStart": False,
-                    "snapshot": False,
+                    "snapshot": snapshot,
                 }
             )
 
@@ -1159,7 +1169,11 @@ def test_authoritative_bookmap_closed_bar_emits_mgann_break_alert(tmp_path):
                     (96.5, 102.5, 96.0, 102.2, 500),
                 ]
             ):
-                await send_bar(index, *bar)
+                await send_bar(
+                    index,
+                    *bar,
+                    snapshot=reconnect_snapshots and index < 5,
+                )
 
         asyncio.run(run())
 

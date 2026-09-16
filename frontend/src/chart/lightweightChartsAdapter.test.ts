@@ -13,12 +13,15 @@ import {
   buildWaveDeltaLineData,
   buildWaveDeltaMboxData,
   fvgSignalColor,
+  gcPushMomentumColor,
   isMgannImpulseTimeframeDuration,
   isUtcPlus7SessionHighlightTime,
   toBarDisplayTimestamp,
   toCandle,
+  toGcPushMomentumHistogram,
   toUtcTimestamp,
 } from "./lightweightChartsAdapter";
+import type { GcPushMomentumPoint } from "./gcPushMomentum";
 import { DEFAULT_OUTSIDE_BAR_SETTINGS } from "./outsideBar";
 
 function bar(time: number, open: number, high: number, low: number, close: number): Bar {
@@ -254,6 +257,37 @@ describe("lightweightChartsAdapter wave delta overlay", () => {
     expect(isMgannImpulseTimeframeDuration(300_000)).toBe(true);
     expect(isMgannImpulseTimeframeDuration(180_000)).toBe(false);
     expect(isMgannImpulseTimeframeDuration(900_000)).toBe(false);
+  });
+});
+
+describe("lightweightChartsAdapter GC Push Momentum", () => {
+  const point: GcPushMomentumPoint = {
+    time: 60_000,
+    push: 2,
+    acceleration: 1,
+    efficiency: 0.8,
+    strong: true,
+    flowState: "confirmed",
+    absorptionCandidate: false,
+  };
+
+  it("dims the unclosed preview without changing its value", () => {
+    const closed = toGcPushMomentumHistogram(point, true);
+    const preview = toGcPushMomentumHistogram(point, false);
+
+    expect(closed.value).toBe(2);
+    expect(preview.value).toBe(2);
+    expect(closed.color).not.toBe(preview.color);
+    expect(preview.color).toContain("0.34");
+  });
+
+  it("uses amber when price push conflicts with executed flow", () => {
+    expect(
+      gcPushMomentumColor(
+        { ...point, flowState: "conflict", absorptionCandidate: true },
+        true,
+      ),
+    ).toContain("245, 158, 11");
   });
 });
 

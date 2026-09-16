@@ -94,13 +94,26 @@ import {
   MGANN_SWING_SIZE,
   normalizeMgannSwingSettings,
   type MgannSwingImpulseWave,
+  type MgannSwingOverlay,
   type MgannSwingSettings,
   type MgannSwingWaveDeltaBox,
 } from "./mgannSwing";
+import {
+  DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
+  calculateGcPushMomentum,
+  normalizeGcPushMomentumSettings,
+  type GcPushMomentumDelta,
+  type GcPushMomentumPoint,
+  type GcPushMomentumSettings,
+} from "./gcPushMomentum";
 
 /** One volume-delta point, keyed by backend Canonical_Timestamp ms. */
 export interface VolumeDeltaDatum {
   time: number;
+  /** Exact order-flow volume represented by this delta row. */
+  volume?: number;
+  buyVolume?: number;
+  sellVolume?: number;
   delta: number;
   deltaHigh: number;
   deltaLow: number;
@@ -271,6 +284,7 @@ const SESSION_HIGHLIGHT_HOURS_UTC_PLUS_7 = new Set([8, 20]);
 const SESSION_HIGHLIGHT_MINUTE_UTC_PLUS_7 = 0;
 const SESSION_HIGHLIGHT_BODY_COLOR = "rgba(255, 213, 79, 0.78)";
 const SESSION_HIGHLIGHT_LINE_COLOR = "#ffd54f";
+const MGANN_REALTIME_RENDER_INTERVAL_MS = 500;
 
 const DARK_CHART_TEXT = "#d8d8d8";
 const LIGHT_CHART_TEXT = "#111111";
@@ -450,6 +464,73 @@ export function toUtcTimestamp(
   displayTimeOffsetMs = 0,
 ): UTCTimestamp {
   return Math.floor((timeMs + displayTimeOffsetMs) / 1000) as UTCTimestamp;
+}
+
+function momentumRgba(
+  red: number,
+  green: number,
+  blue: number,
+  alpha: number,
+): string {
+  return `rgba(${red}, ${green}, ${blue}, ${alpha.toFixed(2)})`;
+}
+
+/**
+ * Encode direction, acceleration, efficiency, strength, and flow agreement in
+ * one histogram color. Live (unclosed) bars deliberately remain translucent.
+ */
+export function gcPushMomentumColor(
+  point: GcPushMomentumPoint,
+  closed: boolean,
+): string {
+  const efficiency = Math.min(1, Math.max(0, point.efficiency));
+  const alpha = closed
+    ? point.strong
+      ? 1
+      : 0.58 + efficiency * 0.3
+    : 0.24 + efficiency * 0.12;
+
+  if (point.absorptionCandidate || point.flowState === "conflict") {
+    return momentumRgba(245, 158, 11, alpha);
+  }
+  if (Math.abs(point.push) <= DEFAULT_GC_PUSH_MOMENTUM_SETTINGS.epsilon) {
+    return momentumRgba(148, 163, 184, alpha);
+  }
+  if (efficiency < 0.25) {
+    return momentumRgba(100, 116, 139, alpha);
+  }
+
+  const accelerating = Math.sign(point.push) === Math.sign(point.acceleration);
+  if (point.push > 0) {
+    if (point.flowState === "confirmed") {
+      return accelerating
+        ? momentumRgba(0, 200, 83, alpha)
+        : momentumRgba(0, 150, 90, alpha);
+    }
+    return accelerating
+      ? momentumRgba(38, 166, 154, alpha)
+      : momentumRgba(76, 139, 103, alpha);
+  }
+  if (point.flowState === "confirmed") {
+    return accelerating
+      ? momentumRgba(255, 23, 68, alpha)
+      : momentumRgba(211, 47, 47, alpha);
+  }
+  return accelerating
+    ? momentumRgba(239, 83, 80, alpha)
+    : momentumRgba(183, 87, 83, alpha);
+}
+
+export function toGcPushMomentumHistogram(
+  point: GcPushMomentumPoint,
+  closed: boolean,
+  displayTimeOffsetMs = 0,
+): HistogramData {
+  return {
+    time: toUtcTimestamp(point.time, displayTimeOffsetMs),
+    value: point.push,
+    color: gcPushMomentumColor(point, closed),
+  };
 }
 
 export function toBarDisplayTimestamp(
@@ -1049,11 +1130,23 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private outsideBar: OutsideBarSettings;
   private readonly barsByTime = new Map<number, Bar>();
   private readonly volumeDeltaByTime = new Map<number, VolumeDeltaDatum>();
+  private readonly closedBarTimes = new Set<number>();
+  private gcPushMomentumSeries: ISeriesApi<"Histogram"> | undefined;
+  private gcPushMomentumPaneIndex: number | undefined;
+  private gcPushMomentumVisible = false;
+  private gcPushMomentumSettings: GcPushMomentumSettings = {
+    ...DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
+  };
   private volumeVisible = true;
   private volumeDeltaVisible = true;
   private mgannSwingVisible = false;
   private waveDeltaVisible = false;
   private mgannSwingSettings: MgannSwingSettings = DEFAULT_MGANN_SWING_SETTINGS;
+  private mgannOverlayRevision = 0;
+  private mgannOverlayCacheRevision = -1;
+  private mgannOverlayCache: MgannSwingOverlay | undefined;
+  private mgannImpulseColors = new Map<number, string>();
+  private mgannRenderTimer: number | undefined;
   private readonly fvgSignalsByTime = new Map<number, FvgSignalUpdateMessage>();
   private fvgGraderVisible = true;
   private readonly bigTradesByKey = new Map<string, BigTradeMarker>();
@@ -1339,6 +1432,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderVolumeDeltaSeries();
     this.renderWaveDeltaSeries();
     this.renderMgannSwing();
+    this.renderGcPushMomentumSeries();
     this.renderBigTradeMarkers();
     this.renderSmcOverlay();
     this.renderSmcAiSignals();
@@ -1378,8 +1472,17 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   /** Change the active timeframe used by the right-axis current-bar countdown. */
   setBarCountdownDuration(durationMs: number): void {
     this.barCountdownDurationMs = durationMs;
+    this.gcPushMomentumSettings = normalizeGcPushMomentumSettings({
+      ...this.gcPushMomentumSettings,
+      barDurationMs: durationMs,
+    });
+    const latest = this.candleBars[this.candleBars.length - 1];
+    if (latest !== undefined && latest.time + durationMs <= Date.now()) {
+      this.closedBarTimes.add(latest.time);
+    }
     this.renderCandleSeries();
     this.renderBigTradeMarkers();
+    this.renderGcPushMomentumSeries();
     this.updateBarCountdown();
   }
 
@@ -1424,12 +1527,25 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   /** Bulk-load the full candle series. Delta history is loaded separately. */
   setBars(bars: BarSeries): void {
     this.candleBars = bars.map((bar) => ({ ...bar }));
+    this.closedBarTimes.clear();
+    const now = Date.now();
+    for (let index = 0; index < this.candleBars.length; index += 1) {
+      const bar = this.candleBars[index];
+      if (
+        index < this.candleBars.length - 1 ||
+        bar.time + this.barCountdownDurationMs <= now
+      ) {
+        this.closedBarTimes.add(bar.time);
+      }
+    }
+    this.invalidateMgannOverlay();
     this.rebuildBarsByDisplayTime();
     this.renderCandleSeries();
     this.renderSessionMarkers();
     this.renderVolumeSeries();
     this.renderWaveDeltaSeries();
     this.renderMgannSwing();
+    this.renderGcPushMomentumSeries();
     this.latestBar =
       this.candleBars.length > 0
         ? { ...this.candleBars[this.candleBars.length - 1] }
@@ -1440,9 +1556,23 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   /** Apply a single incremental candle update. */
-  updateBar(bar: Bar): void {
+  updateBar(bar: Bar, closed?: boolean): void {
     const result = applyBarUpdate(this.candleBars, bar);
     this.candleBars = result.bars;
+    if (result.kind === "append" || result.kind === "insert") {
+      const previous = this.candleBars[result.index - 1];
+      if (previous !== undefined) this.closedBarTimes.add(previous.time);
+    }
+    if (closed === true) {
+      this.closedBarTimes.add(bar.time);
+    } else if (closed === false) {
+      this.closedBarTimes.delete(bar.time);
+    }
+    if (result.kind === "noop") {
+      this.updateGcPushMomentumAt(result.index);
+      return;
+    }
+    this.invalidateMgannOverlay();
     if (this.realtimeInteractionActive) {
       // Keep the data model current but defer canvas invalidation until the pan
       // gesture ends. Usually this set contains only the live bar's timestamp.
@@ -1451,12 +1581,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         this.deferredSessionMarkers = true;
       }
     } else {
-      if (this.shouldRenderMgannImpulseWaves()) {
-        this.renderCandleSeries();
-      } else {
-        this.updateCandleAt(result.index);
-        this.updateCandleAt(result.index + 1);
-      }
+      // Keep the primary price/volume path incremental even when the heavier
+      // mGann overlays are enabled. Their full-history series are refreshed in
+      // one coalesced pass below.
+      this.updateCandleAt(result.index);
+      this.updateCandleAt(result.index + 1);
       // Session markers only depend on bar timestamps. Rebuilding all markers
       // for every overwrite of the live bar needlessly scans the full history.
       if (result.kind === "append" || result.kind === "insert") {
@@ -1465,10 +1594,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       if (this.volumeVisible) {
         this.updateVolumeAt(result.index);
       }
-      this.renderWaveDeltaSeries();
-      if (this.mgannSwingVisible) {
-        this.renderMgannSwing();
-      }
+      this.updateGcPushMomentumAt(result.index);
+      this.scheduleMgannRender();
     }
     this.barsByTime.set(
       toUtcTimestamp(bar.time, this.displayTimeOffsetMs) as number,
@@ -1522,6 +1649,29 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
   }
 
+  /** Create/remove the dedicated GC Push Momentum pane. */
+  setGcPushMomentumVisible(visible: boolean): void {
+    if (this.gcPushMomentumVisible === visible) return;
+    this.gcPushMomentumVisible = visible;
+    if (visible) {
+      this.ensureGcPushMomentumPane();
+      this.renderGcPushMomentumSeries();
+    } else {
+      this.removeGcPushMomentumPane();
+    }
+  }
+
+  setGcPushMomentumSettings(
+    settings: Partial<GcPushMomentumSettings>,
+  ): void {
+    this.gcPushMomentumSettings = normalizeGcPushMomentumSettings({
+      ...this.gcPushMomentumSettings,
+      ...settings,
+      barDurationMs: settings.barDurationMs ?? this.barCountdownDurationMs,
+    });
+    this.renderGcPushMomentumSeries();
+  }
+
   /** Show or hide the wave-delta MBox overlay. */
   setCvdVisible(visible: boolean): void {
     if (this.waveDeltaVisible === visible) {
@@ -1557,6 +1707,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   /** Show or hide the MGannSwing indicator. */
   setMgannSwingVisible(visible: boolean): void {
+    if (this.mgannSwingVisible === visible) return;
     this.mgannSwingVisible = visible;
     this.renderCandleSeries();
     this.renderMgannSwing();
@@ -1565,6 +1716,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   /** Apply MGannSwing sub-settings. */
   setMgannSwingSettings(settings: Partial<MgannSwingSettings>): void {
     this.mgannSwingSettings = normalizeMgannSwingSettings(settings);
+    this.invalidateMgannOverlay();
     this.renderCandleSeries();
     this.renderMgannSwing();
   }
@@ -1577,15 +1729,50 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     );
   }
 
-  private mgannImpulseColorsByIndex(): Map<number, string> {
-    if (!this.shouldRenderMgannImpulseWaves()) {
-      return new Map();
+  private scheduleMgannRender(): void {
+    if (!this.waveDeltaVisible && !this.mgannSwingVisible) return;
+    if (this.mgannRenderTimer !== undefined) return;
+    this.mgannRenderTimer = window.setTimeout(() => {
+      this.mgannRenderTimer = undefined;
+      if (!this.waveDeltaVisible && !this.mgannSwingVisible) return;
+      const overlay = this.currentMgannOverlay();
+      if (this.shouldRenderMgannImpulseWaves()) {
+        this.renderCandleSeries(overlay);
+      }
+      this.renderWaveDeltaSeries(overlay);
+      if (this.mgannSwingVisible) {
+        this.renderMgannSwing(overlay);
+      }
+    }, MGANN_REALTIME_RENDER_INTERVAL_MS);
+  }
+
+  private invalidateMgannOverlay(): void {
+    this.mgannOverlayRevision += 1;
+  }
+
+  private currentMgannOverlay(): MgannSwingOverlay {
+    if (
+      this.mgannOverlayCache !== undefined &&
+      this.mgannOverlayCacheRevision === this.mgannOverlayRevision
+    ) {
+      return this.mgannOverlayCache;
     }
     const overlay = buildMgannSwingOverlay(
       this.candleBars,
       this.volumeDeltaByTime,
       this.mgannSwingSettings,
     );
+    this.mgannOverlayCache = overlay;
+    this.mgannOverlayCacheRevision = this.mgannOverlayRevision;
+    return overlay;
+  }
+
+  private mgannImpulseColorsByIndex(
+    overlay: MgannSwingOverlay,
+  ): Map<number, string> {
+    if (!this.shouldRenderMgannImpulseWaves()) {
+      return new Map();
+    }
     const colors = new Map<number, string>();
     for (const impulse of overlay.impulseWaves) {
       const color = mgannImpulseColor(impulse);
@@ -1600,8 +1787,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     return colors;
   }
 
-  private renderCandleSeries(): void {
-    const impulseColors = this.mgannImpulseColorsByIndex();
+  private renderCandleSeries(overlay?: MgannSwingOverlay): void {
+    const impulseColors = this.shouldRenderMgannImpulseWaves()
+      ? this.mgannImpulseColorsByIndex(overlay ?? this.currentMgannOverlay())
+      : new Map<number, string>();
+    this.mgannImpulseColors = impulseColors;
     this.candleSeries.setData(
       this.candleBars.map((bar, index) =>
         toCandle(
@@ -1639,23 +1829,154 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     );
   }
 
-  private renderWaveDeltaSeries(): void {
+  private ensureGcPushMomentumPane(): void {
+    if (this.gcPushMomentumSeries !== undefined) return;
+    const pane = this.chart.addPane(true);
+    this.gcPushMomentumPaneIndex = this.chart.panes().length - 1;
+    this.chart.panes()[0]?.setStretchFactor(4);
+    pane.setStretchFactor(1);
+    this.gcPushMomentumSeries = this.chart.addSeries(
+      HistogramSeries,
+      {
+        title: "GC Push Momentum",
+        color: "rgba(38, 166, 154, 0.78)",
+        base: 0,
+        priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+        priceLineVisible: false,
+        lastValueVisible: true,
+        autoscaleInfoProvider: symmetricZeroAutoscale,
+      },
+      this.gcPushMomentumPaneIndex,
+    );
+    this.gcPushMomentumSeries.createPriceLine({
+      price: 0,
+      color: "rgba(100, 116, 139, 0.7)",
+      lineWidth: 1,
+      lineStyle: LineStyle.Solid,
+      axisLabelVisible: false,
+      title: "",
+    });
+    this.gcPushMomentumSeries.priceScale().applyOptions({
+      borderVisible: false,
+      scaleMargins: { top: 0.1, bottom: 0.1 },
+    });
+  }
+
+  private removeGcPushMomentumPane(): void {
+    if (this.gcPushMomentumSeries !== undefined) {
+      this.chart.removeSeries(this.gcPushMomentumSeries);
+      this.gcPushMomentumSeries = undefined;
+    }
+    const paneIndex = this.gcPushMomentumPaneIndex;
+    if (paneIndex !== undefined && paneIndex < this.chart.panes().length) {
+      this.chart.removePane(paneIndex);
+    }
+    this.gcPushMomentumPaneIndex = undefined;
+    this.chart.panes()[0]?.setStretchFactor(1);
+  }
+
+  private gcPushMomentumDeltas(): GcPushMomentumDelta[] {
+    const deltas: GcPushMomentumDelta[] = [];
+    for (const point of this.volumeDeltaByTime.values()) {
+      if (
+        point.volume !== undefined &&
+        Number.isFinite(point.volume) &&
+        Number.isFinite(point.delta)
+      ) {
+        deltas.push({
+          time: point.time,
+          volume: point.volume,
+          delta: point.delta,
+        });
+      }
+    }
+    return deltas;
+  }
+
+  private gcPushMomentumCalculationWindow(): number {
+    const settings = this.gcPushMomentumSettings;
+    const warmup = Math.max(
+      settings.warmupBars,
+      settings.horizonBars,
+      settings.accelerationBars * 2,
+      settings.efficiencyLookbackBars,
+    );
+    return warmup + settings.percentileLookbackBars + 32;
+  }
+
+  private renderGcPushMomentumSeries(): void {
+    if (!this.gcPushMomentumVisible) return;
+    this.ensureGcPushMomentumPane();
+    const points = calculateGcPushMomentum(
+      this.candleBars,
+      this.gcPushMomentumDeltas(),
+      this.gcPushMomentumSettings,
+    );
+    this.gcPushMomentumSeries?.setData(
+      points.map((point) =>
+        toGcPushMomentumHistogram(
+          point,
+          this.closedBarTimes.has(point.time),
+          this.displayTimeOffsetMs,
+        ),
+      ),
+    );
+  }
+
+  private updateGcPushMomentumAt(index: number): void {
+    const series = this.gcPushMomentumSeries;
+    if (!this.gcPushMomentumVisible || series === undefined || index < 0) return;
+    if (index < this.candleBars.length - 2) {
+      this.renderGcPushMomentumSeries();
+      return;
+    }
+
+    const windowSize = this.gcPushMomentumCalculationWindow();
+    const from = Math.max(0, this.candleBars.length - windowSize);
+    const points = calculateGcPushMomentum(
+      this.candleBars.slice(from),
+      this.gcPushMomentumDeltas(),
+      this.gcPushMomentumSettings,
+    );
+    const byTime = new Map(points.map((point) => [point.time, point]));
+    const indexes = new Set([index - 1, index]);
+    for (const currentIndex of [...indexes].sort((left, right) => left - right)) {
+      const bar = this.candleBars[currentIndex];
+      if (bar === undefined) continue;
+      const point = byTime.get(bar.time);
+      const historicalUpdate = currentIndex < this.candleBars.length - 1;
+      if (point === undefined) {
+        series.update(
+          { time: toUtcTimestamp(bar.time, this.displayTimeOffsetMs) },
+          historicalUpdate,
+        );
+      } else {
+        series.update(
+          toGcPushMomentumHistogram(
+            point,
+            this.closedBarTimes.has(point.time),
+            this.displayTimeOffsetMs,
+          ),
+          historicalUpdate,
+        );
+      }
+    }
+  }
+
+  private renderWaveDeltaSeries(overlay?: MgannSwingOverlay): void {
     if (!this.waveDeltaVisible) {
       return;
     }
-    const overlay = buildMgannSwingOverlay(
-      this.candleBars,
-      this.volumeDeltaByTime,
-    );
+    const resolvedOverlay = overlay ?? this.currentMgannOverlay();
     this.waveDeltaSeries.setData(
       toWaveDeltaLineDataFromValues(
         this.candleBars,
-        overlay.waveDeltaValues,
+        resolvedOverlay.waveDeltaValues,
         this.displayTimeOffsetMs,
       ),
     );
     this.waveDeltaMboxPrimitive?.setBoxes(
-      toWaveDeltaMboxes(overlay.waveDeltaBoxes, this.displayTimeOffsetMs),
+      toWaveDeltaMboxes(resolvedOverlay.waveDeltaBoxes, this.displayTimeOffsetMs),
     );
     this.renderWaveDeltaDivergences();
   }
@@ -1673,7 +1994,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     );
   }
 
-  private renderMgannSwing(): void {
+  private renderMgannSwing(overlay?: MgannSwingOverlay): void {
     const showLine =
       this.mgannSwingVisible && this.mgannSwingSettings.showSwingLine;
     const showSignals =
@@ -1688,15 +2009,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       return;
     }
 
-    const overlay = buildMgannSwingOverlay(
-      this.candleBars,
-      this.volumeDeltaByTime,
-      this.mgannSwingSettings,
-    );
+    const resolvedOverlay = overlay ?? this.currentMgannOverlay();
 
     this.mgannSwingSeries.setData(
       showLine
-        ? overlay.line.map((point) => ({
+        ? resolvedOverlay.line.map((point) => ({
             time: toUtcTimestamp(point.time, this.displayTimeOffsetMs),
             value: point.value,
           }))
@@ -1704,7 +2021,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     );
 
     const waveDeltaMarkers: SeriesMarker<Time>[] = showWaveDeltaNumbers
-      ? overlay.waveDeltaLabels.map((label) => {
+      ? resolvedOverlay.waveDeltaLabels.map((label) => {
           const isBuy = label.kind === "low";
           const rounded = Math.round(label.value);
           return {
@@ -1724,7 +2041,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         })
       : [];
     const signalMarkers: SeriesMarker<Time>[] = showSignals
-      ? overlay.signals.map((signal) => {
+      ? resolvedOverlay.signals.map((signal) => {
             const isBuy = signal.kind === "low";
             return {
               time: toUtcTimestamp(signal.time, this.displayTimeOffsetMs),
@@ -1758,7 +2075,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     if (index < 0 || index >= this.candleBars.length) {
       return;
     }
-    const impulseColors = this.mgannImpulseColorsByIndex();
     const candle = toCandle(
       this.candleBars[index],
       this.displayTimeOffsetMs,
@@ -1772,7 +2088,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.fvgGraderVisible
         ? this.fvgSignalsByTime.get(this.candleBars[index].time)
         : undefined,
-      impulseColors.get(index),
+      this.mgannImpulseColors.get(index),
     );
     this.candleSeries.update(candle, index < this.candleBars.length - 1);
   }
@@ -1948,12 +2264,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     for (const point of points) {
       this.volumeDeltaByTime.set(point.time, { ...point });
     }
+    this.invalidateMgannOverlay();
     if (this.shouldRenderMgannImpulseWaves()) {
       this.renderCandleSeries();
     }
     if (this.volumeDeltaVisible) {
       this.renderVolumeDeltaSeries();
     }
+    this.renderGcPushMomentumSeries();
     this.renderWaveDeltaSeries();
     if (this.mgannSwingVisible) {
       this.renderMgannSwing();
@@ -1964,6 +2282,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   updateVolumeDelta(point: VolumeDeltaDatum): void {
     const next = { ...point };
     this.volumeDeltaByTime.set(point.time, next);
+    this.invalidateMgannOverlay();
     if (this.realtimeInteractionActive) {
       this.deferredVolumeDeltaTimes.add(point.time);
       return;
@@ -1973,15 +2292,15 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         toVolumeDelta(next, this.deltaColors, this.displayTimeOffsetMs),
       );
     }
-    this.renderWaveDeltaSeries();
-    if (this.mgannSwingVisible) {
-      this.renderMgannSwing();
-    }
     if (this.shouldRenderMgannImpulseWaves()) {
       const index = this.candleBars.findIndex((bar) => bar.time === point.time);
       this.updateCandleAt(index);
       this.updateCandleAt(index + 1);
     }
+    this.updateGcPushMomentumAt(
+      this.candleBars.findIndex((bar) => bar.time === point.time),
+    );
+    this.scheduleMgannRender();
   }
 
   /** Bulk-load FVG Signal Grader candle colors. */
@@ -3089,20 +3408,13 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const hasBarUpdates = dirtyIndexes.length > 0;
     const hasDeltaUpdates = this.deferredVolumeDeltaTimes.size > 0;
 
-    if (
-      this.shouldRenderMgannImpulseWaves() &&
-      (hasBarUpdates || hasDeltaUpdates)
-    ) {
-      this.renderCandleSeries();
-    } else {
-      const candleIndexes = new Set<number>();
-      for (const index of dirtyIndexes) {
-        candleIndexes.add(index);
-        candleIndexes.add(index + 1);
-      }
-      for (const index of [...candleIndexes].sort((left, right) => left - right)) {
-        this.updateCandleAt(index);
-      }
+    const candleIndexes = new Set<number>();
+    for (const index of dirtyIndexes) {
+      candleIndexes.add(index);
+      candleIndexes.add(index + 1);
+    }
+    for (const index of [...candleIndexes].sort((left, right) => left - right)) {
+      this.updateCandleAt(index);
     }
 
     if (this.deferredSessionMarkers) {
@@ -3126,10 +3438,18 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       }
     }
     if (hasBarUpdates || hasDeltaUpdates) {
-      this.renderWaveDeltaSeries();
-      if (this.mgannSwingVisible) {
-        this.renderMgannSwing();
+      const momentumIndexes = new Set(dirtyIndexes);
+      for (const time of this.deferredVolumeDeltaTimes) {
+        const index = this.candleBars.findIndex((bar) => bar.time === time);
+        if (index >= 0) momentumIndexes.add(index);
       }
+      const earliestIndex = Math.min(...momentumIndexes);
+      if (Number.isFinite(earliestIndex)) {
+        this.updateGcPushMomentumAt(earliestIndex);
+      }
+    }
+    if (hasBarUpdates || hasDeltaUpdates) {
+      this.scheduleMgannRender();
     }
 
     this.deferredBarTimes.clear();
@@ -3142,6 +3462,10 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     if (this.barCountdownTimer !== undefined) {
       window.clearInterval(this.barCountdownTimer);
       this.barCountdownTimer = undefined;
+    }
+    if (this.mgannRenderTimer !== undefined) {
+      window.clearTimeout(this.mgannRenderTimer);
+      this.mgannRenderTimer = undefined;
     }
     this.disposePriceLineDragListeners?.();
     this.disposePriceLineDragListeners = undefined;

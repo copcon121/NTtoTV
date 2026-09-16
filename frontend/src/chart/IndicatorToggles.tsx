@@ -24,6 +24,11 @@ import {
   MIN_SESSION_VOLUME_PROFILE_WIDTH_PX,
   normalizeSessionVolumeProfileWidth,
 } from "./sessionVolumeProfileSettings";
+import {
+  DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
+  normalizeGcPushMomentumSettings,
+  type GcPushMomentumSettings,
+} from "./gcPushMomentum";
 
 /**
  * IndicatorToggles â€” TradingView-style "Indicators" dropdown.
@@ -155,6 +160,8 @@ export interface IndicatorTogglesProps {
   /** Temporary master visibility; individual indicator settings stay unchanged. */
   indicatorsVisible?: boolean;
   volumeDelta?: boolean;
+  gcPushMomentum?: boolean;
+  gcPushMomentumSettings?: Partial<GcPushMomentumSettings>;
   mgannSwing?: boolean;
   mgannSwingSettings?: Partial<MgannSwingSettings>;
   footprint: boolean;
@@ -171,10 +178,13 @@ export interface IndicatorTogglesProps {
   footprintSettings: FootprintSettings;
   bigTradeSettings?: BigTradeSettings;
   mgannSwingDisabled?: boolean;
+  gcPushMomentumDisabled?: boolean;
   footprintDisabled?: boolean;
   fvgGraderDisabled?: boolean;
   bigTradeDisabled?: boolean;
   onVolumeDeltaChange?: (enabled: boolean) => void;
+  onGcPushMomentumChange?: (enabled: boolean) => void;
+  onGcPushMomentumSettingsChange?: (next: GcPushMomentumSettings) => void;
   onMgannSwingChange?: (enabled: boolean) => void;
   onMgannSwingSettingsChange?: (next: MgannSwingSettings) => void;
   onFootprintChange: (enabled: boolean) => void;
@@ -211,13 +221,21 @@ interface RowProps {
   label: string;
   checked: boolean;
   disabled?: boolean;
+  title?: string;
   onChange: (enabled: boolean) => void;
   trailing?: ReactNode;
 }
 
-function IndicatorRow({ label, checked, disabled = false, onChange, trailing }: RowProps) {
+function IndicatorRow({
+  label,
+  checked,
+  disabled = false,
+  title,
+  onChange,
+  trailing,
+}: RowProps) {
   return (
-    <div className="indicator-row">
+    <div className="indicator-row" title={title}>
       <label className="indicator-row-main">
         <input
           type="checkbox"
@@ -238,6 +256,8 @@ function IndicatorRow({ label, checked, disabled = false, onChange, trailing }: 
 export function IndicatorToggles({
   indicatorsVisible = true,
   volumeDelta = false,
+  gcPushMomentum = false,
+  gcPushMomentumSettings = DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
   mgannSwing = false,
   mgannSwingSettings = DEFAULT_MGANN_SWING_SETTINGS,
   footprint,
@@ -256,10 +276,13 @@ export function IndicatorToggles({
   footprintSettings,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
   mgannSwingDisabled = false,
+  gcPushMomentumDisabled = false,
   footprintDisabled = false,
   fvgGraderDisabled = false,
   bigTradeDisabled = false,
   onVolumeDeltaChange = () => {},
+  onGcPushMomentumChange = () => {},
+  onGcPushMomentumSettingsChange = () => {},
   onMgannSwingChange = () => {},
   onMgannSwingSettingsChange = () => {},
   onFootprintChange,
@@ -280,12 +303,17 @@ export function IndicatorToggles({
 }: IndicatorTogglesProps) {
   const outsideBarConfig = normalizeOutsideBarSettings(outsideBar);
   const mgannSwingConfig = normalizeMgannSwingSettings(mgannSwingSettings);
+  const gcPushMomentumConfig = normalizeGcPushMomentumSettings(
+    gcPushMomentumSettings,
+  );
   const outsideBarDeltaFilter = outsideBarConfig.deltaFilter;
   const [open, setOpen] = useState(false);
   const [combinedSettingsOpen, setCombinedSettingsOpen] = useState(false);
   const [dailyVolumeProfileSettingsOpen, setDailyVolumeProfileSettingsOpen] =
     useState(false);
   const [mgannSwingSettingsOpen, setMgannSwingSettingsOpen] = useState(false);
+  const [gcPushMomentumSettingsOpen, setGcPushMomentumSettingsOpen] =
+    useState(false);
   const [smcSettingsOpen, setSmcSettingsOpen] = useState(false);
   const [fpSettingsOpen, setFpSettingsOpen] = useState(false);
   const [fvgSettingsOpen, setFvgSettingsOpen] = useState(false);
@@ -338,6 +366,14 @@ export function IndicatorToggles({
   );
   const [mgannImpulseBreakDraft, setMgannImpulseBreakDraft] = useState(
     String(mgannSwingConfig.impulseBreakTicks),
+  );
+  const [gcPushHorizonDraft, setGcPushHorizonDraft] = useState(
+    String(gcPushMomentumConfig.horizonBars),
+  );
+  const [gcPushVolatilityHalfLifeDraft, setGcPushVolatilityHalfLifeDraft] =
+    useState(String(gcPushMomentumConfig.volatilityHalfLifeBars));
+  const [gcPushStrongPercentileDraft, setGcPushStrongPercentileDraft] = useState(
+    String(Math.round(gcPushMomentumConfig.strongPercentile * 100)),
   );
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -437,10 +473,32 @@ export function IndicatorToggles({
   }, [mgannSwingConfig.impulseBreakTicks]);
 
   useEffect(() => {
+    setGcPushHorizonDraft(String(gcPushMomentumConfig.horizonBars));
+  }, [gcPushMomentumConfig.horizonBars]);
+
+  useEffect(() => {
+    setGcPushVolatilityHalfLifeDraft(
+      String(gcPushMomentumConfig.volatilityHalfLifeBars),
+    );
+  }, [gcPushMomentumConfig.volatilityHalfLifeBars]);
+
+  useEffect(() => {
+    setGcPushStrongPercentileDraft(
+      String(Math.round(gcPushMomentumConfig.strongPercentile * 100)),
+    );
+  }, [gcPushMomentumConfig.strongPercentile]);
+
+  useEffect(() => {
     if (mgannSwingDisabled) {
       setMgannSwingSettingsOpen(false);
     }
   }, [mgannSwingDisabled]);
+
+  useEffect(() => {
+    if (gcPushMomentumDisabled) {
+      setGcPushMomentumSettingsOpen(false);
+    }
+  }, [gcPushMomentumDisabled]);
 
   useEffect(() => {
     setVaPercentDraft(String(footprintSettings.vaPercent));
@@ -471,6 +529,7 @@ export function IndicatorToggles({
         setCombinedSettingsOpen(false);
         setDailyVolumeProfileSettingsOpen(false);
         setMgannSwingSettingsOpen(false);
+        setGcPushMomentumSettingsOpen(false);
         setSmcSettingsOpen(false);
         setFpSettingsOpen(false);
         setMgannBreakSettingsOpen(false);
@@ -483,6 +542,7 @@ export function IndicatorToggles({
         setCombinedSettingsOpen(false);
         setDailyVolumeProfileSettingsOpen(false);
         setMgannSwingSettingsOpen(false);
+        setGcPushMomentumSettingsOpen(false);
         setSmcSettingsOpen(false);
         setFpSettingsOpen(false);
         setMgannBreakSettingsOpen(false);
@@ -503,6 +563,7 @@ export function IndicatorToggles({
   const activeCount =
     1 +
     (volumeDelta ? 1 : 0) +
+    (gcPushMomentum && !gcPushMomentumDisabled ? 1 : 0) +
     (dailyVolumeProfile ? 1 : 0) +
     (mgannSwing && !mgannSwingDisabled ? 1 : 0) +
     (combinedIndicatorActive ? 1 : 0) +
@@ -666,6 +727,48 @@ export function IndicatorToggles({
     }
   };
 
+  const updateGcPushMomentum = (
+    next: Partial<GcPushMomentumSettings>,
+  ) => {
+    onGcPushMomentumSettingsChange(
+      normalizeGcPushMomentumSettings({
+        ...gcPushMomentumConfig,
+        ...next,
+      }),
+    );
+  };
+
+  const commitGcPushHorizon = () => {
+    const parsed = Math.round(Number(gcPushHorizonDraft));
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 12) {
+      updateGcPushMomentum({ horizonBars: parsed });
+    } else {
+      setGcPushHorizonDraft(String(gcPushMomentumConfig.horizonBars));
+    }
+  };
+
+  const commitGcPushVolatilityHalfLife = () => {
+    const parsed = Math.round(Number(gcPushVolatilityHalfLifeDraft));
+    if (Number.isFinite(parsed) && parsed >= 10 && parsed <= 240) {
+      updateGcPushMomentum({ volatilityHalfLifeBars: parsed });
+    } else {
+      setGcPushVolatilityHalfLifeDraft(
+        String(gcPushMomentumConfig.volatilityHalfLifeBars),
+      );
+    }
+  };
+
+  const commitGcPushStrongPercentile = () => {
+    const parsed = Math.round(Number(gcPushStrongPercentileDraft));
+    if (Number.isFinite(parsed) && parsed >= 80 && parsed <= 99) {
+      updateGcPushMomentum({ strongPercentile: parsed / 100 });
+    } else {
+      setGcPushStrongPercentileDraft(
+        String(Math.round(gcPushMomentumConfig.strongPercentile * 100)),
+      );
+    }
+  };
+
   const commitImbMinVol = () => {
     const parsed = Math.round(Number(imbMinVolDraft));
     if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1000) {
@@ -784,6 +887,95 @@ export function IndicatorToggles({
             checked={volumeDelta}
             onChange={onVolumeDeltaChange}
           />
+          <IndicatorRow
+            label="GC Push Momentum"
+            checked={gcPushMomentum}
+            disabled={gcPushMomentumDisabled}
+            title={
+              gcPushMomentumDisabled
+                ? "GC Push Momentum is available on the 1-minute chart"
+                : "Volatility-normalized price push with order-flow confirmation"
+            }
+            onChange={onGcPushMomentumChange}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="GC Push Momentum settings"
+                aria-expanded={gcPushMomentumSettingsOpen}
+                disabled={gcPushMomentumDisabled}
+                onClick={() => setGcPushMomentumSettingsOpen((value) => !value)}
+              >
+                {"\u2699"}
+              </button>
+            }
+          />
+          {gcPushMomentumSettingsOpen && !gcPushMomentumDisabled && (
+            <div
+              className="ema-settings"
+              aria-label="GC Push Momentum settings panel"
+            >
+              <label className="ema-setting-line">
+                <span className="ema-setting-label">Push horizon</span>
+                <input
+                  className="ema-length-input"
+                  type="number"
+                  min={1}
+                  max={12}
+                  step={1}
+                  aria-label="GC Push Momentum horizon bars"
+                  value={gcPushHorizonDraft}
+                  onChange={(event) =>
+                    setGcPushHorizonDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitGcPushHorizon}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") commitGcPushHorizon();
+                  }}
+                />
+              </label>
+              <label className="ema-setting-line">
+                <span className="ema-setting-label">Vol half-life</span>
+                <input
+                  className="ema-length-input"
+                  type="number"
+                  min={10}
+                  max={240}
+                  step={1}
+                  aria-label="GC Push Momentum volatility half-life"
+                  value={gcPushVolatilityHalfLifeDraft}
+                  onChange={(event) =>
+                    setGcPushVolatilityHalfLifeDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitGcPushVolatilityHalfLife}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitGcPushVolatilityHalfLife();
+                    }
+                  }}
+                />
+              </label>
+              <label className="ema-setting-line">
+                <span className="ema-setting-label">Strong %ile</span>
+                <input
+                  className="ema-length-input"
+                  type="number"
+                  min={80}
+                  max={99}
+                  step={1}
+                  aria-label="GC Push Momentum strong percentile"
+                  value={gcPushStrongPercentileDraft}
+                  onChange={(event) =>
+                    setGcPushStrongPercentileDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitGcPushStrongPercentile}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") commitGcPushStrongPercentile();
+                  }}
+                />
+              </label>
+            </div>
+          )}
           <IndicatorRow
             label="Volume Profile"
             checked={dailyVolumeProfile}

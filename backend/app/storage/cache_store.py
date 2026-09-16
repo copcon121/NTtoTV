@@ -825,6 +825,14 @@ class CacheStore:
     def insert_alert_event(self, event: AlertEventRecord) -> int:
         return self._alerts.insert_alert_event(event)
 
+    def alert_event_exists(
+        self,
+        alert_id: str,
+        profile_id: str,
+        time: int,
+    ) -> bool:
+        return self._alerts.alert_event_exists(alert_id, profile_id, time)
+
     def read_alert_events(
         self, alert_id: str | None = None, profile_id: str | None = None
     ) -> list[AlertEventRecord]:

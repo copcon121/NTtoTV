@@ -130,6 +130,16 @@ describe("MemoryCache.merge / append", () => {
     expect(cache.coveredRange(KEY)).toEqual({ from: 100, to: 300 });
   });
 
+  it("incrementally appends, inserts, and overwrites without losing sort order", () => {
+    const cache = new MemoryCache();
+    cache.set(KEY, [bar(10, 1), bar(30, 3)]);
+    cache.append(KEY, [bar(30, 8), bar(20, 2), bar(40, 4), bar(30, 9)]);
+
+    const series = cache.get(KEY)!;
+    expect(series.bars.map((item) => item.time)).toEqual([10, 20, 30, 40]);
+    expect(series.bars.find((item) => item.time === 30)?.close).toBe(9);
+  });
+
   it("extends covered range to an explicit fetched range on merge", () => {
     const cache = new MemoryCache();
     cache.set(KEY, [bar(100), bar(200)]);

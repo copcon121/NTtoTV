@@ -197,6 +197,24 @@ class AlertStore:
         )
         return int(cur.lastrowid)
 
+    def alert_event_exists(
+        self,
+        alert_id: str,
+        profile_id: str,
+        time: int,
+    ) -> bool:
+        """Return whether an alert already emitted for this exact closed bar."""
+        conn = self._reader()
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM alert_events "
+                "WHERE alert_id = ? AND profile_id = ? AND time = ? LIMIT 1",
+                (alert_id, profile_id, int(time)),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
     def read_alert_events(
         self, alert_id: str | None = None, profile_id: str | None = None
     ) -> list[AlertEventRecord]:

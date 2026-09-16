@@ -11,6 +11,7 @@ import {
 import { DEFAULT_MGANN_SWING_SETTINGS } from "./mgannSwing";
 import { DEFAULT_OUTSIDE_BAR_SETTINGS } from "./outsideBar";
 import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./smc";
+import { DEFAULT_GC_PUSH_MOMENTUM_SETTINGS } from "./gcPushMomentum";
 
 afterEach(() => {
   cleanup();
@@ -174,6 +175,88 @@ describe("IndicatorToggles", () => {
       ...DEFAULT_MGANN_SWING_SETTINGS,
       impulseBreakTicks: 2,
     });
+  });
+
+  it("toggles and edits GC Push Momentum settings", () => {
+    const onEnabled = vi.fn();
+    const onSettings = vi.fn();
+    render(
+      <IndicatorToggles
+        gcPushMomentum={false}
+        gcPushMomentumSettings={DEFAULT_GC_PUSH_MOMENTUM_SETTINGS}
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        onGcPushMomentumChange={onEnabled}
+        onGcPushMomentumSettingsChange={onSettings}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    fireEvent.click(screen.getByLabelText("GC Push Momentum"));
+    fireEvent.click(screen.getByLabelText("GC Push Momentum settings"));
+    fireEvent.change(screen.getByLabelText("GC Push Momentum horizon bars"), {
+      target: { value: "5" },
+    });
+    fireEvent.blur(screen.getByLabelText("GC Push Momentum horizon bars"));
+    fireEvent.change(
+      screen.getByLabelText("GC Push Momentum volatility half-life"),
+      { target: { value: "90" } },
+    );
+    fireEvent.blur(
+      screen.getByLabelText("GC Push Momentum volatility half-life"),
+    );
+    fireEvent.change(
+      screen.getByLabelText("GC Push Momentum strong percentile"),
+      { target: { value: "95" } },
+    );
+    fireEvent.blur(
+      screen.getByLabelText("GC Push Momentum strong percentile"),
+    );
+
+    expect(onEnabled).toHaveBeenCalledWith(true);
+    expect(onSettings).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ horizonBars: 5 }),
+    );
+    expect(onSettings).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ volatilityHalfLifeBars: 90 }),
+    );
+    expect(onSettings).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ strongPercentile: 0.95 }),
+    );
+  });
+
+  it("disables GC Push Momentum outside M1", () => {
+    render(
+      <IndicatorToggles
+        gcPushMomentum
+        gcPushMomentumDisabled
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    expect(screen.getByLabelText("GC Push Momentum")).toBeDisabled();
+    expect(screen.getByLabelText("GC Push Momentum settings")).toBeDisabled();
   });
 
   it("can disable MGannSwing independently", () => {

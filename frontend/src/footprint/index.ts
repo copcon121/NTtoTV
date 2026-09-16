@@ -12,6 +12,7 @@
 export {
   FOOTPRINT_DISPLAY_COUNT,
   mergeFootprint,
+  mergeFootprintCapped,
   selectDisplayBars,
   shouldRedraw,
   type FootprintBar,

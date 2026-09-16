@@ -7,14 +7,12 @@
  */
 
 import type {
-  AutoscaleInfo,
   Coordinate,
   IChartApiBase,
   IPrimitivePaneRenderer,
   IPrimitivePaneView,
   ISeriesApi,
   ISeriesPrimitive,
-  Logical,
   PrimitivePaneViewZOrder,
   SeriesAttachedParameter,
   Time,
@@ -24,7 +22,7 @@ import type {
   CanvasRenderingTarget2D,
 } from "fancy-canvas";
 
-import { anchorToCoordinate, anchorToLogical } from "./coordinates";
+import { anchorToCoordinate } from "./coordinates";
 import type { AnchorPoint, DrawingOptions, DrawingState, IDrawing } from "./types";
 
 interface ViewPoint {
@@ -309,20 +307,11 @@ export class TrendLinePrimitive implements ISeriesPrimitive<Time>, IDrawing {
     return [this.paneView];
   }
 
-  autoscaleInfo(startTimePoint: Logical, endTimePoint: Logical): AutoscaleInfo | null {
-    if (this.anchorsInternal.length < 2) return null;
-    const p1Index = this.pointIndex(this.anchorsInternal[0]);
-    const p2Index = this.pointIndex(this.anchorsInternal[1]);
-    if (p1Index === null || p2Index === null) return null;
-    const start = Math.min(p1Index, p2Index);
-    const end = Math.max(p1Index, p2Index);
-    if (endTimePoint < start || startTimePoint > end) return null;
-    return {
-      priceRange: {
-        minValue: Math.min(this.anchorsInternal[0].price, this.anchorsInternal[1].price),
-        maxValue: Math.max(this.anchorsInternal[0].price, this.anchorsInternal[1].price),
-      },
-    };
+  autoscaleInfo(): null {
+    // Drawings are annotations, not market data. Including a distant drawing
+    // in autoscale collapses the candles when the chart opens or the user
+    // double-clicks the price axis to reset it.
+    return null;
   }
 
   attached(params: SeriesAttachedParameter<Time, "Candlestick">): void {
@@ -337,7 +326,4 @@ export class TrendLinePrimitive implements ISeriesPrimitive<Time>, IDrawing {
     this.requestUpdateFn = undefined;
   }
 
-  private pointIndex(point: AnchorPoint): Logical | null {
-    return this.chart && this.series ? anchorToLogical(this.chart, this.series, point) : null;
-  }
 }

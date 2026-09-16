@@ -223,6 +223,65 @@ def test_mgann_sweep_signals_replay_without_big_trade(env):
 
 
 @pytest.mark.integration
+def test_mgann_break_ls_signals_ignore_in_progress_bar(env):
+    client, cache = env
+    cache.upsert_alert(
+        AlertRecord(
+            id="a_mgann_open_bar",
+            profile_id="hieu",
+            symbol=_SYMBOL,
+            type=MGANN_SWEEP,
+            params={
+                "timeframe": "1m",
+                "volumeDeltaLookback": 2,
+                "volumeDeltaMultiplier": 2,
+                "minSpreadTicks": 0,
+                "spreadLookback": 2,
+                "spreadMultiplier": 2,
+                "swingSize": 1,
+                "pivotLookbackBars": 20,
+                "minPivotCuts": 1,
+                "confirmationBars": 2,
+                "breakTicks": 0,
+                "repeat": True,
+            },
+            enabled=True,
+            created_at=1,
+            updated_at=1,
+        )
+    )
+    bars = [
+        _bar(0, 100.0, 100.2, 99.5, 100.0, 100),
+        _bar(1, 100.0, 101.0, 98.5, 99.0, 100),
+        _bar(2, 99.0, 99.5, 97.0, 98.0, 100),
+        _bar(3, 98.0, 100.0, 97.5, 98.8, 100),
+        _bar(4, 98.8, 99.0, 96.0, 96.5, 100),
+        _bar(5, 96.5, 102.5, 96.0, 102.2, 500),
+    ]
+    bars[-1].closed = False
+    cache.upsert_bars(bars)
+    cache.upsert_volume_deltas(
+        [_volume_delta(index, 500 if index == 5 else 100) for index in range(6)]
+    )
+
+    resp = client.get(
+        "/api/signals/mgann-break-ls",
+        params={
+            "symbol": _SYMBOL,
+            "contract": _CONTRACT,
+            "tf": "1m",
+            "profileId": "hieu",
+            "from": 5 * _STEP,
+            "to": 5 * _STEP,
+            "warmupBars": 20,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["signals"] == []
+
+
+@pytest.mark.integration
 def test_mgann_break_ls_replay_applies_close_through_liquidity_filter(env):
     client, cache = env
     cache.upsert_alert(

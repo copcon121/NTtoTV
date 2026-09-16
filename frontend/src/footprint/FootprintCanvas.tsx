@@ -44,6 +44,7 @@ export interface FootprintCanvasProps {
 
 const MIN_THROTTLE_MS = 100;
 const MAX_THROTTLE_MS = 125;
+const systemNow = () => Date.now();
 const MZ_THEME = {
   bidCellStrong: "rgba(250, 128, 114, 1)",
   askCellStrong: "rgba(0, 139, 139, 1)",
@@ -633,7 +634,7 @@ export function FootprintCanvas({
   bars,
   viewport,
   throttleMs = MIN_THROTTLE_MS,
-  now = () => Date.now(),
+  now = systemNow,
   settings,
   displayCount = FOOTPRINT_DISPLAY_COUNT,
   rowHeightPx,
@@ -643,6 +644,11 @@ export function FootprintCanvas({
   const prevInputsRef = useRef<FootprintRenderInputs | null>(null);
   const lastDrawAtRef = useRef<number>(-Infinity);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRenderRef = useRef<{
+    ctx: CanvasRenderingContext2D;
+    inputs: FootprintRenderInputs;
+    settings?: FootprintSettings;
+  } | null>(null);
 
   const interval = clampThrottle(throttleMs);
   const effectiveDisplayCount = Math.max(1, Math.round(displayCount));
@@ -663,31 +669,42 @@ export function FootprintCanvas({
     };
 
     if (!shouldRedraw(prevInputsRef.current, next)) {
+      // If a burst changed and then restored the last-painted state before the
+      // trailing edge, discard the obsolete pending frame.
+      pendingRenderRef.current = null;
       return; // retain current rendering (Req 14.6, 14.7)
     }
 
-    const render = () => {
-      drawFootprint(ctx, next, settings);
-      prevInputsRef.current = next;
-      lastDrawAtRef.current = now();
+    pendingRenderRef.current = { ctx, inputs: next, settings };
+    const renderLatest = () => {
+      const pending = pendingRenderRef.current;
+      pendingRenderRef.current = null;
       timerRef.current = null;
+      if (pending === null) return;
+      drawFootprint(pending.ctx, pending.inputs, pending.settings);
+      prevInputsRef.current = pending.inputs;
+      lastDrawAtRef.current = now();
     };
 
     const elapsed = now() - lastDrawAtRef.current;
-    if (elapsed >= interval) {
-      render();
+    if (elapsed >= interval && timerRef.current === null) {
+      renderLatest();
     } else if (timerRef.current === null) {
       // Trailing-edge: collapse a burst to one draw per interval (Req 14.8).
-      timerRef.current = setTimeout(render, interval - elapsed);
+      timerRef.current = setTimeout(renderLatest, Math.max(0, interval - elapsed));
     }
+  }, [bars, viewport, interval, now, settings, effectiveDisplayCount, rowHeightPx, layout]);
 
-    return () => {
+  useEffect(
+    () => () => {
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
       }
-    };
-  }, [bars, viewport, interval, now, settings, effectiveDisplayCount, rowHeightPx, layout]);
+      pendingRenderRef.current = null;
+    },
+    [],
+  );
 
   return (
     <canvas

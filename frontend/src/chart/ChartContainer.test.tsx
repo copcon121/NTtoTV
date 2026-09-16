@@ -31,9 +31,12 @@ import type {
   FvgSignalUpdateMessage,
   VolumeDeltaUpdateMessage,
 } from "../socket/messages";
+import type { SmcWorkerRequest, SmcWorkerResponse } from "./smcWorker";
+import type { GcPushMomentumSettings } from "./gcPushMomentum";
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 function bar(time: number, close = time, volume = 1): Bar {
@@ -54,11 +57,14 @@ function ohlc(
 class FakePort implements DisposableChartPort {
   setBarsCalls: BarSeries[] = [];
   updateBarCalls: Bar[] = [];
+  updateBarClosedCalls: (boolean | undefined)[] = [];
   displayTimeOffsetCalls: number[] = [];
   timezoneOffsetCalls: number[] = [];
   barCountdownDurationCalls: number[] = [];
   setVolumeVisibleCalls: boolean[] = [];
   setVolumeDeltaVisibleCalls: boolean[] = [];
+  setGcPushMomentumVisibleCalls: boolean[] = [];
+  setGcPushMomentumSettingsCalls: GcPushMomentumSettings[] = [];
   setCvdVisibleCalls: boolean[] = [];
   setMgannSwingVisibleCalls: boolean[] = [];
   setMgannSwingSettingsCalls: MgannSwingSettings[] = [];
@@ -101,8 +107,9 @@ class FakePort implements DisposableChartPort {
   setBars(bars: BarSeries): void {
     this.setBarsCalls.push(bars.slice());
   }
-  updateBar(b: Bar): void {
+  updateBar(b: Bar, closed?: boolean): void {
     this.updateBarCalls.push({ ...b });
+    this.updateBarClosedCalls.push(closed);
   }
   takeScreenshotDataUrl(): string | undefined {
     return this.screenshotDataUrl;
@@ -121,6 +128,12 @@ class FakePort implements DisposableChartPort {
   }
   setVolumeDeltaVisible(visible: boolean): void {
     this.setVolumeDeltaVisibleCalls.push(visible);
+  }
+  setGcPushMomentumVisible(visible: boolean): void {
+    this.setGcPushMomentumVisibleCalls.push(visible);
+  }
+  setGcPushMomentumSettings(settings: GcPushMomentumSettings): void {
+    this.setGcPushMomentumSettingsCalls.push({ ...settings });
   }
   setCvdVisible(visible: boolean): void {
     this.setCvdVisibleCalls.push(visible);
@@ -247,6 +260,31 @@ class FakePort implements DisposableChartPort {
   }
   dispose(): void {
     this.disposed = true;
+  }
+}
+
+class FakeSmcWorker {
+  static instances: FakeSmcWorker[] = [];
+
+  onmessage: ((event: MessageEvent<SmcWorkerResponse>) => void) | null = null;
+  onerror: (() => void) | null = null;
+  readonly requests: SmcWorkerRequest[] = [];
+  terminated = false;
+
+  constructor() {
+    FakeSmcWorker.instances.push(this);
+  }
+
+  postMessage(request: SmcWorkerRequest): void {
+    this.requests.push(request);
+  }
+
+  respond(response: SmcWorkerResponse): void {
+    this.onmessage?.({ data: response } as MessageEvent<SmcWorkerResponse>);
+  }
+
+  terminate(): void {
+    this.terminated = true;
   }
 }
 
@@ -536,6 +574,44 @@ describe("ChartContainer", () => {
     expect(port.setVolumeDeltaVisibleCalls).toEqual([true, false]);
   });
 
+  it("configures and toggles the GC Push Momentum pane", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const { rerender } = render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        showGcPushMomentum
+        gcPushMomentumSettings={{ horizonBars: 4 }}
+        portFactory={factory}
+      />,
+    );
+
+    rerender(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10)]}
+        showGcPushMomentum={false}
+        gcPushMomentumSettings={{ horizonBars: 4 }}
+        portFactory={factory}
+      />,
+    );
+
+    expect(port.setGcPushMomentumVisibleCalls).toEqual([true, false]);
+    expect(
+      port.setGcPushMomentumSettingsCalls[
+        port.setGcPushMomentumSettingsCalls.length - 1
+      ],
+    ).toMatchObject({
+      horizonBars: 4,
+      barDurationMs: 60_000,
+    });
+  });
+
   it("toggles the Wave Delta MBox overlay through the port", () => {
     const port = new FakePort();
     const factory: ChartPortFactory = () => port;
@@ -736,6 +812,32 @@ describe("ChartContainer", () => {
     expect(port.setBarsCalls).toHaveLength(1); // never a second full load
     expect(port.updateBarCalls.map((b) => b.time)).toEqual([30, 30]);
     expect(port.updateBarCalls[1].close).toBe(99);
+    expect(port.updateBarClosedCalls).toEqual([false, false]);
+  });
+
+  it("forwards a final closed flag even when OHLCV is unchanged", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const ws = new MockWebSocket();
+    const socket = new ChartSocket({ url: "ws://x/ws/chart", factory: () => ws });
+    socket.connect();
+    const live = bar(20, 21, 7);
+
+    render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={[bar(10), live]}
+        socket={socket}
+        portFactory={factory}
+      />,
+    );
+
+    ws.deliver(barUpdate(live, { closed: false }));
+    ws.deliver(barUpdate(live, { closed: true }));
+
+    expect(port.updateBarClosedCalls).toEqual([true]);
   });
 
   it("loads and updates volume delta on the lower MyVolumeDelta-style candles", () => {
@@ -771,6 +873,9 @@ describe("ChartContainer", () => {
     expect(port.updateVolumeDeltaCalls).toEqual([
       {
         time: 30,
+        volume: 9,
+        buyVolume: 9,
+        sellVolume: 0,
         delta: 9,
         deltaHigh: 9,
         deltaLow: 0,
@@ -1001,6 +1106,48 @@ describe("ChartContainer", () => {
       const overlay = port.setSmcOverlayCalls[0];
       expect(overlay.lines.some((line) => line.label === "BOS")).toBe(true);
       expect(overlay.zones.some((zone) => zone.kind === "ob")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("runs SMC history computation in a worker when the browser supports it", () => {
+    vi.useFakeTimers();
+    FakeSmcWorker.instances = [];
+    vi.stubGlobal("Worker", FakeSmcWorker);
+    try {
+      const port = new FakePort();
+      render(
+        <ChartContainer
+          symbol="GC"
+          contract="GC"
+          timeframe="1h"
+          bars={[bar(1), bar(2), bar(3)]}
+          smc={{ ...DEFAULT_SMC_SETTINGS, enabled: true }}
+          portFactory={() => port}
+        />,
+      );
+
+      vi.advanceTimersByTime(100);
+      const worker = FakeSmcWorker.instances[0];
+      expect(worker.requests).toHaveLength(1);
+      expect(port.setSmcOverlayCalls).toHaveLength(0);
+
+      const response: SmcWorkerResponse = {
+        requestId: worker.requests[0].requestId,
+        overlay: {
+          markers: [],
+          zones: [],
+          lines: [],
+          swingTrend: 1,
+          internalTrend: -1,
+        },
+      };
+      act(() => worker.respond(response));
+
+      expect(
+        port.setSmcOverlayCalls[port.setSmcOverlayCalls.length - 1],
+      ).toEqual(response.overlay);
     } finally {
       vi.useRealTimers();
     }

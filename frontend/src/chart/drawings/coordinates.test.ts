@@ -54,6 +54,43 @@ describe("drawing coordinate anchors", () => {
     expect(anchorToCoordinate(chart as never, series as never, anchor)).toBe(70);
     expect(anchorToLogical(chart as never, series as never, anchor)).toBe(7);
   });
+
+  it("searches loaded bars without mapping the full series for an old anchor", () => {
+    const times = Array.from({ length: 4_320 }, (_, index) => 1_000 + index * 60);
+    const chart = makeChart(new Map(), indexesForTimes(times));
+    const data = times.map((time) => ({ time }));
+    let sliceCalls = 0;
+    const guardedData = new Proxy(data, {
+      get(target, property, receiver) {
+        if (property === "map" || property === "filter") {
+          throw new Error("full-series allocation is not allowed during lookup");
+        }
+        if (property === "slice") {
+          return (...args: Parameters<typeof target.slice>) => {
+            sliceCalls += 1;
+            return target.slice(...args);
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const series = {
+      ...makeSeries(times),
+      data: () => guardedData,
+    };
+    const anchor: AnchorPoint = { time: 0 as never, price: 10, logical: -20 };
+
+    expect(anchorToLogical(chart as never, series as never, anchor)).toBeCloseTo(
+      -1_000 / 60,
+    );
+    expect(
+      anchorToLogical(chart as never, series as never, {
+        ...anchor,
+        time: -60 as never,
+      }),
+    ).toBeCloseTo(-1_060 / 60);
+    expect(sliceCalls).toBe(1);
+  });
 });
 
 function indexesForTimes(times: readonly number[]): Map<number, number> {

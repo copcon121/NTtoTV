@@ -1,12 +1,10 @@
 import type {
-  AutoscaleInfo,
   Coordinate,
   IChartApiBase,
   IPrimitivePaneRenderer,
   IPrimitivePaneView,
   ISeriesApi,
   ISeriesPrimitive,
-  Logical,
   PrimitivePaneViewZOrder,
   SeriesAttachedParameter,
   Time,
@@ -16,7 +14,7 @@ import type {
   CanvasRenderingTarget2D,
 } from "fancy-canvas";
 
-import { anchorToCoordinate, anchorToLogical } from "./coordinates";
+import { anchorToCoordinate } from "./coordinates";
 import type { AnchorPoint, DrawingOptions, DrawingState, IDrawing } from "./types";
 
 interface ViewPoint {
@@ -243,24 +241,9 @@ export class PathPrimitive implements ISeriesPrimitive<Time>, IDrawing {
     return [this.paneView];
   }
 
-  autoscaleInfo(startTimePoint: Logical, endTimePoint: Logical): AutoscaleInfo | null {
-    const visibleAnchors = this.anchorsInternal.filter((anchor) => {
-      if (!this.chart || !this.series) return false;
-      const logical = anchorToLogical(this.chart, this.series, anchor);
-      return (
-        logical !== null &&
-        logical >= startTimePoint &&
-        logical <= endTimePoint
-      );
-    });
-    if (visibleAnchors.length === 0) return null;
-    const prices = visibleAnchors.map((anchor) => anchor.price);
-    return {
-      priceRange: {
-        minValue: Math.min(...prices),
-        maxValue: Math.max(...prices),
-      },
-    };
+  autoscaleInfo(): null {
+    // Freehand annotations must not widen the candle price range on reset.
+    return null;
   }
 
   attached(params: SeriesAttachedParameter<Time, "Candlestick">): void {

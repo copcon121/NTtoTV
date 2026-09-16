@@ -66,6 +66,10 @@ const ORDER_BLOCK_WIDE_RANGE_LOOKBACK = 20;
 const ORDER_BLOCK_WIDE_RANGE_MULTIPLIER = 2;
 const DEFAULT_BAR_STEP_MS = 60_000;
 const ICT_LIQUIDITY_ACTIVE_EXTEND_BARS = 3;
+// Removing one element from the front of several arrays on every processed bar
+// turns a long-history SMC pass into millions of element moves. Keep an exact
+// logical window with a head offset and compact the backing arrays in chunks.
+const SMC_BUFFER_COMPACT_HEAD = 512;
 
 export type SmcMarkerKind =
   | "bos"
@@ -275,6 +279,7 @@ class LuxSmc {
   private readonly atrValues: Array<number | undefined> = [];
   private readonly timestamps: number[] = [];
   private readonly indices: number[] = [];
+  private bufferStart = 0;
 
   readonly state = new StructureState();
   readonly swingObs: OrderBlock[] = [];
@@ -335,19 +340,7 @@ class LuxSmc {
     this.atrValues.push(wilderAtr(this.trueRanges, previousAtr, 10));
     this.timestamps.push(bar.time);
     this.indices.push(barIndex);
-
-    if (this.highs.length > this.maxBuffer) {
-      this.highs.shift();
-      this.lows.shift();
-      this.closes.shift();
-      this.opens.shift();
-      this.volumes.shift();
-      this.bodyDeltaPercents.shift();
-      this.trueRanges.shift();
-      this.atrValues.shift();
-      this.timestamps.shift();
-      this.indices.shift();
-    }
+    this.trimBuffers();
 
     this.state.resetPulses();
 
@@ -367,6 +360,27 @@ class LuxSmc {
     this.updateLiquidityState(bar.close, bar.time, barIndex);
 
     return this.state;
+  }
+
+  private trimBuffers(): void {
+    const activeLength = this.highs.length - this.bufferStart;
+    if (activeLength > this.maxBuffer) {
+      this.bufferStart += activeLength - this.maxBuffer;
+    }
+    if (this.bufferStart < SMC_BUFFER_COMPACT_HEAD) return;
+
+    const count = this.bufferStart;
+    this.highs.splice(0, count);
+    this.lows.splice(0, count);
+    this.closes.splice(0, count);
+    this.opens.splice(0, count);
+    this.volumes.splice(0, count);
+    this.bodyDeltaPercents.splice(0, count);
+    this.trueRanges.splice(0, count);
+    this.atrValues.splice(0, count);
+    this.timestamps.splice(0, count);
+    this.indices.splice(0, count);
+    this.bufferStart = 0;
   }
 
   private updateTrailingExtremes(high: number, low: number): void {
@@ -557,7 +571,10 @@ class LuxSmc {
     direction: Direction,
     isInternal: boolean,
   ): void {
-    const bufferStartPos = this.indices.indexOf(brokenPivot.barIndex);
+    const bufferStartPos = this.indices.indexOf(
+      brokenPivot.barIndex,
+      this.bufferStart,
+    );
     if (bufferStartPos < 0) return;
 
     const rangeHighs = this.highs.slice(bufferStartPos);
@@ -593,7 +610,7 @@ class LuxSmc {
     direction: Direction,
     createdBarIndex: number,
   ): void {
-    const candlePos = this.indices.indexOf(pivot.barIndex);
+    const candlePos = this.indices.indexOf(pivot.barIndex, this.bufferStart);
     if (candlePos < 0) return;
     const ob = this.orderBlockFromBufferCandle(
       candlePos,
@@ -691,7 +708,10 @@ class LuxSmc {
   }
 
   private averageRangeBefore(candlePos: number): number {
-    const start = Math.max(0, candlePos - ORDER_BLOCK_WIDE_RANGE_LOOKBACK);
+    const start = Math.max(
+      this.bufferStart,
+      candlePos - ORDER_BLOCK_WIDE_RANGE_LOOKBACK,
+    );
     let sum = 0;
     let count = 0;
 

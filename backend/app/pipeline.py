@@ -1387,7 +1387,9 @@ class Pipeline:
                 ),
                 breakout_events=breakout_events or None,
             )
-            await self._emit_alerts(self._alerts.evaluate(ctx))
+            alert_events = self._alerts.evaluate(ctx)
+            alert_events.extend(self._alerts.reconcile_mgann_closed_bar(ctx))
+            await self._emit_alerts(alert_events)
             await self._run_auto_trade_closed_bar(ctx)
 
     async def _run_auto_trade_closed_bar(self, ctx: MarketContext) -> None:

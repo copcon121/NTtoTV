@@ -48,6 +48,28 @@ export function mergeFootprint(
 }
 
 /**
+ * Merge one live bar while retaining only the newest time buckets. The main
+ * chart displays a small trailing footprint window, so allowing this map to
+ * grow for the whole browser session only makes every immutable update and
+ * selection progressively more expensive.
+ */
+export function mergeFootprintCapped(
+  bars: ReadonlyMap<number, FootprintBar>,
+  msg: FootprintBar,
+  maxBars: number,
+): Map<number, FootprintBar> {
+  const next = mergeFootprint(bars, msg);
+  const cap = Math.max(1, Math.floor(maxBars));
+  if (next.size <= cap) return next;
+
+  const oldestTimes = [...next.keys()].sort((left, right) => left - right);
+  for (let index = 0; index < oldestTimes.length - cap; index += 1) {
+    next.delete(oldestTimes[index]);
+  }
+  return next;
+}
+
+/**
  * Select exactly the last {@link FOOTPRINT_DISPLAY_COUNT} M1 bars by time,
  * ascending. When fewer bars exist, all are returned. (Req 14.2,
  * Property 19)

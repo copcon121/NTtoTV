@@ -15,14 +15,16 @@ function bar(time: number, close = time, volume = 1): Bar {
 class RecordingPort implements ChartSeriesPort {
   setBarsCalls: BarSeries[] = [];
   updateBarCalls: Bar[] = [];
+  updateBarClosedCalls: (boolean | undefined)[] = [];
 
   setBars(bars: BarSeries): void {
     // store a copy of the times to detect full-replacements precisely
     this.setBarsCalls.push(bars.slice());
   }
 
-  updateBar(bar: Bar): void {
+  updateBar(bar: Bar, closed?: boolean): void {
     this.updateBarCalls.push({ ...bar });
+    this.updateBarClosedCalls.push(closed);
   }
 }
 
@@ -62,6 +64,19 @@ describe("ChartSeriesController", () => {
     expect(outcome.kind).toBe("noop");
     expect(outcome.rendered).toBe(false);
     expect(port.updateBarCalls).toHaveLength(0);
+  });
+
+  it("forwards a close-state-only transition exactly once", () => {
+    const port = new RecordingPort();
+    const controller = new ChartSeriesController(port);
+    controller.load([bar(10), bar(20)]);
+
+    expect(controller.apply(bar(20), false).rendered).toBe(false);
+    expect(controller.apply(bar(20), false).rendered).toBe(false);
+    const closed = controller.apply(bar(20), true);
+
+    expect(closed).toEqual({ kind: "noop", rendered: true });
+    expect(port.updateBarClosedCalls).toEqual([true]);
   });
 
   it("seeds the series with a bulk load when an update arrives before history", () => {

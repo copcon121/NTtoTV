@@ -378,10 +378,7 @@ describe("live chart series identity", () => {
       "market_data_status",
       "alert_event",
       "order_update",
-      "position_update",
       "account_update",
-      "basis_update",
-      "risk_update",
       "status",
     ]);
     expect(BIG_TRADE_SUBSCRIBED_EVENTS).toEqual(["big_trade"]);

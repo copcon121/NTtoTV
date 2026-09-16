@@ -75,6 +75,11 @@ import {
   normalizeMgannSwingSettings,
   type MgannSwingSettings,
 } from "./chart/mgannSwing";
+import {
+  DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
+  normalizeGcPushMomentumSettings,
+  type GcPushMomentumSettings,
+} from "./chart/gcPushMomentum";
 import { bigTradeMinVolumeForTime } from "./chart/bigTradeSessions";
 import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./chart/smc";
 import {
@@ -91,7 +96,7 @@ import { type Bar } from "./cache/types";
 import { AuthDialog, type AuthDialogMode } from "./auth/AuthDialog";
 import {
   type FootprintBar,
-  mergeFootprint,
+  mergeFootprintCapped,
 } from "./footprint/footprintModel";
 import {
   type VolumeDeltaDatum,
@@ -200,10 +205,7 @@ export const GLOBAL_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "market_data_status",
   "alert_event",
   "order_update",
-  "position_update",
   "account_update",
-  "basis_update",
-  "risk_update",
   "status",
 ];
 export const BIG_TRADE_SUBSCRIBED_EVENTS: ChartEventType[] = ["big_trade"];
@@ -246,8 +248,11 @@ const DELTA_PROFILE_VALUE_AREA_PCT = 68;
 const DELTA_PROFILE_REFRESH_DELAY_MS = 1_000;
 const ORDER_REFRESH_INTERVAL_MS = 5_000;
 const ENABLE_REALTIME_FOOTPRINT_UPDATES = true;
-const REALTIME_RENDER_BATCH_MS = 50;
+// Match the chart/canvas cadence so a backend burst cannot force an extra
+// React render halfway between two visible frames.
+const REALTIME_RENDER_BATCH_MS = 100;
 const MAX_RETAINED_BIG_TRADE_MARKERS = INITIAL_BIG_TRADE_LIMIT;
+const MAX_RETAINED_LIVE_FOOTPRINT_BARS = 20;
 const BAR_REPLAY_HISTORY_LIMIT = 5_000;
 
 interface BarReplayDataset {
@@ -1687,6 +1692,9 @@ function replayVolumeDelta(rows: readonly VolumeDeltaBar[]): readonly VolumeDelt
     runningCvd = cumulativeDelta;
     return {
       time: point.time,
+      volume: point.volume,
+      buyVolume: point.buyVolume,
+      sellVolume: point.sellVolume,
       delta: point.delta,
       deltaHigh: point.deltaHigh,
       deltaLow: point.deltaLow,
@@ -1979,6 +1987,11 @@ export function LiveApp() {
   const [sessionVolumeProfile, setSessionVolumeProfile] =
     useState<DeltaProfileData | null>(null);
   const [showVolumeDelta, setShowVolumeDelta] = useState(true);
+  const [showGcPushMomentum, setShowGcPushMomentum] = useState(true);
+  const [gcPushMomentumSettings, setGcPushMomentumSettings] =
+    useState<GcPushMomentumSettings>(() => ({
+      ...DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
+    }));
   const [showMgannSwing, setShowMgannSwing] = useState(false);
   const [mgannSwing, setMgannSwing] = useState<MgannSwingSettings>(() => ({
     ...DEFAULT_MGANN_SWING_SETTINGS,
@@ -2159,6 +2172,8 @@ export function LiveApp() {
       chartBackgroundColor,
       showVolume: true,
       showVolumeDelta,
+      showGcPushMomentum,
+      gcPushMomentum: { ...gcPushMomentumSettings },
       showDailyVolumeProfile,
       dailyVolumeProfileWidth,
       showDailyVolumeProfileDevelopingPoc,
@@ -2189,6 +2204,7 @@ export function LiveApp() {
       drawings,
       ema,
       footprintSettings,
+      gcPushMomentumSettings,
       fvgSignalLimit,
       mgannBreakSignalHistoryBars,
       mgannBreakSignalLimit,
@@ -2205,6 +2221,7 @@ export function LiveApp() {
       showDailyVolumeProfile,
       showDailyVolumeProfileDevelopingPoc,
       showMgannWaveDelta,
+      showGcPushMomentum,
       showFvgGrader,
       smc,
       timeframe,
@@ -2244,6 +2261,13 @@ export function LiveApp() {
   const historyLoader = useRef<HistoryLoader | null>(null);
   const screenshotCaptureRef = useRef<(() => string | undefined) | undefined>(
     undefined,
+  );
+  const deselectActiveTool = useCallback(() => setActiveTool(null), []);
+  const registerScreenshotCapture = useCallback(
+    (capture: (() => string | undefined) | undefined) => {
+      screenshotCaptureRef.current = capture;
+    },
+    [],
   );
   const telegramSentRef = useRef<string | undefined>(undefined);
   const resumeRefreshAtRef = useRef(0);
@@ -3195,6 +3219,9 @@ export function LiveApp() {
                     runningCvd = cumulativeDelta;
                     return {
                       time: point.time,
+                      volume: point.volume,
+                      buyVolume: point.buyVolume,
+                      sellVolume: point.sellVolume,
                       delta: point.delta,
                       deltaHigh: point.deltaHigh,
                       deltaLow: point.deltaLow,
@@ -3465,7 +3492,13 @@ export function LiveApp() {
       const pending = pendingFootprintRef.current;
       pendingFootprintRef.current = undefined;
       if (pending === undefined) return;
-      setFootprintBars((prev) => mergeFootprint(prev, pending));
+      setFootprintBars((prev) =>
+        mergeFootprintCapped(
+          prev,
+          pending,
+          MAX_RETAINED_LIVE_FOOTPRINT_BARS,
+        ),
+      );
       if (
         fixedRangeDeltaProfileDrawings(drawingsRef.current).some((drawing) =>
           footprintTouchesFixedRange(pending.time, drawing, timeframe),
@@ -4587,6 +4620,10 @@ export function LiveApp() {
     setChartBackgroundColor(normalizeChartBackgroundColor(payload.chartBackgroundColor));
     setShowFootprint(Boolean(payload.showFootprint));
     setShowVolumeDelta(payload.showVolumeDelta !== false);
+    setShowGcPushMomentum(payload.showGcPushMomentum !== false);
+    setGcPushMomentumSettings(
+      normalizeGcPushMomentumSettings(payload.gcPushMomentum),
+    );
     setShowDailyVolumeProfile(Boolean(payload.showDailyVolumeProfile));
     setDailyVolumeProfileWidth(
       normalizeSessionVolumeProfileWidth(payload.dailyVolumeProfileWidth),
@@ -5121,6 +5158,8 @@ export function LiveApp() {
         <IndicatorToggles
           indicatorsVisible={indicatorsVisible}
           volumeDelta={showVolumeDelta}
+          gcPushMomentum={showGcPushMomentum}
+          gcPushMomentumSettings={gcPushMomentumSettings}
           mgannSwing={showMgannSwing}
           mgannSwingSettings={mgannSwing}
           footprint={showFootprint}
@@ -5136,6 +5175,7 @@ export function LiveApp() {
           footprintSettings={footprintSettings}
           bigTradeSettings={bigTradeSettings}
           mgannSwingDisabled={mgannSwingDisabled}
+          gcPushMomentumDisabled={timeframe !== "1m"}
           footprintDisabled={!footprintEnabledForTimeframe(timeframe)}
           fvgGraderDisabled={timeframe !== "1m"}
           bigTradeDisabled={!bigTradeOverlayEnabled}
@@ -5148,6 +5188,8 @@ export function LiveApp() {
             setShowDailyVolumeProfileDevelopingPoc
           }
           onVolumeDeltaChange={setShowVolumeDelta}
+          onGcPushMomentumChange={setShowGcPushMomentum}
+          onGcPushMomentumSettingsChange={setGcPushMomentumSettings}
           onMgannSwingChange={setShowMgannSwing}
           onMgannSwingSettingsChange={setMgannSwing}
           onFootprintChange={setShowFootprint}
@@ -5305,6 +5347,10 @@ export function LiveApp() {
             }
             showVolume
             showVolumeDelta={indicatorsVisible && showVolumeDelta}
+            showGcPushMomentum={
+              indicatorsVisible && showGcPushMomentum && timeframe === "1m"
+            }
+            gcPushMomentumSettings={gcPushMomentumSettings}
             showCvd={indicatorsVisible && showMgannWaveDelta}
             showMgannSwing={indicatorsVisible && showMgannSwingForTimeframe}
             mgannSwing={mgannSwing}
@@ -5335,7 +5381,7 @@ export function LiveApp() {
             priceSnap={roundGcPrice}
             activeTool={activeTool}
             fixedRangeProfileMode={fixedRangeProfileMode}
-            onToolDeselect={() => setActiveTool(null)}
+            onToolDeselect={deselectActiveTool}
             onDrawingCountChange={setDrawingCount}
             drawings={visibleDrawings}
             drawingsLoadKey={visibleDrawingsLoadKey}
@@ -5344,9 +5390,7 @@ export function LiveApp() {
             removeDrawingIds={removeDrawingIds}
             fixedRangeDeltaProfiles={fixedRangeDeltaProfiles}
             footprintSettings={footprintSettings}
-            onScreenshotCaptureReady={(capture) => {
-              screenshotCaptureRef.current = capture;
-            }}
+            onScreenshotCaptureReady={registerScreenshotCapture}
           >
             <BarReplayControls
               phase={replayPhase}

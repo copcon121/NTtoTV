@@ -256,6 +256,11 @@ def _mgann_sweep_signals_from_history(
     for alert in alerts:
         state = _mgann_sweep_state_from_alert(alert)
         for bar in bars:
+            # Realtime alerts are close-only. Historical markers must use the
+            # same eligibility rule so an in-progress arrow cannot appear
+            # before a notification is allowed to fire.
+            if not bar.closed:
+                continue
             for trade in trades_by_bucket.get(bar.time, []):
                 state.on_big_trade(
                     time=trade.time,

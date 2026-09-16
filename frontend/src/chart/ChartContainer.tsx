@@ -39,6 +39,7 @@ import {
   type SmcSettings,
   computeSmcOverlay,
 } from "./smc";
+import type { SmcWorkerRequest, SmcWorkerResponse } from "./smcWorker";
 import {
   type LightweightChartsAdapterOptions,
   type VolumeDeltaDatum,
@@ -99,6 +100,11 @@ import {
 } from "./timeframeRange";
 import type { DeltaProfileData, DeltaProfileLoadState } from "../orderflow/deltaProfile";
 import { DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX } from "./sessionVolumeProfileSettings";
+import {
+  DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
+  normalizeGcPushMomentumSettings,
+  type GcPushMomentumSettings,
+} from "./gcPushMomentum";
 
 /**
  * A disposable rendering port. The default factory builds a
@@ -115,6 +121,8 @@ export interface DisposableChartPort extends ChartSeriesPort {
   scrollToLatest?(): void;
   setVolumeVisible?(visible: boolean): void;
   setVolumeDeltaVisible?(visible: boolean): void;
+  setGcPushMomentumVisible?(visible: boolean): void;
+  setGcPushMomentumSettings?(settings: GcPushMomentumSettings): void;
   setCvdVisible?(visible: boolean): void;
   setMgannSwingVisible?(visible: boolean): void;
   setMgannSwingSettings?(settings: MgannSwingSettings): void;
@@ -295,6 +303,10 @@ export interface ChartContainerProps {
   showVolume?: boolean;
   /** Show MyVolumeDelta-style candles at the bottom of the chart. */
   showVolumeDelta?: boolean;
+  /** Show volatility-normalized price push in its own pane (M1 UI feature). */
+  showGcPushMomentum?: boolean;
+  /** GC Push Momentum calculation settings. */
+  gcPushMomentumSettings?: Partial<GcPushMomentumSettings>;
   /** Show current wave delta as an MBox histogram at the bottom of the chart. */
   showCvd?: boolean;
   /** Show MGannSwing price swingline/signals. */
@@ -515,6 +527,8 @@ export function ChartContainer({
   sessionVolumeProfileDevelopingPoc = true,
   showVolume = true,
   showVolumeDelta = true,
+  showGcPushMomentum = false,
+  gcPushMomentumSettings = DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
   showCvd = false,
   showMgannSwing = false,
   mgannSwing = DEFAULT_MGANN_SWING_SETTINGS,
@@ -565,6 +579,15 @@ export function ChartContainer({
   const drawingManagerRef = useRef<DrawingManager | null>(null);
   const showMgannSwingForTimeframe = showMgannSwing;
   const smcThrottleRef = useRef<number | undefined>(undefined);
+  const smcWorkerRef = useRef<Worker | undefined>(undefined);
+  const smcWorkerBusyRef = useRef(false);
+  const smcRequestIdRef = useRef(0);
+  const smcLatestRequestIdRef = useRef(0);
+  const smcInFlightRequestRef = useRef<SmcWorkerRequest | undefined>(undefined);
+  const smcPendingRequestRef = useRef<SmcWorkerRequest | undefined>(undefined);
+  const smcDeferredOverlayRef = useRef<
+    { requestId: number; overlay: SmcOverlay } | undefined
+  >(undefined);
   const chartInteractionActiveRef = useRef(false);
   const [footprintViewport, setFootprintViewport] =
     useState<FootprintViewport | null>(null);
@@ -637,6 +660,66 @@ export function ChartContainer({
     [bigTrades, bigTradeSettings],
   );
 
+  const applySmcFallback = useCallback((request: SmcWorkerRequest) => {
+    const overlay = computeSmcOverlay(request.bars, request.settings);
+    if (request.requestId !== smcLatestRequestIdRef.current) return;
+    if (chartInteractionActiveRef.current) {
+      smcDeferredOverlayRef.current = { requestId: request.requestId, overlay };
+      return;
+    }
+    portRef.current?.setSmcOverlay?.(overlay);
+  }, []);
+
+  const dispatchSmcWorkerRequest = useCallback(
+    (request: SmcWorkerRequest) => {
+      const worker = smcWorkerRef.current;
+      if (worker === undefined) {
+        applySmcFallback(request);
+        return;
+      }
+      smcWorkerBusyRef.current = true;
+      smcInFlightRequestRef.current = request;
+      try {
+        worker.postMessage(request);
+      } catch {
+        worker.terminate();
+        smcWorkerRef.current = undefined;
+        smcWorkerBusyRef.current = false;
+        smcInFlightRequestRef.current = undefined;
+        applySmcFallback(request);
+      }
+    },
+    [applySmcFallback],
+  );
+
+  const requestSmcComputation = useCallback(
+    (nextBars: readonly Bar[], settings?: Partial<SmcSettings>) => {
+      const request: SmcWorkerRequest = {
+        requestId: ++smcRequestIdRef.current,
+        bars: nextBars,
+        settings,
+      };
+      smcLatestRequestIdRef.current = request.requestId;
+      smcDeferredOverlayRef.current = undefined;
+
+      if (!settings?.enabled || nextBars.length === 0) {
+        smcPendingRequestRef.current = undefined;
+        portRef.current?.setSmcOverlay?.(
+          computeSmcOverlay(nextBars, settings),
+        );
+        return;
+      }
+      if (smcWorkerBusyRef.current) {
+        // A volatile burst can arrive faster than one full-history SMC pass.
+        // Keep only the newest snapshot so the worker queue never grows.
+        smcPendingRequestRef.current = request;
+        return;
+      }
+      dispatchSmcWorkerRequest(request);
+    },
+    [dispatchSmcWorkerRequest],
+  );
+
   // Create the chart port + controller once per mount. The factory is captured
   // in a memo so re-renders don't rebuild the chart.
   const factory = useMemo(() => portFactory, [portFactory]);
@@ -661,7 +744,7 @@ export function ChartContainer({
     };
   }, []);
 
-  const refreshFootprintViewport = () => {
+  const refreshFootprintViewport = useCallback(() => {
     const host = hostRef.current;
     const port = portRef.current;
     if (!host || !port?.createFootprintViewport) {
@@ -672,7 +755,7 @@ export function ChartContainer({
     const width = Math.max(1, Math.round(rect.width || host.clientWidth));
     const height = Math.max(1, Math.round(rect.height || host.clientHeight));
     setFootprintViewport(port.createFootprintViewport(width, height));
-  };
+  }, []);
 
   const refreshOrderControlPositions = useCallback(() => {
     const port = portRef.current;
@@ -748,6 +831,11 @@ export function ChartContainer({
     };
     const onChartPointerEnd = () => {
       chartInteractionActiveRef.current = false;
+      const deferred = smcDeferredOverlayRef.current;
+      if (deferred?.requestId === smcLatestRequestIdRef.current) {
+        smcDeferredOverlayRef.current = undefined;
+        portRef.current?.setSmcOverlay?.(deferred.overlay);
+      }
     };
     const onChartWheel = () => {
       chartInteractionActiveRef.current = true;
@@ -756,6 +844,11 @@ export function ChartContainer({
       wheelIdleTimer = window.setTimeout(() => {
         wheelIdleTimer = undefined;
         chartInteractionActiveRef.current = false;
+        const deferred = smcDeferredOverlayRef.current;
+        if (deferred?.requestId === smcLatestRequestIdRef.current) {
+          smcDeferredOverlayRef.current = undefined;
+          portRef.current?.setSmcOverlay?.(deferred.overlay);
+        }
       }, 160);
     };
     host.addEventListener("pointerdown", onChartPointerDown, { passive: true });
@@ -884,6 +977,66 @@ export function ChartContainer({
   }, [factory]);
 
   useEffect(() => {
+    if (typeof Worker === "undefined") return;
+
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./smcWorker.ts", import.meta.url), {
+        type: "module",
+      });
+    } catch {
+      return;
+    }
+    smcWorkerRef.current = worker;
+    worker.onmessage = (event: MessageEvent<SmcWorkerResponse>) => {
+      const response = event.data;
+      smcWorkerBusyRef.current = false;
+      smcInFlightRequestRef.current = undefined;
+      if (
+        "overlay" in response &&
+        response.requestId === smcLatestRequestIdRef.current
+      ) {
+        if (chartInteractionActiveRef.current) {
+          smcDeferredOverlayRef.current = response;
+        } else {
+          portRef.current?.setSmcOverlay?.(response.overlay);
+        }
+      }
+      const pending = smcPendingRequestRef.current;
+      smcPendingRequestRef.current = undefined;
+      if (pending !== undefined) {
+        dispatchSmcWorkerRequest(pending);
+      }
+    };
+    worker.onerror = () => {
+      const fallback =
+        smcPendingRequestRef.current ?? smcInFlightRequestRef.current;
+      smcPendingRequestRef.current = undefined;
+      smcInFlightRequestRef.current = undefined;
+      smcWorkerBusyRef.current = false;
+      worker.terminate();
+      if (smcWorkerRef.current === worker) {
+        smcWorkerRef.current = undefined;
+      }
+      if (fallback !== undefined) {
+        applySmcFallback(fallback);
+      }
+    };
+
+    return () => {
+      smcLatestRequestIdRef.current = ++smcRequestIdRef.current;
+      smcPendingRequestRef.current = undefined;
+      smcInFlightRequestRef.current = undefined;
+      smcDeferredOverlayRef.current = undefined;
+      smcWorkerBusyRef.current = false;
+      worker.terminate();
+      if (smcWorkerRef.current === worker) {
+        smcWorkerRef.current = undefined;
+      }
+    };
+  }, [applySmcFallback, dispatchSmcWorkerRequest]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         (event.key !== "Delete" && event.key !== "Backspace") ||
@@ -924,7 +1077,7 @@ export function ChartContainer({
       window.removeEventListener("resize", onResize);
       observer?.disconnect();
     };
-  }, [refreshOrderControlPositions]);
+  }, [refreshFootprintViewport, refreshOrderControlPositions]);
 
   // Load (or reload) initial history when the series identity or the bars array
   // changes. This is the single allowed bulk load / full repaint (Req 12.4).
@@ -949,6 +1102,26 @@ export function ChartContainer({
   useEffect(() => {
     portRef.current?.setVolumeDeltaVisible?.(showVolumeDelta);
   }, [showVolumeDelta]);
+
+  useEffect(() => {
+    portRef.current?.setGcPushMomentumSettings?.(
+      normalizeGcPushMomentumSettings({
+        ...gcPushMomentumSettings,
+        barDurationMs: barDurationForTimeframe(timeframe),
+      }),
+    );
+  }, [gcPushMomentumSettings, timeframe]);
+
+  useEffect(() => {
+    portRef.current?.setGcPushMomentumVisible?.(showGcPushMomentum);
+    refreshFootprintViewport();
+    drawingManagerRef.current?.requestUpdateAll();
+    const frame = window.requestAnimationFrame(() => {
+      refreshFootprintViewport();
+      drawingManagerRef.current?.requestUpdateAll();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [showGcPushMomentum, refreshFootprintViewport]);
 
   useEffect(() => {
     portRef.current?.setCvdVisible?.(showCvd);
@@ -1110,19 +1283,19 @@ export function ChartContainer({
         timer = window.setTimeout(computeWhenIdle, 100);
         return;
       }
-      portRef.current?.setSmcOverlay?.(computeSmcOverlay(bars ?? [], smc));
+      requestSmcComputation(bars ?? [], smc);
     };
     timer = window.setTimeout(computeWhenIdle, 100);
     return () => {
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [symbol, contract, timeframe, bars, smc]);
+  }, [symbol, contract, timeframe, bars, smc, requestSmcComputation]);
 
   useEffect(() => {
     if (showFootprint) {
       refreshFootprintViewport();
     }
-  }, [footprintBars, showFootprint]);
+  }, [showFootprint, refreshFootprintViewport]);
 
   // Subscribe to realtime bar_update events and apply them incrementally.
   useEffect(() => {
@@ -1141,7 +1314,7 @@ export function ChartContainer({
         realtimeBarRef.current?.(message.bar);
         return;
       }
-      const outcome = controller.apply(message.bar);
+      const outcome = controller.apply(message.bar, message.closed);
       realtimeBarRef.current?.(message.bar);
 
       // Only schedule order position refresh when there are active order
@@ -1162,9 +1335,7 @@ export function ChartContainer({
             const ctrl = controllerRef.current;
             const cfg = smcConfigRef.current;
             if (ctrl && cfg?.enabled && !chartInteractionActiveRef.current) {
-              portRef.current?.setSmcOverlay?.(
-                computeSmcOverlay(ctrl.bars, cfg),
-              );
+              requestSmcComputation(ctrl.bars, cfg);
             }
           }, 500);
         }
@@ -1221,6 +1392,9 @@ export function ChartContainer({
       }
       port.updateVolumeDelta({
         time: message.time,
+        volume: message.volume,
+        buyVolume: message.buyVolume,
+        sellVolume: message.sellVolume,
         delta: message.delta,
         deltaHigh: message.deltaHigh,
         deltaLow: message.deltaLow,
@@ -1239,7 +1413,14 @@ export function ChartContainer({
         smcThrottleRef.current = undefined;
       }
     };
-  }, [socket, symbol, contract, timeframe, refreshOrderControlPositions]);
+  }, [
+    socket,
+    symbol,
+    contract,
+    timeframe,
+    refreshOrderControlPositions,
+    requestSmcComputation,
+  ]);
 
   // Drawing tool activation / deactivation.
   useEffect(() => {

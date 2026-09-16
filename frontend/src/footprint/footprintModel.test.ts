@@ -5,6 +5,7 @@ import {
   FOOTPRINT_DISPLAY_COUNT,
   type FootprintViewport,
   mergeFootprint,
+  mergeFootprintCapped,
   selectDisplayBars,
   shouldRedraw,
 } from "./footprintModel";
@@ -70,6 +71,19 @@ describe("footprintModel — merge + select (Req 14.2)", () => {
     bars = mergeFootprint(bars, fp(0));
     bars = mergeFootprint(bars, fp(60000));
     expect(selectDisplayBars(bars)).toHaveLength(2);
+  });
+
+  it("caps a live footprint map to the newest time buckets", () => {
+    let bars = new Map<number, FootprintUpdateMessage>();
+    for (const time of [300000, 0, 120000, 60000, 240000, 180000]) {
+      bars = mergeFootprintCapped(bars, fp(time), 3);
+    }
+
+    expect([...bars.keys()].sort((left, right) => left - right)).toEqual([
+      180000,
+      240000,
+      300000,
+    ]);
   });
 });
 

@@ -37,7 +37,7 @@ export interface ChartSeriesPort {
   /** Bulk-load the full series (initial render only). */
   setBars(bars: BarSeries): void;
   /** Apply a single incremental bar update (append/overwrite/insert). */
-  updateBar(bar: Bar): void;
+  updateBar(bar: Bar, closed?: boolean): void;
 }
 
 /** Summary of what an `apply()` call did, for callers/tests to assert on. */
@@ -56,6 +56,7 @@ export interface ApplyOutcome {
 export class ChartSeriesController {
   private series: BarSeries = [];
   private loaded = false;
+  private readonly closedByTime = new Map<number, boolean>();
 
   constructor(private readonly port: ChartSeriesPort) {}
 
@@ -77,6 +78,7 @@ export class ChartSeriesController {
    */
   load(bars: readonly Bar[]): void {
     this.series = normalizeBars(bars);
+    this.closedByTime.clear();
     this.loaded = true;
     this.port.setBars(this.series);
   }
@@ -86,11 +88,12 @@ export class ChartSeriesController {
    * with a single bar via a bulk load; afterwards it merges incrementally and
    * issues an incremental `updateBar` only when the merge changed the series.
    */
-  apply(bar: Bar): ApplyOutcome {
+  apply(bar: Bar, closed?: boolean): ApplyOutcome {
     if (!this.loaded) {
       // No history yet: treat the first bar as the initial (bulk) series so the
       // series and the rendered state stay in lock-step.
       this.series = [{ ...bar }];
+      if (closed !== undefined) this.closedByTime.set(bar.time, closed);
       this.loaded = true;
       this.port.setBars(this.series);
       return { kind: "append", rendered: true };
@@ -98,13 +101,24 @@ export class ChartSeriesController {
 
     const result = applyBarUpdate(this.series, bar);
     this.series = result.bars;
+    const priorClosed = this.closedByTime.get(bar.time);
+    const closedChanged =
+      closed === true
+        ? priorClosed !== true
+        : closed === false && priorClosed === true;
+    if (closed !== undefined) this.closedByTime.set(bar.time, closed);
+
+    if (result.kind === "noop" && closedChanged) {
+      this.port.updateBar(result.bar, closed);
+      return { kind: "noop", rendered: true };
+    }
 
     if (result.kind === "noop") {
       // Inputs unchanged — skip the repaint (Req 12.4).
       return { kind: "noop", rendered: false };
     }
 
-    this.port.updateBar(result.bar);
+    this.port.updateBar(result.bar, closed);
     return { kind: result.kind, rendered: true };
   }
 

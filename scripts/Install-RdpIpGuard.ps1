@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$WhitelistIp = '171.245.254.163'
+    [string]$WhitelistIp = '171.245.254.163',
+    [ValidateRange(1, 65535)]
+    [int]$RdpPort = 3389
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,7 +17,7 @@ if (-not (Test-Path -LiteralPath $scriptPath)) {
 New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
 
 $powershell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$argument = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -WhitelistOverride "{1}"' -f $scriptPath, $WhitelistIp
+$argument = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -WhitelistOverride "{1}" -RdpPort {2}' -f $scriptPath, $WhitelistIp, $RdpPort
 $action = New-ScheduledTaskAction -Execute $powershell -Argument $argument
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
     -RepetitionInterval (New-TimeSpan -Minutes 1) `
@@ -28,10 +30,10 @@ Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
     -Settings $settings -Principal $principal -Force | Out-Null
 
 # Run once immediately so current brute-force sources are handled now.
-& $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scriptPath -WhitelistOverride $WhitelistIp
+& $powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scriptPath -WhitelistOverride $WhitelistIp -RdpPort $RdpPort
 
 Get-ScheduledTask -TaskName $taskName | Select-Object TaskName,TaskPath,State
 Write-Output "Installed: $taskName"
 Write-Output "Whitelist: $WhitelistIp"
-Write-Output "Rule: 3 RDP failures from one public IP within 10 minutes -> block TCP/3389 for 60 minutes"
+Write-Output "Rule: 3 RDP failures from one public IP within 10 minutes -> block TCP/$RdpPort for 60 minutes"
 Write-Output "State/log directory: $stateRoot"

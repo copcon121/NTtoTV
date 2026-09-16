@@ -18,6 +18,11 @@ interface ChartPoint {
 type CandleSeries = ISeriesApi<"Candlestick", Time>;
 type ChartApi = IChartApiBase<Time>;
 
+const stepEstimateCache = new WeakMap<
+  CandleSeries,
+  { dataLength: number; lastTime: number | undefined; step: number }
+>();
+
 export function anchorToCoordinate(
   chart: ChartApi,
   series: CandleSeries,
@@ -103,6 +108,15 @@ function lastNumericTime(series: CandleSeries): number | undefined {
 
 function estimateStepSeconds(series: CandleSeries): number {
   const data = series.data();
+  const lastTime = numericTime(data[data.length - 1]);
+  const cached = stepEstimateCache.get(series);
+  if (
+    cached !== undefined &&
+    cached.dataLength === data.length &&
+    cached.lastTime === lastTime
+  ) {
+    return cached.step;
+  }
   const diffs: number[] = [];
   let previous: number | undefined;
   for (const item of data.slice(Math.max(0, data.length - 80))) {
@@ -113,9 +127,13 @@ function estimateStepSeconds(series: CandleSeries): number {
     }
     previous = time;
   }
-  if (diffs.length === 0) return 60;
-  diffs.sort((a, b) => a - b);
-  return diffs[Math.floor(diffs.length / 2)] || 60;
+  let step = 60;
+  if (diffs.length > 0) {
+    diffs.sort((a, b) => a - b);
+    step = diffs[Math.floor(diffs.length / 2)] || 60;
+  }
+  stepEstimateCache.set(series, { dataLength: data.length, lastTime, step });
+  return step;
 }
 
 function coordinateForTime(
@@ -145,50 +163,71 @@ function logicalForTime(
   targetTime: UTCTimestamp,
 ): Logical | null {
   if (!Number.isFinite(targetTime)) return null;
-  const data = series
-    .data()
-    .map((item, index) => ({ index, time: numericTime(item) }))
-    .filter((item): item is { index: number; time: number } => item.time !== undefined);
+  const data = series.data();
   if (data.length === 0) return null;
+
+  // Candle data in this app always uses numeric UTC timestamps. Search the
+  // source array directly: drawing primitives call this path on every chart
+  // pan frame for anchors outside the loaded history, so materialising a full
+  // mapped/filtered copy here turns a single lookup into thousands of object
+  // allocations per anchor and causes severe M1 navigation stalls.
+  if (
+    numericTime(data[0]) === undefined ||
+    numericTime(data[data.length - 1]) === undefined
+  ) {
+    return null;
+  }
 
   let low = 0;
   let high = data.length - 1;
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
-    const item = data[mid];
-    if (item.time === targetTime) {
-      return logicalForDataPoint(chart, item) as Logical;
+    const itemTime = numericTime(data[mid]);
+    if (itemTime === undefined) return null;
+    if (itemTime === targetTime) {
+      return logicalForDataPoint(chart, mid, itemTime) as Logical;
     }
-    if (item.time < targetTime) {
+    if (itemTime < targetTime) {
       low = mid + 1;
     } else {
       high = mid - 1;
     }
   }
 
-  const right = low < data.length ? data[low] : undefined;
-  const left = high >= 0 ? data[high] : undefined;
-  if (left !== undefined && right !== undefined && right.time > left.time) {
-    const leftLogical = logicalForDataPoint(chart, left);
-    const rightLogical = logicalForDataPoint(chart, right);
-    const ratio = (targetTime - left.time) / (right.time - left.time);
+  const rightTime = low < data.length ? numericTime(data[low]) : undefined;
+  const leftTime = high >= 0 ? numericTime(data[high]) : undefined;
+  if (
+    leftTime !== undefined &&
+    rightTime !== undefined &&
+    rightTime > leftTime
+  ) {
+    const leftLogical = logicalForDataPoint(chart, high, leftTime);
+    const rightLogical = logicalForDataPoint(chart, low, rightTime);
+    const ratio = (targetTime - leftTime) / (rightTime - leftTime);
     return (leftLogical + ratio * (rightLogical - leftLogical)) as Logical;
   }
 
   const step = estimateStepSeconds(series);
-  if (left !== undefined) {
-    return (logicalForDataPoint(chart, left) + (targetTime - left.time) / step) as Logical;
+  if (leftTime !== undefined) {
+    return (
+      logicalForDataPoint(chart, high, leftTime) +
+      (targetTime - leftTime) / step
+    ) as Logical;
   }
-  if (right !== undefined) {
-    return (logicalForDataPoint(chart, right) - (right.time - targetTime) / step) as Logical;
+  if (rightTime !== undefined) {
+    return (
+      logicalForDataPoint(chart, low, rightTime) -
+      (rightTime - targetTime) / step
+    ) as Logical;
   }
   return null;
 }
 
 function logicalForDataPoint(
   chart: ChartApi,
-  item: { index: number; time: number },
+  index: number,
+  time: number,
 ): number {
-  const index = chart.timeScale().timeToIndex(item.time as Time, false);
-  return index === null ? item.index : (index as number);
+  const logicalIndex = chart.timeScale().timeToIndex(time as Time, false);
+  return logicalIndex === null ? index : (logicalIndex as number);
 }

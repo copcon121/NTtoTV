@@ -66,6 +66,32 @@ interface ProfileRenderData {
   valueAreaLineColor: string;
 }
 
+interface PreparedProfileRow {
+  price: number;
+  widthRatio: number;
+  delta: number;
+  isPoc: boolean;
+  inValueArea: boolean;
+}
+
+interface PreparedProfile {
+  source: DeltaProfileData;
+  step: number;
+  rows: readonly PreparedProfileRow[];
+  developingPoc: readonly DeltaProfileDevelopingLevelPoint[];
+  developingVah: readonly DeltaProfileDevelopingLevelPoint[];
+  developingVal: readonly DeltaProfileDevelopingLevelPoint[];
+}
+
+interface MillisecondRange {
+  from: number;
+  to: number;
+}
+
+const MIN_DEVELOPING_POINTS_PER_LINE = 96;
+const MAX_DEVELOPING_POINTS_PER_LINE = 320;
+const DEVELOPING_POINT_PIXEL_INTERVAL = 3;
+
 class SessionVolumeProfileRenderer implements IPrimitivePaneRenderer {
   constructor(private readonly data: ProfileRenderData | null) {}
 
@@ -220,6 +246,14 @@ function drawDevelopingLine(
 
 class SessionVolumeProfilePaneView implements IPrimitivePaneView {
   private renderData: ProfileRenderData | null = null;
+  private preparedProfile: PreparedProfile | null = null;
+  private rowCoordinateCache: {
+    profile: PreparedProfile;
+    paneHeight: number;
+    firstY: number | null;
+    lastY: number | null;
+    rows: readonly RenderRow[];
+  } | null = null;
 
   constructor(private readonly source: SessionVolumeProfilePrimitive) {}
 
@@ -230,65 +264,49 @@ class SessionVolumeProfilePaneView implements IPrimitivePaneView {
       return;
     }
 
-    const paneWidth = chart.paneSize(0).width;
+    const paneSize = chart.paneSize(0);
+    const paneWidth = paneSize.width;
     const rightEdge = paneWidth - RIGHT_MARGIN_PX;
-
-    const step = inferPriceStep(profile);
-    const maxVolume = Math.max(1, ...profile.rows.map((r) => r.totalVolume));
-    const { poc, vah, val } = profile;
-
-    const rows: RenderRow[] = [];
-    for (const row of profile.rows) {
-      if (row.totalVolume <= 0) continue;
-      const y = series.priceToCoordinate(row.price);
-      if (y === null) continue;
-      const yNext = series.priceToCoordinate(row.price + step);
-      const h =
-        yNext !== null
-          ? Math.max(1, Math.abs((yNext as number) - (y as number)) * 0.88)
-          : 3;
-      const isPoc = poc !== null && Math.abs(row.price - poc) < step * 0.5;
-      const inValueArea =
-        vah !== null &&
-        val !== null &&
-        row.price >= Math.min(vah, val) - step * 0.5 &&
-        row.price <= Math.max(vah, val) + step * 0.5;
-
-      rows.push({
-        y: (y as number) - h / 2,
-        height: h,
-        widthRatio: row.totalVolume / maxVolume,
-        delta: row.delta,
-        isPoc,
-        inValueArea,
-      });
-    }
+    const prepared = this.prepareProfile(profile);
+    const rows = this.profileRowsForScale(prepared, paneSize.height, series);
+    const visibleRange = visibleProfileTimeRangeMs(
+      chart.timeScale().getVisibleRange(),
+      this.source.displayTimeOffsetMs,
+    );
+    const maxDevelopingPoints = developingPointLimit(paneWidth);
 
     const developingPoc = this.source.developingPocVisible
       ? profilePointsToRenderPoints(
-          profile.developingPoc,
+          prepared.developingPoc,
           chart,
           series,
           this.source.displayTimeOffsetMs,
+          visibleRange,
+          maxDevelopingPoints,
         )
       : [];
     const developingVah = this.source.developingPocVisible
       ? profilePointsToRenderPoints(
-          profile.developingVah,
+          prepared.developingVah,
           chart,
           series,
           this.source.displayTimeOffsetMs,
+          visibleRange,
+          maxDevelopingPoints,
         )
       : [];
     const developingVal = this.source.developingPocVisible
       ? profilePointsToRenderPoints(
-          profile.developingVal,
+          prepared.developingVal,
           chart,
           series,
           this.source.displayTimeOffsetMs,
+          visibleRange,
+          maxDevelopingPoints,
         )
       : [];
 
+    const { poc, vah, val } = profile;
     const pocY = poc !== null ? series.priceToCoordinate(poc) : null;
     const vahY = vah !== null ? series.priceToCoordinate(vah) : null;
     const valY = val !== null ? series.priceToCoordinate(val) : null;
@@ -305,6 +323,109 @@ class SessionVolumeProfilePaneView implements IPrimitivePaneView {
       profileWidth: this.source.profileWidthPx,
       valueAreaLineColor: this.source.valueAreaLineColor,
     };
+  }
+
+  private prepareProfile(profile: DeltaProfileData): PreparedProfile {
+    if (this.preparedProfile?.source === profile) {
+      return this.preparedProfile;
+    }
+
+    const step = inferPriceStep(profile);
+    const maxVolume = Math.max(
+      1,
+      profile.rows.reduce(
+        (current, row) => Math.max(current, row.totalVolume),
+        0,
+      ),
+    );
+    const { poc, vah, val } = profile;
+    const rows = profile.rows.flatMap((row) => {
+      if (
+        !Number.isFinite(row.price) ||
+        !Number.isFinite(row.totalVolume) ||
+        row.totalVolume <= 0
+      ) {
+        return [];
+      }
+      return [{
+        price: row.price,
+        widthRatio: row.totalVolume / maxVolume,
+        delta: row.delta,
+        isPoc: poc !== null && Math.abs(row.price - poc) < step * 0.5,
+        inValueArea:
+          vah !== null &&
+          val !== null &&
+          row.price >= Math.min(vah, val) - step * 0.5 &&
+          row.price <= Math.max(vah, val) + step * 0.5,
+      }];
+    });
+
+    this.preparedProfile = {
+      source: profile,
+      step,
+      rows,
+      developingPoc: normalizeDevelopingPoints(profile.developingPoc),
+      developingVah: normalizeDevelopingPoints(profile.developingVah),
+      developingVal: normalizeDevelopingPoints(profile.developingVal),
+    };
+    this.rowCoordinateCache = null;
+    return this.preparedProfile;
+  }
+
+  private profileRowsForScale(
+    profile: PreparedProfile,
+    paneHeight: number,
+    series: ISeriesApi<"Candlestick", Time>,
+  ): readonly RenderRow[] {
+    const firstPrice = profile.rows[0]?.price;
+    const lastPrice = profile.rows[profile.rows.length - 1]?.price;
+    const firstY = firstPrice === undefined
+      ? null
+      : coordinateNumber(series.priceToCoordinate(firstPrice));
+    const lastY = lastPrice === undefined
+      ? null
+      : coordinateNumber(
+          series.priceToCoordinate(
+            lastPrice === firstPrice ? lastPrice + profile.step : lastPrice,
+          ),
+        );
+    const cached = this.rowCoordinateCache;
+    if (
+      cached?.profile === profile &&
+      cached.paneHeight === paneHeight &&
+      cached.firstY === firstY &&
+      cached.lastY === lastY
+    ) {
+      return cached.rows;
+    }
+
+    const rows: RenderRow[] = [];
+    for (const row of profile.rows) {
+      const y = coordinateNumber(series.priceToCoordinate(row.price));
+      if (y === null) continue;
+      const yNext = coordinateNumber(
+        series.priceToCoordinate(row.price + profile.step),
+      );
+      const height = yNext === null
+        ? 3
+        : Math.max(1, Math.abs(yNext - y) * 0.88);
+      rows.push({
+        y: y - height / 2,
+        height,
+        widthRatio: row.widthRatio,
+        delta: row.delta,
+        isPoc: row.isPoc,
+        inValueArea: row.inValueArea,
+      });
+    }
+    this.rowCoordinateCache = {
+      profile,
+      paneHeight,
+      firstY,
+      lastY,
+      rows,
+    };
+    return rows;
   }
 
   renderer(): IPrimitivePaneRenderer {
@@ -409,23 +530,134 @@ export class SessionVolumeProfilePrimitive implements ISeriesPrimitive<Time> {
 }
 
 function profilePointsToRenderPoints(
-  points: readonly DeltaProfileDevelopingLevelPoint[] | undefined,
+  points: readonly DeltaProfileDevelopingLevelPoint[],
   chart: IChartApiBase<Time>,
   series: ISeriesApi<"Candlestick", Time>,
   displayTimeOffsetMs: number,
+  visibleRange: MillisecondRange | null,
+  maxPoints: number,
 ): RenderPoint[] {
-  return (points ?? []).flatMap((point) => {
-    if (!Number.isFinite(point.time) || !Number.isFinite(point.price)) {
-      return [];
-    }
-    const x = chart
-      .timeScale()
-      .timeToCoordinate(
-        Math.floor((point.time + displayTimeOffsetMs) / 1000) as UTCTimestamp,
-      );
+  const timeScale = chart.timeScale();
+  const selected = selectVisibleProfilePoints(points, visibleRange, maxPoints);
+  const rendered: RenderPoint[] = [];
+  for (const point of selected) {
+    const x = timeScale.timeToCoordinate(
+      Math.floor((point.time + displayTimeOffsetMs) / 1000) as UTCTimestamp,
+    );
     const y = series.priceToCoordinate(point.price);
-    return x === null || y === null ? [] : [{ x: x as number, y: y as number }];
-  });
+    if (x !== null && y !== null) {
+      rendered.push({ x: x as number, y: y as number });
+    }
+  }
+  return rendered;
+}
+
+function normalizeDevelopingPoints(
+  points: readonly DeltaProfileDevelopingLevelPoint[] | undefined,
+): DeltaProfileDevelopingLevelPoint[] {
+  return (points ?? [])
+    .filter(
+      (point) => Number.isFinite(point.time) && Number.isFinite(point.price),
+    )
+    .slice()
+    .sort((left, right) => left.time - right.time);
+}
+
+function coordinateNumber(value: number | null): number | null {
+  return value === null ? null : Number(value);
+}
+
+function visibleProfileTimeRangeMs(
+  range: { from: Time; to: Time } | null,
+  displayTimeOffsetMs: number,
+): MillisecondRange | null {
+  if (
+    range === null ||
+    typeof range.from !== "number" ||
+    typeof range.to !== "number"
+  ) {
+    return null;
+  }
+  return {
+    from: Math.min(range.from, range.to) * 1_000 - displayTimeOffsetMs,
+    to: Math.max(range.from, range.to) * 1_000 - displayTimeOffsetMs,
+  };
+}
+
+function developingPointLimit(paneWidth: number): number {
+  return Math.max(
+    MIN_DEVELOPING_POINTS_PER_LINE,
+    Math.min(
+      MAX_DEVELOPING_POINTS_PER_LINE,
+      Math.ceil(paneWidth / DEVELOPING_POINT_PIXEL_INTERVAL),
+    ),
+  );
+}
+
+/**
+ * Keep only the developing-profile path around the visible time range and
+ * cap it to screen density. The neighbouring points preserve line continuity
+ * at both viewport edges while avoiding thousands of coordinate conversions
+ * on every pan frame.
+ */
+export function selectVisibleProfilePoints(
+  points: readonly DeltaProfileDevelopingLevelPoint[],
+  visibleRange: MillisecondRange | null,
+  maxPoints: number,
+): readonly DeltaProfileDevelopingLevelPoint[] {
+  if (points.length <= 2) return points;
+
+  let start = 0;
+  let end = points.length;
+  if (visibleRange !== null) {
+    start = Math.max(0, lowerBoundPointTime(points, visibleRange.from) - 1);
+    end = Math.min(points.length, upperBoundPointTime(points, visibleRange.to) + 1);
+  }
+  const count = end - start;
+  if (count <= 0) return [];
+
+  const target = Math.max(2, Math.floor(maxPoints));
+  if (count <= target) return points.slice(start, end);
+
+  const sampled: DeltaProfileDevelopingLevelPoint[] = [];
+  const interval = (count - 1) / (target - 1);
+  let previousIndex = -1;
+  for (let i = 0; i < target; i += 1) {
+    const index = start + Math.round(i * interval);
+    if (index !== previousIndex && index < end) {
+      sampled.push(points[index]);
+      previousIndex = index;
+    }
+  }
+  return sampled;
+}
+
+function lowerBoundPointTime(
+  points: readonly DeltaProfileDevelopingLevelPoint[],
+  time: number,
+): number {
+  let low = 0;
+  let high = points.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (points[mid].time < time) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
+function upperBoundPointTime(
+  points: readonly DeltaProfileDevelopingLevelPoint[],
+  time: number,
+): number {
+  let low = 0;
+  let high = points.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (points[mid].time <= time) low = mid + 1;
+    else high = mid;
+  }
+  return low;
 }
 
 function inferPriceStep(profile: DeltaProfileData): number {
