@@ -16,6 +16,7 @@ function barsFromReturns(
   start = 100,
   scale = 1,
   startTime = 0,
+  durationMs = MINUTE,
 ): Bar[] {
   let close = start * scale;
   const bars: Bar[] = [
@@ -25,7 +26,7 @@ function barsFromReturns(
     const previous = close;
     close *= Math.exp(returns[index]);
     bars.push({
-      time: startTime + (index + 1) * MINUTE,
+      time: startTime + (index + 1) * durationMs,
       open: previous,
       high: Math.max(previous, close),
       low: Math.min(previous, close),
@@ -137,8 +138,8 @@ describe("GC Push Momentum", () => {
     expect(after.slice(0, before.length)).toEqual(before);
   });
 
-  it("resets warm-up and rolling thresholds after a timestamp gap", () => {
-    const first = barsFromReturns(new Array(8).fill(0.001));
+  it("carries a warmed model across a gap but refills structural lookbacks", () => {
+    const first = barsFromReturns(new Array(12).fill(0.001));
     const second = barsFromReturns(
       new Array(3).fill(0.001),
       first[first.length - 1].close,
@@ -148,10 +149,43 @@ describe("GC Push Momentum", () => {
     const points = calculateGcPushMomentum(
       [...first, ...second],
       [],
-      testSettings({ warmupBars: 4 }),
+      testSettings({ warmupBars: 8 }),
     );
+    const resumed = points.filter((point) => point.time >= second[0].time);
 
-    expect(points.some((point) => point.time >= second[0].time)).toBe(false);
+    expect(resumed.map((point) => point.time)).toEqual([
+      second[0].time + 2 * MINUTE,
+      second[0].time + 3 * MINUTE,
+    ]);
+  });
+
+  it("uses the configured five-minute duration when detecting M5 gaps", () => {
+    const fiveMinutes = 5 * MINUTE;
+    const first = barsFromReturns(
+      new Array(12).fill(0.001),
+      100,
+      1,
+      0,
+      fiveMinutes,
+    );
+    const second = barsFromReturns(
+      new Array(3).fill(0.001),
+      first[first.length - 1].close,
+      1,
+      first[first.length - 1].time + 60 * MINUTE,
+      fiveMinutes,
+    );
+    const points = calculateGcPushMomentum(
+      [...first, ...second],
+      [],
+      testSettings({ barDurationMs: fiveMinutes, warmupBars: 8 }),
+    );
+    const resumed = points.filter((point) => point.time >= second[0].time);
+
+    expect(resumed.map((point) => point.time)).toEqual([
+      second[0].time + 2 * fiveMinutes,
+      second[0].time + 3 * fiveMinutes,
+    ]);
   });
 
   it("uses exact delta volume and distinguishes confirm, conflict, and missing", () => {

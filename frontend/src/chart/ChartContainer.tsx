@@ -118,7 +118,9 @@ export interface DisposableChartPort extends ChartSeriesPort {
   takeScreenshotDataUrl?(): string | undefined;
   setBarCountdownDuration?(durationMs: number): void;
   setBarCountdownVisible?(visible: boolean): void;
-  scrollToLatest?(): void;
+  /** Coalesce related bulk history setters into one animation-frame render. */
+  setBulkRenderCoalescing?(enabled: boolean): void;
+  scrollToLatest?(force?: boolean): void;
   setVolumeVisible?(visible: boolean): void;
   setVolumeDeltaVisible?(visible: boolean): void;
   setGcPushMomentumVisible?(visible: boolean): void;
@@ -303,7 +305,7 @@ export interface ChartContainerProps {
   showVolume?: boolean;
   /** Show MyVolumeDelta-style candles at the bottom of the chart. */
   showVolumeDelta?: boolean;
-  /** Show volatility-normalized price push in its own pane (M1 UI feature). */
+  /** Show volatility-normalized price push in its own pane (M1/M5 UI feature). */
   showGcPushMomentum?: boolean;
   /** GC Push Momentum calculation settings. */
   gcPushMomentumSettings?: Partial<GcPushMomentumSettings>;
@@ -441,6 +443,46 @@ function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
   return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+/**
+ * Replay projections are immutable prefixes of one snapshot.  Return the first
+ * appended index when `next` keeps the same prefix by identity; `undefined`
+ * means the projection was replaced or moved backwards and needs a bulk load.
+ *
+ * Checking the two prefix edges is deliberately O(1).  Replay slices retain
+ * the snapshot's item identities, so an async history replacement fails this
+ * check while an ordinary one-bar reveal succeeds.
+ */
+function replayAppendStart<T>(
+  previous: readonly T[],
+  next: readonly T[],
+): number | undefined {
+  if (previous.length > next.length) return undefined;
+  if (previous.length === 0) return 0;
+  if (
+    previous[0] !== next[0] ||
+    previous[previous.length - 1] !== next[previous.length - 1]
+  ) {
+    return undefined;
+  }
+  return previous.length;
+}
+
+/** Values newly appended to an immutable replay map, or undefined on replace. */
+function replayMapAppends<T>(
+  previous: ReadonlyMap<number, T>,
+  next: ReadonlyMap<number, T>,
+): readonly T[] | undefined {
+  if (previous.size > next.size) return undefined;
+  for (const [time, value] of previous) {
+    if (next.get(time) !== value) return undefined;
+  }
+  const appended: T[] = [];
+  for (const [time, value] of next) {
+    if (!previous.has(time)) appended.push(value);
+  }
+  return appended;
 }
 
 export function filterBigTradeMarkers(
@@ -591,6 +633,9 @@ export function ChartContainer({
   const chartInteractionActiveRef = useRef(false);
   const [footprintViewport, setFootprintViewport] =
     useState<FootprintViewport | null>(null);
+  const footprintRenderEnabledRef = useRef(false);
+  footprintRenderEnabledRef.current =
+    showFootprint && footprintEnabledForTimeframe(timeframe);
   const [positionedOrderControls, setPositionedOrderControls] = useState<
     readonly PositionedOrderControl[]
   >([]);
@@ -646,6 +691,28 @@ export function ChartContainer({
   // for `time`. Tracking the closed base separately avoids compounding when the
   // same in-progress bar updates many times.
   const emaStateRef = useRef<Map<string, EmaLineState>>(new Map());
+  const renderedBarsInputRef = useRef<readonly Bar[]>();
+  const renderedBarsSeriesRef = useRef<string>();
+  const renderedBarsReplayRef = useRef(false);
+  const emaBarsInputRef = useRef<readonly Bar[]>();
+  const emaBarsSeriesRef = useRef<string>();
+  const emaReplayRef = useRef(false);
+  const emaConfigKeyRef = useRef<string>();
+  const volumeDeltaInputRef = useRef<readonly VolumeDeltaDatum[]>();
+  const volumeDeltaSeriesRef = useRef<string>();
+  const volumeDeltaReplayRef = useRef(false);
+  const fvgSignalsInputRef = useRef<ReadonlyMap<number, FvgSignalUpdateMessage>>();
+  const fvgSignalsSeriesRef = useRef<string>();
+  const fvgSignalsReplayRef = useRef(false);
+  const bigTradesInputRef = useRef<readonly BigTradeMarker[]>();
+  const bigTradesSeriesRef = useRef<string>();
+  const bigTradesReplayRef = useRef(false);
+  const smcAiSignalsInputRef = useRef<readonly SmcAiSignalMarker[]>();
+  const smcAiSignalsSeriesRef = useRef<string>();
+  const smcAiSignalsReplayRef = useRef(false);
+  const alertSignalsInputRef = useRef<readonly AlertSignalMarker[]>();
+  const alertSignalsSeriesRef = useRef<string>();
+  const alertSignalsReplayRef = useRef(false);
   // Latest EMA config, read by the live bar handler without re-subscribing.
   const emaConfigRef = useRef(ema);
   emaConfigRef.current = ema;
@@ -745,6 +812,10 @@ export function ChartContainer({
   }, []);
 
   const refreshFootprintViewport = useCallback(() => {
+    if (!footprintRenderEnabledRef.current) {
+      setFootprintViewport((current) => (current === null ? current : null));
+      return;
+    }
     const host = hostRef.current;
     const port = portRef.current;
     if (!host || !port?.createFootprintViewport) {
@@ -1079,8 +1150,13 @@ export function ChartContainer({
     };
   }, [refreshFootprintViewport, refreshOrderControlPositions]);
 
-  // Load (or reload) initial history when the series identity or the bars array
-  // changes. This is the single allowed bulk load / full repaint (Req 12.4).
+  // Load initial history in bulk. During replay, immutable one-bar prefix growth
+  // is applied incrementally; entering, rewinding, or replacing the snapshot
+  // still performs one authoritative bulk load.
+  useEffect(() => {
+    portRef.current?.setDisplayTimeOffset?.(displayOffsetForTimeframe(timeframe));
+  }, [timeframe]);
+
   useEffect(() => {
     portRef.current?.setBarCountdownDuration?.(
       barDurationForTimeframe(timeframe),
@@ -1089,6 +1165,14 @@ export function ChartContainer({
 
   useEffect(() => {
     portRef.current?.setBarCountdownVisible?.(!suspendRealtime);
+  }, [suspendRealtime]);
+
+  useEffect(() => {
+    const port = portRef.current;
+    if (port?.setBulkRenderCoalescing === undefined) return;
+    // Replay changes bars, delta, and FVG together on entry/backward seeks.
+    // Normal live rendering remains immediate.
+    port.setBulkRenderCoalescing(suspendRealtime);
   }, [suspendRealtime]);
 
   useEffect(() => {
@@ -1160,28 +1244,100 @@ export function ChartContainer({
     if (!controller) {
       return;
     }
-    portRef.current?.setDisplayTimeOffset?.(displayOffsetForTimeframe(timeframe));
-    controller.load(bars ?? []);
-    if (followLatestBar) {
+    const nextBars = bars ?? [];
+    const seriesKey = `${symbol}\u0000${contract}\u0000${timeframe}`;
+    const previousBars = renderedBarsInputRef.current;
+    const sameReplaySeries =
+      suspendRealtime &&
+      renderedBarsReplayRef.current &&
+      renderedBarsSeriesRef.current === seriesKey &&
+      previousBars !== undefined;
+    const appendStart = sameReplaySeries
+      ? replayAppendStart(previousBars, nextBars)
+      : undefined;
+    const bulkLoaded = appendStart === undefined;
+
+    let rendered = true;
+    if (appendStart !== undefined) {
+      if (appendStart === nextBars.length) {
+        rendered = false;
+      } else if (appendStart + 1 === nextBars.length) {
+        controller.apply(nextBars[appendStart], true);
+      } else {
+        // A batched timer reveal is uncommon, but applying the suffix remains
+        // incremental and avoids a full chart/indicator rebuild.
+        for (let index = appendStart; index < nextBars.length; index += 1) {
+          controller.apply(nextBars[index], true);
+        }
+      }
+    } else {
+      controller.load(nextBars);
+    }
+    renderedBarsInputRef.current = nextBars;
+    renderedBarsSeriesRef.current = seriesKey;
+    renderedBarsReplayRef.current = suspendRealtime;
+    if (!rendered) return;
+    if (followLatestBar && !(suspendRealtime && bulkLoaded)) {
       portRef.current?.scrollToLatest?.();
     }
     drawingManagerRef.current?.requestUpdateAll();
     refreshFootprintViewport();
     const frame = window.requestAnimationFrame(() => {
+      // Replay bulk setters flush in the preceding animation-frame callback.
+      // Refresh coordinates once more against the newly revealed price scale.
+      if (suspendRealtime && bulkLoaded) {
+        if (followLatestBar) portRef.current?.scrollToLatest?.(true);
+        refreshFootprintViewport();
+      }
       drawingManagerRef.current?.requestUpdateAll();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [symbol, contract, timeframe, bars]);
+  }, [symbol, contract, timeframe, bars, suspendRealtime]);
 
   // Load or replace the lower volume-delta candle series for this series.
   useEffect(() => {
-    portRef.current?.setDisplayTimeOffset?.(displayOffsetForTimeframe(timeframe));
-    portRef.current?.setVolumeDelta?.(volumeDelta ?? []);
-  }, [symbol, contract, timeframe, volumeDelta]);
+    const next = volumeDelta ?? [];
+    const seriesKey = `${symbol}\u0000${contract}\u0000${timeframe}`;
+    const previous = volumeDeltaInputRef.current;
+    const appendStart =
+      suspendRealtime &&
+      volumeDeltaReplayRef.current &&
+      volumeDeltaSeriesRef.current === seriesKey &&
+      previous !== undefined
+        ? replayAppendStart(previous, next)
+        : undefined;
+    if (appendStart === undefined || portRef.current?.updateVolumeDelta === undefined) {
+      portRef.current?.setVolumeDelta?.(next);
+    } else {
+      for (let index = appendStart; index < next.length; index += 1) {
+        portRef.current.updateVolumeDelta(next[index]);
+      }
+    }
+    volumeDeltaInputRef.current = next;
+    volumeDeltaSeriesRef.current = seriesKey;
+    volumeDeltaReplayRef.current = suspendRealtime;
+  }, [symbol, contract, timeframe, volumeDelta, suspendRealtime]);
 
   useEffect(() => {
-    portRef.current?.setFvgSignals?.(fvgSignals ?? new Map());
-  }, [symbol, contract, timeframe, fvgSignals]);
+    const next = fvgSignals ?? new Map<number, FvgSignalUpdateMessage>();
+    const seriesKey = `${symbol}\u0000${contract}\u0000${timeframe}`;
+    const previous = fvgSignalsInputRef.current;
+    const appended =
+      suspendRealtime &&
+      fvgSignalsReplayRef.current &&
+      fvgSignalsSeriesRef.current === seriesKey &&
+      previous !== undefined
+        ? replayMapAppends(previous, next)
+        : undefined;
+    if (appended === undefined || portRef.current?.updateFvgSignal === undefined) {
+      portRef.current?.setFvgSignals?.(next);
+    } else {
+      for (const signal of appended) portRef.current.updateFvgSignal(signal);
+    }
+    fvgSignalsInputRef.current = next;
+    fvgSignalsSeriesRef.current = seriesKey;
+    fvgSignalsReplayRef.current = suspendRealtime;
+  }, [symbol, contract, timeframe, fvgSignals, suspendRealtime]);
 
   useEffect(() => {
     portRef.current?.setChartBackgroundColor?.(chartBackgroundColor);
@@ -1193,16 +1349,66 @@ export function ChartContainer({
   }, [timezoneOffsetMinutes]);
 
   useEffect(() => {
-    portRef.current?.setBigTrades?.(showBigTrades ? displayedBigTrades : []);
-  }, [symbol, contract, displayedBigTrades, showBigTrades]);
+    const next = showBigTrades ? displayedBigTrades : [];
+    const seriesKey = `${symbol}\u0000${contract}\u0000${timeframe}`;
+    const previous = bigTradesInputRef.current;
+    const appendStart =
+      suspendRealtime &&
+      bigTradesReplayRef.current &&
+      bigTradesSeriesRef.current === seriesKey &&
+      previous !== undefined
+        ? replayAppendStart(previous, next)
+        : undefined;
+    if (appendStart === undefined || portRef.current?.updateBigTrade === undefined) {
+      portRef.current?.setBigTrades?.(next);
+    } else {
+      for (let index = appendStart; index < next.length; index += 1) {
+        portRef.current.updateBigTrade(next[index]);
+      }
+    }
+    bigTradesInputRef.current = next;
+    bigTradesSeriesRef.current = seriesKey;
+    bigTradesReplayRef.current = suspendRealtime;
+  }, [
+    symbol,
+    contract,
+    timeframe,
+    displayedBigTrades,
+    showBigTrades,
+    suspendRealtime,
+  ]);
 
   useEffect(() => {
-    portRef.current?.setSmcAiSignals?.(smcAiSignals ?? []);
-  }, [symbol, contract, timeframe, smcAiSignals]);
+    const next = smcAiSignals ?? [];
+    const seriesKey = `${symbol}\u0000${contract}\u0000${timeframe}`;
+    const previous = smcAiSignalsInputRef.current;
+    const unchanged =
+      suspendRealtime &&
+      smcAiSignalsReplayRef.current &&
+      smcAiSignalsSeriesRef.current === seriesKey &&
+      previous !== undefined &&
+      replayAppendStart(previous, next) === next.length;
+    if (!unchanged) portRef.current?.setSmcAiSignals?.(next);
+    smcAiSignalsInputRef.current = next;
+    smcAiSignalsSeriesRef.current = seriesKey;
+    smcAiSignalsReplayRef.current = suspendRealtime;
+  }, [symbol, contract, timeframe, smcAiSignals, suspendRealtime]);
 
   useEffect(() => {
-    portRef.current?.setAlertSignals?.(alertSignals ?? []);
-  }, [symbol, contract, timeframe, alertSignals]);
+    const next = alertSignals ?? [];
+    const seriesKey = `${symbol}\u0000${contract}\u0000${timeframe}`;
+    const previous = alertSignalsInputRef.current;
+    const unchanged =
+      suspendRealtime &&
+      alertSignalsReplayRef.current &&
+      alertSignalsSeriesRef.current === seriesKey &&
+      previous !== undefined &&
+      replayAppendStart(previous, next) === next.length;
+    if (!unchanged) portRef.current?.setAlertSignals?.(next);
+    alertSignalsInputRef.current = next;
+    alertSignalsSeriesRef.current = seriesKey;
+    alertSignalsReplayRef.current = suspendRealtime;
+  }, [symbol, contract, timeframe, alertSignals, suspendRealtime]);
 
   // Draw alert level lines on the candle price scale (Req 16.5). Re-applied on
   // any change to the alert set; the adapter diffs by id so unchanged lines are
@@ -1228,6 +1434,54 @@ export function ChartContainer({
     const port = portRef.current;
     if (!port) return;
     const configs = emaLineConfigs(ema);
+    const nextBars = bars ?? [];
+    const seriesKey = `${symbol}\u0000${contract}\u0000${timeframe}`;
+    const configKey = configs
+      .map((config) => `${config.id}:${config.period}:${config.color}:${config.lineWidth ?? ""}`)
+      .join("|");
+    const previousBars = emaBarsInputRef.current;
+    const appendStart =
+      suspendRealtime &&
+      emaReplayRef.current &&
+      emaBarsSeriesRef.current === seriesKey &&
+      emaConfigKeyRef.current === configKey &&
+      previousBars !== undefined
+        ? replayAppendStart(previousBars, nextBars)
+        : undefined;
+    const rememberInputs = () => {
+      emaBarsInputRef.current = nextBars;
+      emaBarsSeriesRef.current = seriesKey;
+      emaReplayRef.current = suspendRealtime;
+      emaConfigKeyRef.current = configKey;
+    };
+
+    if (appendStart !== undefined && appendStart === nextBars.length) {
+      rememberInputs();
+      return;
+    }
+    if (
+      appendStart !== undefined &&
+      appendStart + 1 === nextBars.length &&
+      configs.length > 0 &&
+      port.updateEmaLine !== undefined &&
+      configs.every((config) => emaStateRef.current.has(config.id))
+    ) {
+      const appendedBar = nextBars[appendStart];
+      const nextState = new Map(emaStateRef.current);
+      for (const config of configs) {
+        const prior = nextState.get(config.id)!;
+        const value = nextEma(prior.displayValue, appendedBar.close, config.period);
+        port.updateEmaLine(config.id, { time: appendedBar.time, value });
+        nextState.set(config.id, {
+          closedValue: prior.displayValue,
+          time: appendedBar.time,
+          displayValue: value,
+        });
+      }
+      emaStateRef.current = nextState;
+      rememberInputs();
+      return;
+    }
     if (configs.length === 0) {
       if (port.clearEmaLines) {
         port.clearEmaLines();
@@ -1235,6 +1489,7 @@ export function ChartContainer({
         port.clearEma?.();
       }
       emaStateRef.current = new Map();
+      rememberInputs();
       return;
     }
     const nextState = new Map<string, EmaLineState>();
@@ -1262,11 +1517,13 @@ export function ChartContainer({
       port.setEma?.(lines[0].points, lines[0].color);
     }
     emaStateRef.current = nextState;
+    rememberInputs();
   }, [
     symbol,
     contract,
     timeframe,
     bars,
+    suspendRealtime,
     ema?.enabled,
     ema?.period,
     ema?.color,
@@ -1292,9 +1549,7 @@ export function ChartContainer({
   }, [symbol, contract, timeframe, bars, smc, requestSmcComputation]);
 
   useEffect(() => {
-    if (showFootprint) {
-      refreshFootprintViewport();
-    }
+    refreshFootprintViewport();
   }, [showFootprint, refreshFootprintViewport]);
 
   // Subscribe to realtime bar_update events and apply them incrementally.

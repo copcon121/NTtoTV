@@ -893,7 +893,7 @@ export function IndicatorToggles({
             disabled={gcPushMomentumDisabled}
             title={
               gcPushMomentumDisabled
-                ? "GC Push Momentum is available on the 1-minute chart"
+                ? "GC Push Momentum is available on the 1-minute and 5-minute charts"
                 : "Volatility-normalized price push with order-flow confirmation"
             }
             onChange={onGcPushMomentumChange}

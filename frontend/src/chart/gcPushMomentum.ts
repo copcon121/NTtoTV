@@ -184,21 +184,58 @@ export function normalizeGcPushMomentumSettings(
   };
 }
 
-function quantile(values: readonly number[], percentile: number): number | undefined {
-  if (values.length === 0) return undefined;
-  const sorted = [...values].sort((left, right) => left - right);
-  if (sorted.length === 1) return sorted[0];
-  const position = percentile * (sorted.length - 1);
-  const lowerIndex = Math.floor(position);
-  const upperIndex = Math.ceil(position);
-  const lower = sorted[lowerIndex];
-  const upper = sorted[upperIndex];
-  return lower + (upper - lower) * (position - lowerIndex);
-}
+/**
+ * Fixed-size FIFO with a second, sorted view for O(1) quantile reads.
+ *
+ * The previous implementation copied and sorted up to 300 observations for
+ * every emitted bar (three times per bar). That work dominated Replay entry
+ * and fast playback. Insertion/removal is O(n), but happens once per value and
+ * keeps the hot quantile path allocation-free while preserving interpolation.
+ */
+class RollingQuantiles {
+  private readonly fifo: number[] = [];
+  private readonly sorted: number[] = [];
 
-function pushRolling(history: number[], value: number, maximum: number): void {
-  history.push(value);
-  if (history.length > maximum) history.shift();
+  constructor(private readonly maximum: number) {}
+
+  clear(): void {
+    this.fifo.length = 0;
+    this.sorted.length = 0;
+  }
+
+  quantile(percentile: number): number | undefined {
+    if (this.sorted.length === 0) return undefined;
+    if (this.sorted.length === 1) return this.sorted[0];
+    const position = percentile * (this.sorted.length - 1);
+    const lowerIndex = Math.floor(position);
+    const upperIndex = Math.ceil(position);
+    const lower = this.sorted[lowerIndex];
+    const upper = this.sorted[upperIndex];
+    return lower + (upper - lower) * (position - lowerIndex);
+  }
+
+  push(value: number): void {
+    this.fifo.push(value);
+    const insertAt = this.lowerBound(value);
+    this.sorted.splice(insertAt, 0, value);
+    if (this.fifo.length <= this.maximum) return;
+
+    const removed = this.fifo.shift();
+    if (removed === undefined) return;
+    const removeAt = this.lowerBound(removed);
+    if (removeAt < this.sorted.length) this.sorted.splice(removeAt, 1);
+  }
+
+  private lowerBound(value: number): number {
+    let low = 0;
+    let high = this.sorted.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (this.sorted[middle] < value) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  }
 }
 
 function finitePositiveClose(bar: Bar): boolean {
@@ -302,7 +339,10 @@ function finiteScore(numerator: number, variance: number, epsilon: number): numb
  *
  * Results are stateless: replacing a live bar/delta and calling this function
  * again is equivalent to a fresh calculation. A gap larger than
- * `barDurationMs * gapMultiplier` resets EWMA, warm-up, and percentile history.
+ * `barDurationMs * gapMultiplier` starts a new contiguous price segment so no
+ * return spans missing time. Once the model has warmed up, its lagged EWMA and
+ * rolling thresholds are carried across the gap; only the structural
+ * horizon/acceleration/efficiency lookbacks must refill.
  */
 export function calculateGcPushMomentum(
   inputBars: readonly Bar[],
@@ -319,28 +359,35 @@ export function calculateGcPushMomentum(
   const output: GcPushMomentumPoint[] = [];
   const lambda = Math.exp(Math.log(0.5) / settings.volatilityHalfLifeBars);
   const gapLimit = settings.barDurationMs * settings.gapMultiplier;
-  const requiredReturns = Math.max(
-    settings.warmupBars,
+  const structuralRequiredReturns = Math.max(
     settings.horizonBars,
     settings.accelerationBars * 2,
     settings.efficiencyLookbackBars,
   );
+  const coldRequiredReturns = Math.max(
+    settings.warmupBars,
+    structuralRequiredReturns,
+  );
 
   let segmentStart = 0;
   let ewmaVariance: number | undefined;
-  let priorAbsPush: number[] = [];
-  let priorAbsFlow: number[] = [];
-  let priorHorizonVolume: number[] = [];
+  const priorAbsPush = new RollingQuantiles(settings.percentileLookbackBars);
+  const priorAbsFlow = new RollingQuantiles(settings.percentileLookbackBars);
+  const priorHorizonVolume = new RollingQuantiles(settings.percentileLookbackBars);
+  let warmed = false;
 
-  const resetAt = (index: number): void => {
+  const startSegmentAt = (index: number, preserveWarmedState: boolean): void => {
     segmentStart = index;
-    ewmaVariance = undefined;
-    priorAbsPush = [];
-    priorAbsFlow = [];
-    priorHorizonVolume = [];
+    if (!preserveWarmedState) {
+      ewmaVariance = undefined;
+      priorAbsPush.clear();
+      priorAbsFlow.clear();
+      priorHorizonVolume.clear();
+      warmed = false;
+    }
   };
 
-  if (!finitePositiveClose(bars[0])) resetAt(1);
+  if (!finitePositiveClose(bars[0])) startSegmentAt(1, false);
 
   for (let index = 1; index < bars.length; index += 1) {
     const previous = bars[index - 1];
@@ -353,13 +400,16 @@ export function calculateGcPushMomentum(
       elapsed <= 0 ||
       elapsed > gapLimit
     ) {
-      resetAt(finitePositiveClose(current) ? index : index + 1);
+      startSegmentAt(
+        finitePositiveClose(current) ? index : index + 1,
+        warmed,
+      );
       continue;
     }
 
     const currentReturn = Math.log(current.close) - Math.log(previous.close);
     if (!Number.isFinite(currentReturn)) {
-      resetAt(index + 1);
+      startSegmentAt(index + 1, warmed);
       continue;
     }
 
@@ -375,7 +425,11 @@ export function calculateGcPushMomentum(
         : lambda * ewmaVariance + (1 - lambda) * squaredReturn;
 
     const returnCount = index - segmentStart;
+    const requiredReturns = warmed
+      ? structuralRequiredReturns
+      : coldRequiredReturns;
     if (returnCount < requiredReturns) continue;
+    warmed = true;
 
     const pushFrom = index - settings.horizonBars + 1;
     const pushNumerator = sumRange(returns, pushFrom, index);
@@ -408,7 +462,7 @@ export function calculateGcPushMomentum(
     );
 
     // Thresholds are intentionally calculated before adding this observation.
-    const strongThreshold = quantile(priorAbsPush, settings.strongPercentile);
+    const strongThreshold = priorAbsPush.quantile(settings.strongPercentile);
     const strong =
       strongThreshold !== undefined &&
       Math.abs(push) > settings.epsilon &&
@@ -428,8 +482,8 @@ export function calculateGcPushMomentum(
 
     if (flow !== undefined) {
       flowRatio = flow.ratio;
-      const flowThreshold = quantile(priorAbsFlow, settings.flowPercentile);
-      const medianVolume = quantile(priorHorizonVolume, 0.5);
+      const flowThreshold = priorAbsFlow.quantile(settings.flowPercentile);
+      const medianVolume = priorHorizonVolume.quantile(0.5);
       if (medianVolume !== undefined && medianVolume > settings.epsilon) {
         const ratio = flow.volume / medianVolume;
         if (Number.isFinite(ratio)) participationRatio = ratio;
@@ -455,16 +509,8 @@ export function calculateGcPushMomentum(
         qualifiedFlow &&
         (flowState === "conflict" || (!strong && efficiency < 0.35));
 
-      pushRolling(
-        priorAbsFlow,
-        Math.abs(flow.ratio),
-        settings.percentileLookbackBars,
-      );
-      pushRolling(
-        priorHorizonVolume,
-        flow.volume,
-        settings.percentileLookbackBars,
-      );
+      priorAbsFlow.push(Math.abs(flow.ratio));
+      priorHorizonVolume.push(flow.volume);
     }
 
     const point: GcPushMomentumPoint = {
@@ -483,11 +529,7 @@ export function calculateGcPushMomentum(
     if (strongThreshold !== undefined) point.strongThreshold = strongThreshold;
     output.push(point);
 
-    pushRolling(
-      priorAbsPush,
-      Math.abs(push),
-      settings.percentileLookbackBars,
-    );
+    priorAbsPush.push(Math.abs(push));
   }
 
   return output;

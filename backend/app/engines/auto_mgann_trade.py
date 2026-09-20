@@ -30,6 +30,7 @@ from ..mt5.manager import Mt5Manager
 from ..registry.registry import OutboundEvent, WebSocketRegistry
 from ..storage.cache_store import CacheStore
 from .basis_engine import BasisEngine
+from .gc_push_momentum import GcPushMomentumPoint, GcPushMomentumState
 from .mgann_big_trade_sweep import MgannBigTradeSweepBar, MgannBigTradeSweepState
 from .symbol_map import SymbolMap
 
@@ -49,7 +50,7 @@ _EMA_TRAILING_STARTED_EVENT = "auto_mgann_ema21_trailing_started"
 
 
 class AutoMgannTradeEngine:
-    """Execute opted-in mGann signals with a TP 3R and EMA21 trailing at 1R."""
+    """Execute opted-in mGann signals with Long BOS momentum confirmation."""
 
     def __init__(
         self,
@@ -65,9 +66,11 @@ class AutoMgannTradeEngine:
         self._basis = basis_engine
         self._registry = registry
         self._settings = settings or default_settings
-        # Exact requested strategy: M1 internal BOS/CHoCH, body from 2x through
-        # 8x the prior 20 bodies, direction-aligned volume delta >= 2x the
-        # prior 20 absolute deltas, without a BigTrade gate.
+        # Base strategy: M1 internal BOS/CHoCH, body from 2x through 8x the
+        # prior 20 bodies, direction-aligned volume delta >= 2x the prior 20
+        # absolute deltas, without a BigTrade/liquidity gate. Long is narrowed
+        # below to BOS plus aligned prior-P90 GC Push Momentum; Short retains
+        # the existing behavior.
         self._signals = MgannBigTradeSweepState(
             timeframe="1m",
             require_big_trade=False,
@@ -80,6 +83,7 @@ class AutoMgannTradeEngine:
             break_ticks=0,
             tick_size=_GC_TICK_SIZE,
         )
+        self._push_momentum = GcPushMomentumState()
         self._last_open_order_scan_at = 0
         self._ema21: float | None = None
         self._ema_last_bar_time: int | None = None
@@ -100,6 +104,7 @@ class AutoMgannTradeEngine:
         for bar in bars:
             if not bar.closed:
                 continue
+            self._push_momentum.on_closed_bar(bar)
             self._signals.on_closed_bar(
                 _to_signal_bar(bar, volume_delta=deltas_by_time.get(bar.time))
             )
@@ -110,6 +115,7 @@ class AutoMgannTradeEngine:
         ema21 = self._advance_ema21(bar)
         if ema21 is not None:
             self._manage_ema21_trailing_on_closed_bar(bar, ema21)
+        push_momentum = self._push_momentum.on_closed_bar(bar)
         triggers = self._signals.on_closed_bar(
             _to_signal_bar(bar, volume_delta=volume_delta)
         )
@@ -122,6 +128,23 @@ class AutoMgannTradeEngine:
                 continue
             if not _is_auto_body_size_allowed(trigger):
                 continue
+            if trigger.direction > 0 and not _long_bos_push_momentum_passes(
+                trigger,
+                push_momentum,
+            ):
+                logger.info(
+                    "auto mGann skipped long %s at %s: GC Push Momentum "
+                    "requires aligned prior-P90 strength (push=%s threshold=%s)",
+                    trigger.structure_kind,
+                    bar.time,
+                    None if push_momentum is None else push_momentum.push,
+                    (
+                        None
+                        if push_momentum is None
+                        else push_momentum.strong_threshold
+                    ),
+                )
+                continue
             use_body_limit = _uses_body_midpoint_limit(trigger)
             for config in self._cache.auto_trade.read_enabled():
                 if not _is_enabled_for_direction(config, trigger.direction):
@@ -131,6 +154,8 @@ class AutoMgannTradeEngine:
                     trigger.direction,
                     bar,
                     use_body_midpoint_limit=use_body_limit,
+                    structure_kind=trigger.structure_kind,
+                    push_momentum=push_momentum,
                 )
         return attempts
 
@@ -230,6 +255,8 @@ class AutoMgannTradeEngine:
         bar: OHLCVBar,
         *,
         use_body_midpoint_limit: bool = False,
+        structure_kind: str,
+        push_momentum: GcPushMomentumPoint | None,
     ) -> int:
         side = OrderSide.BUY if direction > 0 else OrderSide.SELL
         idempotency_key = f"auto-mgann:{bar.time}:{side.value}"
@@ -354,6 +381,18 @@ class AutoMgannTradeEngine:
                         "slGc": sl_gc,
                         "tpGc": tp_gc,
                         "riskGc": risk,
+                        "structureKind": structure_kind,
+                        "gcPushMomentum": (
+                            None if push_momentum is None else push_momentum.push
+                        ),
+                        "gcPushStrongThreshold": (
+                            None
+                            if push_momentum is None
+                            else push_momentum.strong_threshold
+                        ),
+                        "gcPushStrong": (
+                            False if push_momentum is None else push_momentum.strong
+                        ),
                         "entryStyle": "body_70_percent_limit"
                         if kind is OrderKind.LIMIT
                         else "market",
@@ -623,6 +662,19 @@ def _to_signal_bar(bar, *, volume_delta: int | None = None) -> MgannBigTradeSwee
 
 def _is_enabled_for_direction(config: AutoTradeSettingsRecord, direction: int) -> bool:
     return config.long_enabled if direction > 0 else config.short_enabled
+
+
+def _long_bos_push_momentum_passes(
+    trigger,
+    point: GcPushMomentumPoint | None,
+) -> bool:
+    """Allow Long only for BOS with positive prior-P90 GC Push Momentum."""
+    return (
+        getattr(trigger, "structure_kind", None) == "BOS"
+        and point is not None
+        and point.strong
+        and point.push > 0
+    )
 
 
 def _is_auto_body_size_allowed(trigger) -> bool:

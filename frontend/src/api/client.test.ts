@@ -276,6 +276,34 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
+  it("can request cached big trades without a raw-tick rebuild", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        symbol: "GC",
+        contract: "GC",
+        trades: [
+          {
+            tradeId: 7,
+            time: 1_000,
+            price: 2_400.1,
+            volume: 12,
+            side: "buy",
+          },
+        ],
+      }),
+    );
+    const api = new ApiClient({ fetchFn });
+
+    await expect(
+      api.bigTrades("GC", "GC", 5_000, { from: 1_000, to: 2_000 }, true),
+    ).resolves.toMatchObject([{ tradeId: 7, time: 1_000, side: "buy" }]);
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/big-trades?symbol=GC&contract=GC&limit=5000&from=1000&to=2000&cacheOnly=true",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
   it("loads centered footprint history metadata", async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({

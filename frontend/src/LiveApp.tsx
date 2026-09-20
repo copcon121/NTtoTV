@@ -142,6 +142,7 @@ import {
   displayOffsetForTimeframe,
   footprintEnabledForTimeframe,
   fixedRangeMsFromAnchors,
+  gcPushMomentumEnabledForTimeframe,
 } from "./chart/timeframeRange";
 import {
   DEFAULT_TIMEZONE_OFFSET_MINUTES,
@@ -222,6 +223,9 @@ const EMPTY_VOLUME_DELTA: readonly VolumeDeltaDatum[] = [];
 const EMPTY_BIG_TRADES: readonly BigTradeMarker[] = [];
 const EMPTY_SMC_AI_SIGNALS: readonly SmcAiSignalMarker[] = [];
 const EMPTY_ALERT_SIGNAL_MARKERS: readonly AlertSignalMarker[] = [];
+const EMPTY_ALERT_LINES: readonly AlertLine[] = [];
+const EMPTY_ORDER_LINES: readonly OrderLine[] = [];
+const EMPTY_ORDER_CONTROLS: readonly OrderControl[] = [];
 const EMPTY_FOOTPRINT_BARS: ReadonlyMap<number, FootprintBar> = new Map();
 const EMPTY_FVG_SIGNALS: ReadonlyMap<number, FvgSignalUpdateMessage> = new Map();
 const SUB_MINUTE_HISTORY_FALLBACK_TF: Timeframe = "1m";
@@ -2397,7 +2401,7 @@ export function LiveApp() {
         timeframe === "1m"
           ? api.fvgSignals(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range)
           : Promise.resolve<FvgSignalUpdateMessage[]>([]),
-        api.bigTrades(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range),
+        api.bigTrades(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range, true),
       ]).then(([deltaResult, fvgResult, bigTradeResult]) => {
         setReplayDataset((current) => {
           if (current?.id !== id) return current;
@@ -4949,24 +4953,54 @@ export function LiveApp() {
       cancellingOrderIds,
     ],
   );
-  const replayCurrentBar = replayActive
-    ? replayDataset?.bars[replayCursorIndex]
-    : undefined;
+  const replayBars = replayDataset?.bars;
+  const replayVolumeDeltaData = replayDataset?.volumeDelta;
+  const replayFootprintBars = replayDataset?.footprintBars;
+  const replayFvgSignals = replayDataset?.fvgSignals;
+  const replayBigTrades = replayDataset?.bigTrades;
+  const replaySmcAiSignals = replayDataset?.smcAiSignals;
+  const replayAlertSignals = replayDataset?.alertSignals;
+  const replayCurrentBar = replayActive ? replayBars?.[replayCursorIndex] : undefined;
   const replayCutoffExclusive = replayCurrentBar === undefined
     ? undefined
     : replayCurrentBar.time + barDurationForTimeframe(timeframe);
-  const chartBars = replayActive && replayDataset !== undefined
-    ? replayBarsThrough(replayDataset.bars, replayCursorIndex)
+  // Keep replay projections independent from live state. The websocket keeps
+  // updating `bars` and overlays behind the replay snapshot; including those
+  // live collections in a replay memo would create a fresh prefix and repaint
+  // the whole chart even while replay is paused.
+  const replayChartBars = useMemo(
+    () =>
+      replayActive && replayBars !== undefined
+        ? replayBarsThrough(replayBars, replayCursorIndex)
+        : undefined,
+    [replayActive, replayBars, replayCursorIndex],
+  );
+  const chartBars = replayActive
+    ? replayChartBars ?? EMPTY_BARS
     : hasLoadedCurrentSeries
       ? bars
       : EMPTY_BARS;
-  const chartVolumeDelta = replayActive && replayDataset !== undefined && replayCurrentBar !== undefined
-    ? timedValuesBefore(replayDataset.volumeDelta, replayCurrentBar.time + 1)
+  const replayChartVolumeDelta = useMemo(
+    () =>
+      replayActive && replayVolumeDeltaData !== undefined && replayCurrentBar !== undefined
+        ? timedValuesBefore(replayVolumeDeltaData, replayCurrentBar.time + 1)
+        : undefined,
+    [replayActive, replayCurrentBar?.time, replayVolumeDeltaData],
+  );
+  const chartVolumeDelta = replayActive
+    ? replayChartVolumeDelta ?? EMPTY_VOLUME_DELTA
     : hasLoadedCurrentSeries && volumeDeltaSeriesKey === currentSeriesKey
       ? volumeDelta
       : EMPTY_VOLUME_DELTA;
-  const chartFootprintBars = replayActive && replayDataset !== undefined && replayCurrentBar !== undefined
-    ? timedMapThrough(replayDataset.footprintBars, replayCurrentBar.time)
+  const replayChartFootprintBars = useMemo(
+    () =>
+      replayActive && replayFootprintBars !== undefined && replayCurrentBar !== undefined
+        ? timedMapThrough(replayFootprintBars, replayCurrentBar.time)
+        : undefined,
+    [replayActive, replayCurrentBar?.time, replayFootprintBars],
+  );
+  const chartFootprintBars = replayActive
+    ? replayChartFootprintBars ?? EMPTY_FOOTPRINT_BARS
     : hasLoadedCurrentSeries
       ? footprintBars
       : EMPTY_FOOTPRINT_BARS;
@@ -4974,51 +5008,63 @@ export function LiveApp() {
     indicatorsVisible &&
     showFootprint &&
     footprintEnabledForTimeframe(timeframe);
+  const replayChartFvgSignals = useMemo(
+    () =>
+      replayActive && replayFvgSignals !== undefined && replayCurrentBar !== undefined
+        ? timedMapThrough(replayFvgSignals, replayCurrentBar.time)
+        : undefined,
+    [replayActive, replayCurrentBar?.time, replayFvgSignals],
+  );
   const chartFvgSignals =
     indicatorsVisible &&
     hasLoadedCurrentSeries &&
     showFvgGrader &&
     timeframe === "1m" &&
     (replayActive || fvgSignalSeriesKey === currentSeriesKey)
-      ? replayActive && replayDataset !== undefined && replayCurrentBar !== undefined
-        ? timedMapThrough(replayDataset.fvgSignals, replayCurrentBar.time)
+      ? replayActive
+        ? replayChartFvgSignals ?? EMPTY_FVG_SIGNALS
         : fvgSignals
       : EMPTY_FVG_SIGNALS;
   const bigTradeOverlayEnabled = bigTradesEnabledForTimeframe(timeframe);
-  const chartBigTrades = indicatorsVisible && hasLoadedCurrentSeries && showBigTrades && bigTradeOverlayEnabled
-    ? replayActive && replayDataset !== undefined && replayCutoffExclusive !== undefined
-      ? timedValuesBefore(replayDataset.bigTrades, replayCutoffExclusive)
-      : bigTrades
-    : EMPTY_BIG_TRADES;
-  const chartSmcAiSignals = indicatorsVisible && hasLoadedCurrentSeries && timeframe === "1m"
-    ? replayActive && replayDataset !== undefined && replayCutoffExclusive !== undefined
-      ? timedValuesBefore(replayDataset.smcAiSignals, replayCutoffExclusive)
-      : smcAiSignals
-    : EMPTY_SMC_AI_SIGNALS;
-  const chartAlertSignals = useMemo(
-    () => {
-      if (!indicatorsVisible || !hasLoadedCurrentSeries || timeframe !== "1m") {
-        return EMPTY_ALERT_SIGNAL_MARKERS;
-      }
-      if (!showMgannBreak) {
-        return EMPTY_ALERT_SIGNAL_MARKERS;
-      }
-      if (replayActive && replayDataset !== undefined && replayCutoffExclusive !== undefined) {
-        return timedValuesBefore(replayDataset.alertSignals, replayCutoffExclusive);
-      }
-      return alertSignalMarkers;
-    },
-    [
-      alertSignalMarkers,
-      hasLoadedCurrentSeries,
-      indicatorsVisible,
-      replayActive,
-      replayCutoffExclusive,
-      replayDataset,
-      showMgannBreak,
-      timeframe,
-    ],
+  const replayChartBigTrades = useMemo(
+    () =>
+      replayActive && replayBigTrades !== undefined && replayCutoffExclusive !== undefined
+        ? timedValuesBefore(replayBigTrades, replayCutoffExclusive)
+        : undefined,
+    [replayActive, replayCutoffExclusive, replayBigTrades],
   );
+  const chartBigTrades =
+    indicatorsVisible && hasLoadedCurrentSeries && showBigTrades && bigTradeOverlayEnabled
+      ? replayActive
+        ? replayChartBigTrades ?? EMPTY_BIG_TRADES
+        : bigTrades
+      : EMPTY_BIG_TRADES;
+  const replayChartSmcAiSignals = useMemo(
+    () =>
+      replayActive && replaySmcAiSignals !== undefined && replayCutoffExclusive !== undefined
+        ? timedValuesBefore(replaySmcAiSignals, replayCutoffExclusive)
+        : undefined,
+    [replayActive, replayCutoffExclusive, replaySmcAiSignals],
+  );
+  const chartSmcAiSignals =
+    indicatorsVisible && hasLoadedCurrentSeries && timeframe === "1m"
+      ? replayActive
+        ? replayChartSmcAiSignals ?? EMPTY_SMC_AI_SIGNALS
+        : smcAiSignals
+      : EMPTY_SMC_AI_SIGNALS;
+  const replayChartAlertSignals = useMemo(
+    () =>
+      replayActive && replayAlertSignals !== undefined && replayCutoffExclusive !== undefined
+        ? timedValuesBefore(replayAlertSignals, replayCutoffExclusive)
+        : undefined,
+    [replayActive, replayCutoffExclusive, replayAlertSignals],
+  );
+  const chartAlertSignals =
+    indicatorsVisible && hasLoadedCurrentSeries && timeframe === "1m" && showMgannBreak
+      ? replayActive
+        ? replayChartAlertSignals ?? EMPTY_ALERT_SIGNAL_MARKERS
+        : alertSignalMarkers
+      : EMPTY_ALERT_SIGNAL_MARKERS;
   const effectiveOutsideBar = useMemo(
     () => outsideBarSettingsForTimeframe(outsideBar, timeframe),
     [outsideBar, timeframe],
@@ -5175,7 +5221,9 @@ export function LiveApp() {
           footprintSettings={footprintSettings}
           bigTradeSettings={bigTradeSettings}
           mgannSwingDisabled={mgannSwingDisabled}
-          gcPushMomentumDisabled={timeframe !== "1m"}
+          gcPushMomentumDisabled={
+            !gcPushMomentumEnabledForTimeframe(timeframe)
+          }
           footprintDisabled={!footprintEnabledForTimeframe(timeframe)}
           fvgGraderDisabled={timeframe !== "1m"}
           bigTradeDisabled={!bigTradeOverlayEnabled}
@@ -5330,9 +5378,9 @@ export function LiveApp() {
             bigTrades={chartBigTrades}
             smcAiSignals={chartSmcAiSignals}
             alertSignals={chartAlertSignals}
-            alertLines={replayActive ? [] : alertLines}
-            orderLines={replayActive ? [] : orderLines}
-            orderControls={replayActive ? [] : orderControls}
+            alertLines={replayActive ? EMPTY_ALERT_LINES : alertLines}
+            orderLines={replayActive ? EMPTY_ORDER_LINES : orderLines}
+            orderControls={replayActive ? EMPTY_ORDER_CONTROLS : orderControls}
             ema={visibleEma}
             smc={visibleSmc}
             outsideBar={visibleOutsideBar}
@@ -5348,7 +5396,9 @@ export function LiveApp() {
             showVolume
             showVolumeDelta={indicatorsVisible && showVolumeDelta}
             showGcPushMomentum={
-              indicatorsVisible && showGcPushMomentum && timeframe === "1m"
+              indicatorsVisible &&
+              showGcPushMomentum &&
+              gcPushMomentumEnabledForTimeframe(timeframe)
             }
             gcPushMomentumSettings={gcPushMomentumSettings}
             showCvd={indicatorsVisible && showMgannWaveDelta}

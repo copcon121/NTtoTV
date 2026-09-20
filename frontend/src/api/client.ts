@@ -1069,6 +1069,7 @@ export class ApiClient {
     contract: string,
     limit?: number,
     range?: { from?: number; to?: number },
+    cacheOnly?: boolean,
   ): Promise<BigTradeMessage[]> {
     const params = new URLSearchParams({ symbol, contract });
     if (limit !== undefined) {
@@ -1076,6 +1077,7 @@ export class ApiClient {
     }
     if (range?.from !== undefined) params.set("from", String(range.from));
     if (range?.to !== undefined) params.set("to", String(range.to));
+    if (cacheOnly !== undefined) params.set("cacheOnly", String(cacheOnly));
     const body = await this.getJson<{
       symbol: string;
       contract: string;

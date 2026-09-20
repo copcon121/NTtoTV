@@ -4,6 +4,7 @@ import {
   displayOffsetForTimeframe,
   fixedRangeMsFromAnchors,
   footprintEnabledForTimeframe,
+  gcPushMomentumEnabledForTimeframe,
 } from "./timeframeRange";
 
 function ts(value: number): AnchorPoint["time"] {
@@ -61,5 +62,14 @@ describe("footprintEnabledForTimeframe", () => {
     expect(footprintEnabledForTimeframe("1m")).toBe(true);
     expect(footprintEnabledForTimeframe("5m")).toBe(false);
     expect(footprintEnabledForTimeframe("1D")).toBe(false);
+  });
+});
+
+describe("gcPushMomentumEnabledForTimeframe", () => {
+  it("supports M1 and M5 only", () => {
+    expect(gcPushMomentumEnabledForTimeframe("1m")).toBe(true);
+    expect(gcPushMomentumEnabledForTimeframe("5m")).toBe(true);
+    expect(gcPushMomentumEnabledForTimeframe("3m")).toBe(false);
+    expect(gcPushMomentumEnabledForTimeframe("15m")).toBe(false);
   });
 });

@@ -1078,6 +1078,11 @@ async def get_big_trades(
     limit: int | None = Query(
         None, description=f"Max rows (defaults to and capped at {MAX_ROWS})"
     ),
+    cache_only: bool = Query(
+        False,
+        alias="cacheOnly",
+        description="Return persisted rows without rebuilding from raw ticks",
+    ),
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
     tick_store: TickStore = Depends(get_tick_store),
@@ -1093,7 +1098,7 @@ async def get_big_trades(
     effective_limit = MAX_ROWS if limit is None else min(limit, MAX_ROWS)
 
     cached = cache.read_big_trades(symbol, resolved, frm, to, effective_limit)
-    if cached and frm is None and to is None:
+    if cache_only or (cached and frm is None and to is None):
         return {
             "symbol": symbol,
             "contract": resolved,

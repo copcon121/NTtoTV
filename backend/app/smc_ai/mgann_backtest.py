@@ -21,10 +21,12 @@ from typing import Any, Literal, Sequence
 
 from ..engines.auto_mgann_trade import (
     _is_auto_body_size_allowed,
+    _long_bos_push_momentum_passes,
     _round_gc,
     _signal_body_limit_price,
     _signal_stop,
 )
+from ..engines.gc_push_momentum import GcPushMomentumState
 from ..engines.mgann_big_trade_sweep import (
     MgannBigTradeSweepBar,
     MgannBigTradeSweepState,
@@ -59,6 +61,7 @@ class MgannBacktestConfig:
     require_delta_filter: bool = False
     require_liquidity_filter: bool = False
     require_ema200_trend_filter: bool = False
+    require_long_bos_push_momentum: bool = True
     breakeven_at_one_r: bool = False
     fixed_target_r: float | None = None
     trade_side: Literal["both", "long", "short"] = "both"
@@ -227,6 +230,7 @@ def run_mgann_backtest(
         filter_liquidity=config.require_liquidity_filter,
         tick_size=_GC_TICK_SIZE,
     )
+    push_momentum_state = GcPushMomentumState()
     pending: list[_Trade] = []
     open_trades: list[_Trade] = []
     closed: list[_Trade] = []
@@ -238,6 +242,7 @@ def run_mgann_backtest(
     body_too_large = 0
     delta_rejected = 0
     ema200_rejected = 0
+    long_bos_push_momentum_rejected = 0
     side_rejected = 0
     market_submitted = 0
     limit_submitted = 0
@@ -255,6 +260,7 @@ def run_mgann_backtest(
         )
         ema21 = _advance_ema21(ema21, bar.close)
         ema200 = _advance_ema200(ema200, bar.close)
+        push_momentum = push_momentum_state.on_closed_bar(bar)
         if not config.breakeven_at_one_r and config.fixed_target_r is None:
             _manage_at_close(bar, ema21, open_trades, closed)
 
@@ -281,6 +287,13 @@ def run_mgann_backtest(
                 continue
             if not _is_auto_body_size_allowed(trigger):
                 body_too_large += 1
+                continue
+            if (
+                config.require_long_bos_push_momentum
+                and trigger.direction > 0
+                and not _long_bos_push_momentum_passes(trigger, push_momentum)
+            ):
+                long_bos_push_momentum_rejected += 1
                 continue
             if config.require_ema200_trend_filter and not ema200_trend_filter_passes(
                 direction=trigger.direction,
@@ -330,6 +343,7 @@ def run_mgann_backtest(
             "target": "default: 3R target; fixedTargetR overrides it with a fixed take-profit multiple",
             "side": "both by default; long-only or short-only replays skip the other direction before order submission",
             "ema200Trend": "when enabled, signal-bar close must be strictly above EMA200 for long or below EMA200 for short",
+            "longBosPushMomentum": "enabled by default: Long requires BOS and positive GC Push Momentum at or above its prior rolling P90 threshold",
         },
         "data": {
             "bars": len(ordered),
@@ -341,6 +355,7 @@ def run_mgann_backtest(
             "bodyTooLargeRejected": body_too_large,
             "deltaRejected": delta_rejected,
             "ema200Rejected": ema200_rejected,
+            "longBosPushMomentumRejected": long_bos_push_momentum_rejected,
             "sideRejected": side_rejected,
             "marketSubmitted": market_submitted,
             "limitSubmitted": limit_submitted,
@@ -621,6 +636,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--delta-filter", action="store_true", help="Require aligned delta >= 2x prior-20 absolute delta")
     parser.add_argument("--liquidity-filter", action="store_true", help="Require CHoCH to follow the configured BSL/SSL sweep")
     parser.add_argument("--ema200-trend-filter", action="store_true", help="Require long close > M1 EMA200 and short close < M1 EMA200")
+    parser.add_argument("--disable-long-bos-push-momentum", action="store_true", help="Replay legacy Long BOS/CHoCH entries without the live prior-P90 GC Push Momentum gate")
     parser.add_argument("--breakeven-at-1r", action="store_true", help="Move stop to entry at +1R and replace EMA21 trailing")
     parser.add_argument("--fixed-target-r", type=float, help="Use a fixed take-profit multiple and disable EMA21 trailing")
     parser.add_argument("--trade-side", choices=("both", "long", "short"), default="both", help="Replay both directions, long-only, or short-only")
@@ -633,6 +649,7 @@ def main(argv: list[str] | None = None) -> int:
         require_delta_filter=args.delta_filter,
         require_liquidity_filter=args.liquidity_filter,
         require_ema200_trend_filter=args.ema200_trend_filter,
+        require_long_bos_push_momentum=not args.disable_long_bos_push_momentum,
         breakeven_at_one_r=args.breakeven_at_1r,
         fixed_target_r=args.fixed_target_r,
         trade_side=args.trade_side,

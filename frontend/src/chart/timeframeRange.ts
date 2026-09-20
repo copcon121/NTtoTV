@@ -27,6 +27,13 @@ export function footprintEnabledForTimeframe(timeframe: Timeframe): boolean {
   return timeframe === "15s" || timeframe === "1m";
 }
 
+/** GC Push Momentum is calibrated and fed with exact delta on M1 and M5. */
+export function gcPushMomentumEnabledForTimeframe(
+  timeframe: Timeframe,
+): boolean {
+  return timeframe === "1m" || timeframe === "5m";
+}
+
 export function fixedRangeMsFromAnchors(
   anchors: readonly AnchorPoint[],
   timeframe: Timeframe,

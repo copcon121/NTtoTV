@@ -15,6 +15,7 @@ import {
   fvgSignalColor,
   gcPushMomentumColor,
   isMgannImpulseTimeframeDuration,
+  isSessionHighlightTimeframeDuration,
   isUtcPlus7SessionHighlightTime,
   toBarDisplayTimestamp,
   toCandle,
@@ -82,6 +83,13 @@ describe("lightweightChartsAdapter time conversion", () => {
     expect(isUtcPlus7SessionHighlightTime(eightOhOneAm, displayOffsetMs)).toBe(false);
     expect(isUtcPlus7SessionHighlightTime(eightPm, displayOffsetMs)).toBe(true);
     expect(isUtcPlus7SessionHighlightTime(ordinaryBar, displayOffsetMs)).toBe(false);
+  });
+
+  it("only shows session highlights on M1 and M5", () => {
+    expect(isSessionHighlightTimeframeDuration(60_000)).toBe(true);
+    expect(isSessionHighlightTimeframeDuration(5 * 60_000)).toBe(true);
+    expect(isSessionHighlightTimeframeDuration(15 * 60_000)).toBe(false);
+    expect(isSessionHighlightTimeframeDuration(60 * 60_000)).toBe(false);
   });
 });
 

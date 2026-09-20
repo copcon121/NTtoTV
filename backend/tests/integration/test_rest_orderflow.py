@@ -479,6 +479,55 @@ def test_big_trades_default_load_uses_cache_when_available(env):
 
 
 @pytest.mark.integration
+def test_big_trades_cache_only_range_does_not_rebuild(env, monkeypatch):
+    client, cache = env
+    tick_store: TickStore = client.app.state.tick_store
+    cache.upsert_big_trade(
+        BigTradeRecord(
+            symbol=_SYMBOL,
+            contract=_ACTIVE,
+            time=_BASE_MS + 1_000,
+            price=2345.6,
+            volume=35,
+            side=Side.BUY,
+        )
+    )
+
+    def fail_raw_read(*args, **kwargs):
+        raise AssertionError("cacheOnly range must not read raw ticks")
+
+    def fail_cache_replace(*args, **kwargs):
+        raise AssertionError("cacheOnly range must not replace cached big trades")
+
+    monkeypatch.setattr(tick_store, "read_range", fail_raw_read)
+    monkeypatch.setattr(cache, "replace_big_trades", fail_cache_replace)
+
+    resp = client.get(
+        "/api/big-trades",
+        params={
+            "symbol": _SYMBOL,
+            "from": _BASE_MS,
+            "to": _BASE_MS + 2_000,
+            "cacheOnly": "true",
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "cache"
+    assert body["trades"] == [
+        {
+            "tradeId": 0,
+            "time": _BASE_MS + 1_000,
+            "price": 2345.6,
+            "volume": 35,
+            "side": "buy",
+            "source": "legacy",
+        }
+    ]
+
+
+@pytest.mark.integration
 def test_big_trades_rebuilds_from_ticks_when_raw_ticks_exist(env):
     client, cache = env
     tick_store: TickStore = client.app.state.tick_store

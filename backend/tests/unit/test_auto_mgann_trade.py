@@ -12,6 +12,7 @@ from app.engines.auto_mgann_trade import (
     _should_close_trailing_on_ema_cross,
 )
 from app.engines.basis_engine import BasisEngine
+from app.engines.gc_push_momentum import GcPushMomentumPoint
 from app.models.auto_trade import AutoTradeSettingsRecord
 from app.models.messages import OHLCVBar
 from app.models.orders import OrderKind, OrderRecord, OrderSide, OrderSource, OrderStatus
@@ -47,9 +48,25 @@ def _setup(tmp_path):
     return cache, fake, basis, user, account, engine
 
 
+def _set_push_momentum(
+    engine: AutoMgannTradeEngine,
+    *,
+    push: float = 2.0,
+    threshold: float = 1.5,
+    strong: bool = True,
+) -> None:
+    engine._push_momentum = SimpleNamespace(  # type: ignore[assignment]
+        on_closed_bar=lambda bar: GcPushMomentumPoint(
+            time=bar.time,
+            push=push,
+            strong_threshold=threshold,
+            strong=strong,
+        )
+    )
+
+
 @pytest.mark.unit
-@pytest.mark.parametrize("structure_kind", ["BOS", "CHoCH"])
-def test_auto_mgann_submits_one_idempotent_long_market_bracket(tmp_path, structure_kind):
+def test_auto_mgann_submits_one_idempotent_long_bos_market_bracket(tmp_path):
     cache, _, _, user, _, engine = _setup(tmp_path)
     try:
         cache.auto_trade.upsert(
@@ -64,12 +81,13 @@ def test_auto_mgann_submits_one_idempotent_long_market_bracket(tmp_path, structu
             on_closed_bar=lambda _: [
                 SimpleNamespace(
                     direction=1,
-                    structure_kind=structure_kind,
+                    structure_kind="BOS",
                     bar_spread=2.1,
                     avg_spread=0.525,
                 )
             ]
         )
+        _set_push_momentum(engine)
         bar = OHLCVBar(
             time=1_000_000,
             open=99.0,
@@ -91,6 +109,58 @@ def test_auto_mgann_submits_one_idempotent_long_market_bracket(tmp_path, structu
         assert order.sl_gc == 98.6  # signal low minus two GC ticks
         assert order.tp_gc == 104.2  # 3R from the market-entry estimate
         assert order.status is OrderStatus.FILLED
+    finally:
+        cache.close()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("structure_kind", "push", "strong"),
+    [
+        ("CHoCH", 2.0, True),
+        ("BOS", 1.0, False),
+        ("BOS", -2.0, True),
+    ],
+)
+def test_auto_mgann_rejects_long_without_bos_and_aligned_p90_push(
+    tmp_path,
+    structure_kind,
+    push,
+    strong,
+):
+    cache, _, _, user, _, engine = _setup(tmp_path)
+    try:
+        cache.auto_trade.upsert(
+            AutoTradeSettingsRecord(
+                user_id=user.id,
+                long_enabled=True,
+                volume_lots=0.1,
+                updated_at=now_ms(),
+            )
+        )
+        engine._signals = SimpleNamespace(  # type: ignore[assignment]
+            on_closed_bar=lambda _: [
+                SimpleNamespace(
+                    direction=1,
+                    structure_kind=structure_kind,
+                    bar_spread=2.1,
+                    avg_spread=0.525,
+                )
+            ]
+        )
+        _set_push_momentum(engine, push=push, strong=strong)
+
+        assert engine.on_closed_bar(
+            OHLCVBar(
+                time=1_000_000,
+                open=99.0,
+                high=101.2,
+                low=98.8,
+                close=101.1,
+                volume=500,
+            )
+        ) == 0
+        assert cache.orders.list_for_user(user.id, open_only=False) == []
     finally:
         cache.close()
 
@@ -140,6 +210,7 @@ def test_auto_mgann_validates_bracket_in_broker_price_scale(tmp_path):
         engine._signals = SimpleNamespace(  # type: ignore[assignment]
             on_closed_bar=lambda _: [SimpleNamespace(direction=1, structure_kind="BOS")]
         )
+        _set_push_momentum(engine)
         bar = OHLCVBar(
             time=1_000_001,
             open=89.0,
@@ -185,6 +256,7 @@ def test_auto_mgann_uses_body_70_percent_limit_and_cancels_it_at_1r(tmp_path):
                 )
             ]
         )
+        _set_push_momentum(engine)
         bar = OHLCVBar(
             time=1_000_002,
             open=99.0,

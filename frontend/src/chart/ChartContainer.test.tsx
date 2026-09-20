@@ -71,11 +71,13 @@ class FakePort implements DisposableChartPort {
   setVolumeDeltaCalls: VolumeDeltaDatum[][] = [];
   updateVolumeDeltaCalls: VolumeDeltaDatum[] = [];
   setFvgSignalsCalls: FvgSignalUpdateMessage[][] = [];
+  updateFvgSignalCalls: FvgSignalUpdateMessage[] = [];
   setFvgGraderVisibleCalls: boolean[] = [];
   setEmaLinesCalls: EmaLineData[][] = [];
   updateEmaLineCalls: { id: string; point: { time: number; value: number } }[] = [];
   clearEmaLinesCalls = 0;
   setBigTradesCalls: BigTradeMarker[][] = [];
+  updateBigTradeCalls: BigTradeMarker[] = [];
   setSmcAiSignalsCalls: SmcAiSignalMarker[][] = [];
   setAlertLinesCalls: AlertLine[][] = [];
   setOrderLinesCalls: OrderLine[][] = [];
@@ -155,6 +157,9 @@ class FakePort implements DisposableChartPort {
       [...signals.values()].map((signal) => ({ ...signal })),
     );
   }
+  updateFvgSignal(signal: FvgSignalUpdateMessage): void {
+    this.updateFvgSignalCalls.push({ ...signal });
+  }
   setFvgGraderVisible(visible: boolean): void {
     this.setFvgGraderVisibleCalls.push(visible);
   }
@@ -174,6 +179,9 @@ class FakePort implements DisposableChartPort {
   }
   setBigTrades(markers: readonly BigTradeMarker[]): void {
     this.setBigTradesCalls.push(markers.map((marker) => ({ ...marker })));
+  }
+  updateBigTrade(marker: BigTradeMarker): void {
+    this.updateBigTradeCalls.push({ ...marker });
   }
   setSmcAiSignals(markers: readonly SmcAiSignalMarker[]): void {
     this.setSmcAiSignalsCalls.push(markers.map((marker) => ({ ...marker })));
@@ -1530,6 +1538,119 @@ describe("ChartContainer", () => {
 
     fireEvent.wheel(host);
     expect(onChartNavigate).toHaveBeenCalledTimes(2);
+  });
+
+  it("reveals replay bars and overlays incrementally without bulk repainting", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const replayBars = [bar(10), bar(20), bar(30)];
+    const replayDelta: VolumeDeltaDatum[] = [
+      {
+        time: 10,
+        volume: 10,
+        buyVolume: 7,
+        sellVolume: 3,
+        delta: 4,
+        deltaHigh: 4,
+        deltaLow: 0,
+        openDelta: 0,
+        closeDelta: 4,
+      },
+      {
+        time: 30,
+        volume: 12,
+        buyVolume: 8,
+        sellVolume: 4,
+        delta: 4,
+        deltaHigh: 5,
+        deltaLow: 0,
+        openDelta: 4,
+        closeDelta: 4,
+      },
+    ];
+    const fvgAt10: FvgSignalUpdateMessage = {
+      type: "fvg_signal_update",
+      symbol: "GC",
+      contract: "GC",
+      tf: "1m",
+      time: 10,
+      direction: 1,
+      level: 1,
+      pulse: 1,
+      top: 2,
+      bottom: 1,
+      breakoutRatio: 1,
+      phase: "confirmed",
+    };
+    const fvgAt30: FvgSignalUpdateMessage = { ...fvgAt10, time: 30, level: 2 };
+    const bigTrades: BigTradeMarker[] = [
+      { tradeId: 1, time: 10, price: 10, volume: 1_000, side: "buy" },
+      { tradeId: 2, time: 30, price: 30, volume: 1_000, side: "sell" },
+    ];
+
+    const view = (cursor: 1 | 2) => (
+      <ChartContainer
+        symbol="GC"
+        contract="GC"
+        timeframe="1m"
+        bars={replayBars.slice(0, cursor + 1)}
+        volumeDelta={replayDelta.slice(0, cursor)}
+        fvgSignals={new Map(
+          cursor === 1
+            ? [[fvgAt10.time, fvgAt10]]
+            : [[fvgAt10.time, fvgAt10], [fvgAt30.time, fvgAt30]],
+        )}
+        bigTrades={bigTrades.slice(0, cursor)}
+        ema={{ enabled: true, period: 2, showEma200: true }}
+        suspendRealtime
+        followLatestBar
+        portFactory={factory}
+      />
+    );
+
+    const { rerender } = render(view(1));
+    expect(port.setBarsCalls).toHaveLength(1);
+    expect(port.setVolumeDeltaCalls).toHaveLength(1);
+    expect(port.setFvgSignalsCalls).toHaveLength(1);
+    expect(port.setBigTradesCalls).toHaveLength(1);
+    expect(port.setEmaLinesCalls).toHaveLength(1);
+
+    rerender(view(2));
+
+    expect(port.setBarsCalls).toHaveLength(1);
+    expect(port.updateBarCalls).toEqual([replayBars[2]]);
+    expect(port.updateBarClosedCalls).toEqual([true]);
+    expect(port.setVolumeDeltaCalls).toHaveLength(1);
+    expect(port.updateVolumeDeltaCalls).toEqual([replayDelta[1]]);
+    expect(port.setFvgSignalsCalls).toHaveLength(1);
+    expect(port.updateFvgSignalCalls).toEqual([fvgAt30]);
+    expect(port.setBigTradesCalls).toHaveLength(1);
+    expect(port.updateBigTradeCalls).toEqual([bigTrades[1]]);
+    expect(port.setEmaLinesCalls).toHaveLength(1);
+    expect(port.updateEmaLineCalls.map((call) => call.point.time)).toEqual([30, 30]);
+
+    // Re-projecting the same immutable prefix (for example after a live state
+    // update in the parent) must not repaint any replay series.
+    rerender(view(2));
+    expect(port.setBarsCalls).toHaveLength(1);
+    expect(port.updateBarCalls).toHaveLength(1);
+    expect(port.setVolumeDeltaCalls).toHaveLength(1);
+    expect(port.updateVolumeDeltaCalls).toHaveLength(1);
+    expect(port.setFvgSignalsCalls).toHaveLength(1);
+    expect(port.updateFvgSignalCalls).toHaveLength(1);
+    expect(port.setBigTradesCalls).toHaveLength(1);
+    expect(port.updateBigTradeCalls).toHaveLength(1);
+    expect(port.setEmaLinesCalls).toHaveLength(1);
+    expect(port.updateEmaLineCalls).toHaveLength(2);
+
+    // Seeking backwards is intentionally authoritative: future values must be
+    // removed, so every affected series gets one bulk reset.
+    rerender(view(1));
+    expect(port.setBarsCalls).toHaveLength(2);
+    expect(port.setVolumeDeltaCalls).toHaveLength(2);
+    expect(port.setFvgSignalsCalls).toHaveLength(2);
+    expect(port.setBigTradesCalls).toHaveLength(2);
+    expect(port.setEmaLinesCalls).toHaveLength(2);
   });
 
   it("disposes the port on unmount", () => {

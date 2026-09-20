@@ -554,6 +554,10 @@ export function isMgannImpulseTimeframeDuration(durationMs: number): boolean {
   return durationMs === 60_000 || durationMs === 300_000;
 }
 
+export function isSessionHighlightTimeframeDuration(durationMs: number): boolean {
+  return durationMs === 60_000 || durationMs === 300_000;
+}
+
 function utcPlus7SessionHighlightHour(
   timeMs: number,
   displayTimeOffsetMs = 0,
@@ -583,11 +587,11 @@ export function toCandle(
   outsideBarContext: OutsideBarFilterContext = {},
   fvgSignal?: FvgSignalUpdateMessage,
   impulseColor?: string,
+  sessionHighlightEnabled = true,
 ): CandlestickData {
-  const highlight = isUtcPlus7SessionHighlightTime(
-    bar.time,
-    displayTimeOffsetMs,
-  );
+  const highlight =
+    sessionHighlightEnabled &&
+    isUtcPlus7SessionHighlightTime(bar.time, displayTimeOffsetMs);
   const obColor = outsideBarColor(
     bar,
     previousBar,
@@ -1190,6 +1194,13 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private latestBarFirstSeenAtMs: number | undefined;
   private latestBarUsesObservedCountdown = false;
   private timezoneOffsetMinutes: number;
+  private bulkRenderCoalescing = false;
+  private bulkRenderFrame: number | undefined;
+  private bulkBarsDirty = false;
+  private bulkVolumeDeltaDirty = false;
+  private bulkFvgDirty = false;
+  private replayMomentumFrame: number | undefined;
+  private replayMomentumIndex = -1;
 
   constructor(container: HTMLElement, options: LightweightChartsAdapterOptions = {}) {
     this.container = container;
@@ -1423,6 +1434,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   /** Set the display-only bucket-start -> chart-time offsets. */
   setDisplayTimeOffset(offsetMs: number): void {
+    if (this.displayTimeOffsetMs === offsetMs) return;
     this.displayTimeOffsetMs = offsetMs;
     this.sessionVolumeProfilePrimitive?.setDisplayTimeOffset(offsetMs);
     this.rebuildBarsByDisplayTime();
@@ -1481,9 +1493,73 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.closedBarTimes.add(latest.time);
     }
     this.renderCandleSeries();
+    this.renderSessionMarkers();
     this.renderBigTradeMarkers();
     this.renderGcPushMomentumSeries();
     this.updateBarCountdown();
+  }
+
+  /**
+   * Combine bulk bars/delta/FVG replacements into one render pass. Replay
+   * changes all three projections together; rendering each setter separately
+   * repeats the same full-history mGann/momentum/candle work several times.
+   */
+  setBulkRenderCoalescing(enabled: boolean): void {
+    if (this.bulkRenderCoalescing === enabled) return;
+    this.bulkRenderCoalescing = enabled;
+    if (!enabled) {
+      if (this.replayMomentumFrame !== undefined) {
+        window.cancelAnimationFrame(this.replayMomentumFrame);
+        this.replayMomentumFrame = undefined;
+        this.replayMomentumIndex = -1;
+      }
+      this.flushBulkRender();
+    }
+  }
+
+  private deferBulkRender(kind: "bars" | "volumeDelta" | "fvg"): boolean {
+    if (!this.bulkRenderCoalescing) return false;
+    if (kind === "bars") this.bulkBarsDirty = true;
+    else if (kind === "volumeDelta") this.bulkVolumeDeltaDirty = true;
+    else this.bulkFvgDirty = true;
+    if (this.bulkRenderFrame === undefined) {
+      this.bulkRenderFrame = window.requestAnimationFrame(() => {
+        this.bulkRenderFrame = undefined;
+        this.flushBulkRender();
+      });
+    }
+    return true;
+  }
+
+  private flushBulkRender(): void {
+    if (this.bulkRenderFrame !== undefined) {
+      window.cancelAnimationFrame(this.bulkRenderFrame);
+      this.bulkRenderFrame = undefined;
+    }
+    const barsDirty = this.bulkBarsDirty;
+    const deltaDirty = this.bulkVolumeDeltaDirty;
+    const fvgDirty = this.bulkFvgDirty;
+    this.bulkBarsDirty = false;
+    this.bulkVolumeDeltaDirty = false;
+    this.bulkFvgDirty = false;
+    if (!barsDirty && !deltaDirty && !fvgDirty) return;
+
+    if (barsDirty || fvgDirty || (deltaDirty && this.shouldRenderMgannImpulseWaves())) {
+      this.renderCandleSeries();
+    }
+    if (barsDirty) {
+      this.renderSessionMarkers();
+      this.renderVolumeSeries();
+    }
+    if (deltaDirty && this.volumeDeltaVisible) {
+      this.renderVolumeDeltaSeries();
+    }
+    if (barsDirty || deltaDirty) {
+      this.renderWaveDeltaSeries();
+      this.renderMgannSwing();
+      this.renderGcPushMomentumSeries();
+    }
+    if (barsDirty) this.updateBarCountdown();
   }
 
   setBarCountdownVisible(visible: boolean): void {
@@ -1491,8 +1567,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.updateBarCountdown();
   }
 
-  scrollToLatest(): void {
-    this.chart.timeScale().scrollToRealTime();
+  scrollToLatest(force = false): void {
+    const timeScale = this.chart.timeScale();
+    const visible = timeScale.getVisibleLogicalRange();
+    const latestIndex = this.candleBars.length - 1;
+    if (!force && visible !== null && Number(visible.to) >= latestIndex) {
+      return;
+    }
+    timeScale.scrollToRealTime();
   }
 
   /** Restyle the chart background without rebuilding the chart instance. */
@@ -1540,18 +1622,19 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
     this.invalidateMgannOverlay();
     this.rebuildBarsByDisplayTime();
-    this.renderCandleSeries();
-    this.renderSessionMarkers();
-    this.renderVolumeSeries();
-    this.renderWaveDeltaSeries();
-    this.renderMgannSwing();
-    this.renderGcPushMomentumSeries();
     this.latestBar =
       this.candleBars.length > 0
         ? { ...this.candleBars[this.candleBars.length - 1] }
         : undefined;
     this.latestBarFirstSeenAtMs = undefined;
     this.latestBarUsesObservedCountdown = false;
+    if (this.deferBulkRender("bars")) return;
+    this.renderCandleSeries();
+    this.renderSessionMarkers();
+    this.renderVolumeSeries();
+    this.renderWaveDeltaSeries();
+    this.renderMgannSwing();
+    this.renderGcPushMomentumSeries();
     this.updateBarCountdown();
   }
 
@@ -1569,7 +1652,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.closedBarTimes.delete(bar.time);
     }
     if (result.kind === "noop") {
-      this.updateGcPushMomentumAt(result.index);
+      this.scheduleGcPushMomentumUpdate(result.index);
       return;
     }
     this.invalidateMgannOverlay();
@@ -1586,15 +1669,19 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       // one coalesced pass below.
       this.updateCandleAt(result.index);
       this.updateCandleAt(result.index + 1);
-      // Session markers only depend on bar timestamps. Rebuilding all markers
-      // for every overwrite of the live bar needlessly scans the full history.
-      if (result.kind === "append" || result.kind === "insert") {
+      // Session markers only exist on the two highlighted session boundaries.
+      // Most Replay appends do not change this collection, so avoid replacing
+      // the marker plugin data (and invalidating the chart) for every candle.
+      if (
+        (result.kind === "append" || result.kind === "insert") &&
+        utcPlus7SessionHighlightHour(bar.time, this.displayTimeOffsetMs) !== undefined
+      ) {
         this.renderSessionMarkers();
       }
       if (this.volumeVisible) {
         this.updateVolumeAt(result.index);
       }
-      this.updateGcPushMomentumAt(result.index);
+      this.scheduleGcPushMomentumUpdate(result.index);
       this.scheduleMgannRender();
     }
     this.barsByTime.set(
@@ -1806,6 +1893,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
           },
           this.fvgGraderVisible ? this.fvgSignalsByTime.get(bar.time) : undefined,
           impulseColors.get(index),
+          isSessionHighlightTimeframeDuration(this.barCountdownDurationMs),
         ),
       ),
     );
@@ -1875,10 +1963,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.chart.panes()[0]?.setStretchFactor(1);
   }
 
-  private gcPushMomentumDeltas(): GcPushMomentumDelta[] {
+  private gcPushMomentumDeltas(fromTime?: number): GcPushMomentumDelta[] {
     const deltas: GcPushMomentumDelta[] = [];
     for (const point of this.volumeDeltaByTime.values()) {
       if (
+        (fromTime === undefined || point.time >= fromTime) &&
         point.volume !== undefined &&
         Number.isFinite(point.volume) &&
         Number.isFinite(point.delta)
@@ -1933,9 +2022,10 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
     const windowSize = this.gcPushMomentumCalculationWindow();
     const from = Math.max(0, this.candleBars.length - windowSize);
+    const calculationBars = this.candleBars.slice(from);
     const points = calculateGcPushMomentum(
-      this.candleBars.slice(from),
-      this.gcPushMomentumDeltas(),
+      calculationBars,
+      this.gcPushMomentumDeltas(calculationBars[0]?.time),
       this.gcPushMomentumSettings,
     );
     const byTime = new Map(points.map((point) => [point.time, point]));
@@ -1961,6 +2051,25 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         );
       }
     }
+  }
+
+  /**
+   * Bar and delta projections arrive in the same React commit during Replay.
+   * Coalesce their identical momentum recalculation into one animation frame.
+   */
+  private scheduleGcPushMomentumUpdate(index: number): void {
+    if (!this.bulkRenderCoalescing) {
+      this.updateGcPushMomentumAt(index);
+      return;
+    }
+    this.replayMomentumIndex = Math.max(this.replayMomentumIndex, index);
+    if (this.replayMomentumFrame !== undefined) return;
+    this.replayMomentumFrame = window.requestAnimationFrame(() => {
+      this.replayMomentumFrame = undefined;
+      const pendingIndex = this.replayMomentumIndex;
+      this.replayMomentumIndex = -1;
+      this.updateGcPushMomentumAt(pendingIndex);
+    });
   }
 
   private renderWaveDeltaSeries(overlay?: MgannSwingOverlay): void {
@@ -2089,6 +2198,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         ? this.fvgSignalsByTime.get(this.candleBars[index].time)
         : undefined,
       this.mgannImpulseColors.get(index),
+      isSessionHighlightTimeframeDuration(this.barCountdownDurationMs),
     );
     this.candleSeries.update(candle, index < this.candleBars.length - 1);
   }
@@ -2265,6 +2375,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.volumeDeltaByTime.set(point.time, { ...point });
     }
     this.invalidateMgannOverlay();
+    if (this.deferBulkRender("volumeDelta")) return;
     if (this.shouldRenderMgannImpulseWaves()) {
       this.renderCandleSeries();
     }
@@ -2297,7 +2408,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.updateCandleAt(index);
       this.updateCandleAt(index + 1);
     }
-    this.updateGcPushMomentumAt(
+    this.scheduleGcPushMomentumUpdate(
       this.candleBars.findIndex((bar) => bar.time === point.time),
     );
     this.scheduleMgannRender();
@@ -2311,6 +2422,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         this.fvgSignalsByTime.set(time, { ...signal });
       }
     }
+    if (this.deferBulkRender("fvg")) return;
     this.renderCandleSeries();
   }
 
@@ -3010,6 +3122,10 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   private renderSessionMarkers(): void {
+    if (!isSessionHighlightTimeframeDuration(this.barCountdownDurationMs)) {
+      this.sessionMarkers.setMarkers([]);
+      return;
+    }
     const markers: SeriesMarker<Time>[] = [];
     for (const bar of this.candleBars) {
       const hour = utcPlus7SessionHighlightHour(
@@ -3459,6 +3575,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   /** Release the chart instance and its DOM. */
   dispose(): void {
+    if (this.bulkRenderFrame !== undefined) {
+      window.cancelAnimationFrame(this.bulkRenderFrame);
+      this.bulkRenderFrame = undefined;
+    }
+    if (this.replayMomentumFrame !== undefined) {
+      window.cancelAnimationFrame(this.replayMomentumFrame);
+      this.replayMomentumFrame = undefined;
+    }
     if (this.barCountdownTimer !== undefined) {
       window.clearInterval(this.barCountdownTimer);
       this.barCountdownTimer = undefined;
