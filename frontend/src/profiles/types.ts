@@ -7,8 +7,10 @@ import type { FixedRangeProfileMode } from "../chart/drawings/types";
 import type { DrawingState } from "../chart/drawings/types";
 import type { OutsideBarSettings } from "../chart/outsideBar";
 import type { MgannSwingSettings } from "../chart/mgannSwing";
+import type { MgannBreakSettings } from "../chart/mgannBreak";
 import type { GcPushMomentumSettings } from "../chart/gcPushMomentum";
 import type { SmcSettings } from "../chart/smc";
+import type { SweepReversalSettings } from "../chart/sweepReversal";
 import type { Timeframe } from "../socket/messages";
 
 export interface ProfileMarketOrderSettings {
@@ -56,9 +58,13 @@ export interface ChartProfilePayload {
   mgannBreakSignalHistoryBars?: number;
   /** Optional maximum number of mGann Break L/S chart markers to display. */
   mgannBreakSignalLimit?: number;
+  /** Detection settings for the standalone mGann Break L/S indicator. */
+  mgannBreak?: MgannBreakSettings;
   showBigTrades: boolean;
   ema: EmaSettings;
   smc: SmcSettings;
+  /** Optional for profiles saved before standalone Sweep Reversal existed. */
+  sweepReversal?: SweepReversalSettings;
   outsideBar?: OutsideBarSettings;
   footprintSettings: FootprintSettings;
   bigTradeSettings?: BigTradeSettings;

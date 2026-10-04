@@ -9,6 +9,7 @@ import {
   DEFAULT_FOOTPRINT_SETTINGS,
 } from "./IndicatorToggles";
 import { DEFAULT_MGANN_SWING_SETTINGS } from "./mgannSwing";
+import { DEFAULT_MGANN_BREAK_SETTINGS } from "./mgannBreak";
 import { DEFAULT_OUTSIDE_BAR_SETTINGS } from "./outsideBar";
 import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./smc";
 import { DEFAULT_GC_PUSH_MOMENTUM_SETTINGS } from "./gcPushMomentum";
@@ -436,6 +437,51 @@ describe("IndicatorToggles", () => {
 
     expect(onHistoryBars).toHaveBeenCalledWith(2500);
     expect(onLimit).toHaveBeenCalledWith(750);
+  });
+
+  it("edits mGann Break detector settings and creates a server alert", () => {
+    const onSettings = vi.fn();
+    const onCreateAlert = vi.fn();
+    render(
+      <IndicatorToggles
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        mgannBreakSettings={DEFAULT_MGANN_BREAK_SETTINGS}
+        onMgannBreakSettingsChange={onSettings}
+        onCreateMgannBreakAlert={onCreateAlert}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    fireEvent.click(screen.getByLabelText("mGann Break L/S display settings"));
+    fireEvent.click(screen.getByLabelText("mGann Break require BigTrade"));
+    fireEvent.change(screen.getByLabelText("mGann Break Delta x"), {
+      target: { value: "3" },
+    });
+    fireEvent.click(screen.getByLabelText("mGann Break liquidity filter"));
+    fireEvent.click(screen.getByRole("button", { name: "Create server alert" }));
+
+    expect(onSettings).toHaveBeenNthCalledWith(1, {
+      ...DEFAULT_MGANN_BREAK_SETTINGS,
+      requireBigTrade: true,
+    });
+    expect(onSettings).toHaveBeenNthCalledWith(2, {
+      ...DEFAULT_MGANN_BREAK_SETTINGS,
+      volumeDeltaMultiplier: 3,
+    });
+    expect(onSettings).toHaveBeenNthCalledWith(3, {
+      ...DEFAULT_MGANN_BREAK_SETTINGS,
+      filterLiquidity: true,
+    });
+    expect(onCreateAlert).toHaveBeenCalledTimes(1);
   });
 
   it("can disable BigTrade independently", () => {

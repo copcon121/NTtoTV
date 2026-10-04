@@ -11,7 +11,7 @@ import {
   type Time,
 } from "lightweight-charts";
 
-import { type SmcLine, type SmcZone } from "./smc";
+import { type SmcLine, type SmcMarker, type SmcZone } from "./smc";
 
 export interface RenderableSmcZone
   extends Omit<
@@ -27,6 +27,12 @@ export interface RenderableSmcLine extends Omit<SmcLine, "startTime" | "endTime"
   startTime: Time;
   endTime: Time;
   labelTime: Time;
+}
+
+export interface RenderableSmcLabel extends Omit<SmcMarker, "time" | "price"> {
+  time: Time;
+  price: number;
+  color: string;
 }
 
 interface ViewZone {
@@ -47,6 +53,12 @@ interface ViewLine {
   y: Coordinate;
 }
 
+interface ViewLabel {
+  label: RenderableSmcLabel;
+  x: Coordinate;
+  y: Coordinate;
+}
+
 interface ZoneStyle {
   fill: string;
   stroke: string;
@@ -61,6 +73,8 @@ interface LineStyle {
 }
 
 const VIEWPORT_OVERSCAN_PX = 24;
+const SMC_FONT_SIZE_PX = 9;
+const SMC_LABEL_OFFSET_PX = 5;
 
 /** True when an SMC object overlaps the currently visible numeric time range. */
 export function smcTimeRangeIntersects(
@@ -161,7 +175,7 @@ function lineStyleFor(line: RenderableSmcLine): LineStyle {
       : "#ff6347";
   return {
     color,
-    width: line.scope === "internal" ? 1 : 2,
+    width: 1,
     dash: line.scope === "internal" ? [2, 4] : [],
   };
 }
@@ -179,13 +193,17 @@ class SmcOverlayRenderer implements IPrimitivePaneRenderer {
   constructor(
     private readonly zones: readonly ViewZone[],
     private readonly lines: readonly ViewLine[],
+    private readonly labels: readonly ViewLabel[],
   ) {}
 
   draw(target: CanvasRenderingTarget2D): void {
     target.useBitmapCoordinateSpace((scope) => {
       const ctx = scope.context;
       ctx.save();
-      ctx.font = `${Math.max(10, Math.round(11 * scope.verticalPixelRatio))}px sans-serif`;
+      ctx.font = `300 ${Math.max(
+        8,
+        Math.round(SMC_FONT_SIZE_PX * scope.verticalPixelRatio),
+      )}px "Segoe UI", Arial, sans-serif`;
       ctx.textBaseline = "top";
 
       for (const view of this.zones) {
@@ -292,10 +310,25 @@ class SmcOverlayRenderer implements IPrimitivePaneRenderer {
         const labelX = Math.round(view.labelX * scope.horizontalPixelRatio);
         const textX = x1 + (labelX - x1) / 2;
         const textYOffset =
-          (view.line.direction === 1 ? -8 : 8) * scope.verticalPixelRatio;
+          (view.line.direction === 1 ? -6 : 6) * scope.verticalPixelRatio;
         ctx.setLineDash([]);
         ctx.fillStyle = style.color;
         ctx.fillText(view.line.label, textX, y + textYOffset);
+      }
+
+      ctx.setLineDash([]);
+      ctx.textAlign = "center";
+      for (const view of this.labels) {
+        const x = Math.round(view.x * scope.horizontalPixelRatio);
+        const y = Math.round(view.y * scope.verticalPixelRatio);
+        const offset = SMC_LABEL_OFFSET_PX * scope.verticalPixelRatio;
+        ctx.fillStyle = view.label.color;
+        ctx.textBaseline = view.label.direction === 1 ? "bottom" : "top";
+        ctx.fillText(
+          view.label.label,
+          x,
+          y + (view.label.direction === 1 ? -offset : offset),
+        );
       }
       ctx.restore();
     });
@@ -305,6 +338,7 @@ class SmcOverlayRenderer implements IPrimitivePaneRenderer {
 class SmcOverlayPaneView implements IPrimitivePaneView {
   private viewZones: ViewZone[] = [];
   private viewLines: ViewLine[] = [];
+  private viewLabels: ViewLabel[] = [];
 
   constructor(private readonly source: SmcOverlayPrimitive) {}
 
@@ -313,6 +347,7 @@ class SmcOverlayPaneView implements IPrimitivePaneView {
     if (!chart || !series) {
       this.viewZones = [];
       this.viewLines = [];
+      this.viewLabels = [];
       return;
     }
 
@@ -461,10 +496,39 @@ class SmcOverlayPaneView implements IPrimitivePaneView {
     }
     this.viewZones = nextZones;
     this.viewLines = nextLines;
+
+    const nextLabels: ViewLabel[] = [];
+    for (const label of this.source.labels) {
+      if (
+        visibleFrom !== undefined &&
+        visibleTo !== undefined &&
+        typeof label.time === "number" &&
+        (label.time < visibleFrom || label.time > visibleTo)
+      ) {
+        continue;
+      }
+      const x = chart.timeScale().timeToCoordinate(label.time);
+      const y = series.priceToCoordinate(label.price);
+      if (x === null || y === null) continue;
+      if (
+        (x as number) < -VIEWPORT_OVERSCAN_PX ||
+        (x as number) > paneWidth + VIEWPORT_OVERSCAN_PX ||
+        (y as number) < -VIEWPORT_OVERSCAN_PX ||
+        (y as number) > paneHeight + VIEWPORT_OVERSCAN_PX
+      ) {
+        continue;
+      }
+      nextLabels.push({
+        label,
+        x: clampCoordinate(x, -VIEWPORT_OVERSCAN_PX, paneWidth + VIEWPORT_OVERSCAN_PX),
+        y: clampCoordinate(y, -VIEWPORT_OVERSCAN_PX, paneHeight + VIEWPORT_OVERSCAN_PX),
+      });
+    }
+    this.viewLabels = nextLabels;
   }
 
   renderer(): IPrimitivePaneRenderer {
-    return new SmcOverlayRenderer(this.viewZones, this.viewLines);
+    return new SmcOverlayRenderer(this.viewZones, this.viewLines, this.viewLabels);
   }
 
   zOrder(): PrimitivePaneViewZOrder {
@@ -531,6 +595,7 @@ function coordinateForEndTime(
 export class SmcOverlayPrimitive implements ISeriesPrimitive<Time> {
   private zonesInternal: RenderableSmcZone[];
   private linesInternal: RenderableSmcLine[];
+  private labelsInternal: RenderableSmcLabel[];
   private readonly paneView: SmcOverlayPaneView;
   private requestUpdateFn?: () => void;
 
@@ -540,9 +605,11 @@ export class SmcOverlayPrimitive implements ISeriesPrimitive<Time> {
   constructor(
     zones: readonly RenderableSmcZone[],
     lines: readonly RenderableSmcLine[] = [],
+    labels: readonly RenderableSmcLabel[] = [],
   ) {
     this.zonesInternal = zones.map((zone) => ({ ...zone }));
     this.linesInternal = lines.map((line) => ({ ...line }));
+    this.labelsInternal = labels.map((label) => ({ ...label }));
     this.paneView = new SmcOverlayPaneView(this);
   }
 
@@ -554,12 +621,18 @@ export class SmcOverlayPrimitive implements ISeriesPrimitive<Time> {
     return this.linesInternal;
   }
 
+  get labels(): readonly RenderableSmcLabel[] {
+    return this.labelsInternal;
+  }
+
   setOverlay(
     zones: readonly RenderableSmcZone[],
     lines: readonly RenderableSmcLine[],
+    labels: readonly RenderableSmcLabel[],
   ): void {
     this.zonesInternal = zones.map((zone) => ({ ...zone }));
     this.linesInternal = lines.map((line) => ({ ...line }));
+    this.labelsInternal = labels.map((label) => ({ ...label }));
     this.requestUpdate();
   }
 

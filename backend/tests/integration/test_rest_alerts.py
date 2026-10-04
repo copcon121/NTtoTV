@@ -28,9 +28,59 @@ from app.engines.alert_engine import (
     SMC_DEFAULT_RETEST_TOLERANCE_TICKS,
     SMC_DEFAULT_SWING_LENGTH,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
+    SWEEP_REVERSAL,
 )
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
+
+
+@pytest.mark.integration
+def test_rest_alerts_snapshot_sweep_reversal_settings(tmp_path: Path):
+    settings = Settings(
+        data_dir=tmp_path,
+        supported_symbols=("GC",),
+        gc_candidate_contracts=("GC 12-26",),
+    )
+    cache = CacheStore(tmp_path / "app.sqlite")
+    app = create_app()
+    app.state.contract_state = ContractStateStore(cache, settings=settings)
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/alerts",
+                json={
+                    "symbol": "GC",
+                    "profileId": "sweep-profile",
+                    "type": SWEEP_REVERSAL,
+                    "params": {
+                        "timeframe": "4h",
+                        "equalSwingFilter": True,
+                        "liquidityMinPivots": 4,
+                        "liquidityAtrMargin": 5.5,
+                    },
+                },
+            )
+            assert response.status_code == 201
+            body = response.json()
+            assert body["profileId"] == "sweep-profile"
+            assert body["params"]["timeframe"] == "4h"
+            assert body["params"]["equalSwingFilter"] is True
+            assert body["params"]["liquidityMinPivots"] == 4
+            assert body["params"]["liquidityAtrMargin"] == 5.5
+            assert body["params"]["swingLength"] == 5
+            assert body["params"]["repeat"] is True
+
+            invalid = client.post(
+                "/api/alerts",
+                json={
+                    "symbol": "GC",
+                    "type": SWEEP_REVERSAL,
+                    "params": {"timeframe": "2m"},
+                },
+            )
+            assert invalid.status_code == 422
+    finally:
+        cache.close()
 
 
 @pytest.mark.integration

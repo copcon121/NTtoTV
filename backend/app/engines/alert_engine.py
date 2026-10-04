@@ -78,6 +78,22 @@ from .smc_external import (
     SmcLiquidityBreakEvent,
     SmcStrategyTrigger,
 )
+from .sweep_reversal import (
+    SWEEP_REVERSAL_DEFAULT_ATR_LENGTH,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_LENGTH,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_MARGIN,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_LOOKBACK_BARS,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_MIN_PIVOTS,
+    SWEEP_REVERSAL_DEFAULT_MAX_CONFIRMATION_BARS,
+    SWEEP_REVERSAL_DEFAULT_MIN_DISPLACEMENT_ATR,
+    SWEEP_REVERSAL_DEFAULT_MIN_PENETRATION_ATR,
+    SWEEP_REVERSAL_DEFAULT_STRUCTURE_LENGTH,
+    SWEEP_REVERSAL_DEFAULT_SWING_LENGTH,
+    SWEEP_REVERSAL_TIMEFRAMES,
+    SweepReversalBar,
+    SweepReversalState,
+    SweepReversalTrigger,
+)
 
 __all__ = [
     "ALERT_TYPES",
@@ -88,6 +104,8 @@ __all__ = [
     "SMC_DEFAULT_RETEST_TOLERANCE_TICKS",
     "SMC_DEFAULT_SWING_LENGTH",
     "SMC_EXTERNAL_BREAK_BIG_TRADE",
+    "SWEEP_REVERSAL",
+    "SWEEP_REVERSAL_TIMEFRAMES",
     "LIQUIDITY_POOL_BREAK",
     "LIQUIDITY_POOL_BREAK_TIMEFRAME",
     "LIQUIDITY_POOL_BREAK_TIMEFRAMES",
@@ -130,6 +148,7 @@ LIQUIDITY_POOL_BREAK_TIMEFRAMES = ("1m", "5m")
 MGANN_BREAK_LS = "mgann_break_ls"
 MGANN_SWEEP = "mgann_sweep"
 MGANN_BIG_TRADE_SWEEP = "mgann_big_trade_sweep"
+SWEEP_REVERSAL = "sweep_reversal"
 MGANN_BREAK_LS_TYPES = frozenset(
     {MGANN_BREAK_LS, MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP}
 )
@@ -155,6 +174,7 @@ ALERT_TYPES: frozenset[str] = frozenset(
         MGANN_BREAK_LS,
         MGANN_SWEEP,
         MGANN_BIG_TRADE_SWEEP,
+        SWEEP_REVERSAL,
     }
 )
 
@@ -311,6 +331,7 @@ class AlertEngine:
         self._smc_state: dict[str, SmcExternalBreakState] = {}
         self._liquidity_break_state: dict[str, _LiquidityPoolBreakState] = {}
         self._mgann_sweep_state: dict[str, MgannBigTradeSweepState] = {}
+        self._sweep_reversal_state: dict[str, SweepReversalState] = {}
         if store is not None:
             for rec in store.read_alerts(profile_id=None):
                 alert = Alert.from_record(rec)
@@ -330,6 +351,7 @@ class AlertEngine:
         self._smc_state.pop(alert.id, None)
         self._liquidity_break_state.pop(alert.id, None)
         self._mgann_sweep_state.pop(alert.id, None)
+        self._sweep_reversal_state.pop(alert.id, None)
         if self._store is not None:
             from ..models.timestamp import now_ms
 
@@ -360,6 +382,7 @@ class AlertEngine:
         self._smc_state.pop(alert_id, None)
         self._liquidity_break_state.pop(alert_id, None)
         self._mgann_sweep_state.pop(alert_id, None)
+        self._sweep_reversal_state.pop(alert_id, None)
         if self._store is not None:
             self._store.delete_alert(alert_id)
 
@@ -373,6 +396,7 @@ class AlertEngine:
             self._smc_state.pop(alert.id, None)
             self._liquidity_break_state.pop(alert.id, None)
             self._mgann_sweep_state.pop(alert.id, None)
+            self._sweep_reversal_state.pop(alert.id, None)
             self._warm_smc_alert(alert)
         self._persist_enabled(alert)
 
@@ -413,6 +437,30 @@ class AlertEngine:
         if self._store is not None:
             for ev in events:
                 self._persist_event(ev)
+            for alert in one_shot_fired_alerts:
+                self._persist_enabled(alert)
+        return events
+
+    def evaluate_sweep_reversal_only(self, ctx: MarketContext) -> list[AlertEvent]:
+        """Evaluate Sweep Reversal without exposing legacy alerts to extra TFs."""
+        events: list[AlertEvent] = []
+        one_shot_fired_alerts: list[Alert] = []
+        for alert in self._alerts.values():
+            if (
+                not alert.enabled
+                or alert.symbol != ctx.symbol
+                or alert.type != SWEEP_REVERSAL
+            ):
+                continue
+            alert_events = self._eval_sweep_reversal(alert, ctx)
+            events.extend(alert_events)
+            if alert_events and not _is_repeat_alert(alert):
+                one_shot_fired_alerts.append(alert)
+        for alert in one_shot_fired_alerts:
+            alert.enabled = False
+        if self._store is not None:
+            for event in events:
+                self._persist_event(event)
             for alert in one_shot_fired_alerts:
                 self._persist_enabled(alert)
         return events
@@ -549,6 +597,8 @@ class AlertEngine:
             return self._eval_liquidity_pool_break(alert, ctx)
         if alert.type in MGANN_BREAK_LS_TYPES:
             return self._eval_mgann_big_trade_sweep(alert, ctx)
+        if alert.type == SWEEP_REVERSAL:
+            return self._eval_sweep_reversal(alert, ctx)
         return None
 
     # -- price_crosses_level (Req 16.6, 17.5, 17.7) ---------------------------
@@ -764,6 +814,37 @@ class AlertEngine:
             events.append(self._make_mgann_sweep_event(alert, ctx, trigger))
         return events
 
+    # -- standalone sweep_reversal ------------------------------------------
+
+    def _eval_sweep_reversal(
+        self, alert: Alert, ctx: MarketContext
+    ) -> list[AlertEvent]:
+        timeframe = self._sweep_reversal_timeframe(alert)
+        if (
+            ctx.bar_tf != timeframe
+            or not ctx.bar_closed
+            or ctx.bar_time is None
+            or ctx.bar_open is None
+            or ctx.bar_high is None
+            or ctx.bar_low is None
+            or ctx.bar_close is None
+        ):
+            return []
+        triggers = self._sweep_reversal_state_for(alert).on_closed_bar(
+            SweepReversalBar(
+                time=ctx.bar_time,
+                open=float(ctx.bar_open),
+                high=float(ctx.bar_high),
+                low=float(ctx.bar_low),
+                close=float(ctx.bar_close),
+                volume=int(ctx.bar_volume or 0),
+            )
+        )
+        return [
+            self._make_sweep_reversal_event(alert, ctx, trigger)
+            for trigger in triggers
+        ]
+
     # -- per-closed-bar fire-once + re-arm gate (Req 17.6, 17.8) --------------
 
     def _bar_gate(
@@ -868,6 +949,35 @@ class AlertEngine:
             direction=trigger.direction,
         )
 
+    def _make_sweep_reversal_event(
+        self,
+        alert: Alert,
+        ctx: MarketContext,
+        trigger: SweepReversalTrigger,
+    ) -> AlertEvent:
+        timeframe = self._sweep_reversal_timeframe(alert)
+        side = "L" if trigger.direction > 0 else "S"
+        pool = (
+            f" pool x{trigger.liquidity_count}"
+            if alert.params.get("equalSwingFilter") is True
+            else ""
+        )
+        return AlertEvent(
+            alert_id=alert.id,
+            alert_type=alert.type,
+            symbol=ctx.symbol,
+            contract=ctx.contract,
+            time=trigger.signal_time,
+            price=trigger.signal_price,
+            message=(
+                f"{alert.symbol} {_timeframe_label(timeframe)} Sweep {side}{pool} "
+                f"@ {_fmt_num(trigger.sweep_level)}"
+            ),
+            level=trigger.sweep_level,
+            profile_id=alert.profile_id,
+            direction=trigger.direction,
+        )
+
     def _smc_state_for(self, alert: Alert) -> SmcExternalBreakState:
         state = self._smc_state.get(alert.id)
         if state is None:
@@ -891,7 +1001,17 @@ class AlertEngine:
             self._mgann_sweep_state[alert.id] = state
         return state
 
+    def _sweep_reversal_state_for(self, alert: Alert) -> SweepReversalState:
+        state = self._sweep_reversal_state.get(alert.id)
+        if state is None:
+            state = self._new_sweep_reversal_state(alert)
+            self._sweep_reversal_state[alert.id] = state
+        return state
+
     def _warm_smc_alert(self, alert: Alert) -> None:
+        if alert.type == SWEEP_REVERSAL:
+            self._warm_sweep_reversal_alert(alert)
+            return
         if alert.type == LIQUIDITY_POOL_BREAK:
             self._warm_liquidity_break_alert(alert)
             return
@@ -934,6 +1054,29 @@ class AlertEngine:
 
         if break_state is not None:
             self._smc_state[alert.id] = break_state
+
+    def _warm_sweep_reversal_alert(self, alert: Alert) -> None:
+        state = self._new_sweep_reversal_state(alert)
+        if self._store is not None:
+            for rec in self._store.read_bars(
+                alert.symbol,
+                alert.symbol,
+                self._sweep_reversal_timeframe(alert),
+                limit=self._sweep_reversal_warmup_bars(alert),
+            ):
+                if not rec.closed:
+                    continue
+                state.on_closed_bar(
+                    SweepReversalBar(
+                        time=rec.time,
+                        open=rec.open,
+                        high=rec.high,
+                        low=rec.low,
+                        close=rec.close,
+                        volume=rec.volume,
+                    )
+                )
+        self._sweep_reversal_state[alert.id] = state
 
     def _warm_liquidity_break_alert(self, alert: Alert) -> None:
         state = self._new_liquidity_break_state(alert)
@@ -1050,6 +1193,51 @@ class AlertEngine:
             require_big_trade=self._mgann_sweep_require_big_trade(alert),
         )
 
+    def _new_sweep_reversal_state(self, alert: Alert) -> SweepReversalState:
+        return SweepReversalState(
+            swing_length=_positive_int_param(
+                alert.params.get("swingLength"),
+                SWEEP_REVERSAL_DEFAULT_SWING_LENGTH,
+            ),
+            atr_length=_positive_int_param(
+                alert.params.get("atrLength"),
+                SWEEP_REVERSAL_DEFAULT_ATR_LENGTH,
+            ),
+            min_penetration_atr=_nonnegative_float_param(
+                alert.params.get("minPenetrationAtr"),
+                SWEEP_REVERSAL_DEFAULT_MIN_PENETRATION_ATR,
+            ),
+            structure_length=_positive_int_param(
+                alert.params.get("structureLength"),
+                SWEEP_REVERSAL_DEFAULT_STRUCTURE_LENGTH,
+            ),
+            max_confirmation_bars=_positive_int_param(
+                alert.params.get("maxConfirmationBars"),
+                SWEEP_REVERSAL_DEFAULT_MAX_CONFIRMATION_BARS,
+            ),
+            min_displacement_atr=_nonnegative_float_param(
+                alert.params.get("minDisplacementAtr"),
+                SWEEP_REVERSAL_DEFAULT_MIN_DISPLACEMENT_ATR,
+            ),
+            equal_swing_filter=alert.params.get("equalSwingFilter") is True,
+            liquidity_min_pivots=_positive_int_param(
+                alert.params.get("liquidityMinPivots"),
+                SWEEP_REVERSAL_DEFAULT_LIQUIDITY_MIN_PIVOTS,
+            ),
+            liquidity_lookback_bars=_positive_int_param(
+                alert.params.get("liquidityLookbackBars"),
+                SWEEP_REVERSAL_DEFAULT_LIQUIDITY_LOOKBACK_BARS,
+            ),
+            liquidity_atr_length=_positive_int_param(
+                alert.params.get("liquidityAtrLength"),
+                SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_LENGTH,
+            ),
+            liquidity_atr_margin=_positive_float_param(
+                alert.params.get("liquidityAtrMargin"),
+                SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_MARGIN,
+            ),
+        )
+
     @staticmethod
     def _smc_bar_from_context(ctx: MarketContext) -> SmcBar | None:
         if ctx.bar_time is None or ctx.bar_close is None:
@@ -1140,6 +1328,42 @@ class AlertEngine:
             + self._mgann_sweep_swing_size(alert) * 8
             + 40,
         )
+
+    def _sweep_reversal_warmup_bars(self, alert: Alert) -> int:
+        return max(
+            300,
+            _positive_int_param(
+                alert.params.get("liquidityLookbackBars"),
+                SWEEP_REVERSAL_DEFAULT_LIQUIDITY_LOOKBACK_BARS,
+            )
+            + _positive_int_param(
+                alert.params.get("swingLength"),
+                SWEEP_REVERSAL_DEFAULT_SWING_LENGTH,
+            )
+            * 4
+            + _positive_int_param(
+                alert.params.get("maxConfirmationBars"),
+                SWEEP_REVERSAL_DEFAULT_MAX_CONFIRMATION_BARS,
+            )
+            + max(
+                _positive_int_param(
+                    alert.params.get("atrLength"),
+                    SWEEP_REVERSAL_DEFAULT_ATR_LENGTH,
+                ),
+                _positive_int_param(
+                    alert.params.get("liquidityAtrLength"),
+                    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_LENGTH,
+                ),
+            )
+            + 40,
+        )
+
+    @staticmethod
+    def _sweep_reversal_timeframe(alert: Alert) -> str:
+        raw = alert.params.get("timeframe", "1m")
+        if isinstance(raw, str) and raw in SWEEP_REVERSAL_TIMEFRAMES:
+            return raw
+        return "1m"
 
     @staticmethod
     def _mgann_sweep_timeframe(alert: Alert) -> str:
@@ -1362,6 +1586,15 @@ def _positive_float_param(value: Any, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+def _nonnegative_float_param(value: Any, default: float) -> float:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
 
 def _fmt_num(value: int | float | None) -> str:
     if value is None:

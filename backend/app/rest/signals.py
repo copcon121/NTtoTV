@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -13,10 +14,12 @@ from ..engines.mgann_big_trade_sweep import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
@@ -61,10 +64,16 @@ async def mgann_break_ls_signals(
         alias="warmupBars",
         description="Bars before the requested range used to warm the detector",
     ),
+    settings_json: str | None = Query(
+        None,
+        alias="settings",
+        max_length=8_000,
+        description="Optional indicator settings snapshot as JSON.",
+    ),
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
-    """Return historical mGann Break L/S markers for enabled profile alerts."""
+    """Return historical mGann Break L/S markers for an indicator or profile alerts."""
     return await _mgann_break_ls_response(
         symbol=symbol,
         contract=contract,
@@ -74,6 +83,7 @@ async def mgann_break_ls_signals(
         to=to,
         limit=limit,
         warmup_bars=warmup_bars,
+        settings_json=settings_json,
         state=state,
         cache=cache,
     )
@@ -100,6 +110,7 @@ async def mgann_big_trade_sweep_signals(
         alias="warmupBars",
         description="Bars before the requested range used to warm the detector",
     ),
+    settings_json: str | None = Query(None, alias="settings", max_length=8_000),
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
@@ -113,6 +124,7 @@ async def mgann_big_trade_sweep_signals(
         to=to,
         limit=limit,
         warmup_bars=warmup_bars,
+        settings_json=settings_json,
         state=state,
         cache=cache,
     )
@@ -128,6 +140,7 @@ async def _mgann_break_ls_response(
     to: int | None,
     limit: int,
     warmup_bars: int,
+    settings_json: str | None,
     state: ContractStateStore,
     cache: CacheStore,
 ) -> dict[str, Any]:
@@ -149,6 +162,16 @@ async def _mgann_break_ls_response(
     )
     effective_limit = min(limit, SIGNAL_LIMIT_CAP)
     profile_id = _normalize_profile_id(profile_id)
+    indicator_params: dict[str, Any] | None = None
+    if settings_json is not None:
+        try:
+            decoded = json.loads(settings_json)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise bad_request("'settings' must be valid JSON", field="settings")
+        if not isinstance(decoded, dict):
+            raise bad_request("'settings' must be a JSON object", field="settings")
+        indicator_params = dict(decoded)
+        indicator_params["timeframe"] = tf
     signals = await asyncio.to_thread(
         _load_mgann_sweep_signals,
         cache=cache,
@@ -159,6 +182,7 @@ async def _mgann_break_ls_response(
         from_time=frm,
         to_time=to,
         warmup_bars=warmup_bars,
+        indicator_params=indicator_params,
     )
     if len(signals) > effective_limit:
         signals = signals[-effective_limit:]
@@ -180,13 +204,26 @@ def _load_mgann_sweep_signals(
     from_time: int | None,
     to_time: int | None,
     warmup_bars: int,
+    indicator_params: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    alerts = [
-        alert
-        for alert in cache.read_alerts(symbol=symbol, profile_id=profile_id)
-        if alert.enabled
-        and alert.type in (MGANN_BREAK_LS, MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP)
-    ]
+    if indicator_params is not None:
+        alerts = [
+            AlertRecord(
+                id="indicator-mgann-break",
+                profile_id=profile_id,
+                symbol=symbol,
+                type=MGANN_BREAK_LS,
+                params=indicator_params,
+                enabled=True,
+            )
+        ]
+    else:
+        alerts = [
+            alert
+            for alert in cache.read_alerts(symbol=symbol, profile_id=profile_id)
+            if alert.enabled
+            and alert.type in (MGANN_BREAK_LS, MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP)
+        ]
     if not alerts:
         return []
 
@@ -338,6 +375,14 @@ def _mgann_sweep_state_from_alert(alert: AlertRecord) -> MgannBigTradeSweepState
         min_pivot_cuts=_positive_int_param(
             params.get("minPivotCuts"),
             MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+        ),
+        pivot_tolerance_ticks=_nonnegative_int_param(
+            params.get("pivotToleranceTicks"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
+        ),
+        min_pivot_wick_ticks=_nonnegative_int_param(
+            params.get("minPivotWickTicks"),
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
         ),
         filter_liquidity=params.get("filterLiquidity") is True,
         liquidity_atr_margin=_positive_float_param(

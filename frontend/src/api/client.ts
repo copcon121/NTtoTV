@@ -1131,6 +1131,7 @@ export class ApiClient {
     from?: number;
     to?: number;
     limit?: number;
+    settings?: object;
   }): Promise<AlertSignalRestRow[]> {
     const params = new URLSearchParams({
       symbol: input.symbol,
@@ -1146,6 +1147,9 @@ export class ApiClient {
     }
     if (input.limit !== undefined) {
       params.set("limit", String(input.limit));
+    }
+    if (input.settings !== undefined) {
+      params.set("settings", JSON.stringify(input.settings));
     }
     const body = await this.getJson<{ signals: AlertSignalRestRow[] }>(
       `/signals/mgann-break-ls?${params.toString()}`,

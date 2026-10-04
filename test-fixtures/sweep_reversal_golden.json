@@ -1,0 +1,43 @@
+{
+  "name": "bearish_close_sweep_reclaim_confirm",
+  "settings": {
+    "enabled": true,
+    "swingLength": 2,
+    "atrLength": 1,
+    "minPenetrationAtr": 0,
+    "structureLength": 2,
+    "maxConfirmationBars": 4,
+    "minDisplacementAtr": 0,
+    "equalSwingFilter": false,
+    "liquidityMinPivots": 2,
+    "liquidityLookbackBars": 120,
+    "liquidityAtrLength": 1,
+    "liquidityAtrMargin": 4,
+    "showDeveloping": true,
+    "confirmedExtension": 2,
+    "maxHistory": 80,
+    "zoneColor": "#ff9f43",
+    "levelColor": "#7f1d1d"
+  },
+  "bars": [
+    { "time": 0, "open": 9, "high": 10, "low": 8, "close": 9, "volume": 1 },
+    { "time": 60000, "open": 9, "high": 11, "low": 8.5, "close": 10, "volume": 1 },
+    { "time": 120000, "open": 10, "high": 12, "low": 9, "close": 11, "volume": 1 },
+    { "time": 180000, "open": 11, "high": 11, "low": 9.5, "close": 10, "volume": 1 },
+    { "time": 240000, "open": 10, "high": 10.5, "low": 9, "close": 10, "volume": 1 },
+    { "time": 300000, "open": 10, "high": 13, "low": 9.5, "close": 11.5, "volume": 1 },
+    { "time": 360000, "open": 11.5, "high": 13.5, "low": 11, "close": 12.5, "volume": 1 },
+    { "time": 420000, "open": 12.5, "high": 12.7, "low": 10, "close": 11.5, "volume": 1 },
+    { "time": 480000, "open": 11.5, "high": 11.6, "low": 8, "close": 8.5, "volume": 1 }
+  ],
+  "expected": {
+    "wickOnlyBarTime": 300000,
+    "developingTime": 360000,
+    "confirmationTime": 480000,
+    "direction": -1,
+    "level": 12,
+    "confirmationLevel": 9,
+    "pivotTimes": [120000],
+    "confirmedEndTime": 600000
+  }
+}

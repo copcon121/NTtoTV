@@ -54,10 +54,16 @@ import {
 } from "./outsideBar";
 import { type SmcMarker, type SmcOverlay } from "./smc";
 import {
+  type RenderableSmcLabel,
   type RenderableSmcLine,
   type RenderableSmcZone,
   SmcOverlayPrimitive,
 } from "./SmcOverlayPrimitive";
+import { type SweepReversalOverlay } from "./sweepReversal";
+import {
+  type RenderableSweepSetup,
+  SweepReversalPrimitive,
+} from "./SweepReversalPrimitive";
 import {
   BigTradeBubblePrimitive,
   type RenderableBigTradeBubble,
@@ -476,8 +482,10 @@ function momentumRgba(
 }
 
 /**
- * Encode direction, acceleration, efficiency, strength, and flow agreement in
- * one histogram color. Live (unclosed) bars deliberately remain translucent.
+ * Use a MACD-style four-color palette: direction selects green/red while
+ * acceleration selects bright/muted. Efficiency and strength affect opacity,
+ * and live (unclosed) bars deliberately remain translucent. Flow state is
+ * rendered separately so it cannot hide the direction of the price push.
  */
 export function gcPushMomentumColor(
   point: GcPushMomentumPoint,
@@ -490,34 +498,18 @@ export function gcPushMomentumColor(
       : 0.58 + efficiency * 0.3
     : 0.24 + efficiency * 0.12;
 
-  if (point.absorptionCandidate || point.flowState === "conflict") {
-    return momentumRgba(245, 158, 11, alpha);
-  }
   if (Math.abs(point.push) <= DEFAULT_GC_PUSH_MOMENTUM_SETTINGS.epsilon) {
     return momentumRgba(148, 163, 184, alpha);
-  }
-  if (efficiency < 0.25) {
-    return momentumRgba(100, 116, 139, alpha);
   }
 
   const accelerating = Math.sign(point.push) === Math.sign(point.acceleration);
   if (point.push > 0) {
-    if (point.flowState === "confirmed") {
-      return accelerating
-        ? momentumRgba(0, 200, 83, alpha)
-        : momentumRgba(0, 150, 90, alpha);
-    }
     return accelerating
-      ? momentumRgba(38, 166, 154, alpha)
+      ? momentumRgba(0, 200, 83, alpha)
       : momentumRgba(76, 139, 103, alpha);
   }
-  if (point.flowState === "confirmed") {
-    return accelerating
-      ? momentumRgba(255, 23, 68, alpha)
-      : momentumRgba(211, 47, 47, alpha);
-  }
   return accelerating
-    ? momentumRgba(239, 83, 80, alpha)
+    ? momentumRgba(255, 23, 68, alpha)
     : momentumRgba(183, 87, 83, alpha);
 }
 
@@ -530,6 +522,28 @@ export function toGcPushMomentumHistogram(
     time: toUtcTimestamp(point.time, displayTimeOffsetMs),
     value: point.push,
     color: gcPushMomentumColor(point, closed),
+  };
+}
+
+/** Mark exceptional order-flow disagreement without replacing direction color. */
+export function toGcPushMomentumMarker(
+  point: GcPushMomentumPoint,
+  closed: boolean,
+  displayTimeOffsetMs = 0,
+): SeriesMarker<Time> | undefined {
+  if (
+    !closed ||
+    (!point.absorptionCandidate && point.flowState !== "conflict")
+  ) {
+    return undefined;
+  }
+  return {
+    time: toUtcTimestamp(point.time, displayTimeOffsetMs),
+    position: point.push >= 0 ? "aboveBar" : "belowBar",
+    shape: point.absorptionCandidate ? "square" : "circle",
+    color: "rgba(245, 158, 11, 1)",
+    id: `gc-push-flow-${point.time}`,
+    size: point.absorptionCandidate ? 0.8 : 0.65,
   };
 }
 
@@ -1120,12 +1134,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly mgannSwingMarkers: ISeriesMarkersPluginApi<Time>;
   private bigTradePrimitive: BigTradeBubblePrimitive | undefined;
   private smcPrimitive: SmcOverlayPrimitive | undefined;
+  private sweepReversalPrimitive: SweepReversalPrimitive | undefined;
   private priceDivergencePrimitive: DivergenceLinePrimitive | undefined;
   private waveDeltaMboxPrimitive: WaveDeltaMboxPrimitive | undefined;
   private sessionVolumeProfilePrimitive: SessionVolumeProfilePrimitive | undefined;
   private waveDivergencePrimitive: DivergenceLinePrimitive | undefined;
   private smcOverlay: SmcOverlay = emptySmcOverlay();
   private smcOverlaySignature = "";
+  private sweepReversalOverlaySignature = "";
   private readonly emaSeriesById = new Map<string, ISeriesApi<"Line">>();
   private readonly emaLastTimeById = new Map<string, number>();
   private readonly emaColorById = new Map<string, string>();
@@ -1136,6 +1152,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly volumeDeltaByTime = new Map<number, VolumeDeltaDatum>();
   private readonly closedBarTimes = new Set<number>();
   private gcPushMomentumSeries: ISeriesApi<"Histogram"> | undefined;
+  private gcPushMomentumMarkers: ISeriesMarkersPluginApi<Time> | undefined;
+  private readonly gcPushMomentumMarkerByTime = new Map<
+    number,
+    SeriesMarker<Time>
+  >();
   private gcPushMomentumPaneIndex: number | undefined;
   private gcPushMomentumVisible = false;
   private gcPushMomentumSettings: GcPushMomentumSettings = {
@@ -1936,6 +1957,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       },
       this.gcPushMomentumPaneIndex,
     );
+    this.gcPushMomentumMarkers = createSeriesMarkers(
+      this.gcPushMomentumSeries,
+      [],
+      { autoScale: false, zOrder: "aboveSeries" },
+    );
     this.gcPushMomentumSeries.createPriceLine({
       price: 0,
       color: "rgba(100, 116, 139, 0.7)",
@@ -1951,6 +1977,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   private removeGcPushMomentumPane(): void {
+    this.gcPushMomentumMarkers?.detach();
+    this.gcPushMomentumMarkers = undefined;
+    this.gcPushMomentumMarkerByTime.clear();
     if (this.gcPushMomentumSeries !== undefined) {
       this.chart.removeSeries(this.gcPushMomentumSeries);
       this.gcPushMomentumSeries = undefined;
@@ -2010,6 +2039,26 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         ),
       ),
     );
+    this.gcPushMomentumMarkerByTime.clear();
+    for (const point of points) {
+      const marker = toGcPushMomentumMarker(
+        point,
+        this.closedBarTimes.has(point.time),
+        this.displayTimeOffsetMs,
+      );
+      if (marker !== undefined) {
+        this.gcPushMomentumMarkerByTime.set(point.time, marker);
+      }
+    }
+    this.renderGcPushMomentumMarkers();
+  }
+
+  private renderGcPushMomentumMarkers(): void {
+    this.gcPushMomentumMarkers?.setMarkers(
+      [...this.gcPushMomentumMarkerByTime.values()].sort(
+        (left, right) => Number(left.time) - Number(right.time),
+      ),
+    );
   }
 
   private updateGcPushMomentumAt(index: number): void {
@@ -2035,12 +2084,21 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       if (bar === undefined) continue;
       const point = byTime.get(bar.time);
       const historicalUpdate = currentIndex < this.candleBars.length - 1;
+      this.gcPushMomentumMarkerByTime.delete(bar.time);
       if (point === undefined) {
         series.update(
           { time: toUtcTimestamp(bar.time, this.displayTimeOffsetMs) },
           historicalUpdate,
         );
       } else {
+        const marker = toGcPushMomentumMarker(
+          point,
+          this.closedBarTimes.has(point.time),
+          this.displayTimeOffsetMs,
+        );
+        if (marker !== undefined) {
+          this.gcPushMomentumMarkerByTime.set(point.time, marker);
+        }
         series.update(
           toGcPushMomentumHistogram(
             point,
@@ -2051,6 +2109,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         );
       }
     }
+    this.renderGcPushMomentumMarkers();
   }
 
   /**
@@ -2490,6 +2549,50 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       internalTrend: overlay.internalTrend,
     };
     this.renderSmcOverlay();
+  }
+
+  /** Draw or clear the standalone Sweep Reversal lifecycle overlay. */
+  setSweepReversalOverlay(overlay: SweepReversalOverlay): void {
+    const signature = JSON.stringify(overlay);
+    if (signature === this.sweepReversalOverlaySignature) return;
+    this.sweepReversalOverlaySignature = signature;
+    const setups: RenderableSweepSetup[] = overlay.setups.map((setup) => ({
+      id: setup.id,
+      direction: setup.direction,
+      phase: setup.phase,
+      sweepTime: toUtcTimestamp(setup.sweepTime, this.displayTimeOffsetMs),
+      endTime: toUtcTimestamp(setup.endTime, this.displayTimeOffsetMs),
+      lineEndTime: toUtcTimestamp(setup.lineEndTime, this.displayTimeOffsetMs),
+      level: setup.level,
+      extreme: setup.extreme,
+      pivotTimes: setup.pivotTimes.map((time) =>
+        toUtcTimestamp(time, this.displayTimeOffsetMs),
+      ),
+      pivotPrices: [...setup.pivotPrices],
+      zoneColor: overlay.zoneColor,
+      levelColor: overlay.levelColor,
+    }));
+    if (setups.length === 0) {
+      if (this.sweepReversalPrimitive !== undefined) {
+        this.candleSeries.detachPrimitive(
+          this.sweepReversalPrimitive as unknown as Parameters<
+            typeof this.candleSeries.detachPrimitive
+          >[0],
+        );
+        this.sweepReversalPrimitive = undefined;
+      }
+      return;
+    }
+    if (this.sweepReversalPrimitive === undefined) {
+      this.sweepReversalPrimitive = new SweepReversalPrimitive(setups);
+      this.candleSeries.attachPrimitive(
+        this.sweepReversalPrimitive as unknown as Parameters<
+          typeof this.candleSeries.attachPrimitive
+        >[0],
+      );
+    } else {
+      this.sweepReversalPrimitive.setSetups(setups);
+    }
   }
 
   /**
@@ -3220,7 +3323,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private renderSmcOverlay(): void {
     const markerTextColor = chartContrastPalette(this.chartBackgroundColor).text;
     const markers: SeriesMarker<Time>[] = this.smcOverlay.markers
-      .filter((marker) => marker.kind !== "bos" && marker.kind !== "choch")
+      .filter(
+        (marker) =>
+          marker.kind !== "bos" &&
+          marker.kind !== "choch" &&
+          marker.kind !== "swing_label",
+      )
       .map((marker) => ({
         time: toUtcTimestamp(marker.time, this.displayTimeOffsetMs),
         position: marker.direction === 1 ? "aboveBar" : "belowBar",
@@ -3228,7 +3336,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         color: smcMarkerColor(marker, markerTextColor),
         id: marker.id,
         text: marker.label,
-        size: marker.kind === "swing_label" ? 0 : marker.scope === "internal" ? 0.85 : 1,
+        size: marker.scope === "internal" ? 0.85 : 1,
       }));
     this.smcMarkers.setMarkers(markers);
 
@@ -3260,7 +3368,17 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       endTime: toUtcTimestamp(line.endTime, this.displayTimeOffsetMs),
       labelTime: toUtcTimestamp(line.labelTime, this.displayTimeOffsetMs),
     }));
-    if (zones.length === 0 && lines.length === 0) {
+    const labels: RenderableSmcLabel[] = this.smcOverlay.markers
+      .filter(
+        (marker): marker is SmcMarker & { price: number } =>
+          marker.kind === "swing_label" && marker.price !== undefined,
+      )
+      .map((marker) => ({
+        ...marker,
+        time: toUtcTimestamp(marker.time, this.displayTimeOffsetMs),
+        color: smcMarkerColor(marker, markerTextColor),
+      }));
+    if (zones.length === 0 && lines.length === 0 && labels.length === 0) {
       if (this.smcPrimitive !== undefined) {
         this.candleSeries.detachPrimitive(
           this.smcPrimitive as unknown as Parameters<
@@ -3273,14 +3391,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
 
     if (this.smcPrimitive === undefined) {
-      this.smcPrimitive = new SmcOverlayPrimitive(zones, lines);
+      this.smcPrimitive = new SmcOverlayPrimitive(zones, lines, labels);
       this.candleSeries.attachPrimitive(
         this.smcPrimitive as unknown as Parameters<
           typeof this.candleSeries.attachPrimitive
         >[0],
       );
     } else {
-      this.smcPrimitive.setOverlay(zones, lines);
+      this.smcPrimitive.setOverlay(zones, lines, labels);
     }
   }
 
@@ -3607,6 +3725,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         >[0],
       );
       this.smcPrimitive = undefined;
+    }
+    if (this.sweepReversalPrimitive !== undefined) {
+      this.candleSeries.detachPrimitive(
+        this.sweepReversalPrimitive as unknown as Parameters<
+          typeof this.candleSeries.detachPrimitive
+        >[0],
+      );
+      this.sweepReversalPrimitive = undefined;
     }
     if (this.bigTradePrimitive !== undefined) {
       this.candleSeries.detachPrimitive(

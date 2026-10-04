@@ -15,7 +15,8 @@ export type AlertType =
   | "smc_external_break_big_trade"
   | "mgann_break_ls"
   | "mgann_sweep"
-  | "mgann_big_trade_sweep";
+  | "mgann_big_trade_sweep"
+  | "sweep_reversal";
 
 /** An alert definition as returned by `GET /api/alerts`. */
 export interface Alert {

@@ -41,6 +41,11 @@ import {
 } from "./smc";
 import type { SmcWorkerRequest, SmcWorkerResponse } from "./smcWorker";
 import {
+  computeSweepReversalOverlay,
+  type SweepReversalOverlay,
+  type SweepReversalSettings,
+} from "./sweepReversal";
+import {
   type LightweightChartsAdapterOptions,
   type VolumeDeltaDatum,
   type AlertLine,
@@ -149,6 +154,7 @@ export interface DisposableChartPort extends ChartSeriesPort {
   clearEma?(): void;
   clearEmaLines?(): void;
   setSmcOverlay?(overlay: SmcOverlay): void;
+  setSweepReversalOverlay?(overlay: SweepReversalOverlay): void;
   setOutsideBar?(settings: OutsideBarSettings): void;
   setSessionVolumeProfile?(data: import("../orderflow/deltaProfile").DeltaProfileData | null): void;
   setSessionVolumeProfileWidth?(widthPx: number): void;
@@ -323,6 +329,8 @@ export interface ChartContainerProps {
   bigTradeSettings?: BigTradeSettings;
   /** SMC overlay config. Disabled clears all SMC markers/zones. */
   smc?: SmcSettings;
+  /** Standalone close-based Sweep Reversal overlay config. */
+  sweepReversal?: Partial<SweepReversalSettings>;
   /** Recolor candles that engulf the prior bar's high and low. */
   outsideBar?: OutsideBarSettings;
   /** Main chart background color. */
@@ -361,7 +369,7 @@ export interface ChartContainerProps {
   /** Fired when the selected alert line is deleted with Delete/Backspace. */
   onAlertDelete?: (id: string) => void;
   /** Fired after a matching realtime bar update is applied to the chart. */
-  onRealtimeBar?: (bar: Bar) => void;
+  onRealtimeBar?: (bar: Bar, closed?: boolean) => void;
   /** Fired when a loaded candle is clicked, used to choose a replay start. */
   onBarClick?: (bar: Bar) => void;
   /** Keep receiving realtime bars without painting them over replay history. */
@@ -424,6 +432,22 @@ function matchesSeries(
     (contract === symbol || message.contract === contract) &&
     message.tf === timeframe
   );
+}
+
+function sweepClosedBars(
+  bars: readonly Bar[],
+  timeframe: Timeframe,
+  nowMs = Date.now(),
+): readonly Bar[] {
+  const capped = bars.slice(-10_000);
+  const latest = capped[capped.length - 1];
+  if (
+    latest !== undefined &&
+    latest.time + barDurationForTimeframe(timeframe) > nowMs
+  ) {
+    return capped.slice(0, -1);
+  }
+  return capped;
 }
 
 function matchesVolumeDeltaSeries(
@@ -578,6 +602,7 @@ export function ChartContainer({
   showFvgGrader = true,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
   smc,
+  sweepReversal,
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
   chartBackgroundColor = "#d3d3d3",
   timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES,
@@ -661,7 +686,9 @@ export function ChartContainer({
     onAlertDelete,
   );
   alertDeleteRef.current = onAlertDelete;
-  const realtimeBarRef = useRef<((bar: Bar) => void) | undefined>(onRealtimeBar);
+  const realtimeBarRef = useRef<
+    ((bar: Bar, closed?: boolean) => void) | undefined
+  >(onRealtimeBar);
   realtimeBarRef.current = onRealtimeBar;
   const barClickRef = useRef<((bar: Bar) => void) | undefined>(onBarClick);
   barClickRef.current = onBarClick;
@@ -718,6 +745,8 @@ export function ChartContainer({
   emaConfigRef.current = ema;
   const smcConfigRef = useRef(smc);
   smcConfigRef.current = smc;
+  const sweepReversalConfigRef = useRef(sweepReversal);
+  sweepReversalConfigRef.current = sweepReversal;
   const drawingsChangeRef = useRef(onDrawingsChange);
   drawingsChangeRef.current = onDrawingsChange;
   const screenshotCaptureReadyRef = useRef(onScreenshotCaptureReady);
@@ -1549,6 +1578,13 @@ export function ChartContainer({
   }, [symbol, contract, timeframe, bars, smc, requestSmcComputation]);
 
   useEffect(() => {
+    const closedBars = sweepClosedBars(bars ?? [], timeframe);
+    portRef.current?.setSweepReversalOverlay?.(
+      computeSweepReversalOverlay(closedBars, sweepReversal),
+    );
+  }, [symbol, contract, timeframe, bars, sweepReversal]);
+
+  useEffect(() => {
     refreshFootprintViewport();
   }, [showFootprint, refreshFootprintViewport]);
 
@@ -1566,11 +1602,11 @@ export function ChartContainer({
         return;
       }
       if (suspendRealtimeRef.current) {
-        realtimeBarRef.current?.(message.bar);
+        realtimeBarRef.current?.(message.bar, message.closed);
         return;
       }
       const outcome = controller.apply(message.bar, message.closed);
-      realtimeBarRef.current?.(message.bar);
+      realtimeBarRef.current?.(message.bar, message.closed);
 
       // Only schedule order position refresh when there are active order
       // controls, avoiding needless rAF work on every tick.
@@ -1594,6 +1630,15 @@ export function ChartContainer({
             }
           }, 500);
         }
+      }
+
+      if (message.closed && sweepReversalConfigRef.current?.enabled) {
+        portRef.current?.setSweepReversalOverlay?.(
+          computeSweepReversalOverlay(
+            controller.bars.slice(-10_000),
+            sweepReversalConfigRef.current,
+          ),
+        );
       }
 
       // Advance the EMA overlay for the same bar when enabled. An in-progress

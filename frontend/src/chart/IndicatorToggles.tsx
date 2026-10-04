@@ -10,7 +10,17 @@ import {
   normalizeMgannSwingSettings,
   type MgannSwingSettings,
 } from "./mgannSwing";
+import {
+  DEFAULT_MGANN_BREAK_SETTINGS,
+  normalizeMgannBreakSettings,
+  type MgannBreakSettings,
+} from "./mgannBreak";
 import { type SmcSettings } from "./smc";
+import {
+  DEFAULT_SWEEP_REVERSAL_SETTINGS,
+  normalizeSweepReversalSettings,
+  type SweepReversalSettings,
+} from "./sweepReversal";
 import {
   BIG_TRADE_SESSIONS,
   DEFAULT_BIG_TRADE_SESSION_MIN_VOLUMES,
@@ -171,9 +181,11 @@ export interface IndicatorTogglesProps {
   mgannBreak?: boolean;
   mgannBreakSignalHistoryBars?: number;
   mgannBreakSignalLimit?: number;
+  mgannBreakSettings?: Partial<MgannBreakSettings>;
   bigTrades: boolean;
   ema: EmaSettings;
   smc: SmcSettings;
+  sweepReversal?: Partial<SweepReversalSettings>;
   outsideBar?: OutsideBarSettings;
   footprintSettings: FootprintSettings;
   bigTradeSettings?: BigTradeSettings;
@@ -193,6 +205,8 @@ export interface IndicatorTogglesProps {
   onMgannBreakChange?: (enabled: boolean) => void;
   onMgannBreakSignalHistoryBarsChange?: (bars: number) => void;
   onMgannBreakSignalLimitChange?: (limit: number) => void;
+  onMgannBreakSettingsChange?: (next: MgannBreakSettings) => void;
+  onCreateMgannBreakAlert?: () => void;
   dailyVolumeProfile?: boolean;
   dailyVolumeProfileWidth?: number;
   dailyVolumeProfileDevelopingPoc?: boolean;
@@ -202,6 +216,8 @@ export interface IndicatorTogglesProps {
   onBigTradesChange: (enabled: boolean) => void;
   onEmaChange: (next: EmaSettings) => void;
   onSmcChange: (next: SmcSettings) => void;
+  onSweepReversalChange?: (next: SweepReversalSettings) => void;
+  onCreateSweepReversalAlert?: () => void;
   onOutsideBarChange?: (next: OutsideBarSettings) => void;
   onFootprintSettingsChange: (next: FootprintSettings) => void;
   onBigTradeSettingsChange?: (next: BigTradeSettings) => void;
@@ -266,12 +282,14 @@ export function IndicatorToggles({
   mgannBreak = true,
   mgannBreakSignalHistoryBars = DEFAULT_MGANN_BREAK_SIGNAL_HISTORY_BARS,
   mgannBreakSignalLimit = DEFAULT_MGANN_BREAK_SIGNAL_LIMIT,
+  mgannBreakSettings = DEFAULT_MGANN_BREAK_SETTINGS,
   bigTrades,
   dailyVolumeProfile = false,
   dailyVolumeProfileWidth = DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
   dailyVolumeProfileDevelopingPoc = true,
   ema,
   smc,
+  sweepReversal = DEFAULT_SWEEP_REVERSAL_SETTINGS,
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
   footprintSettings,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
@@ -291,18 +309,24 @@ export function IndicatorToggles({
   onMgannBreakChange = () => {},
   onMgannBreakSignalHistoryBarsChange = () => {},
   onMgannBreakSignalLimitChange = () => {},
+  onMgannBreakSettingsChange = () => {},
+  onCreateMgannBreakAlert = () => {},
   onDailyVolumeProfileChange = () => {},
   onDailyVolumeProfileWidthChange = () => {},
   onDailyVolumeProfileDevelopingPocChange = () => {},
   onBigTradesChange,
   onEmaChange,
   onSmcChange,
+  onSweepReversalChange = () => {},
+  onCreateSweepReversalAlert = () => {},
   onOutsideBarChange = () => {},
   onFootprintSettingsChange,
   onBigTradeSettingsChange = () => {},
 }: IndicatorTogglesProps) {
   const outsideBarConfig = normalizeOutsideBarSettings(outsideBar);
+  const sweepConfig = normalizeSweepReversalSettings(sweepReversal);
   const mgannSwingConfig = normalizeMgannSwingSettings(mgannSwingSettings);
+  const mgannBreakConfig = normalizeMgannBreakSettings(mgannBreakSettings);
   const gcPushMomentumConfig = normalizeGcPushMomentumSettings(
     gcPushMomentumSettings,
   );
@@ -315,6 +339,7 @@ export function IndicatorToggles({
   const [gcPushMomentumSettingsOpen, setGcPushMomentumSettingsOpen] =
     useState(false);
   const [smcSettingsOpen, setSmcSettingsOpen] = useState(false);
+  const [sweepSettingsOpen, setSweepSettingsOpen] = useState(false);
   const [fpSettingsOpen, setFpSettingsOpen] = useState(false);
   const [fvgSettingsOpen, setFvgSettingsOpen] = useState(false);
   const [mgannBreakSettingsOpen, setMgannBreakSettingsOpen] = useState(false);
@@ -383,6 +408,12 @@ export function IndicatorToggles({
         ...outsideBarConfig,
         ...next,
       }),
+    );
+  };
+
+  const updateMgannBreak = (next: Partial<MgannBreakSettings>) => {
+    onMgannBreakSettingsChange(
+      normalizeMgannBreakSettings({ ...mgannBreakConfig, ...next }),
     );
   };
 
@@ -531,6 +562,7 @@ export function IndicatorToggles({
         setMgannSwingSettingsOpen(false);
         setGcPushMomentumSettingsOpen(false);
         setSmcSettingsOpen(false);
+        setSweepSettingsOpen(false);
         setFpSettingsOpen(false);
         setMgannBreakSettingsOpen(false);
         setBtSettingsOpen(false);
@@ -544,6 +576,7 @@ export function IndicatorToggles({
         setMgannSwingSettingsOpen(false);
         setGcPushMomentumSettingsOpen(false);
         setSmcSettingsOpen(false);
+        setSweepSettingsOpen(false);
         setFpSettingsOpen(false);
         setMgannBreakSettingsOpen(false);
         setBtSettingsOpen(false);
@@ -571,7 +604,8 @@ export function IndicatorToggles({
     (fvgGrader ? 1 : 0) +
     (mgannBreak ? 1 : 0) +
     (bigTrades ? 1 : 0) +
-    (smc.enabled ? 1 : 0);
+    (smc.enabled ? 1 : 0) +
+    (sweepConfig.enabled ? 1 : 0);
   const normalizedDailyVolumeProfileWidth =
     normalizeSessionVolumeProfileWidth(dailyVolumeProfileWidth);
   const normalizedFvgSignalLimit = normalizeFvgSignalLimit(fvgSignalLimit);
@@ -1270,6 +1304,106 @@ export function IndicatorToggles({
                   }
                 />
               </div>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={mgannBreakConfig.requireBigTrade}
+                  aria-label="mGann Break require BigTrade"
+                  onChange={(event) =>
+                    updateMgannBreak({ requireBigTrade: event.currentTarget.checked })
+                  }
+                />
+                <span>Require BigTrade</span>
+              </label>
+              {mgannBreakConfig.requireBigTrade && (
+                <label className="ema-setting-line">
+                  <span className="ema-setting-label">BigTrade &gt;</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100000}
+                    step={1}
+                    className="ema-length-input"
+                    aria-label="mGann Break BigTrade threshold"
+                    value={mgannBreakConfig.bigTradeThreshold}
+                    onChange={(event) =>
+                      updateMgannBreak({ bigTradeThreshold: Number(event.currentTarget.value) })
+                    }
+                  />
+                </label>
+              )}
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={mgannBreakConfig.filterLiquidity}
+                  aria-label="mGann Break liquidity filter"
+                  onChange={(event) =>
+                    updateMgannBreak({ filterLiquidity: event.currentTarget.checked })
+                  }
+                />
+                <span>Liquidity CHoCH</span>
+              </label>
+              {([
+                ["Delta lookback", "volumeDeltaLookback", 1, 5000, 1],
+                ["Delta x", "volumeDeltaMultiplier", 0.1, 100, 0.1],
+                ["Min spread ticks", "minSpreadTicks", 0, 5000, 1],
+                ["Spread lookback", "spreadLookback", 1, 5000, 1],
+                ["Spread x", "spreadMultiplier", 0.1, 100, 0.1],
+                ["Swing size", "swingSize", 1, 100, 1],
+                ["Pivot lookback", "pivotLookbackBars", 1, 5000, 1],
+                ["Pivot tolerance ticks", "pivotToleranceTicks", 0, 5000, 1],
+                ["Min pivot wick ticks", "minPivotWickTicks", 0, 5000, 1],
+                ["Confirm bars", "confirmationBars", 0, 100, 1],
+                ["Break ticks", "breakTicks", 0, 5000, 1],
+              ] as const).map(([label, key, min, max, step]) => (
+                <label className="ema-setting-line" key={key}>
+                  <span className="ema-setting-label">{label}</span>
+                  <input
+                    type="number"
+                    min={min}
+                    max={max}
+                    step={step}
+                    className="ema-length-input"
+                    aria-label={`mGann Break ${label}`}
+                    value={mgannBreakConfig[key]}
+                    onChange={(event) =>
+                      updateMgannBreak({ [key]: Number(event.currentTarget.value) })
+                    }
+                  />
+                </label>
+              ))}
+              {mgannBreakConfig.filterLiquidity && (
+                <>
+                  {([
+                    ["Liquidity pivots", "minPivotCuts", 2, 20, 1],
+                    ["Liquidity ATR /10", "liquidityAtrMargin", 0.1, 100, 0.5],
+                    ["Sweep lookback", "liquiditySweepLookbackBars", 1, 5000, 1],
+                  ] as const).map(([label, key, min, max, step]) => (
+                    <label className="ema-setting-line" key={key}>
+                      <span className="ema-setting-label">{label}</span>
+                      <input
+                        type="number"
+                        min={min}
+                        max={max}
+                        step={step}
+                        className="ema-length-input"
+                        aria-label={`mGann Break ${label}`}
+                        value={mgannBreakConfig[key]}
+                        onChange={(event) =>
+                          updateMgannBreak({ [key]: Number(event.currentTarget.value) })
+                        }
+                      />
+                    </label>
+                  ))}
+                </>
+              )}
+              <button
+                type="button"
+                className="indicator-alert-button"
+                onClick={onCreateMgannBreakAlert}
+              >
+                Create server alert
+              </button>
             </div>
           )}
           <IndicatorRow
@@ -1492,6 +1626,168 @@ export function IndicatorToggles({
                 />
                 <span>Range &gt; prev 2</span>
               </label>
+            </div>
+          )}
+          <IndicatorRow
+            label="Sweep Reversal"
+            checked={sweepConfig.enabled}
+            title="Close-based liquidity sweep and structure reversal"
+            onChange={(enabled) =>
+              onSweepReversalChange({ ...sweepConfig, enabled })
+            }
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="Sweep Reversal settings"
+                aria-expanded={sweepSettingsOpen}
+                onClick={() => setSweepSettingsOpen((value) => !value)}
+              >
+                {"\u2699"}
+              </button>
+            }
+          />
+          {sweepSettingsOpen && (
+            <div className="ema-settings" aria-label="Sweep Reversal settings panel">
+              {([
+                ["Swing", "swingLength", 2, 50, 1],
+                ["ATR", "atrLength", 1, 500, 1],
+                ["Penetration", "minPenetrationAtr", 0, 10, 0.05],
+                ["Structure", "structureLength", 1, 20, 1],
+                ["Confirm bars", "maxConfirmationBars", 1, 100, 1],
+                ["Displacement", "minDisplacementAtr", 0, 10, 0.05],
+              ] as const).map(([label, key, min, max, step]) => (
+                <label className="ema-setting-line" key={key}>
+                  <span className="ema-setting-label">{label}</span>
+                  <input
+                    type="number"
+                    className="ema-length-input"
+                    min={min}
+                    max={max}
+                    step={step}
+                    aria-label={`Sweep Reversal ${label}`}
+                    value={sweepConfig[key]}
+                    onChange={(event) =>
+                      onSweepReversalChange(
+                        normalizeSweepReversalSettings({
+                          ...sweepConfig,
+                          [key]: Number(event.currentTarget.value),
+                        }),
+                      )
+                    }
+                  />
+                </label>
+              ))}
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={sweepConfig.equalSwingFilter}
+                  aria-label="Sweep Reversal equal swing ATR filter"
+                  onChange={(event) =>
+                    onSweepReversalChange({
+                      ...sweepConfig,
+                      equalSwingFilter: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>Equal-swing ATR pool</span>
+              </label>
+              {sweepConfig.equalSwingFilter && (
+                <>
+                  {([
+                    ["Min pivots", "liquidityMinPivots", 2, 20, 1],
+                    ["Pool lookback", "liquidityLookbackBars", 1, 1000, 1],
+                    ["Pool ATR", "liquidityAtrLength", 1, 500, 1],
+                    ["ATR margin /10", "liquidityAtrMargin", 0.1, 100, 0.5],
+                  ] as const).map(([label, key, min, max, step]) => (
+                    <label className="ema-setting-line" key={key}>
+                      <span className="ema-setting-label">{label}</span>
+                      <input
+                        type="number"
+                        className="ema-length-input"
+                        min={min}
+                        max={max}
+                        step={step}
+                        aria-label={`Sweep Reversal ${label}`}
+                        value={sweepConfig[key]}
+                        onChange={(event) =>
+                          onSweepReversalChange(
+                            normalizeSweepReversalSettings({
+                              ...sweepConfig,
+                              [key]: Number(event.currentTarget.value),
+                            }),
+                          )
+                        }
+                      />
+                    </label>
+                  ))}
+                </>
+              )}
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={sweepConfig.showDeveloping}
+                  aria-label="Sweep Reversal show developing"
+                  onChange={(event) =>
+                    onSweepReversalChange({
+                      ...sweepConfig,
+                      showDeveloping: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>Show developing</span>
+              </label>
+              {([
+                ["Extension", "confirmedExtension", 0, 50],
+                ["History", "maxHistory", 1, 150],
+              ] as const).map(([label, key, min, max]) => (
+                <label className="ema-setting-line" key={key}>
+                  <span className="ema-setting-label">{label}</span>
+                  <input
+                    type="number"
+                    className="ema-length-input"
+                    min={min}
+                    max={max}
+                    value={sweepConfig[key]}
+                    aria-label={`Sweep Reversal ${label}`}
+                    onChange={(event) =>
+                      onSweepReversalChange(
+                        normalizeSweepReversalSettings({
+                          ...sweepConfig,
+                          [key]: Number(event.currentTarget.value),
+                        }),
+                      )
+                    }
+                  />
+                </label>
+              ))}
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Zone</span>
+                <input
+                  type="color"
+                  className="ema-color-picker"
+                  aria-label="Sweep Reversal zone color"
+                  value={sweepConfig.zoneColor}
+                  onChange={(event) => onSweepReversalChange({ ...sweepConfig, zoneColor: event.currentTarget.value })}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Level</span>
+                <input
+                  type="color"
+                  className="ema-color-picker"
+                  aria-label="Sweep Reversal level color"
+                  value={sweepConfig.levelColor}
+                  onChange={(event) => onSweepReversalChange({ ...sweepConfig, levelColor: event.currentTarget.value })}
+                />
+              </div>
+              <button
+                type="button"
+                className="indicator-alert-button"
+                onClick={onCreateSweepReversalAlert}
+              >
+                Create server alert
+              </button>
             </div>
           )}
           <IndicatorRow

@@ -20,6 +20,7 @@ import {
   toBarDisplayTimestamp,
   toCandle,
   toGcPushMomentumHistogram,
+  toGcPushMomentumMarker,
   toUtcTimestamp,
 } from "./lightweightChartsAdapter";
 import type { GcPushMomentumPoint } from "./gcPushMomentum";
@@ -289,13 +290,33 @@ describe("lightweightChartsAdapter GC Push Momentum", () => {
     expect(preview.color).toContain("0.34");
   });
 
-  it("uses amber when price push conflicts with executed flow", () => {
+  it("uses four MACD-style direction and acceleration colors", () => {
+    expect(gcPushMomentumColor(point, true)).toContain("0, 200, 83");
     expect(
-      gcPushMomentumColor(
-        { ...point, flowState: "conflict", absorptionCandidate: true },
-        true,
-      ),
-    ).toContain("245, 158, 11");
+      gcPushMomentumColor({ ...point, acceleration: -1 }, true),
+    ).toContain("76, 139, 103");
+    expect(
+      gcPushMomentumColor({ ...point, push: -2, acceleration: -1 }, true),
+    ).toContain("255, 23, 68");
+    expect(
+      gcPushMomentumColor({ ...point, push: -2, acceleration: 1 }, true),
+    ).toContain("183, 87, 83");
+  });
+
+  it("keeps direction color and marks closed flow conflict separately", () => {
+    const conflict = {
+      ...point,
+      flowState: "conflict" as const,
+      absorptionCandidate: true,
+    };
+
+    expect(gcPushMomentumColor(conflict, true)).toContain("0, 200, 83");
+    expect(toGcPushMomentumMarker(conflict, true)).toMatchObject({
+      position: "aboveBar",
+      shape: "square",
+      color: "rgba(245, 158, 11, 1)",
+    });
+    expect(toGcPushMomentumMarker(conflict, false)).toBeUndefined();
   });
 });
 

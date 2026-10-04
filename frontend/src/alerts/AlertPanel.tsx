@@ -162,6 +162,14 @@ function alertInputPlaceholder(type: AlertType): string {
 }
 
 function alertDescription(alert: Alert): string {
+  if (alert.type === "sweep_reversal") {
+    const timeframe = String(alert.params.timeframe ?? "1m").toUpperCase();
+    const pool = alert.params.equalSwingFilter === true
+      ? `, ATR pool x${String(alert.params.liquidityMinPivots ?? 2)}`
+      : "";
+    const repeat = alert.params.repeat === true ? " (repeat)" : "";
+    return `${timeframe} Sweep Reversal${pool}${repeat}`;
+  }
   if (alert.type === LIQUIDITY_POOL_BREAK_TYPE) {
     const timeframe = alert.params.timeframe === "5m" ? "M5" : "M1";
     const side = String(alert.params.side ?? "both").toUpperCase();

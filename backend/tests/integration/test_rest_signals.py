@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -152,6 +154,81 @@ def test_mgann_break_ls_signals_replays_profile_alert(env):
     assert signal["barSpread"] == pytest.approx(5.7)
     assert signal["avgVolumeDelta"] == 100.0
     assert signal["avgSpread"] == pytest.approx(1.55)
+
+
+@pytest.mark.integration
+def test_mgann_break_ls_signals_replays_indicator_settings_without_alert(env):
+    client, cache = env
+    cache.upsert_bars(
+        [
+            _bar(0, 100.0, 100.2, 99.5, 100.0, 100),
+            _bar(1, 100.0, 101.0, 98.5, 99.0, 100),
+            _bar(2, 99.0, 99.5, 97.0, 98.0, 100),
+            _bar(3, 98.0, 100.0, 97.5, 98.8, 100),
+            _bar(4, 98.8, 99.0, 96.0, 96.5, 100),
+            _bar(5, 96.5, 102.5, 96.0, 102.2, 500),
+        ]
+    )
+    cache.upsert_volume_deltas(
+        [_volume_delta(index, 500 if index == 5 else 100) for index in range(6)]
+    )
+    settings = {
+        "requireBigTrade": False,
+        "bigTradeThreshold": 70,
+        "volumeDeltaLookback": 2,
+        "volumeDeltaMultiplier": 2,
+        "minSpreadTicks": 0,
+        "spreadLookback": 2,
+        "spreadMultiplier": 2,
+        "swingSize": 1,
+        "pivotLookbackBars": 20,
+        "minPivotCuts": 2,
+        "pivotToleranceTicks": 7,
+        "minPivotWickTicks": 3,
+        "filterLiquidity": False,
+        "liquidityAtrMargin": 4,
+        "liquiditySweepLookbackBars": 5,
+        "confirmationBars": 2,
+        "breakTicks": 0,
+    }
+
+    resp = client.get(
+        "/api/signals/mgann-break-ls",
+        params={
+            "symbol": _SYMBOL,
+            "contract": _CONTRACT,
+            "tf": "1m",
+            "profileId": "hieu",
+            "from": 5 * _STEP,
+            "to": 5 * _STEP,
+            "warmupBars": 20,
+            "settings": json.dumps(settings),
+        },
+    )
+
+    assert resp.status_code == 200
+    signals = resp.json()["signals"]
+    assert len(signals) == 1
+    assert signals[0]["id"] == "indicator-mgann-break:hist:300000:1"
+    assert signals[0]["alertId"] == "indicator-mgann-break"
+    assert signals[0]["bigTradeVolume"] == 0
+
+
+@pytest.mark.integration
+def test_mgann_break_ls_signals_rejects_invalid_indicator_settings(env):
+    client, _cache = env
+
+    resp = client.get(
+        "/api/signals/mgann-break-ls",
+        params={
+            "symbol": _SYMBOL,
+            "contract": _CONTRACT,
+            "tf": "1m",
+            "settings": "not-json",
+        },
+    )
+
+    assert resp.status_code == 400
 
 
 @pytest.mark.integration

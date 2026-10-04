@@ -80,6 +80,7 @@ export type SmcMarkerKind =
 export interface SmcMarker {
   id: string;
   time: number;
+  price?: number;
   direction: Direction;
   label: string;
   scope: Scope;
@@ -1365,6 +1366,7 @@ function pushStateMarkers(
   if (state.swingHh && state.swingHigh) {
     addMarker(markers, {
       time: state.swingHigh.timestamp,
+      price: state.swingHigh.price,
       direction: 1,
       label: "HH",
       scope: "swing",
@@ -1374,6 +1376,7 @@ function pushStateMarkers(
   if (state.swingLh && state.swingHigh) {
     addMarker(markers, {
       time: state.swingHigh.timestamp,
+      price: state.swingHigh.price,
       direction: 1,
       label: "LH",
       scope: "swing",
@@ -1383,6 +1386,7 @@ function pushStateMarkers(
   if (state.swingHl && state.swingLow) {
     addMarker(markers, {
       time: state.swingLow.timestamp,
+      price: state.swingLow.price,
       direction: -1,
       label: "HL",
       scope: "swing",
@@ -1392,6 +1396,7 @@ function pushStateMarkers(
   if (state.swingLl && state.swingLow) {
     addMarker(markers, {
       time: state.swingLow.timestamp,
+      price: state.swingLow.price,
       direction: -1,
       label: "LL",
       scope: "swing",

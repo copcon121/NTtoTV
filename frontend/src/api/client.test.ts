@@ -534,13 +534,16 @@ describe("ApiClient auth, MT5, and user profile", () => {
         from: 1000,
         to: 2000,
         limit: 250,
+        settings: { requireBigTrade: true },
       }),
     ).resolves.toEqual([
       expect.objectContaining({ id: "a_1:hist:1000:1", text: "Break L" }),
     ]);
 
     expect(fetchFn).toHaveBeenCalledWith(
-      "/api/signals/mgann-break-ls?symbol=GC&contract=GC&tf=1m&profileId=hieu&from=1000&to=2000&limit=250",
+      expect.stringContaining(
+        `settings=${encodeURIComponent(JSON.stringify({ requireBigTrade: true }))}`,
+      ),
       expect.objectContaining({ credentials: "same-origin" }),
     );
   });

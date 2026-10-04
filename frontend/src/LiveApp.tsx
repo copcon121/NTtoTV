@@ -76,12 +76,24 @@ import {
   type MgannSwingSettings,
 } from "./chart/mgannSwing";
 import {
+  DEFAULT_MGANN_BREAK_SETTINGS,
+  mgannBreakAlertParams,
+  mgannBreakSettingsMatchParams,
+  normalizeMgannBreakSettings,
+  type MgannBreakSettings,
+} from "./chart/mgannBreak";
+import {
   DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
   normalizeGcPushMomentumSettings,
   type GcPushMomentumSettings,
 } from "./chart/gcPushMomentum";
 import { bigTradeMinVolumeForTime } from "./chart/bigTradeSessions";
 import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./chart/smc";
+import {
+  DEFAULT_SWEEP_REVERSAL_SETTINGS,
+  normalizeSweepReversalSettings,
+  type SweepReversalSettings,
+} from "./chart/sweepReversal";
 import {
   DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
   normalizeSessionVolumeProfileWidth,
@@ -440,24 +452,7 @@ function alertSignalRowToMarker(
 }
 
 function alertSignalMarkerKey(marker: AlertSignalMarker): string {
-  const historicalParts = marker.id.split(":hist:");
-  if (historicalParts.length === 2) {
-    const [alertId, rest] = historicalParts;
-    const [time, direction] = rest.split(":");
-    if (alertId && time && direction) {
-      return `${alertId}:${time}:${direction}`;
-    }
-  }
-  const parts = marker.id.split(":");
-  if (parts.length >= 3) {
-    const direction = parts[parts.length - 1];
-    const time = parts[parts.length - 2];
-    const alertId = parts.slice(0, -2).join(":");
-    if (alertId && time && direction) {
-      return `${alertId}:${time}:${direction}`;
-    }
-  }
-  return `${marker.id}:${marker.time}:${marker.direction}`;
+  return `${marker.time}:${marker.direction}`;
 }
 
 function mergeAlertSignalMarker<T extends AlertSignalMarker>(
@@ -2007,6 +2002,10 @@ export function LiveApp() {
   const [showFootprint, setShowFootprint] = useState(false);
   const [showFvgGrader, setShowFvgGrader] = useState(true);
   const [showMgannBreak, setShowMgannBreak] = useState(true);
+  const [mgannBreakSettings, setMgannBreakSettings] =
+    useState<MgannBreakSettings>(() => ({ ...DEFAULT_MGANN_BREAK_SETTINGS }));
+  const [mgannBreakLatestClosedTime, setMgannBreakLatestClosedTime] =
+    useState<number>();
   const [fvgSignalLimit, setFvgSignalLimit] = useState(DEFAULT_FVG_SIGNAL_LIMIT);
   const [mgannBreakSignalHistoryBars, setMgannBreakSignalHistoryBars] = useState(
     DEFAULT_MGANN_BREAK_SIGNAL_HISTORY_BARS,
@@ -2017,6 +2016,9 @@ export function LiveApp() {
   const [showBigTrades, setShowBigTrades] = useState(true);
   const [ema, setEma] = useState<EmaSettings>(() => ({ ...DEFAULT_EMA_SETTINGS }));
   const [smc, setSmc] = useState<SmcSettings>(() => ({ ...DEFAULT_SMC_SETTINGS }));
+  const [sweepReversal, setSweepReversal] = useState<SweepReversalSettings>(
+    () => ({ ...DEFAULT_SWEEP_REVERSAL_SETTINGS }),
+  );
   const [outsideBar, setOutsideBar] = useState<OutsideBarSettings>(() => ({
     ...DEFAULT_OUTSIDE_BAR_SETTINGS,
     enabled: true,
@@ -2036,6 +2038,10 @@ export function LiveApp() {
     DEFAULT_TIMEZONE_OFFSET_MINUTES,
   );
   const [alerts, setAlerts] = useState<readonly Alert[]>([]);
+  const alertsRef = useRef(alerts);
+  alertsRef.current = alerts;
+  const mgannBreakSettingsRef = useRef(mgannBreakSettings);
+  mgannBreakSettingsRef.current = mgannBreakSettings;
   const [lastAlert, setLastAlert] = useState<AlertEventMessage | undefined>(undefined);
   const [alertPanelOpen, setAlertPanelOpen] = useState(false);
   const [analystPanelOpen, setAnalystPanelOpen] = useState(false);
@@ -2187,12 +2193,14 @@ export function LiveApp() {
       showFootprint,
       showFvgGrader,
       showMgannBreak,
+      mgannBreak: { ...mgannBreakSettings },
       fvgSignalLimit,
       mgannBreakSignalHistoryBars,
       mgannBreakSignalLimit,
       showBigTrades,
       ema: { ...ema },
       smc: { ...smc },
+      sweepReversal: { ...sweepReversal },
       outsideBar: { ...outsideBar },
       footprintSettings: { ...footprintSettings },
       bigTradeSettings: { ...bigTradeSettings },
@@ -2212,6 +2220,7 @@ export function LiveApp() {
       fvgSignalLimit,
       mgannBreakSignalHistoryBars,
       mgannBreakSignalLimit,
+      mgannBreakSettings,
       fixedRangeProfileMode,
       marketOrderSettings,
       mgannSwing,
@@ -2228,6 +2237,7 @@ export function LiveApp() {
       showGcPushMomentum,
       showFvgGrader,
       smc,
+      sweepReversal,
       timeframe,
       timezoneOffsetMinutes,
     ],
@@ -2561,8 +2571,11 @@ export function LiveApp() {
     }, DELTA_PROFILE_REFRESH_DELAY_MS);
   }, []);
   const onChartRealtimeBar = useCallback(
-    (bar: Bar) => {
+    (bar: Bar, closed?: boolean) => {
       cache.append({ symbol: SYMBOL, contract, timeframe }, [bar]);
+      if (closed === true && timeframe === "1m") {
+        setMgannBreakLatestClosedTime(bar.time);
+      }
       setExtendRightLiveBar((current) =>
         current?.seriesKey === currentSeriesKey && current.time === bar.time
           ? current
@@ -2970,7 +2983,17 @@ export function LiveApp() {
         }
         setLastAlert(msg);
         const marker = alertEventToSignalMarker(msg);
-        if (marker !== undefined) {
+        const sourceAlert = alertsRef.current.find(
+          (alert) => alert.id === msg.alertId,
+        );
+        if (
+          marker !== undefined &&
+          sourceAlert !== undefined &&
+          mgannBreakSettingsMatchParams(
+            mgannBreakSettingsRef.current,
+            sourceAlert.params,
+          )
+        ) {
           setAlertSignalMarkers((prev) => mergeAlertSignalMarker(prev, marker));
         }
       }
@@ -3281,6 +3304,10 @@ export function LiveApp() {
       return;
     }
 
+    const latestSignalTime = Math.max(
+      latestLoadedBarTime,
+      mgannBreakLatestClosedTime ?? latestLoadedBarTime,
+    );
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void (async () => {
@@ -3292,11 +3319,12 @@ export function LiveApp() {
             profileId,
             from: Math.max(
               firstLoadedBarTime,
-              latestLoadedBarTime -
+              latestSignalTime -
                 mgannBreakSignalHistoryBars * 60_000,
             ),
-            to: latestLoadedBarTime,
+            to: latestSignalTime,
             limit: mgannBreakSignalLimit,
+            settings: mgannBreakSettings,
           });
           if (!cancelled) {
             setAlertSignalMarkers((prev) =>
@@ -3331,8 +3359,10 @@ export function LiveApp() {
     firstLoadedBarTime,
     hasLoadedCurrentSeries,
     latestLoadedBarTime,
+    mgannBreakLatestClosedTime,
     mgannBreakSignalHistoryBars,
     mgannBreakSignalLimit,
+    mgannBreakSettings,
     profileHydrated,
     profileId,
     timeframe,
@@ -3721,6 +3751,37 @@ export function LiveApp() {
         );
       }
     })();
+  };
+  const onCreateSweepReversalAlert = () => {
+    const settings = normalizeSweepReversalSettings(sweepReversal);
+    onCreateAlert({
+      type: "sweep_reversal",
+      params: {
+        timeframe,
+        swingLength: settings.swingLength,
+        atrLength: settings.atrLength,
+        minPenetrationAtr: settings.minPenetrationAtr,
+        structureLength: settings.structureLength,
+        maxConfirmationBars: settings.maxConfirmationBars,
+        minDisplacementAtr: settings.minDisplacementAtr,
+        equalSwingFilter: settings.equalSwingFilter,
+        liquidityMinPivots: settings.liquidityMinPivots,
+        liquidityLookbackBars: settings.liquidityLookbackBars,
+        liquidityAtrLength: settings.liquidityAtrLength,
+        liquidityAtrMargin: settings.liquidityAtrMargin,
+        repeat: true,
+      },
+    });
+  };
+  const onCreateMgannBreakAlert = () => {
+    onCreateAlert({
+      type: "mgann_break_ls",
+      params: mgannBreakAlertParams(mgannBreakSettings),
+    });
+  };
+  const onMgannBreakSettingsChange = (next: MgannBreakSettings) => {
+    setAlertSignalMarkers([]);
+    setMgannBreakSettings(next);
   };
   const onEnableWebPush = () => {
     if (!authUser) {
@@ -4645,6 +4706,7 @@ export function LiveApp() {
     );
     setShowFvgGrader(payload.showFvgGrader !== false);
     setShowMgannBreak(payload.showMgannBreak !== false);
+    setMgannBreakSettings(normalizeMgannBreakSettings(payload.mgannBreak));
     setFvgSignalLimit(normalizeFvgSignalLimit(payload.fvgSignalLimit));
     setMgannBreakSignalHistoryBars(
       normalizeMgannBreakSignalHistoryBars(payload.mgannBreakSignalHistoryBars),
@@ -4655,6 +4717,7 @@ export function LiveApp() {
     setShowBigTrades(payload.showBigTrades !== false);
     setEma(normalizeEmaSettings(payload.ema));
     setSmc({ ...DEFAULT_SMC_SETTINGS, ...(payload.smc ?? {}) });
+    setSweepReversal(normalizeSweepReversalSettings(payload.sweepReversal));
     setOutsideBar(
       payload.outsideBar
         ? normalizeOutsideBarSettings(payload.outsideBar)
@@ -5080,6 +5143,13 @@ export function LiveApp() {
     () => (indicatorsVisible ? smc : { ...smc, enabled: false }),
     [indicatorsVisible, smc],
   );
+  const visibleSweepReversal = useMemo(
+    () =>
+      indicatorsVisible
+        ? sweepReversal
+        : { ...sweepReversal, enabled: false },
+    [indicatorsVisible, sweepReversal],
+  );
   const visibleOutsideBar = useMemo(
     () =>
       indicatorsVisible
@@ -5211,12 +5281,14 @@ export function LiveApp() {
           footprint={showFootprint}
           fvgGrader={showFvgGrader}
           mgannBreak={showMgannBreak}
+          mgannBreakSettings={mgannBreakSettings}
           fvgSignalLimit={fvgSignalLimit}
           mgannBreakSignalHistoryBars={mgannBreakSignalHistoryBars}
           mgannBreakSignalLimit={mgannBreakSignalLimit}
           bigTrades={showBigTrades && bigTradeOverlayEnabled}
           ema={ema}
           smc={smc}
+          sweepReversal={sweepReversal}
           outsideBar={effectiveOutsideBar}
           footprintSettings={footprintSettings}
           bigTradeSettings={bigTradeSettings}
@@ -5243,12 +5315,16 @@ export function LiveApp() {
           onFootprintChange={setShowFootprint}
           onFvgGraderChange={setShowFvgGrader}
           onMgannBreakChange={setShowMgannBreak}
+          onMgannBreakSettingsChange={onMgannBreakSettingsChange}
+          onCreateMgannBreakAlert={onCreateMgannBreakAlert}
           onFvgSignalLimitChange={setFvgSignalLimit}
           onMgannBreakSignalHistoryBarsChange={setMgannBreakSignalHistoryBars}
           onMgannBreakSignalLimitChange={setMgannBreakSignalLimit}
           onBigTradesChange={setShowBigTrades}
           onEmaChange={setEma}
           onSmcChange={setSmc}
+          onSweepReversalChange={setSweepReversal}
+          onCreateSweepReversalAlert={onCreateSweepReversalAlert}
           onOutsideBarChange={setOutsideBar}
           onFootprintSettingsChange={setFootprintSettings}
           onBigTradeSettingsChange={setBigTradeSettings}
@@ -5383,6 +5459,7 @@ export function LiveApp() {
             orderControls={replayActive ? EMPTY_ORDER_CONTROLS : orderControls}
             ema={visibleEma}
             smc={visibleSmc}
+            sweepReversal={visibleSweepReversal}
             outsideBar={visibleOutsideBar}
             sessionVolumeProfile={
               indicatorsVisible && showDailyVolumeProfile && !replayActive

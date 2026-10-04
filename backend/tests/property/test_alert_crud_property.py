@@ -59,6 +59,20 @@ from app.engines.alert_engine import (
     SMC_DEFAULT_RETEST_TOLERANCE_TICKS,
     SMC_DEFAULT_SWING_LENGTH,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
+    SWEEP_REVERSAL,
+)
+from app.engines.sweep_reversal import (
+    SWEEP_REVERSAL_DEFAULT_ATR_LENGTH,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_LENGTH,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_MARGIN,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_LOOKBACK_BARS,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_MIN_PIVOTS,
+    SWEEP_REVERSAL_DEFAULT_MAX_CONFIRMATION_BARS,
+    SWEEP_REVERSAL_DEFAULT_MIN_DISPLACEMENT_ATR,
+    SWEEP_REVERSAL_DEFAULT_MIN_PENETRATION_ATR,
+    SWEEP_REVERSAL_DEFAULT_STRUCTURE_LENGTH,
+    SWEEP_REVERSAL_DEFAULT_SWING_LENGTH,
+    SWEEP_REVERSAL_TIMEFRAMES,
 )
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
@@ -141,6 +155,24 @@ def _params_for(alert_type: str):
             params["maxBars"] = SMC_DEFAULT_MAX_BARS
             params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
             params["retestToleranceTicks"] = SMC_DEFAULT_RETEST_TOLERANCE_TICKS
+        elif alert_type == SWEEP_REVERSAL:
+            params.update(
+                {
+                    "timeframe": draw(st.sampled_from(SWEEP_REVERSAL_TIMEFRAMES)),
+                    "swingLength": SWEEP_REVERSAL_DEFAULT_SWING_LENGTH,
+                    "atrLength": SWEEP_REVERSAL_DEFAULT_ATR_LENGTH,
+                    "minPenetrationAtr": SWEEP_REVERSAL_DEFAULT_MIN_PENETRATION_ATR,
+                    "structureLength": SWEEP_REVERSAL_DEFAULT_STRUCTURE_LENGTH,
+                    "maxConfirmationBars": SWEEP_REVERSAL_DEFAULT_MAX_CONFIRMATION_BARS,
+                    "minDisplacementAtr": SWEEP_REVERSAL_DEFAULT_MIN_DISPLACEMENT_ATR,
+                    "equalSwingFilter": draw(st.booleans()),
+                    "liquidityMinPivots": SWEEP_REVERSAL_DEFAULT_LIQUIDITY_MIN_PIVOTS,
+                    "liquidityLookbackBars": SWEEP_REVERSAL_DEFAULT_LIQUIDITY_LOOKBACK_BARS,
+                    "liquidityAtrLength": SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_LENGTH,
+                    "liquidityAtrMargin": SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_MARGIN,
+                    "repeat": True,
+                }
+            )
         elif alert_type == MGANN_BREAK_LS:
             params["requireBigTrade"] = draw(st.booleans())
             params["bigTradeThreshold"] = draw(_positive_numbers)

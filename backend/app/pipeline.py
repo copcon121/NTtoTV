@@ -1322,6 +1322,34 @@ class Pipeline:
             )
             await self._emit_alerts(self._alerts.evaluate(m5_ctx))
 
+        # Sweep Reversal is the only server alert that intentionally consumes
+        # every chart timeframe. Keep legacy alert types on their established
+        # M1/M5 paths by using the type-filtered evaluator here.
+        already_evaluated = {
+            closed_bar.tf if closed_bar is not None else None,
+            m5_bar.tf if m5_bar is not None else None,
+        }
+        for tf, update in (closed_bars or {}).items():
+            if tf in already_evaluated or not update.closed:
+                continue
+            bar = update.bar
+            sweep_ctx = MarketContext(
+                symbol=trade.symbol,
+                contract=trade.contract,
+                time=trade.time,
+                bar_closed=True,
+                bar_tf=tf,
+                bar_time=bar.time,
+                bar_open=bar.open,
+                bar_high=bar.high,
+                bar_low=bar.low,
+                bar_close=bar.close,
+                bar_volume=bar.volume,
+            )
+            await self._emit_alerts(
+                self._alerts.evaluate_sweep_reversal_only(sweep_ctx)
+            )
+
         # Big-trade threshold alerts: one context per reconstructed big trade.
         for bt in big_trades:
             bt_ctx = MarketContext(

@@ -57,8 +57,22 @@ from ..engines.alert_engine import (
     SMC_DEFAULT_RETEST_TOLERANCE_TICKS,
     SMC_DEFAULT_SWING_LENGTH,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
+    SWEEP_REVERSAL,
     Alert,
     AlertEngine,
+)
+from ..engines.sweep_reversal import (
+    SWEEP_REVERSAL_DEFAULT_ATR_LENGTH,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_LENGTH,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_MARGIN,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_LOOKBACK_BARS,
+    SWEEP_REVERSAL_DEFAULT_LIQUIDITY_MIN_PIVOTS,
+    SWEEP_REVERSAL_DEFAULT_MAX_CONFIRMATION_BARS,
+    SWEEP_REVERSAL_DEFAULT_MIN_DISPLACEMENT_ATR,
+    SWEEP_REVERSAL_DEFAULT_MIN_PENETRATION_ATR,
+    SWEEP_REVERSAL_DEFAULT_STRUCTURE_LENGTH,
+    SWEEP_REVERSAL_DEFAULT_SWING_LENGTH,
+    SWEEP_REVERSAL_TIMEFRAMES,
 )
 from ..models.timestamp import now_ms
 from ..storage.cache_store import CacheStore
@@ -186,6 +200,59 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         params["maxBars"] = SMC_DEFAULT_MAX_BARS
         params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
         params["retestToleranceTicks"] = SMC_DEFAULT_RETEST_TOLERANCE_TICKS
+    elif alert_type == SWEEP_REVERSAL:
+        timeframe = params.get("timeframe", "1m")
+        if not isinstance(timeframe, str) or timeframe not in SWEEP_REVERSAL_TIMEFRAMES:
+            allowed = ", ".join(SWEEP_REVERSAL_TIMEFRAMES)
+            raise validation_error(
+                f"'timeframe' must be one of: {allowed}",
+                field="timeframe",
+            )
+        equal_swing_filter = params.get("equalSwingFilter", False)
+        if not isinstance(equal_swing_filter, bool):
+            raise validation_error(
+                "'equalSwingFilter' must be a boolean",
+                field="equalSwingFilter",
+            )
+        for key in (
+            "swingLength",
+            "atrLength",
+            "structureLength",
+            "maxConfirmationBars",
+            "liquidityMinPivots",
+            "liquidityLookbackBars",
+            "liquidityAtrLength",
+            "liquidityAtrMargin",
+        ):
+            _validate_optional_positive_number(params, key)
+        for key in ("minPenetrationAtr", "minDisplacementAtr"):
+            _validate_optional_nonnegative_number(params, key)
+        min_pivots = params.get(
+            "liquidityMinPivots",
+            SWEEP_REVERSAL_DEFAULT_LIQUIDITY_MIN_PIVOTS,
+        )
+        if isinstance(min_pivots, bool) or int(min_pivots) < 2:
+            raise validation_error(
+                "'liquidityMinPivots' must be at least 2",
+                field="liquidityMinPivots",
+            )
+        params.update(
+            {
+                "timeframe": timeframe,
+                "swingLength": int(params.get("swingLength", SWEEP_REVERSAL_DEFAULT_SWING_LENGTH)),
+                "atrLength": int(params.get("atrLength", SWEEP_REVERSAL_DEFAULT_ATR_LENGTH)),
+                "minPenetrationAtr": float(params.get("minPenetrationAtr", SWEEP_REVERSAL_DEFAULT_MIN_PENETRATION_ATR)),
+                "structureLength": int(params.get("structureLength", SWEEP_REVERSAL_DEFAULT_STRUCTURE_LENGTH)),
+                "maxConfirmationBars": int(params.get("maxConfirmationBars", SWEEP_REVERSAL_DEFAULT_MAX_CONFIRMATION_BARS)),
+                "minDisplacementAtr": float(params.get("minDisplacementAtr", SWEEP_REVERSAL_DEFAULT_MIN_DISPLACEMENT_ATR)),
+                "equalSwingFilter": equal_swing_filter,
+                "liquidityMinPivots": int(min_pivots),
+                "liquidityLookbackBars": int(params.get("liquidityLookbackBars", SWEEP_REVERSAL_DEFAULT_LIQUIDITY_LOOKBACK_BARS)),
+                "liquidityAtrLength": int(params.get("liquidityAtrLength", SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_LENGTH)),
+                "liquidityAtrMargin": float(params.get("liquidityAtrMargin", SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_MARGIN)),
+                "repeat": params.get("repeat", True),
+            }
+        )
     elif alert_type == LIQUIDITY_POOL_BREAK:
         side = params.get("side", "both")
         if side not in ("both", "bsl", "ssl"):
