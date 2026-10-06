@@ -2,11 +2,16 @@
  * Drawing tools — shared types.
  *
  * Each drawing is a lightweight-charts v5 series primitive (ISeriesPrimitive)
- * attached to the candle series. This module defines the common interfaces
- * shared by all tool implementations and the DrawingManager orchestrator.
+ * attached to the series whose pane/value scale owns it. This module defines
+ * the common interfaces shared by tool implementations and DrawingManager.
  */
 
-import type { ISeriesApi, IChartApi, UTCTimestamp } from "lightweight-charts";
+import type {
+  ISeriesApi,
+  IChartApi,
+  SeriesType,
+  UTCTimestamp,
+} from "lightweight-charts";
 import type { DeltaProfileLoadState } from "../../orderflow/deltaProfile";
 import type { Timeframe } from "../../socket/messages";
 
@@ -124,8 +129,25 @@ export interface DrawingState {
   tool: DrawingToolType;
   anchors: AnchorPoint[];
   options?: DrawingOptions;
+  /** Pane whose value scale owns the drawing. Omitted for legacy/main-pane drawings. */
+  paneId?: DrawingPaneId;
   sourceTimeframe?: Timeframe;
   locked?: boolean;
+}
+
+export type DrawingPaneId = "main" | "gc_push_momentum";
+
+export type DrawingSeriesApi = ISeriesApi<SeriesType>;
+
+export interface DrawingPaneTarget {
+  id: DrawingPaneId;
+  paneIndex: number;
+  series: DrawingSeriesApi;
+}
+
+export interface DrawingPaneResolver {
+  byIndex(paneIndex: number): DrawingPaneTarget | undefined;
+  byId(paneId: DrawingPaneId): DrawingPaneTarget | undefined;
 }
 
 export interface DrawingOptions {
@@ -196,11 +218,12 @@ export interface IDrawing {
 /* ------------------------------------------------------------------ */
 
 export interface IDrawingManager {
-  /** Attach to chart + series. Call once after the adapter mounts. */
+  /** Attach to chart + main series. Call once after the adapter mounts. */
   attach(
     chart: IChartApi,
     series: ISeriesApi<"Candlestick">,
     container: HTMLElement,
+    paneResolver?: DrawingPaneResolver,
   ): void;
 
   /** Start interactive placement for the given tool type. */

@@ -1,0 +1,304 @@
+{
+  "schemaVersion": 1,
+  "name": "pine_v4_supertrend_warmup_gap_equality_and_flip",
+  "description": "Language-neutral golden vectors for the supplied Pine v4 Supertrend study.",
+  "settings": {
+    "period": 2,
+    "multiplier": 1,
+    "source": "hl2",
+    "initialTrend": 1,
+    "numericToleranceForBinaryFloatConsumers": 1e-12
+  },
+  "bars": [
+    { "time": 0, "open": 10, "high": 11, "low": 9, "close": 10, "volume": 1 },
+    { "time": 60000, "open": 10, "high": 11, "low": 9, "close": 10, "volume": 1 },
+    { "time": 120000, "open": 10, "high": 10, "low": 8, "close": 8, "volume": 1 },
+    { "time": 180000, "open": 8, "high": 8, "low": 6, "close": 6, "volume": 1 },
+    { "time": 240000, "open": 8, "high": 10, "low": 8, "close": 9, "volume": 1 },
+    { "time": 300000, "open": 9, "high": 11, "low": 9, "close": 10, "volume": 1 },
+    { "time": 360000, "open": 10, "high": 16, "low": 8, "close": 8, "volume": 1 },
+    { "time": 420000, "open": 8, "high": 8, "low": 7, "close": 7, "volume": 1 },
+    { "time": 480000, "open": 7, "high": 7.9, "low": 6.9, "close": 6.9, "volume": 1 }
+  ],
+  "expected": {
+    "wilderRma": [
+      {
+        "time": 0,
+        "tr": 2,
+        "atr": null,
+        "basicLower": null,
+        "basicUpper": null,
+        "finalLower": null,
+        "finalUpper": null,
+        "trend": 1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      },
+      {
+        "time": 60000,
+        "tr": 2,
+        "atr": 2,
+        "basicLower": 8,
+        "basicUpper": 12,
+        "finalLower": 8,
+        "finalUpper": 12,
+        "trend": 1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      },
+      {
+        "time": 120000,
+        "tr": 2,
+        "atr": 2,
+        "basicLower": 7,
+        "basicUpper": 11,
+        "finalLower": 8,
+        "finalUpper": 11,
+        "trend": 1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      },
+      {
+        "time": 180000,
+        "tr": 2,
+        "atr": 2,
+        "basicLower": 5,
+        "basicUpper": 9,
+        "finalLower": 5,
+        "finalUpper": 9,
+        "trend": -1,
+        "buySignal": false,
+        "sellSignal": true,
+        "changeSignal": true
+      },
+      {
+        "time": 240000,
+        "tr": 4,
+        "atr": 3,
+        "basicLower": 6,
+        "basicUpper": 12,
+        "finalLower": 6,
+        "finalUpper": 9,
+        "trend": -1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      },
+      {
+        "time": 300000,
+        "tr": 2,
+        "atr": 2.5,
+        "basicLower": 7.5,
+        "basicUpper": 12.5,
+        "finalLower": 7.5,
+        "finalUpper": 12.5,
+        "trend": 1,
+        "buySignal": true,
+        "sellSignal": false,
+        "changeSignal": true
+      },
+      {
+        "time": 360000,
+        "tr": 8,
+        "atr": 5.25,
+        "basicLower": 6.75,
+        "basicUpper": 17.25,
+        "finalLower": 7.5,
+        "finalUpper": 12.5,
+        "trend": 1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      },
+      {
+        "time": 420000,
+        "tr": 1,
+        "atr": 3.125,
+        "basicLower": 4.375,
+        "basicUpper": 10.625,
+        "finalLower": 7.5,
+        "finalUpper": 10.625,
+        "trend": -1,
+        "buySignal": false,
+        "sellSignal": true,
+        "changeSignal": true
+      },
+      {
+        "time": 480000,
+        "tr": 1,
+        "atr": 2.0625,
+        "basicLower": 5.3375,
+        "basicUpper": 9.4625,
+        "finalLower": 5.3375,
+        "finalUpper": 9.4625,
+        "trend": -1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      }
+    ],
+    "simpleSma": [
+      {
+        "time": 0,
+        "tr": null,
+        "atr": null,
+        "basicLower": null,
+        "basicUpper": null,
+        "finalLower": null,
+        "finalUpper": null,
+        "trend": 1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      },
+      {
+        "time": 60000,
+        "tr": 2,
+        "atr": null,
+        "basicLower": null,
+        "basicUpper": null,
+        "finalLower": null,
+        "finalUpper": null,
+        "trend": 1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      },
+      {
+        "time": 120000,
+        "tr": 2,
+        "atr": 2,
+        "basicLower": 7,
+        "basicUpper": 11,
+        "finalLower": 7,
+        "finalUpper": 11,
+        "trend": 1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      },
+      {
+        "time": 180000,
+        "tr": 2,
+        "atr": 2,
+        "basicLower": 5,
+        "basicUpper": 9,
+        "finalLower": 7,
+        "finalUpper": 9,
+        "trend": -1,
+        "buySignal": false,
+        "sellSignal": true,
+        "changeSignal": true
+      },
+      {
+        "time": 240000,
+        "tr": 4,
+        "atr": 3,
+        "basicLower": 6,
+        "basicUpper": 12,
+        "finalLower": 6,
+        "finalUpper": 9,
+        "trend": -1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      },
+      {
+        "time": 300000,
+        "tr": 2,
+        "atr": 3,
+        "basicLower": 7,
+        "basicUpper": 13,
+        "finalLower": 7,
+        "finalUpper": 13,
+        "trend": 1,
+        "buySignal": true,
+        "sellSignal": false,
+        "changeSignal": true
+      },
+      {
+        "time": 360000,
+        "tr": 8,
+        "atr": 5,
+        "basicLower": 7,
+        "basicUpper": 17,
+        "finalLower": 7,
+        "finalUpper": 13,
+        "trend": 1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      },
+      {
+        "time": 420000,
+        "tr": 1,
+        "atr": 4.5,
+        "basicLower": 3,
+        "basicUpper": 12,
+        "finalLower": 7,
+        "finalUpper": 12,
+        "trend": 1,
+        "buySignal": false,
+        "sellSignal": false,
+        "changeSignal": false
+      },
+      {
+        "time": 480000,
+        "tr": 1,
+        "atr": 1,
+        "basicLower": 6.4,
+        "basicUpper": 8.4,
+        "finalLower": 6.4,
+        "finalUpper": 8.4,
+        "trend": -1,
+        "buySignal": false,
+        "sellSignal": true,
+        "changeSignal": true
+      }
+    ]
+  },
+  "realtimeRollbackProbe": {
+    "mode": "wilderRma",
+    "baseThroughTime": 360000,
+    "rule": "Evaluate each same-time snapshot independently from the committed state at baseThroughTime.",
+    "snapshots": [
+      {
+        "id": "temporary_bearish_flip",
+        "bar": { "time": 420000, "open": 8, "high": 8, "low": 7, "close": 7, "volume": 1 },
+        "expected": {
+          "time": 420000,
+          "tr": 1,
+          "atr": 3.125,
+          "basicLower": 4.375,
+          "basicUpper": 10.625,
+          "finalLower": 7.5,
+          "finalUpper": 10.625,
+          "trend": -1,
+          "buySignal": false,
+          "sellSignal": true,
+          "changeSignal": true
+        }
+      },
+      {
+        "id": "later_recovery_removes_flip",
+        "bar": { "time": 420000, "open": 8, "high": 9, "low": 7, "close": 8, "volume": 1 },
+        "expected": {
+          "time": 420000,
+          "tr": 2,
+          "atr": 3.625,
+          "basicLower": 4.375,
+          "basicUpper": 11.625,
+          "finalLower": 7.5,
+          "finalUpper": 11.625,
+          "trend": 1,
+          "buySignal": false,
+          "sellSignal": false,
+          "changeSignal": false
+        }
+      }
+    ]
+  }
+}

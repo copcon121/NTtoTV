@@ -29,6 +29,7 @@ import {
 
 import { type BigTradeMarker } from "./indicatorReducer";
 import { type ChartSeriesPort, ChartSeriesController } from "./chartSeriesController";
+import { applyBarUpdate } from "./barReducer";
 import { type EmaPoint, emaSeries, nextEma } from "./ema";
 import {
   DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -110,6 +111,16 @@ import {
   normalizeGcPushMomentumSettings,
   type GcPushMomentumSettings,
 } from "./gcPushMomentum";
+import {
+  calculateSupertrend,
+  DEFAULT_SUPERTREND_SETTINGS,
+  normalizeSupertrendSettings,
+  updateSupertrendRuntime,
+  type SupertrendOverlay,
+  type SupertrendPoint,
+  type SupertrendRuntimeState,
+  type SupertrendSettings,
+} from "./supertrend";
 
 /**
  * A disposable rendering port. The default factory builds a
@@ -153,6 +164,16 @@ export interface DisposableChartPort extends ChartSeriesPort {
   updateEmaLine?(id: string, point: EmaPoint): void;
   clearEma?(): void;
   clearEmaLines?(): void;
+  setSupertrendOverlay?(
+    overlay: SupertrendOverlay,
+    settings: Partial<SupertrendSettings>,
+  ): void;
+  updateSupertrendPoint?(
+    point: SupertrendPoint,
+    confirmed: boolean,
+    settings: Partial<SupertrendSettings>,
+  ): void;
+  clearSupertrend?(): void;
   setSmcOverlay?(overlay: SmcOverlay): void;
   setSweepReversalOverlay?(overlay: SweepReversalOverlay): void;
   setOutsideBar?(settings: OutsideBarSettings): void;
@@ -275,6 +296,8 @@ export interface ChartContainerProps {
   timeframe: Timeframe;
   /** Initial history bars (from the MemoryCache / HistoryLoader). */
   bars?: readonly Bar[];
+  /** Actual timeframe of `bars` when a requested 15s load fell back to 1m. */
+  barsTimeframe?: Timeframe;
   /** Initial volume-delta history for the lower MyVolumeDelta-style candles. */
   volumeDelta?: readonly VolumeDeltaDatum[];
   /** Initial/live footprint bars keyed by M1 bar time. */
@@ -299,6 +322,8 @@ export interface ChartContainerProps {
    * added overlay). `color` restyles the line.
    */
   ema?: Partial<EmaSettings>;
+  /** Pine-v4-compatible ATR trailing regime overlay. Disabled by default. */
+  supertrend?: Partial<SupertrendSettings>;
   /** Show the M1 footprint overlay on the supported 15s/1m chart timeframes. */
   showFootprint?: boolean;
   /** Session volume profile data for the right-edge histogram. */
@@ -577,6 +602,7 @@ export function ChartContainer({
   contract,
   timeframe,
   bars,
+  barsTimeframe = timeframe,
   volumeDelta,
   footprintBars,
   fvgSignals,
@@ -587,6 +613,7 @@ export function ChartContainer({
   orderLines,
   orderControls,
   ema,
+  supertrend = DEFAULT_SUPERTREND_SETTINGS,
   showFootprint = false,
   sessionVolumeProfile = null,
   sessionVolumeProfileWidth = DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
@@ -718,6 +745,12 @@ export function ChartContainer({
   // for `time`. Tracking the closed base separately avoids compounding when the
   // same in-progress bar updates many times.
   const emaStateRef = useRef<Map<string, EmaLineState>>(new Map());
+  const supertrendRuntimeRef = useRef<SupertrendRuntimeState>();
+  const supertrendClosedByTimeRef = useRef(new Map<number, boolean>());
+  const supertrendSeriesRef = useRef<string>();
+  const supertrendLiveOnlyBarsRef = useRef<readonly Bar[]>([]);
+  const barsTimeframeRef = useRef(barsTimeframe);
+  barsTimeframeRef.current = barsTimeframe;
   const renderedBarsInputRef = useRef<readonly Bar[]>();
   const renderedBarsSeriesRef = useRef<string>();
   const renderedBarsReplayRef = useRef(false);
@@ -743,6 +776,8 @@ export function ChartContainer({
   // Latest EMA config, read by the live bar handler without re-subscribing.
   const emaConfigRef = useRef(ema);
   emaConfigRef.current = ema;
+  const supertrendConfigRef = useRef(supertrend);
+  supertrendConfigRef.current = supertrend;
   const smcConfigRef = useRef(smc);
   smcConfigRef.current = smc;
   const sweepReversalConfigRef = useRef(sweepReversal);
@@ -1045,7 +1080,10 @@ export function ChartContainer({
     const mgr = new DrawingManager();
     const adapter = port as LightweightChartsAdapter;
     if (adapter.chartApi && adapter.candleSeriesApi) {
-      mgr.attach(adapter.chartApi, adapter.candleSeriesApi, host);
+      mgr.attach(adapter.chartApi, adapter.candleSeriesApi, host, {
+        byIndex: (paneIndex) => adapter.drawingPaneTargetByIndex(paneIndex),
+        byId: (paneId) => adapter.drawingPaneTargetById(paneId),
+      });
     }
     drawingManagerRef.current = mgr;
 
@@ -1560,6 +1598,59 @@ export function ChartContainer({
     ema?.ema200Color,
   ]);
 
+  // Supertrend owns a separate pair of line series and marker layer. History,
+  // replay seeks, backfills, settings changes and revisions all rebuild from
+  // the merged bars; the socket path below advances only the latest candle.
+  useEffect(() => {
+    const port = portRef.current;
+    if (!port) return;
+    const settings = normalizeSupertrendSettings(supertrend);
+    const seriesKey = `${symbol}\u0000${contract}\u0000${timeframe}`;
+    if (supertrendSeriesRef.current !== seriesKey) {
+      supertrendSeriesRef.current = seriesKey;
+      supertrendClosedByTimeRef.current.clear();
+      supertrendLiveOnlyBarsRef.current = [];
+    }
+    const historyMatchesRequestedTimeframe = barsTimeframe === timeframe;
+    const nextBars = suspendRealtime
+      ? historyMatchesRequestedTimeframe
+        ? (bars ?? [])
+        : []
+      : historyMatchesRequestedTimeframe
+        ? (controllerRef.current?.bars ?? bars ?? [])
+        : supertrendLiveOnlyBarsRef.current;
+    if (!settings.enabled) {
+      port.clearSupertrend?.();
+      supertrendRuntimeRef.current = undefined;
+      return;
+    }
+
+    const confirmations = supertrendClosedByTimeRef.current;
+    nextBars.forEach((bar, index) => {
+      if (bar.closed !== undefined) {
+        confirmations.set(bar.time, bar.closed);
+      } else if (suspendRealtime || index < nextBars.length - 1) {
+        confirmations.set(bar.time, true);
+      } else if (!confirmations.has(bar.time)) {
+        confirmations.set(bar.time, false);
+      }
+    });
+    const calculated = calculateSupertrend(nextBars, settings, {
+      assumeLastBarClosed: suspendRealtime,
+      confirmedByTime: confirmations,
+    });
+    supertrendRuntimeRef.current = calculated.runtime;
+    port.setSupertrendOverlay?.(calculated.overlay, settings);
+  }, [
+    symbol,
+    contract,
+    timeframe,
+    bars,
+    barsTimeframe,
+    suspendRealtime,
+    supertrend,
+  ]);
+
   useEffect(() => {
     // Defer SMC recomputation by 100ms so the chart renders bars first
     // without blocking the main thread on O(n) structure detection.
@@ -1639,6 +1730,72 @@ export function ChartContainer({
             sweepReversalConfigRef.current,
           ),
         );
+      }
+
+      const supertrendSettings = normalizeSupertrendSettings(
+        supertrendConfigRef.current,
+      );
+      const supertrendUsesLiveOnlyBars = barsTimeframeRef.current !== timeframe;
+      if (supertrendUsesLiveOnlyBars) {
+        supertrendLiveOnlyBarsRef.current = applyBarUpdate(
+          supertrendLiveOnlyBarsRef.current,
+          message.bar,
+        ).bars;
+      }
+      if (
+        (outcome.rendered || supertrendUsesLiveOnlyBars) &&
+        supertrendSettings.enabled &&
+        portRef.current
+      ) {
+        const confirmations = supertrendClosedByTimeRef.current;
+        const runtime = supertrendRuntimeRef.current;
+        if (
+          runtime?.currentTime !== undefined &&
+          message.bar.time > runtime.currentTime
+        ) {
+          confirmations.set(runtime.currentTime, true);
+        }
+        confirmations.set(message.bar.time, message.closed === true);
+        const update =
+          runtime === undefined
+            ? undefined
+            : updateSupertrendRuntime(
+                runtime,
+                message.bar,
+                message.closed === true,
+                supertrendSettings,
+              );
+        const supertrendPort = portRef.current;
+        if (update !== undefined && supertrendPort.updateSupertrendPoint) {
+          if (update.committedPoint !== undefined) {
+            supertrendPort.updateSupertrendPoint(
+              update.committedPoint,
+              true,
+              supertrendSettings,
+            );
+          }
+          supertrendPort.updateSupertrendPoint(
+            update.point,
+            update.confirmed,
+            supertrendSettings,
+          );
+          supertrendRuntimeRef.current = update.state;
+        } else {
+          // Historical insert/overwrite, or a minimal test port without the
+          // incremental method: recompute from the controller's merged bars.
+          const calculated = calculateSupertrend(
+            supertrendUsesLiveOnlyBars
+              ? supertrendLiveOnlyBarsRef.current
+              : controller.bars,
+            supertrendSettings,
+            { confirmedByTime: confirmations },
+          );
+          supertrendRuntimeRef.current = calculated.runtime;
+          supertrendPort.setSupertrendOverlay?.(
+            calculated.overlay,
+            supertrendSettings,
+          );
+        }
       }
 
       // Advance the EMA overlay for the same bar when enabled. An in-progress

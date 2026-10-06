@@ -1,14 +1,23 @@
 // GC Push Momentum -- pure, deterministic indicator math.
 //
-// The histogram measures multi-bar log return in units of volatility known
-// before each return.  Order-flow is deliberately kept as confirmation
-// metadata instead of being mixed into the price score.
+// Push measures multi-bar log return in units of volatility known before each
+// return. A causal EMA signal and their difference make the same score easier
+// to read without changing the price score used by trading logic. Order-flow
+// remains confirmation metadata instead of being mixed into that score.
 
 import { type Bar } from "../cache/types";
 
 export interface GcPushMomentumSettings {
+  /** Show the optional smoothed Push and Signal lines above the histogram. */
+  showLines: boolean;
+  /** Show confirmed regular divergence on both price and momentum panes. */
+  showDivergence: boolean;
   /** Number of returns in the price-push and order-flow horizons. */
   horizonBars: number;
+  /** EMA period applied to raw Push for the displayed Push line. */
+  pushSmoothingBars: number;
+  /** EMA period applied to displayed Push for the MACD-style Signal line. */
+  signalSmoothingBars: number;
   /** Length of each of the two non-overlapping acceleration windows. */
   accelerationBars: number;
   /** Half-life of the lagged EWMA return variance. */
@@ -34,7 +43,11 @@ export interface GcPushMomentumSettings {
 }
 
 export const DEFAULT_GC_PUSH_MOMENTUM_SETTINGS: GcPushMomentumSettings = {
+  showLines: false,
+  showDivergence: true,
   horizonBars: 3,
+  pushSmoothingBars: 5,
+  signalSmoothingBars: 9,
   accelerationBars: 2,
   volatilityHalfLifeBars: 60,
   efficiencyLookbackBars: 10,
@@ -65,7 +78,13 @@ export type GcPushMomentumFlowState =
 
 export interface GcPushMomentumPoint {
   time: number;
+  /** Raw volatility-normalized score retained for strength/trading logic. */
   push: number;
+  /** Causal EMA of raw Push used for the visible blue line. */
+  smoothedPush: number;
+  signal: number;
+  histogram: number;
+  histogramChange: number;
   acceleration: number;
   efficiency: number;
   flowRatio?: number;
@@ -109,9 +128,29 @@ export function normalizeGcPushMomentumSettings(
 ): GcPushMomentumSettings {
   const defaults = DEFAULT_GC_PUSH_MOMENTUM_SETTINGS;
   return {
+    showLines:
+      typeof settings?.showLines === "boolean"
+        ? settings.showLines
+        : defaults.showLines,
+    showDivergence:
+      typeof settings?.showDivergence === "boolean"
+        ? settings.showDivergence
+        : defaults.showDivergence,
     horizonBars: normalizedInteger(
       settings?.horizonBars,
       defaults.horizonBars,
+      1,
+      10_000,
+    ),
+    pushSmoothingBars: normalizedInteger(
+      settings?.pushSmoothingBars,
+      defaults.pushSmoothingBars,
+      1,
+      10_000,
+    ),
+    signalSmoothingBars: normalizedInteger(
+      settings?.signalSmoothingBars,
+      defaults.signalSmoothingBars,
       1,
       10_000,
     ),
@@ -358,6 +397,8 @@ export function calculateGcPushMomentum(
   const predictedVariances = new Array<number>(bars.length).fill(0);
   const output: GcPushMomentumPoint[] = [];
   const lambda = Math.exp(Math.log(0.5) / settings.volatilityHalfLifeBars);
+  const pushSmoothingAlpha = 2 / (settings.pushSmoothingBars + 1);
+  const signalAlpha = 2 / (settings.signalSmoothingBars + 1);
   const gapLimit = settings.barDurationMs * settings.gapMultiplier;
   const structuralRequiredReturns = Math.max(
     settings.horizonBars,
@@ -375,9 +416,15 @@ export function calculateGcPushMomentum(
   const priorAbsFlow = new RollingQuantiles(settings.percentileLookbackBars);
   const priorHorizonVolume = new RollingQuantiles(settings.percentileLookbackBars);
   let warmed = false;
+  let smoothedPush: number | undefined;
+  let signal: number | undefined;
+  let previousHistogram: number | undefined;
 
   const startSegmentAt = (index: number, preserveWarmedState: boolean): void => {
     segmentStart = index;
+    smoothedPush = undefined;
+    signal = undefined;
+    previousHistogram = undefined;
     if (!preserveWarmedState) {
       ewmaVariance = undefined;
       priorAbsPush.clear();
@@ -435,6 +482,20 @@ export function calculateGcPushMomentum(
     const pushNumerator = sumRange(returns, pushFrom, index);
     const pushVariance = sumRange(predictedVariances, pushFrom, index);
     const push = finiteScore(pushNumerator, pushVariance, settings.epsilon);
+    const currentSmoothedPush =
+      smoothedPush === undefined
+        ? push
+        : pushSmoothingAlpha * push + (1 - pushSmoothingAlpha) * smoothedPush;
+    const currentSignal =
+      signal === undefined
+        ? currentSmoothedPush
+        : signalAlpha * currentSmoothedPush + (1 - signalAlpha) * signal;
+    const histogram = currentSmoothedPush - currentSignal;
+    const histogramChange =
+      previousHistogram === undefined ? 0 : histogram - previousHistogram;
+    smoothedPush = currentSmoothedPush;
+    signal = currentSignal;
+    previousHistogram = histogram;
 
     const accelerationRecentFrom = index - settings.accelerationBars + 1;
     const accelerationPriorFrom = index - settings.accelerationBars * 2 + 1;
@@ -516,6 +577,10 @@ export function calculateGcPushMomentum(
     const point: GcPushMomentumPoint = {
       time: current.time,
       push,
+      smoothedPush: currentSmoothedPush,
+      signal: currentSignal,
+      histogram,
+      histogramChange,
       acceleration,
       efficiency,
       strong,

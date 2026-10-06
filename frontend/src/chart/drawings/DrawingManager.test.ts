@@ -7,10 +7,11 @@ import { type RectanglePrimitive } from "./RectanglePrimitive";
 import { type TrendLinePrimitive } from "./TrendLinePrimitive";
 import type { DrawingToolType } from "./types";
 
-function makeHarness() {
+function makeHarness(options: { lowerPane?: boolean } = {}) {
   const clickHandlers: Array<(param: unknown) => void> = [];
   const crosshairHandlers: Array<(param: unknown) => void> = [];
   const attached: unknown[] = [];
+  const lowerAttached: unknown[] = [];
 
   const timeScale = {
     coordinateToLogical: (x: number) => x,
@@ -20,7 +21,10 @@ function makeHarness() {
   };
   const chart = {
     applyOptions: vi.fn(),
-    paneSize: vi.fn(() => ({ width: 240, height: 180 })),
+    paneSize: vi.fn((paneIndex = 0) => ({
+      width: 240,
+      height: paneIndex === 1 ? 120 : 180,
+    })),
     timeScale: () => timeScale,
     subscribeClick: vi.fn((handler: (param: unknown) => void) => {
       clickHandlers.push(handler);
@@ -60,6 +64,29 @@ function makeHarness() {
         volume: 100,
       })),
   };
+  const lowerSeries = {
+    attachPrimitive: vi.fn((primitive: unknown) => {
+      lowerAttached.push(primitive);
+      (primitive as { attached?: (params: unknown) => void }).attached?.({
+        chart,
+        series: lowerSeries,
+        requestUpdate: vi.fn(),
+      });
+    }),
+    detachPrimitive: vi.fn((primitive: unknown) => {
+      const index = lowerAttached.indexOf(primitive);
+      if (index >= 0) lowerAttached.splice(index, 1);
+      (primitive as { detached?: () => void }).detached?.();
+    }),
+    coordinateToPrice: (y: number) => y * 10,
+    priceToCoordinate: (price: number) => price / 10,
+    dataByIndex: (index: number) => ({ time: index, value: index }),
+    data: () =>
+      Array.from({ length: 241 }, (_, index) => ({
+        time: index,
+        value: index,
+      })),
+  };
 
   const container = document.createElement("div");
   Object.defineProperty(container, "getBoundingClientRect", {
@@ -67,9 +94,9 @@ function makeHarness() {
       left: 0,
       top: 0,
       width: 240,
-      height: 180,
+      height: options.lowerPane ? 300 : 180,
       right: 240,
-      bottom: 180,
+      bottom: options.lowerPane ? 300 : 180,
       x: 0,
       y: 0,
       toJSON: () => ({}),
@@ -77,9 +104,68 @@ function makeHarness() {
   });
   document.body.appendChild(container);
 
+  const mainPane = document.createElement("div");
+  const lowerPane = document.createElement("div");
+  Object.defineProperty(mainPane, "getBoundingClientRect", {
+    value: () => ({
+      left: 0, top: 0, width: 240, height: 180, right: 240, bottom: 180,
+      x: 0, y: 0, toJSON: () => ({}),
+    }),
+  });
+  Object.defineProperty(lowerPane, "getBoundingClientRect", {
+    value: () => ({
+      left: 0, top: 180, width: 240, height: 120, right: 240, bottom: 300,
+      x: 0, y: 180, toJSON: () => ({}),
+    }),
+  });
+  if (options.lowerPane) {
+    Object.assign(chart, {
+      panes: () => [
+        { getHTMLElement: () => mainPane, getSeries: () => [series] },
+        { getHTMLElement: () => lowerPane, getSeries: () => [lowerSeries] },
+      ],
+    });
+  }
+
   const manager = new DrawingManager();
-  manager.attach(chart as never, series as never, container);
-  return { attached, chart, clickHandlers, container, crosshairHandlers, manager, series };
+  manager.attach(
+    chart as never,
+    series as never,
+    container,
+    options.lowerPane
+      ? {
+          byIndex: (paneIndex) =>
+            paneIndex === 0
+              ? { id: "main", paneIndex: 0, series: series as never }
+              : paneIndex === 1
+                ? {
+                    id: "gc_push_momentum",
+                    paneIndex: 1,
+                    series: lowerSeries as never,
+                  }
+                : undefined,
+          byId: (paneId) =>
+            paneId === "main"
+              ? { id: "main", paneIndex: 0, series: series as never }
+              : {
+                  id: "gc_push_momentum",
+                  paneIndex: 1,
+                  series: lowerSeries as never,
+                },
+        }
+      : undefined,
+  );
+  return {
+    attached,
+    chart,
+    clickHandlers,
+    container,
+    crosshairHandlers,
+    lowerAttached,
+    lowerSeries,
+    manager,
+    series,
+  };
 }
 
 function placeRectangle(clickHandlers: Array<(param: unknown) => void>) {
@@ -927,6 +1013,75 @@ describe("DrawingManager path tool", () => {
 });
 
 describe("DrawingManager trendline constraints", () => {
+  it("places a trendline on the lower indicator pane using its own value scale", () => {
+    const {
+      clickHandlers,
+      container,
+      crosshairHandlers,
+      lowerAttached,
+      manager,
+    } = makeHarness({ lowerPane: true });
+    manager.startDrawing("trendline");
+
+    clickHandlers[0]({ point: { x: 10, y: 20 }, paneIndex: 1 });
+    crosshairHandlers[0]({ point: { x: 40, y: 50 }, paneIndex: 1 });
+    expect(lowerAttached).toHaveLength(1);
+    expect((lowerAttached[0] as TrendLinePrimitive).anchors[1].price).toBe(500);
+
+    clickHandlers[0]({ point: { x: 70, y: 80 }, paneIndex: 1 });
+    const [trendline] = manager.exportState();
+    expect(trendline.paneId).toBe("gc_push_momentum");
+    expect(trendline.anchors).toEqual([
+      { time: 10, logical: 10, price: 200 },
+      { time: 70, logical: 70, price: 800 },
+    ]);
+    expect(lowerAttached).toHaveLength(1);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("selects and moves a lower-pane trendline in pane-local coordinates", () => {
+    const { clickHandlers, container, manager } = makeHarness({ lowerPane: true });
+    manager.startDrawing("trendline");
+    clickHandlers[0]({ point: { x: 10, y: 20 }, paneIndex: 1 });
+    clickHandlers[0]({ point: { x: 60, y: 80 }, paneIndex: 1 });
+
+    pointerDown(container, 35, 230);
+    pointerMove(container, 45, 240);
+    pointerUp(container, 45, 240);
+
+    const [trendline] = manager.exportState();
+    expect(trendline.paneId).toBe("gc_push_momentum");
+    expect(
+      trendline.anchors.map((anchor) => ({
+        logical: anchor.logical,
+        price: anchor.price,
+      })),
+    ).toEqual([
+      { logical: 20, price: 300 },
+      { logical: 70, price: 900 },
+    ]);
+
+    manager.dispose();
+    container.remove();
+  });
+
+  it("keeps both trendline anchors in the pane chosen by the first click", () => {
+    const { clickHandlers, container, manager } = makeHarness({ lowerPane: true });
+    manager.startDrawing("trendline");
+
+    clickHandlers[0]({ point: { x: 10, y: 20 }, paneIndex: 1 });
+    clickHandlers[0]({ point: { x: 70, y: 80 }, paneIndex: 0 });
+    expect(manager.exportState()).toEqual([]);
+
+    clickHandlers[0]({ point: { x: 70, y: 80 }, paneIndex: 1 });
+    expect(manager.exportState()).toHaveLength(1);
+
+    manager.dispose();
+    container.remove();
+  });
+
   it("keeps the trendline horizontal when the second click is made with Shift", () => {
     const { clickHandlers, container, manager } = makeHarness();
     manager.startDrawing("trendline");

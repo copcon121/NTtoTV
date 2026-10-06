@@ -213,8 +213,8 @@ def _resolve_contract(
 def _bar_to_dict(bar: BarRecord) -> dict[str, Any]:
     """Serialize a :class:`BarRecord` to the OHLCV wire shape used by history.
 
-    Matches the ``bar`` payload of a ``bar_update`` (time/open/high/low/close/
-    volume), so the Frontend renders cache and rebuild bars identically.
+    Matches the ``bar`` payload of a ``bar_update`` and also exposes finality,
+    so recursive indicators do not accidentally commit a forming cache row.
     """
     return {
         "time": bar.time,
@@ -224,6 +224,7 @@ def _bar_to_dict(bar: BarRecord) -> dict[str, Any]:
         "close": bar.close,
         "volume": bar.volume,
         "source": bar.source,
+        "closed": bar.closed,
     }
 
 
@@ -265,7 +266,9 @@ def _rebuild_bars(
                 close=trade.price,
                 volume=trade.volume,
                 source=trade.source,
-                closed=True,
+                # A rebuild range that ends inside this bucket cannot prove
+                # the bar final. Prior buckets are safe to mark confirmed.
+                closed=agg.bucket_start(to, tf) > bucket,
             )
         else:
             if trade.price > rec.high:

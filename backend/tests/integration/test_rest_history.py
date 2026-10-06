@@ -116,6 +116,7 @@ def test_history_cache_hit_returns_source_cache(env):
         "close",
         "volume",
         "source",
+        "closed",
     }
 
 
@@ -194,7 +195,30 @@ def test_history_cache_miss_rebuilds_from_ticks(env):
         "close": 2347.0,
         "volume": 4,
         "source": "nt",
+        "closed": True,
     }
+
+
+@pytest.mark.integration
+def test_history_rebuild_marks_last_partial_bucket_open(env):
+    client, _, tick_store = env
+    bucket0 = _BASE_MS
+    bucket1 = _BASE_MS + _MINUTE_MS
+    tick_store.record_trade(_trade(bucket0 + 1_000, price=2345.0, volume=1, seq=1))
+    tick_store.record_trade(_trade(bucket1 + 1_000, price=2346.0, volume=1, seq=2))
+
+    response = client.get(
+        "/api/history",
+        params={
+            "symbol": "GC",
+            "tf": "1m",
+            "from": bucket0,
+            "to": bucket1 + 30_000,
+        },
+    )
+
+    assert response.status_code == 200
+    assert [bar["closed"] for bar in response.json()["bars"]] == [True, False]
 
 
 @pytest.mark.integration

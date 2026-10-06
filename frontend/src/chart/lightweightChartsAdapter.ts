@@ -80,6 +80,11 @@ import { SessionVolumeProfilePrimitive } from "./SessionVolumeProfilePrimitive";
 import { type Bar } from "../cache/types";
 import type { FvgSignalUpdateMessage } from "../socket/messages";
 import { type FootprintViewport } from "../footprint/footprintModel";
+import type {
+  DrawingPaneId,
+  DrawingPaneTarget,
+  DrawingSeriesApi,
+} from "./drawings/types";
 import {
   countdownBarStartMs,
   formatBarCountdown,
@@ -112,6 +117,124 @@ import {
   type GcPushMomentumPoint,
   type GcPushMomentumSettings,
 } from "./gcPushMomentum";
+import {
+  buildGcPushMomentumDivergences,
+  buildGcPushMomentumEarlyDivergences,
+  type GcPushMomentumDivergence,
+  type GcPushMomentumEarlyDivergence,
+} from "./gcPushMomentumDivergence";
+import {
+  MAX_SUPERTREND_MARKERS,
+  normalizeSupertrendSettings,
+  supertrendMarkerForPoint,
+  type SupertrendDirection,
+  type SupertrendMarker,
+  type SupertrendOverlay,
+  type SupertrendPoint,
+  type SupertrendSettings,
+} from "./supertrend";
+
+interface SupertrendLineSample {
+  time: number;
+  direction?: SupertrendDirection;
+  value?: number;
+}
+
+export interface SupertrendLineSegment {
+  direction: SupertrendDirection;
+  points: readonly {
+    time: number;
+    value: number;
+  }[];
+}
+
+function supertrendLineSamples(
+  overlay: SupertrendOverlay,
+): SupertrendLineSample[] {
+  const samplesByTime = new Map<
+    number,
+    { bullish?: number; bearish?: number }
+  >();
+  for (const point of overlay.bullish) {
+    const sample = samplesByTime.get(point.time) ?? {};
+    if (point.value !== undefined && Number.isFinite(point.value)) {
+      sample.bullish = point.value;
+    }
+    samplesByTime.set(point.time, sample);
+  }
+  for (const point of overlay.bearish) {
+    const sample = samplesByTime.get(point.time) ?? {};
+    if (point.value !== undefined && Number.isFinite(point.value)) {
+      sample.bearish = point.value;
+    }
+    samplesByTime.set(point.time, sample);
+  }
+
+  return [...samplesByTime.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([time, sample]) => {
+      // A valid Supertrend calculation never supplies both sides. Keep this
+      // deterministic even for malformed external input so the renderer can
+      // never draw two bands on the same candle.
+      if (sample.bullish !== undefined) {
+        return { time, direction: 1 as const, value: sample.bullish };
+      }
+      if (sample.bearish !== undefined) {
+        return { time, direction: -1 as const, value: sample.bearish };
+      }
+      return { time };
+    });
+}
+
+function segmentSupertrendLineSamples(
+  samples: readonly SupertrendLineSample[],
+): SupertrendLineSegment[] {
+  const segments: Array<{
+    direction: SupertrendDirection;
+    points: Array<{ time: number; value: number }>;
+  }> = [];
+  let active: (typeof segments)[number] | undefined;
+
+  for (const sample of samples) {
+    if (sample.direction === undefined || sample.value === undefined) {
+      active = undefined;
+      continue;
+    }
+    if (active === undefined || active.direction !== sample.direction) {
+      active = { direction: sample.direction, points: [] };
+      segments.push(active);
+    }
+    active.points.push({ time: sample.time, value: sample.value });
+  }
+  return segments;
+}
+
+/**
+ * Split Supertrend into true line-break runs. Lightweight Charts deliberately
+ * connects a LineSeries across whitespace, unlike Pine's plot.style_linebr.
+ */
+export function buildSupertrendLineSegments(
+  overlay: SupertrendOverlay,
+): SupertrendLineSegment[] {
+  return segmentSupertrendLineSamples(supertrendLineSamples(overlay));
+}
+
+/** TradingView-style signal dot placed at the exact Supertrend band price. */
+export function toSupertrendSignalDot(
+  marker: SupertrendMarker,
+  colors: Pick<SupertrendSettings, "bullColor" | "bearColor">,
+  displayTimeOffsetMs = 0,
+): SeriesMarker<Time> {
+  return {
+    time: toUtcTimestamp(marker.time, displayTimeOffsetMs),
+    position: "atPriceMiddle",
+    price: marker.value,
+    shape: "circle",
+    color: marker.direction === 1 ? colors.bullColor : colors.bearColor,
+    id: `supertrend:${marker.direction}:${marker.time}`,
+    size: 0,
+  };
+}
 
 /** One volume-delta point, keyed by backend Canonical_Timestamp ms. */
 export interface VolumeDeltaDatum {
@@ -142,7 +265,7 @@ const FVG_BEAR_COLORS: Record<number, string> = {
   5: "magenta",
 };
 
-const MGANN_SWING_LINE_COLOR = "#ff3b30";
+const MGANN_SWING_LINE_COLOR = "rgba(255, 59, 48, 0.55)";
 const MGANN_SWING_BUY_COLOR = "#00c0c0";
 const MGANN_SWING_SELL_COLOR = "#c00000";
 const MGANN_SWING_DELTA_UP_COLOR = "#004080";
@@ -481,11 +604,19 @@ function momentumRgba(
   return `rgba(${red}, ${green}, ${blue}, ${alpha.toFixed(2)})`;
 }
 
+export function gcPushMomentumSeriesVisibility(showLines: boolean): {
+  histogram: true;
+  push: boolean;
+  signal: boolean;
+} {
+  return { histogram: true, push: showLines, signal: showLines };
+}
+
 /**
- * Use a MACD-style four-color palette: direction selects green/red while
- * acceleration selects bright/muted. Efficiency and strength affect opacity,
- * and live (unclosed) bars deliberately remain translucent. Flow state is
- * rendered separately so it cannot hide the direction of the price push.
+ * Use a MACD-style four-color palette for the Push-minus-Signal histogram.
+ * Sign selects green/red and expansion versus contraction selects bright/muted.
+ * Live (unclosed) bars deliberately remain translucent. Flow state is rendered
+ * separately so it cannot hide the direction of either momentum line.
  */
 export function gcPushMomentumColor(
   point: GcPushMomentumPoint,
@@ -498,17 +629,20 @@ export function gcPushMomentumColor(
       : 0.58 + efficiency * 0.3
     : 0.24 + efficiency * 0.12;
 
-  if (Math.abs(point.push) <= DEFAULT_GC_PUSH_MOMENTUM_SETTINGS.epsilon) {
+  if (Math.abs(point.histogram) <= DEFAULT_GC_PUSH_MOMENTUM_SETTINGS.epsilon) {
     return momentumRgba(148, 163, 184, alpha);
   }
 
-  const accelerating = Math.sign(point.push) === Math.sign(point.acceleration);
-  if (point.push > 0) {
-    return accelerating
+  const expanding =
+    point.histogram > 0
+      ? point.histogramChange >= 0
+      : point.histogramChange <= 0;
+  if (point.histogram > 0) {
+    return expanding
       ? momentumRgba(0, 200, 83, alpha)
       : momentumRgba(76, 139, 103, alpha);
   }
-  return accelerating
+  return expanding
     ? momentumRgba(255, 23, 68, alpha)
     : momentumRgba(183, 87, 83, alpha);
 }
@@ -520,8 +654,28 @@ export function toGcPushMomentumHistogram(
 ): HistogramData {
   return {
     time: toUtcTimestamp(point.time, displayTimeOffsetMs),
-    value: point.push,
+    value: point.histogram,
     color: gcPushMomentumColor(point, closed),
+  };
+}
+
+export function toGcPushMomentumPushLine(
+  point: GcPushMomentumPoint,
+  displayTimeOffsetMs = 0,
+): LineData {
+  return {
+    time: toUtcTimestamp(point.time, displayTimeOffsetMs),
+    value: point.smoothedPush,
+  };
+}
+
+export function toGcPushMomentumSignalLine(
+  point: GcPushMomentumPoint,
+  displayTimeOffsetMs = 0,
+): LineData {
+  return {
+    time: toUtcTimestamp(point.time, displayTimeOffsetMs),
+    value: point.signal,
   };
 }
 
@@ -1061,6 +1215,120 @@ function toDivergenceWaveLines(
   });
 }
 
+function gcPushDivergenceColor(direction: 1 | -1): string {
+  return direction === 1 ? "#00c853" : "#ff1744";
+}
+
+export function toGcPushDivergencePriceLines(
+  divergences: readonly GcPushMomentumDivergence[],
+  displayTimeOffsetMs = 0,
+): RenderableDivergenceLine[] {
+  return divergences.map((signal) => {
+    const [first, second, third] = signal.pricePivots;
+    return {
+      id: `${signal.id}:price`,
+      startTime: toUtcTimestamp(first.time, displayTimeOffsetMs),
+      startValue: first.price,
+      midTime: toUtcTimestamp(second.time, displayTimeOffsetMs),
+      midValue: second.price,
+      endTime: toUtcTimestamp(third.time, displayTimeOffsetMs),
+      endValue: third.price,
+      direction: signal.direction,
+      label: signal.direction === 1 ? "Push Bull Div 3" : "Push Bear Div 3",
+      color: gcPushDivergenceColor(signal.direction),
+      dashed: true,
+    };
+  });
+}
+
+export function toGcPushDivergenceMomentumLines(
+  divergences: readonly GcPushMomentumDivergence[],
+  displayTimeOffsetMs = 0,
+): RenderableDivergenceLine[] {
+  return divergences.map((signal) => {
+    const [first, second, third] = signal.pricePivots;
+    return {
+      id: `${signal.id}:momentum`,
+      startTime: toUtcTimestamp(first.pushTime, displayTimeOffsetMs),
+      startValue: first.pushValue,
+      midTime: toUtcTimestamp(second.pushTime, displayTimeOffsetMs),
+      midValue: second.pushValue,
+      endTime: toUtcTimestamp(third.pushTime, displayTimeOffsetMs),
+      endValue: third.pushValue,
+      direction: signal.direction,
+      color: gcPushDivergenceColor(signal.direction),
+      dashed: true,
+      autoscale: true,
+    };
+  });
+}
+
+function gcPushEarlyDivergenceColor(direction: 1 | -1): string {
+  return direction === 1
+    ? "rgba(0, 200, 83, 0.82)"
+    : "rgba(255, 23, 68, 0.82)";
+}
+
+export function toGcPushEarlyDivergencePriceLines(
+  divergences: readonly GcPushMomentumEarlyDivergence[],
+  displayTimeOffsetMs = 0,
+): RenderableDivergenceLine[] {
+  return divergences.map((signal) => {
+    const [first, second] = signal.pricePivots;
+    return {
+      id: `${signal.id}:price`,
+      startTime: toUtcTimestamp(first.time, displayTimeOffsetMs),
+      startValue: first.price,
+      midTime: toUtcTimestamp(first.time, displayTimeOffsetMs),
+      midValue: first.price,
+      endTime: toUtcTimestamp(second.time, displayTimeOffsetMs),
+      endValue: second.price,
+      direction: signal.direction,
+      label: signal.direction === 1 ? "Push Bull Div 2" : "Push Bear Div 2",
+      color: gcPushEarlyDivergenceColor(signal.direction),
+      dashed: true,
+    };
+  });
+}
+
+export function toGcPushEarlyDivergenceMomentumLines(
+  divergences: readonly GcPushMomentumEarlyDivergence[],
+  displayTimeOffsetMs = 0,
+): RenderableDivergenceLine[] {
+  return divergences.map((signal) => {
+    const [first, second] = signal.pricePivots;
+    return {
+      id: `${signal.id}:momentum`,
+      startTime: toUtcTimestamp(first.pushTime, displayTimeOffsetMs),
+      startValue: first.pushValue,
+      midTime: toUtcTimestamp(first.pushTime, displayTimeOffsetMs),
+      midValue: first.pushValue,
+      endTime: toUtcTimestamp(second.pushTime, displayTimeOffsetMs),
+      endValue: second.pushValue,
+      direction: signal.direction,
+      color: gcPushEarlyDivergenceColor(signal.direction),
+      dashed: true,
+      autoscale: true,
+    };
+  });
+}
+
+export function toGcPushEarlyDivergenceMarker(
+  divergence: GcPushMomentumEarlyDivergence,
+  displayTimeOffsetMs = 0,
+): SeriesMarker<Time> {
+  const bullish = divergence.direction === 1;
+  return {
+    time: toUtcTimestamp(divergence.confirmedAt, displayTimeOffsetMs),
+    position: bullish ? "belowBar" : "aboveBar",
+    shape: bullish ? "arrowUp" : "arrowDown",
+    color: gcPushEarlyDivergenceColor(divergence.direction),
+    text: bullish ? "Bull Div 2" : "Bear Div 2",
+    id: `${divergence.id}:confirmation`,
+    size: 1,
+  };
+}
+
 function toVolumeHistogram(
   bar: Bar,
   displayTimeOffsetMs: number,
@@ -1132,10 +1400,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly alertSignalMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly sessionMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly mgannSwingMarkers: ISeriesMarkersPluginApi<Time>;
+  private readonly supertrendMarkers: ISeriesMarkersPluginApi<Time>;
   private bigTradePrimitive: BigTradeBubblePrimitive | undefined;
   private smcPrimitive: SmcOverlayPrimitive | undefined;
   private sweepReversalPrimitive: SweepReversalPrimitive | undefined;
   private priceDivergencePrimitive: DivergenceLinePrimitive | undefined;
+  private gcPushPriceDivergencePrimitive: DivergenceLinePrimitive | undefined;
   private waveDeltaMboxPrimitive: WaveDeltaMboxPrimitive | undefined;
   private sessionVolumeProfilePrimitive: SessionVolumeProfilePrimitive | undefined;
   private waveDivergencePrimitive: DivergenceLinePrimitive | undefined;
@@ -1145,6 +1415,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly emaSeriesById = new Map<string, ISeriesApi<"Line">>();
   private readonly emaLastTimeById = new Map<string, number>();
   private readonly emaColorById = new Map<string, string>();
+  private supertrendSegmentSeries: ISeriesApi<"Line">[] = [];
+  private supertrendLineHistory: SupertrendLineSample[] = [];
+  private readonly supertrendMarkerByTime = new Map<number, SupertrendMarker>();
   private readonly deltaColors: DeltaColors;
   private candleBars: BarSeries = [];
   private outsideBar: OutsideBarSettings;
@@ -1152,10 +1425,20 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly volumeDeltaByTime = new Map<number, VolumeDeltaDatum>();
   private readonly closedBarTimes = new Set<number>();
   private gcPushMomentumSeries: ISeriesApi<"Histogram"> | undefined;
+  private gcPushMomentumPushSeries: ISeriesApi<"Line"> | undefined;
+  private gcPushMomentumSignalSeries: ISeriesApi<"Line"> | undefined;
   private gcPushMomentumMarkers: ISeriesMarkersPluginApi<Time> | undefined;
+  private gcPushMomentumDivergenceMarkers:
+    | ISeriesMarkersPluginApi<Time>
+    | undefined;
+  private gcPushMomentumDivergencePrimitive: DivergenceLinePrimitive | undefined;
   private readonly gcPushMomentumMarkerByTime = new Map<
     number,
     SeriesMarker<Time>
+  >();
+  private readonly gcPushMomentumPointByTime = new Map<
+    number,
+    GcPushMomentumPoint
   >();
   private gcPushMomentumPaneIndex: number | undefined;
   private gcPushMomentumVisible = false;
@@ -1293,6 +1576,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.alertSignalMarkers = createSeriesMarkers(this.candleSeries, []);
     this.sessionMarkers = createSeriesMarkers(this.candleSeries, []);
     this.mgannSwingMarkers = createSeriesMarkers(this.candleSeries, []);
+    this.supertrendMarkers = createSeriesMarkers(this.candleSeries, []);
     this.bigTradePrimitive = new BigTradeBubblePrimitive([]);
     this.candleSeries.attachPrimitive(
       this.bigTradePrimitive as unknown as Parameters<
@@ -1302,6 +1586,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.priceDivergencePrimitive = new DivergenceLinePrimitive([]);
     this.candleSeries.attachPrimitive(
       this.priceDivergencePrimitive as unknown as Parameters<
+        typeof this.candleSeries.attachPrimitive
+      >[0],
+    );
+    this.gcPushPriceDivergencePrimitive = new DivergenceLinePrimitive([]);
+    this.candleSeries.attachPrimitive(
+      this.gcPushPriceDivergencePrimitive as unknown as Parameters<
         typeof this.candleSeries.attachPrimitive
       >[0],
     );
@@ -1321,7 +1611,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
     this.mgannSwingSeries = this.chart.addSeries(LineSeries, {
       color: MGANN_SWING_LINE_COLOR,
-      lineWidth: 2,
+      lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
       visible: false,
@@ -1423,6 +1713,36 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   /** The candle series instance (for DrawingManager to attach primitives). */
   get candleSeriesApi(): ISeriesApi<"Candlestick"> {
     return this.candleSeries;
+  }
+
+  /** Resolve the value scale that owns drawings placed in a chart pane. */
+  drawingPaneTargetByIndex(paneIndex: number): DrawingPaneTarget | undefined {
+    if (paneIndex === 0) {
+      return {
+        id: "main",
+        paneIndex: 0,
+        series: this.candleSeries as unknown as DrawingSeriesApi,
+      };
+    }
+    if (
+      paneIndex === this.gcPushMomentumPaneIndex &&
+      this.gcPushMomentumSeries !== undefined
+    ) {
+      return {
+        id: "gc_push_momentum",
+        paneIndex,
+        series: this.gcPushMomentumSeries as unknown as DrawingSeriesApi,
+      };
+    }
+    return undefined;
+  }
+
+  drawingPaneTargetById(paneId: DrawingPaneId): DrawingPaneTarget | undefined {
+    return paneId === "main"
+      ? this.drawingPaneTargetByIndex(0)
+      : this.gcPushMomentumPaneIndex === undefined
+        ? undefined
+        : this.drawingPaneTargetByIndex(this.gcPushMomentumPaneIndex);
   }
 
   /** Convert a candle-scale price to a Y coordinate inside the candle pane. */
@@ -1777,6 +2097,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       ...settings,
       barDurationMs: settings.barDurationMs ?? this.barCountdownDurationMs,
     });
+    const visibility = gcPushMomentumSeriesVisibility(
+      this.gcPushMomentumSettings.showLines,
+    );
+    this.gcPushMomentumSeries?.applyOptions({ visible: visibility.histogram });
+    this.gcPushMomentumPushSeries?.applyOptions({ visible: visibility.push });
+    this.gcPushMomentumSignalSeries?.applyOptions({ visible: visibility.signal });
     this.renderGcPushMomentumSeries();
   }
 
@@ -1940,6 +2266,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   private ensureGcPushMomentumPane(): void {
     if (this.gcPushMomentumSeries !== undefined) return;
+    const visibility = gcPushMomentumSeriesVisibility(
+      this.gcPushMomentumSettings.showLines,
+    );
     const pane = this.chart.addPane(true);
     this.gcPushMomentumPaneIndex = this.chart.panes().length - 1;
     this.chart.panes()[0]?.setStretchFactor(4);
@@ -1947,17 +2276,57 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.gcPushMomentumSeries = this.chart.addSeries(
       HistogramSeries,
       {
-        title: "GC Push Momentum",
+        title: "Push - Signal",
         color: "rgba(38, 166, 154, 0.78)",
         base: 0,
         priceFormat: { type: "price", precision: 2, minMove: 0.01 },
         priceLineVisible: false,
         lastValueVisible: true,
+        visible: visibility.histogram,
         autoscaleInfoProvider: symmetricZeroAutoscale,
       },
       this.gcPushMomentumPaneIndex,
     );
+    this.gcPushMomentumPushSeries = this.chart.addSeries(
+      LineSeries,
+      {
+        title: "Push",
+        color: "#2962ff",
+        lineWidth: 1,
+        priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+        priceLineVisible: false,
+        lastValueVisible: true,
+        visible: visibility.push,
+        autoscaleInfoProvider: symmetricZeroAutoscale,
+      },
+      this.gcPushMomentumPaneIndex,
+    );
+    this.gcPushMomentumSignalSeries = this.chart.addSeries(
+      LineSeries,
+      {
+        title: "Signal",
+        color: "#ff6d00",
+        lineWidth: 1,
+        priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+        priceLineVisible: false,
+        lastValueVisible: true,
+        visible: visibility.signal,
+        autoscaleInfoProvider: symmetricZeroAutoscale,
+      },
+      this.gcPushMomentumPaneIndex,
+    );
+    this.gcPushMomentumDivergencePrimitive = new DivergenceLinePrimitive([]);
+    this.gcPushMomentumSeries.attachPrimitive(
+      this.gcPushMomentumDivergencePrimitive as unknown as Parameters<
+        typeof this.gcPushMomentumSeries.attachPrimitive
+      >[0],
+    );
     this.gcPushMomentumMarkers = createSeriesMarkers(
+      this.gcPushMomentumSeries,
+      [],
+      { autoScale: false, zOrder: "aboveSeries" },
+    );
+    this.gcPushMomentumDivergenceMarkers = createSeriesMarkers(
       this.gcPushMomentumSeries,
       [],
       { autoScale: false, zOrder: "aboveSeries" },
@@ -1979,10 +2348,24 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private removeGcPushMomentumPane(): void {
     this.gcPushMomentumMarkers?.detach();
     this.gcPushMomentumMarkers = undefined;
+    this.gcPushMomentumDivergenceMarkers?.detach();
+    this.gcPushMomentumDivergenceMarkers = undefined;
     this.gcPushMomentumMarkerByTime.clear();
+    this.gcPushMomentumPointByTime.clear();
+    this.gcPushPriceDivergencePrimitive?.setLines([]);
+    this.gcPushMomentumDivergencePrimitive?.setLines([]);
+    this.gcPushMomentumDivergencePrimitive = undefined;
     if (this.gcPushMomentumSeries !== undefined) {
       this.chart.removeSeries(this.gcPushMomentumSeries);
       this.gcPushMomentumSeries = undefined;
+    }
+    if (this.gcPushMomentumPushSeries !== undefined) {
+      this.chart.removeSeries(this.gcPushMomentumPushSeries);
+      this.gcPushMomentumPushSeries = undefined;
+    }
+    if (this.gcPushMomentumSignalSeries !== undefined) {
+      this.chart.removeSeries(this.gcPushMomentumSignalSeries);
+      this.gcPushMomentumSignalSeries = undefined;
     }
     const paneIndex = this.gcPushMomentumPaneIndex;
     if (paneIndex !== undefined && paneIndex < this.chart.panes().length) {
@@ -2019,7 +2402,15 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       settings.accelerationBars * 2,
       settings.efficiencyLookbackBars,
     );
-    return warmup + settings.percentileLookbackBars + 32;
+    return (
+      warmup +
+      settings.percentileLookbackBars +
+      Math.max(
+        32,
+        settings.pushSmoothingBars * 5,
+        settings.signalSmoothingBars * 5,
+      )
+    );
   }
 
   private renderGcPushMomentumSeries(): void {
@@ -2039,6 +2430,20 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         ),
       ),
     );
+    this.gcPushMomentumPushSeries?.setData(
+      points.map((point) =>
+        toGcPushMomentumPushLine(point, this.displayTimeOffsetMs),
+      ),
+    );
+    this.gcPushMomentumSignalSeries?.setData(
+      points.map((point) =>
+        toGcPushMomentumSignalLine(point, this.displayTimeOffsetMs),
+      ),
+    );
+    this.gcPushMomentumPointByTime.clear();
+    for (const point of points) {
+      this.gcPushMomentumPointByTime.set(point.time, point);
+    }
     this.gcPushMomentumMarkerByTime.clear();
     for (const point of points) {
       const marker = toGcPushMomentumMarker(
@@ -2051,12 +2456,64 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       }
     }
     this.renderGcPushMomentumMarkers();
+    this.renderGcPushMomentumDivergences();
   }
 
   private renderGcPushMomentumMarkers(): void {
     this.gcPushMomentumMarkers?.setMarkers(
       [...this.gcPushMomentumMarkerByTime.values()].sort(
         (left, right) => Number(left.time) - Number(right.time),
+      ),
+    );
+  }
+
+  private renderGcPushMomentumDivergences(): void {
+    if (
+      !this.gcPushMomentumVisible ||
+      !this.gcPushMomentumSettings.showDivergence
+    ) {
+      this.gcPushPriceDivergencePrimitive?.setLines([]);
+      this.gcPushMomentumDivergencePrimitive?.setLines([]);
+      this.gcPushMomentumDivergenceMarkers?.setMarkers([]);
+      return;
+    }
+    const points = [...this.gcPushMomentumPointByTime.values()].sort(
+      (left, right) => left.time - right.time,
+    );
+    const divergences = buildGcPushMomentumDivergences(
+      this.candleBars,
+      points,
+      this.closedBarTimes,
+    );
+    const earlyDivergences = buildGcPushMomentumEarlyDivergences(
+      this.candleBars,
+      points,
+      this.closedBarTimes,
+    );
+    this.gcPushPriceDivergencePrimitive?.setLines(
+      [
+        ...toGcPushDivergencePriceLines(divergences, this.displayTimeOffsetMs),
+        ...toGcPushEarlyDivergencePriceLines(
+          earlyDivergences,
+          this.displayTimeOffsetMs,
+        ),
+      ],
+    );
+    this.gcPushMomentumDivergencePrimitive?.setLines(
+      [
+        ...toGcPushDivergenceMomentumLines(
+          divergences,
+          this.displayTimeOffsetMs,
+        ),
+        ...toGcPushEarlyDivergenceMomentumLines(
+          earlyDivergences,
+          this.displayTimeOffsetMs,
+        ),
+      ],
+    );
+    this.gcPushMomentumDivergenceMarkers?.setMarkers(
+      earlyDivergences.map((divergence) =>
+        toGcPushEarlyDivergenceMarker(divergence, this.displayTimeOffsetMs),
       ),
     );
   }
@@ -2086,11 +2543,15 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       const historicalUpdate = currentIndex < this.candleBars.length - 1;
       this.gcPushMomentumMarkerByTime.delete(bar.time);
       if (point === undefined) {
-        series.update(
-          { time: toUtcTimestamp(bar.time, this.displayTimeOffsetMs) },
-          historicalUpdate,
-        );
+        this.gcPushMomentumPointByTime.delete(bar.time);
+        const whitespace = {
+          time: toUtcTimestamp(bar.time, this.displayTimeOffsetMs),
+        };
+        series.update(whitespace, historicalUpdate);
+        this.gcPushMomentumPushSeries?.update(whitespace, historicalUpdate);
+        this.gcPushMomentumSignalSeries?.update(whitespace, historicalUpdate);
       } else {
+        this.gcPushMomentumPointByTime.set(point.time, point);
         const marker = toGcPushMomentumMarker(
           point,
           this.closedBarTimes.has(point.time),
@@ -2107,9 +2568,18 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
           ),
           historicalUpdate,
         );
+        this.gcPushMomentumPushSeries?.update(
+          toGcPushMomentumPushLine(point, this.displayTimeOffsetMs),
+          historicalUpdate,
+        );
+        this.gcPushMomentumSignalSeries?.update(
+          toGcPushMomentumSignalLine(point, this.displayTimeOffsetMs),
+          historicalUpdate,
+        );
       }
     }
     this.renderGcPushMomentumMarkers();
+    this.renderGcPushMomentumDivergences();
   }
 
   /**
@@ -2425,6 +2895,157 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
     this.emaColorById.set(id, color);
     return series;
+  }
+
+  /** Replace the line-break Supertrend runs and confirmed markers. */
+  setSupertrendOverlay(
+    overlay: SupertrendOverlay,
+    input: Partial<SupertrendSettings>,
+  ): void {
+    const settings = normalizeSupertrendSettings(input);
+    if (!settings.enabled) {
+      this.clearSupertrend();
+      return;
+    }
+    this.supertrendLineHistory = supertrendLineSamples(overlay);
+    this.renderSupertrendSegments(settings);
+    this.supertrendMarkerByTime.clear();
+    for (const marker of overlay.markers.slice(-MAX_SUPERTREND_MARKERS)) {
+      this.supertrendMarkerByTime.set(marker.time, { ...marker });
+    }
+    this.renderSupertrendMarkers(settings);
+  }
+
+  /** Update one provisional/closed Supertrend point without compounding it. */
+  updateSupertrendPoint(
+    point: SupertrendPoint,
+    confirmed: boolean,
+    input: Partial<SupertrendSettings>,
+  ): void {
+    const settings = normalizeSupertrendSettings(input);
+    if (!settings.enabled) return;
+    const value = point.trend === 1 ? point.up : point.down;
+    const sample: SupertrendLineSample =
+      value === undefined || !Number.isFinite(value)
+        ? { time: point.time }
+        : { time: point.time, direction: point.trend, value };
+    const lastIndex = this.supertrendLineHistory.length - 1;
+    const previous = this.supertrendLineHistory[lastIndex];
+    let canUpdateLastSegment = false;
+
+    if (previous === undefined || point.time > previous.time) {
+      canUpdateLastSegment =
+        previous?.direction !== undefined &&
+        previous.value !== undefined &&
+        previous.direction === sample.direction &&
+        sample.value !== undefined;
+      this.supertrendLineHistory.push(sample);
+    } else if (point.time === previous.time) {
+      canUpdateLastSegment =
+        previous.direction !== undefined &&
+        previous.value !== undefined &&
+        previous.direction === sample.direction &&
+        sample.value !== undefined;
+      this.supertrendLineHistory[lastIndex] = sample;
+    } else {
+      const insertionIndex = this.supertrendLineHistory.findIndex(
+        (candidate) => candidate.time >= point.time,
+      );
+      if (insertionIndex === -1) {
+        this.supertrendLineHistory.push(sample);
+      } else if (this.supertrendLineHistory[insertionIndex].time === point.time) {
+        this.supertrendLineHistory[insertionIndex] = sample;
+      } else {
+        this.supertrendLineHistory.splice(insertionIndex, 0, sample);
+      }
+    }
+
+    if (canUpdateLastSegment) {
+      const activeSeries =
+        this.supertrendSegmentSeries[this.supertrendSegmentSeries.length - 1];
+      if (activeSeries === undefined || sample.value === undefined) {
+        this.renderSupertrendSegments(settings);
+      } else {
+        activeSeries.applyOptions({
+          color:
+            sample.direction === 1 ? settings.bullColor : settings.bearColor,
+        });
+        activeSeries.update({
+          time: toUtcTimestamp(sample.time, this.displayTimeOffsetMs),
+          value: sample.value,
+        });
+      }
+    } else {
+      // A flip (including a provisional same-bar flip/recovery) changes the
+      // line-break topology, so rebuild the small set of affected runs.
+      this.renderSupertrendSegments(settings);
+    }
+
+    const marker = supertrendMarkerForPoint(point, confirmed, settings);
+    if (marker === undefined) {
+      this.supertrendMarkerByTime.delete(point.time);
+    } else {
+      this.supertrendMarkerByTime.set(point.time, marker);
+    }
+    this.renderSupertrendMarkers(settings);
+  }
+
+  /** Remove every Supertrend line-break run and its independent marker layer. */
+  clearSupertrend(): void {
+    for (const series of this.supertrendSegmentSeries) {
+      this.chart.removeSeries(series);
+    }
+    this.supertrendSegmentSeries = [];
+    this.supertrendLineHistory = [];
+    this.supertrendMarkerByTime.clear();
+    this.supertrendMarkers.setMarkers([]);
+  }
+
+  private renderSupertrendSegments(settings: SupertrendSettings): void {
+    const segments = segmentSupertrendLineSamples(this.supertrendLineHistory);
+    while (this.supertrendSegmentSeries.length < segments.length) {
+      this.supertrendSegmentSeries.push(
+        this.chart.addSeries(LineSeries, {
+          color: settings.bullColor,
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        }),
+      );
+    }
+    while (this.supertrendSegmentSeries.length > segments.length) {
+      const series = this.supertrendSegmentSeries.pop();
+      if (series !== undefined) this.chart.removeSeries(series);
+    }
+
+    segments.forEach((segment, index) => {
+      const series = this.supertrendSegmentSeries[index];
+      series.applyOptions({
+        color:
+          segment.direction === 1 ? settings.bullColor : settings.bearColor,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      series.setData(
+        segment.points.map((linePoint) => ({
+          time: toUtcTimestamp(linePoint.time, this.displayTimeOffsetMs),
+          value: linePoint.value,
+        })),
+      );
+    });
+  }
+
+  private renderSupertrendMarkers(settings: SupertrendSettings): void {
+    const markers: SeriesMarker<Time>[] = [...this.supertrendMarkerByTime.values()]
+      .sort((a, b) => a.time - b.time)
+      .slice(-MAX_SUPERTREND_MARKERS)
+      .map((marker) =>
+        toSupertrendSignalDot(marker, settings, this.displayTimeOffsetMs),
+      );
+    this.supertrendMarkers.setMarkers(markers);
   }
 
   /** Bulk-load volume-delta history into the MyVolumeDelta-style candles. */

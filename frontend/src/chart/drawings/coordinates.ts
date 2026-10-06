@@ -4,6 +4,7 @@ import {
   type IChartApiBase,
   type ISeriesApi,
   type Logical,
+  type SeriesType,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
@@ -15,17 +16,17 @@ interface ChartPoint {
   y: number;
 }
 
-type CandleSeries = ISeriesApi<"Candlestick", Time>;
+type DrawingSeries = ISeriesApi<SeriesType, Time>;
 type ChartApi = IChartApiBase<Time>;
 
 const stepEstimateCache = new WeakMap<
-  CandleSeries,
+  DrawingSeries,
   { dataLength: number; lastTime: number | undefined; step: number }
 >();
 
 export function anchorToCoordinate(
   chart: ChartApi,
-  series: CandleSeries,
+  series: DrawingSeries,
   anchor: AnchorPoint,
 ): Coordinate | null {
   const timeCoordinate = coordinateForTime(chart, series, anchor.time);
@@ -37,7 +38,7 @@ export function anchorToCoordinate(
 
 export function anchorToLogical(
   chart: ChartApi,
-  series: CandleSeries,
+  series: DrawingSeries,
   anchor: AnchorPoint,
 ): Logical | null {
   const timeLogical = logicalForTime(chart, series, anchor.time);
@@ -49,7 +50,7 @@ export function anchorToLogical(
 
 export function anchorToPoint(
   chart: ChartApi,
-  series: CandleSeries,
+  series: DrawingSeries,
   anchor: AnchorPoint,
 ): ChartPoint | null {
   const x = anchorToCoordinate(chart, series, anchor);
@@ -60,7 +61,7 @@ export function anchorToPoint(
 
 export function anchorFromPoint(
   chart: ChartApi,
-  series: CandleSeries,
+  series: DrawingSeries,
   point: ChartPoint,
 ): AnchorPoint | null {
   const logical = chart.timeScale().coordinateToLogical(point.x);
@@ -75,7 +76,7 @@ export function anchorFromPoint(
 
 function timeForLogical(
   chart: ChartApi,
-  series: CandleSeries,
+  series: DrawingSeries,
   logical: Logical,
 ): UTCTimestamp {
   const logicalNumber = logical as number;
@@ -97,7 +98,7 @@ function numericTime(data: { time: Time } | null | undefined): number | undefine
   return typeof data?.time === "number" ? data.time : undefined;
 }
 
-function lastNumericTime(series: CandleSeries): number | undefined {
+function lastNumericTime(series: DrawingSeries): number | undefined {
   const data = series.data();
   for (let i = data.length - 1; i >= 0; i--) {
     const time = numericTime(data[i]);
@@ -106,7 +107,7 @@ function lastNumericTime(series: CandleSeries): number | undefined {
   return undefined;
 }
 
-function estimateStepSeconds(series: CandleSeries): number {
+function estimateStepSeconds(series: DrawingSeries): number {
   const data = series.data();
   const lastTime = numericTime(data[data.length - 1]);
   const cached = stepEstimateCache.get(series);
@@ -138,7 +139,7 @@ function estimateStepSeconds(series: CandleSeries): number {
 
 function coordinateForTime(
   chart: ChartApi,
-  series: CandleSeries,
+  series: DrawingSeries,
   time: UTCTimestamp,
 ): Coordinate | null {
   if (!Number.isFinite(time)) return null;
@@ -159,7 +160,7 @@ function coordinateForLogical(
 
 function logicalForTime(
   chart: ChartApi,
-  series: CandleSeries,
+  series: DrawingSeries,
   targetTime: UTCTimestamp,
 ): Logical | null {
   if (!Number.isFinite(targetTime)) return null;

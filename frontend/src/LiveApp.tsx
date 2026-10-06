@@ -95,6 +95,11 @@ import {
   type SweepReversalSettings,
 } from "./chart/sweepReversal";
 import {
+  DEFAULT_SUPERTREND_SETTINGS,
+  normalizeSupertrendSettings,
+  type SupertrendSettings,
+} from "./chart/supertrend";
+import {
   DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
   normalizeSessionVolumeProfileWidth,
 } from "./chart/sessionVolumeProfileSettings";
@@ -275,6 +280,7 @@ interface BarReplayDataset {
   id: string;
   seriesKey: string;
   bars: readonly Bar[];
+  barsTimeframe: Timeframe;
   volumeDelta: readonly VolumeDeltaDatum[];
   footprintBars: ReadonlyMap<number, FootprintBar>;
   fvgSignals: ReadonlyMap<number, FvgSignalUpdateMessage>;
@@ -1941,6 +1947,8 @@ export function LiveApp() {
   const [socketGeneration, setSocketGeneration] = useState(0);
   const [overlayRefreshNonce, setOverlayRefreshNonce] = useState(0);
   const [bars, setBars] = useState<readonly Bar[]>([]);
+  const [loadedBarsTimeframe, setLoadedBarsTimeframe] =
+    useState<Timeframe>("1m");
   const [loadedSeriesKey, setLoadedSeriesKey] = useState<string | undefined>(
     undefined,
   );
@@ -2015,6 +2023,9 @@ export function LiveApp() {
   );
   const [showBigTrades, setShowBigTrades] = useState(true);
   const [ema, setEma] = useState<EmaSettings>(() => ({ ...DEFAULT_EMA_SETTINGS }));
+  const [supertrend, setSupertrend] = useState<SupertrendSettings>(() => ({
+    ...DEFAULT_SUPERTREND_SETTINGS,
+  }));
   const [smc, setSmc] = useState<SmcSettings>(() => ({ ...DEFAULT_SMC_SETTINGS }));
   const [sweepReversal, setSweepReversal] = useState<SweepReversalSettings>(
     () => ({ ...DEFAULT_SWEEP_REVERSAL_SETTINGS }),
@@ -2199,6 +2210,7 @@ export function LiveApp() {
       mgannBreakSignalLimit,
       showBigTrades,
       ema: { ...ema },
+      supertrend: { ...supertrend },
       smc: { ...smc },
       sweepReversal: { ...sweepReversal },
       outsideBar: { ...outsideBar },
@@ -2237,6 +2249,7 @@ export function LiveApp() {
       showGcPushMomentum,
       showFvgGrader,
       smc,
+      supertrend,
       sweepReversal,
       timeframe,
       timezoneOffsetMinutes,
@@ -2336,6 +2349,7 @@ export function LiveApp() {
     if (live !== undefined) {
       setLoadedSeriesKey(currentSeriesKey);
       setBars(live.bars.slice());
+      setLoadedBarsTimeframe(timeframe);
     }
     // Catch up Volume Delta/FVG and any REST overlays that changed during replay.
     setSocketGeneration((generation) => generation + 1);
@@ -2364,9 +2378,8 @@ export function LiveApp() {
   const selectBarReplayStart = useCallback(
     (selectedBar: Bar) => {
       if (!replaySelecting) return;
-      const sourceBars = (
-        cache.get({ symbol: SYMBOL, contract, timeframe })?.bars ?? bars
-      ).slice();
+      const cachedSource = cache.get({ symbol: SYMBOL, contract, timeframe });
+      const sourceBars = (cachedSource?.bars ?? bars).slice();
       const selectedIndex = findReplayBarIndex(sourceBars, selectedBar.time);
       if (selectedIndex <= 0) {
         setReplaySelectionError("Choose a candle after the first loaded candle");
@@ -2382,6 +2395,8 @@ export function LiveApp() {
         id,
         seriesKey: currentSeriesKey,
         bars: sourceBars,
+        barsTimeframe:
+          cachedSource === undefined ? loadedBarsTimeframe : timeframe,
         volumeDelta: volumeDelta.slice(),
         footprintBars: new Map(footprintBars),
         fvgSignals: new Map(fvgSignals),
@@ -2443,6 +2458,7 @@ export function LiveApp() {
       alertSignalMarkers,
       api,
       bars,
+      loadedBarsTimeframe,
       bigTrades,
       cache,
       contract,
@@ -2572,7 +2588,10 @@ export function LiveApp() {
   }, []);
   const onChartRealtimeBar = useCallback(
     (bar: Bar, closed?: boolean) => {
-      cache.append({ symbol: SYMBOL, contract, timeframe }, [bar]);
+      cache.append(
+        { symbol: SYMBOL, contract, timeframe },
+        [{ ...bar, ...(closed !== undefined ? { closed } : {}) }],
+      );
       if (closed === true && timeframe === "1m") {
         setMgannBreakLatestClosedTime(bar.time);
       }
@@ -2647,6 +2666,10 @@ export function LiveApp() {
         const nextSeries = cache.get(requestKey)?.bars ?? [];
         setLoadedSeriesKey(requestedSeriesKey);
         setBars(nextSeries);
+        // A successful 15s backfill replaces the temporary 1m fallback with
+        // bars from the requested series. Recursive indicators must follow
+        // that real source timeframe from this point onward.
+        setLoadedBarsTimeframe(timeframe);
       } finally {
         if (historyBackfillRef.current.seriesKey === requestedSeriesKey) {
           historyBackfillRef.current.pending = false;
@@ -3221,6 +3244,7 @@ export function LiveApp() {
         if (!cancelled) {
           setLoadedSeriesKey(requestedSeriesKey);
           setBars(history.bars);
+          setLoadedBarsTimeframe(indicatorTimeframe);
           const loadedLatestPrice = history.bars[history.bars.length - 1]?.close;
           latestPriceRef.current = loadedLatestPrice;
           setLatestPrice(loadedLatestPrice);
@@ -3271,6 +3295,7 @@ export function LiveApp() {
         if (!cancelled) {
           setLoadedSeriesKey(requestedSeriesKey);
           setBars([]);
+          setLoadedBarsTimeframe(timeframe);
           latestPriceRef.current = undefined;
           setLatestPrice(undefined);
           setVolumeDeltaSeriesKey(requestedSeriesKey);
@@ -3769,6 +3794,22 @@ export function LiveApp() {
         liquidityLookbackBars: settings.liquidityLookbackBars,
         liquidityAtrLength: settings.liquidityAtrLength,
         liquidityAtrMargin: settings.liquidityAtrMargin,
+        repeat: true,
+      },
+    });
+  };
+  const onCreateSupertrendAlert = () => {
+    if (timeframe === "15s") return;
+    const settings = normalizeSupertrendSettings(supertrend);
+    onCreateAlert({
+      type: "supertrend_direction_change",
+      params: {
+        timeframe,
+        period: settings.period,
+        multiplier: settings.multiplier,
+        atrMethod: settings.atrMethod,
+        source: settings.source,
+        direction: "both",
         repeat: true,
       },
     });
@@ -4716,6 +4757,7 @@ export function LiveApp() {
     );
     setShowBigTrades(payload.showBigTrades !== false);
     setEma(normalizeEmaSettings(payload.ema));
+    setSupertrend(normalizeSupertrendSettings(payload.supertrend));
     setSmc({ ...DEFAULT_SMC_SETTINGS, ...(payload.smc ?? {}) });
     setSweepReversal(normalizeSweepReversalSettings(payload.sweepReversal));
     setOutsideBar(
@@ -5139,6 +5181,13 @@ export function LiveApp() {
         : { ...ema, enabled: false, showEma200: false },
     [ema, indicatorsVisible],
   );
+  const visibleSupertrend = useMemo(
+    () =>
+      indicatorsVisible
+        ? supertrend
+        : { ...supertrend, enabled: false },
+    [indicatorsVisible, supertrend],
+  );
   const visibleSmc = useMemo(
     () => (indicatorsVisible ? smc : { ...smc, enabled: false }),
     [indicatorsVisible, smc],
@@ -5287,6 +5336,7 @@ export function LiveApp() {
           mgannBreakSignalLimit={mgannBreakSignalLimit}
           bigTrades={showBigTrades && bigTradeOverlayEnabled}
           ema={ema}
+          supertrend={supertrend}
           smc={smc}
           sweepReversal={sweepReversal}
           outsideBar={effectiveOutsideBar}
@@ -5322,6 +5372,9 @@ export function LiveApp() {
           onMgannBreakSignalLimitChange={setMgannBreakSignalLimit}
           onBigTradesChange={setShowBigTrades}
           onEmaChange={setEma}
+          onSupertrendChange={setSupertrend}
+          onCreateSupertrendAlert={onCreateSupertrendAlert}
+          supertrendAlertDisabled={timeframe === "15s"}
           onSmcChange={setSmc}
           onSweepReversalChange={setSweepReversal}
           onCreateSweepReversalAlert={onCreateSweepReversalAlert}
@@ -5448,6 +5501,11 @@ export function LiveApp() {
             contract={contract}
             timeframe={timeframe}
             bars={chartBars}
+            barsTimeframe={
+              replayActive
+                ? replayDataset?.barsTimeframe ?? loadedBarsTimeframe
+                : loadedBarsTimeframe
+            }
             volumeDelta={chartVolumeDelta}
             footprintBars={chartFootprintBars}
             fvgSignals={chartFvgSignals}
@@ -5458,6 +5516,7 @@ export function LiveApp() {
             orderLines={replayActive ? EMPTY_ORDER_LINES : orderLines}
             orderControls={replayActive ? EMPTY_ORDER_CONTROLS : orderControls}
             ema={visibleEma}
+            supertrend={visibleSupertrend}
             smc={visibleSmc}
             sweepReversal={visibleSweepReversal}
             outsideBar={visibleOutsideBar}

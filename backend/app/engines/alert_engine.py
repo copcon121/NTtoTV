@@ -40,6 +40,7 @@ Fire-once + re-arm semantics (Req 17.5-17.8):
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -94,6 +95,21 @@ from .sweep_reversal import (
     SweepReversalState,
     SweepReversalTrigger,
 )
+from .supertrend import (
+    SUPERTREND_ATR_METHODS,
+    SUPERTREND_DEFAULT_ATR_METHOD,
+    SUPERTREND_DEFAULT_DIRECTION,
+    SUPERTREND_DEFAULT_MULTIPLIER,
+    SUPERTREND_DEFAULT_PERIOD,
+    SUPERTREND_DEFAULT_SOURCE,
+    SUPERTREND_DIRECTIONS,
+    SUPERTREND_MAX_PERIOD,
+    SUPERTREND_SOURCES,
+    SUPERTREND_TIMEFRAMES,
+    SupertrendBar,
+    SupertrendConfig,
+    SupertrendState,
+)
 
 __all__ = [
     "ALERT_TYPES",
@@ -106,6 +122,8 @@ __all__ = [
     "SMC_EXTERNAL_BREAK_BIG_TRADE",
     "SWEEP_REVERSAL",
     "SWEEP_REVERSAL_TIMEFRAMES",
+    "SUPERTREND_DIRECTION_CHANGE",
+    "SUPERTREND_TIMEFRAMES",
     "LIQUIDITY_POOL_BREAK",
     "LIQUIDITY_POOL_BREAK_TIMEFRAME",
     "LIQUIDITY_POOL_BREAK_TIMEFRAMES",
@@ -149,6 +167,7 @@ MGANN_BREAK_LS = "mgann_break_ls"
 MGANN_SWEEP = "mgann_sweep"
 MGANN_BIG_TRADE_SWEEP = "mgann_big_trade_sweep"
 SWEEP_REVERSAL = "sweep_reversal"
+SUPERTREND_DIRECTION_CHANGE = "supertrend_direction_change"
 MGANN_BREAK_LS_TYPES = frozenset(
     {MGANN_BREAK_LS, MGANN_SWEEP, MGANN_BIG_TRADE_SWEEP}
 )
@@ -159,6 +178,7 @@ SMC_DEFAULT_MAX_BARS = 20
 SMC_DEFAULT_PAUSE_ON_INSIDE_BARS = True
 SMC_DEFAULT_RETEST_TOLERANCE_TICKS = 50
 _SMC_WARMUP_MIN_BARS = 300
+_SUPERTREND_WARMUP_BARS = 5_000
 _M1_MS = 60_000
 
 ALERT_TYPES: frozenset[str] = frozenset(
@@ -175,6 +195,7 @@ ALERT_TYPES: frozenset[str] = frozenset(
         MGANN_SWEEP,
         MGANN_BIG_TRADE_SWEEP,
         SWEEP_REVERSAL,
+        SUPERTREND_DIRECTION_CHANGE,
     }
 )
 
@@ -332,12 +353,14 @@ class AlertEngine:
         self._liquidity_break_state: dict[str, _LiquidityPoolBreakState] = {}
         self._mgann_sweep_state: dict[str, MgannBigTradeSweepState] = {}
         self._sweep_reversal_state: dict[str, SweepReversalState] = {}
+        self._supertrend_state: dict[str, SupertrendState] = {}
+        self._supertrend_min_bar_time: CanonicalTimestamp | None = None
         if store is not None:
             for rec in store.read_alerts(profile_id=None):
                 alert = Alert.from_record(rec)
                 self._alerts[rec.id] = alert
                 if alert.enabled:
-                    self._warm_smc_alert(alert)
+                    self._warm_alert_state(alert)
 
     # -- registration ---------------------------------------------------------
 
@@ -352,6 +375,7 @@ class AlertEngine:
         self._liquidity_break_state.pop(alert.id, None)
         self._mgann_sweep_state.pop(alert.id, None)
         self._sweep_reversal_state.pop(alert.id, None)
+        self._supertrend_state.pop(alert.id, None)
         if self._store is not None:
             from ..models.timestamp import now_ms
 
@@ -371,7 +395,7 @@ class AlertEngine:
                 )
             )
         if alert.enabled:
-            self._warm_smc_alert(alert)
+            self._warm_alert_state(alert)
         return alert
 
     def delete(self, alert_id: str) -> None:
@@ -383,6 +407,7 @@ class AlertEngine:
         self._liquidity_break_state.pop(alert_id, None)
         self._mgann_sweep_state.pop(alert_id, None)
         self._sweep_reversal_state.pop(alert_id, None)
+        self._supertrend_state.pop(alert_id, None)
         if self._store is not None:
             self._store.delete_alert(alert_id)
 
@@ -397,12 +422,38 @@ class AlertEngine:
             self._liquidity_break_state.pop(alert.id, None)
             self._mgann_sweep_state.pop(alert.id, None)
             self._sweep_reversal_state.pop(alert.id, None)
-            self._warm_smc_alert(alert)
+            self._supertrend_state.pop(alert.id, None)
+            self._warm_alert_state(alert)
         self._persist_enabled(alert)
 
     def alerts(self) -> list[Alert]:
         """Return the registered alert definitions."""
         return list(self._alerts.values())
+
+    def rewarm_supertrend(self) -> None:
+        """Rebuild enabled Supertrend states from logical cached closed bars.
+
+        Source arbitration may replace the two most recent logical chart bars
+        while switching owners. Replaying without emitting keeps recursive ATR
+        and bands aligned with the same cache history the chart will render.
+        """
+        for alert in self._alerts.values():
+            if not alert.enabled or alert.type != SUPERTREND_DIRECTION_CHANGE:
+                continue
+            self._supertrend_state.pop(alert.id, None)
+            self._warm_supertrend_alert(alert)
+
+    def reset_supertrend(
+        self, *, warm_from: CanonicalTimestamp | None = None
+    ) -> None:
+        """Reset recursive state at a physical-contract boundary.
+
+        ``warm_from`` suppresses partial buckets that started before rollover
+        and keeps later feed-switch rewarms from joining the old contract's
+        logical-cache history to the new contract.
+        """
+        self._supertrend_state.clear()
+        self._supertrend_min_bar_time = warm_from
 
     # -- evaluation -----------------------------------------------------------
 
@@ -455,6 +506,32 @@ class AlertEngine:
             alert_events = self._eval_sweep_reversal(alert, ctx)
             events.extend(alert_events)
             if alert_events and not _is_repeat_alert(alert):
+                one_shot_fired_alerts.append(alert)
+        for alert in one_shot_fired_alerts:
+            alert.enabled = False
+        if self._store is not None:
+            for event in events:
+                self._persist_event(event)
+            for alert in one_shot_fired_alerts:
+                self._persist_enabled(alert)
+        return events
+
+    def evaluate_supertrend_only(self, ctx: MarketContext) -> list[AlertEvent]:
+        """Evaluate Supertrend on extra closed-bar timeframes only."""
+        events: list[AlertEvent] = []
+        one_shot_fired_alerts: list[Alert] = []
+        for alert in self._alerts.values():
+            if (
+                not alert.enabled
+                or alert.symbol != ctx.symbol
+                or alert.type != SUPERTREND_DIRECTION_CHANGE
+            ):
+                continue
+            event = self._eval_supertrend(alert, ctx)
+            if event is None:
+                continue
+            events.append(event)
+            if not _is_repeat_alert(alert):
                 one_shot_fired_alerts.append(alert)
         for alert in one_shot_fired_alerts:
             alert.enabled = False
@@ -599,6 +676,8 @@ class AlertEngine:
             return self._eval_mgann_big_trade_sweep(alert, ctx)
         if alert.type == SWEEP_REVERSAL:
             return self._eval_sweep_reversal(alert, ctx)
+        if alert.type == SUPERTREND_DIRECTION_CHANGE:
+            return self._eval_supertrend(alert, ctx)
         return None
 
     # -- price_crosses_level (Req 16.6, 17.5, 17.7) ---------------------------
@@ -845,6 +924,59 @@ class AlertEngine:
             for trigger in triggers
         ]
 
+    # -- Supertrend direction change ----------------------------------------
+
+    def _eval_supertrend(
+        self, alert: Alert, ctx: MarketContext
+    ) -> AlertEvent | None:
+        timeframe = self._supertrend_timeframe(alert)
+        if (
+            ctx.bar_tf != timeframe
+            or not ctx.bar_closed
+            or ctx.bar_time is None
+            or ctx.bar_open is None
+            or ctx.bar_high is None
+            or ctx.bar_low is None
+            or ctx.bar_close is None
+        ):
+            return None
+        if (
+            self._supertrend_min_bar_time is not None
+            and ctx.bar_time < self._supertrend_min_bar_time
+        ):
+            return None
+
+        state = self._supertrend_state_for(alert)
+        # The same authoritative close can arrive as both a live update and a
+        # reconnect snapshot. Recursive state must advance exactly once.
+        if state.last_time is not None and ctx.bar_time <= state.last_time:
+            return None
+        point = state.on_closed_bar(
+            SupertrendBar(
+                time=ctx.bar_time,
+                open=float(ctx.bar_open),
+                high=float(ctx.bar_high),
+                low=float(ctx.bar_low),
+                close=float(ctx.bar_close),
+            )
+        )
+        if point is None or point.direction == 0:
+            return None
+        configured_direction = self._supertrend_direction(alert)
+        if configured_direction == "buy" and point.direction < 0:
+            return None
+        if configured_direction == "sell" and point.direction > 0:
+            return None
+        # This also covers a process restart where the alert audit survived
+        # but the corresponding logical bar was not available during warmup.
+        if self._store is not None and self._store.alert_event_exists(
+            alert.id,
+            alert.profile_id,
+            ctx.bar_time,
+        ):
+            return None
+        return self._make_supertrend_event(alert, ctx, point.direction)
+
     # -- per-closed-bar fire-once + re-arm gate (Req 17.6, 17.8) --------------
 
     def _bar_gate(
@@ -978,6 +1110,29 @@ class AlertEngine:
             direction=trigger.direction,
         )
 
+    def _make_supertrend_event(
+        self,
+        alert: Alert,
+        ctx: MarketContext,
+        direction: int,
+    ) -> AlertEvent:
+        assert ctx.bar_time is not None
+        assert ctx.bar_close is not None
+        side = "Buy" if direction > 0 else "Sell"
+        timeframe = self._supertrend_timeframe(alert)
+        return AlertEvent(
+            alert_id=alert.id,
+            alert_type=alert.type,
+            symbol=ctx.symbol,
+            contract=ctx.contract,
+            time=ctx.bar_time,
+            price=float(ctx.bar_close),
+            message=f"{alert.symbol} {_timeframe_label(timeframe)} Supertrend {side}",
+            level=None,
+            profile_id=alert.profile_id,
+            direction=direction,
+        )
+
     def _smc_state_for(self, alert: Alert) -> SmcExternalBreakState:
         state = self._smc_state.get(alert.id)
         if state is None:
@@ -1007,6 +1162,48 @@ class AlertEngine:
             state = self._new_sweep_reversal_state(alert)
             self._sweep_reversal_state[alert.id] = state
         return state
+
+    def _supertrend_state_for(self, alert: Alert) -> SupertrendState:
+        state = self._supertrend_state.get(alert.id)
+        if state is None:
+            state = self._new_supertrend_state(alert)
+            self._supertrend_state[alert.id] = state
+        return state
+
+    def _warm_alert_state(self, alert: Alert) -> None:
+        if alert.type == SUPERTREND_DIRECTION_CHANGE:
+            self._warm_supertrend_alert(alert)
+            return
+        self._warm_smc_alert(alert)
+
+    def _warm_supertrend_alert(self, alert: Alert) -> None:
+        state = self._new_supertrend_state(alert)
+        if self._store is not None:
+            for rec in self._store.read_bars(
+                alert.symbol,
+                alert.symbol,
+                self._supertrend_timeframe(alert),
+                limit=_SUPERTREND_WARMUP_BARS,
+            ):
+                # Forming cache rows are mutable. Pine commits recursive state
+                # only when a bar is confirmed, so never seed from open bars.
+                if not rec.closed:
+                    continue
+                if (
+                    self._supertrend_min_bar_time is not None
+                    and rec.time < self._supertrend_min_bar_time
+                ):
+                    continue
+                state.on_closed_bar(
+                    SupertrendBar(
+                        time=rec.time,
+                        open=rec.open,
+                        high=rec.high,
+                        low=rec.low,
+                        close=rec.close,
+                    )
+                )
+        self._supertrend_state[alert.id] = state
 
     def _warm_smc_alert(self, alert: Alert) -> None:
         if alert.type == SWEEP_REVERSAL:
@@ -1238,6 +1435,16 @@ class AlertEngine:
             ),
         )
 
+    def _new_supertrend_state(self, alert: Alert) -> SupertrendState:
+        return SupertrendState(
+            SupertrendConfig(
+                period=self._supertrend_period(alert),
+                multiplier=self._supertrend_multiplier(alert),
+                atr_method=self._supertrend_atr_method(alert),
+                source=self._supertrend_source(alert),
+            )
+        )
+
     @staticmethod
     def _smc_bar_from_context(ctx: MarketContext) -> SmcBar | None:
         if ctx.bar_time is None or ctx.bar_close is None:
@@ -1364,6 +1571,70 @@ class AlertEngine:
         if isinstance(raw, str) and raw in SWEEP_REVERSAL_TIMEFRAMES:
             return raw
         return "1m"
+
+    @staticmethod
+    def _supertrend_timeframe(alert: Alert) -> str:
+        raw = alert.params.get("timeframe", "1m")
+        if isinstance(raw, str) and raw in SUPERTREND_TIMEFRAMES:
+            return raw
+        return "1m"
+
+    @staticmethod
+    def _supertrend_period(alert: Alert) -> int:
+        raw = alert.params.get("period", SUPERTREND_DEFAULT_PERIOD)
+        if isinstance(raw, bool):
+            return SUPERTREND_DEFAULT_PERIOD
+        try:
+            period = int(raw)
+        except (TypeError, ValueError):
+            return SUPERTREND_DEFAULT_PERIOD
+        return (
+            period
+            if 1 <= period <= SUPERTREND_MAX_PERIOD
+            else SUPERTREND_DEFAULT_PERIOD
+        )
+
+    @staticmethod
+    def _supertrend_multiplier(alert: Alert) -> float:
+        raw = alert.params.get("multiplier", SUPERTREND_DEFAULT_MULTIPLIER)
+        if isinstance(raw, bool):
+            return SUPERTREND_DEFAULT_MULTIPLIER
+        try:
+            multiplier = float(raw)
+        except (TypeError, ValueError):
+            return SUPERTREND_DEFAULT_MULTIPLIER
+        return (
+            multiplier
+            if math.isfinite(multiplier) and multiplier > 0
+            else SUPERTREND_DEFAULT_MULTIPLIER
+        )
+
+    @staticmethod
+    def _supertrend_atr_method(alert: Alert) -> str:
+        raw = alert.params.get("atrMethod", SUPERTREND_DEFAULT_ATR_METHOD)
+        return (
+            raw
+            if isinstance(raw, str) and raw in SUPERTREND_ATR_METHODS
+            else SUPERTREND_DEFAULT_ATR_METHOD
+        )
+
+    @staticmethod
+    def _supertrend_source(alert: Alert) -> str:
+        raw = alert.params.get("source", SUPERTREND_DEFAULT_SOURCE)
+        return (
+            raw
+            if isinstance(raw, str) and raw in SUPERTREND_SOURCES
+            else SUPERTREND_DEFAULT_SOURCE
+        )
+
+    @staticmethod
+    def _supertrend_direction(alert: Alert) -> str:
+        raw = alert.params.get("direction", SUPERTREND_DEFAULT_DIRECTION)
+        return (
+            raw
+            if isinstance(raw, str) and raw in SUPERTREND_DIRECTIONS
+            else SUPERTREND_DEFAULT_DIRECTION
+        )
 
     @staticmethod
     def _mgann_sweep_timeframe(alert: Alert) -> str:

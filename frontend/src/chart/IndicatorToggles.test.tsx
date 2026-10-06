@@ -208,6 +208,20 @@ describe("IndicatorToggles", () => {
     });
     fireEvent.blur(screen.getByLabelText("GC Push Momentum horizon bars"));
     fireEvent.change(
+      screen.getByLabelText("GC Push Momentum push smoothing bars"),
+      { target: { value: "6" } },
+    );
+    fireEvent.blur(
+      screen.getByLabelText("GC Push Momentum push smoothing bars"),
+    );
+    fireEvent.change(
+      screen.getByLabelText("GC Push Momentum signal smoothing bars"),
+      { target: { value: "7" } },
+    );
+    fireEvent.blur(
+      screen.getByLabelText("GC Push Momentum signal smoothing bars"),
+    );
+    fireEvent.change(
       screen.getByLabelText("GC Push Momentum volatility half-life"),
       { target: { value: "90" } },
     );
@@ -221,6 +235,16 @@ describe("IndicatorToggles", () => {
     fireEvent.blur(
       screen.getByLabelText("GC Push Momentum strong percentile"),
     );
+    const linesToggle = screen.getByLabelText(
+      "GC Push Momentum Push and Signal lines",
+    );
+    expect(linesToggle).not.toBeChecked();
+    fireEvent.click(linesToggle);
+    const divergenceToggle = screen.getByLabelText(
+      "GC Push Momentum confirmed divergence",
+    );
+    expect(divergenceToggle).toBeChecked();
+    fireEvent.click(divergenceToggle);
 
     expect(onEnabled).toHaveBeenCalledWith(true);
     expect(onSettings).toHaveBeenNthCalledWith(
@@ -229,11 +253,27 @@ describe("IndicatorToggles", () => {
     );
     expect(onSettings).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ volatilityHalfLifeBars: 90 }),
+      expect.objectContaining({ pushSmoothingBars: 6 }),
     );
     expect(onSettings).toHaveBeenNthCalledWith(
       3,
+      expect.objectContaining({ signalSmoothingBars: 7 }),
+    );
+    expect(onSettings).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({ volatilityHalfLifeBars: 90 }),
+    );
+    expect(onSettings).toHaveBeenNthCalledWith(
+      5,
       expect.objectContaining({ strongPercentile: 0.95 }),
+    );
+    expect(onSettings).toHaveBeenNthCalledWith(
+      6,
+      expect.objectContaining({ showLines: true }),
+    );
+    expect(onSettings).toHaveBeenNthCalledWith(
+      7,
+      expect.objectContaining({ showDivergence: false }),
     );
   });
 

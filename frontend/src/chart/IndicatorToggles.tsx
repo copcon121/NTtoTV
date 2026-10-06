@@ -39,6 +39,11 @@ import {
   normalizeGcPushMomentumSettings,
   type GcPushMomentumSettings,
 } from "./gcPushMomentum";
+import {
+  DEFAULT_SUPERTREND_SETTINGS,
+  normalizeSupertrendSettings,
+  type SupertrendSettings,
+} from "./supertrend";
 
 /**
  * IndicatorToggles â€” TradingView-style "Indicators" dropdown.
@@ -184,6 +189,7 @@ export interface IndicatorTogglesProps {
   mgannBreakSettings?: Partial<MgannBreakSettings>;
   bigTrades: boolean;
   ema: EmaSettings;
+  supertrend?: Partial<SupertrendSettings>;
   smc: SmcSettings;
   sweepReversal?: Partial<SweepReversalSettings>;
   outsideBar?: OutsideBarSettings;
@@ -215,6 +221,9 @@ export interface IndicatorTogglesProps {
   onDailyVolumeProfileDevelopingPocChange?: (enabled: boolean) => void;
   onBigTradesChange: (enabled: boolean) => void;
   onEmaChange: (next: EmaSettings) => void;
+  onSupertrendChange?: (next: SupertrendSettings) => void;
+  onCreateSupertrendAlert?: () => void;
+  supertrendAlertDisabled?: boolean;
   onSmcChange: (next: SmcSettings) => void;
   onSweepReversalChange?: (next: SweepReversalSettings) => void;
   onCreateSweepReversalAlert?: () => void;
@@ -288,6 +297,7 @@ export function IndicatorToggles({
   dailyVolumeProfileWidth = DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
   dailyVolumeProfileDevelopingPoc = true,
   ema,
+  supertrend = DEFAULT_SUPERTREND_SETTINGS,
   smc,
   sweepReversal = DEFAULT_SWEEP_REVERSAL_SETTINGS,
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -316,6 +326,9 @@ export function IndicatorToggles({
   onDailyVolumeProfileDevelopingPocChange = () => {},
   onBigTradesChange,
   onEmaChange,
+  onSupertrendChange = () => {},
+  onCreateSupertrendAlert = () => {},
+  supertrendAlertDisabled = false,
   onSmcChange,
   onSweepReversalChange = () => {},
   onCreateSweepReversalAlert = () => {},
@@ -324,6 +337,7 @@ export function IndicatorToggles({
   onBigTradeSettingsChange = () => {},
 }: IndicatorTogglesProps) {
   const outsideBarConfig = normalizeOutsideBarSettings(outsideBar);
+  const supertrendConfig = normalizeSupertrendSettings(supertrend);
   const sweepConfig = normalizeSweepReversalSettings(sweepReversal);
   const mgannSwingConfig = normalizeMgannSwingSettings(mgannSwingSettings);
   const mgannBreakConfig = normalizeMgannBreakSettings(mgannBreakSettings);
@@ -333,6 +347,7 @@ export function IndicatorToggles({
   const outsideBarDeltaFilter = outsideBarConfig.deltaFilter;
   const [open, setOpen] = useState(false);
   const [combinedSettingsOpen, setCombinedSettingsOpen] = useState(false);
+  const [supertrendSettingsOpen, setSupertrendSettingsOpen] = useState(false);
   const [dailyVolumeProfileSettingsOpen, setDailyVolumeProfileSettingsOpen] =
     useState(false);
   const [mgannSwingSettingsOpen, setMgannSwingSettingsOpen] = useState(false);
@@ -346,6 +361,12 @@ export function IndicatorToggles({
   const [btSettingsOpen, setBtSettingsOpen] = useState(false);
   // Local draft for the length input so typing is smooth; committed on blur/Enter.
   const [lengthDraft, setLengthDraft] = useState(String(ema.period));
+  const [supertrendPeriodDraft, setSupertrendPeriodDraft] = useState(
+    String(supertrendConfig.period),
+  );
+  const [supertrendMultiplierDraft, setSupertrendMultiplierDraft] = useState(
+    String(supertrendConfig.multiplier),
+  );
   const [smcSwingDraft, setSmcSwingDraft] = useState(String(smc.swingLength));
   const [smcInternalDraft, setSmcInternalDraft] = useState(String(smc.internalLength));
   const [smcFvgExtendDraft, setSmcFvgExtendDraft] = useState(String(smc.fvgExtendBars));
@@ -395,6 +416,12 @@ export function IndicatorToggles({
   const [gcPushHorizonDraft, setGcPushHorizonDraft] = useState(
     String(gcPushMomentumConfig.horizonBars),
   );
+  const [gcPushSmoothingDraft, setGcPushSmoothingDraft] = useState(
+    String(gcPushMomentumConfig.pushSmoothingBars),
+  );
+  const [gcPushSignalSmoothingDraft, setGcPushSignalSmoothingDraft] = useState(
+    String(gcPushMomentumConfig.signalSmoothingBars),
+  );
   const [gcPushVolatilityHalfLifeDraft, setGcPushVolatilityHalfLifeDraft] =
     useState(String(gcPushMomentumConfig.volatilityHalfLifeBars));
   const [gcPushStrongPercentileDraft, setGcPushStrongPercentileDraft] = useState(
@@ -432,6 +459,14 @@ export function IndicatorToggles({
   useEffect(() => {
     setLengthDraft(String(ema.period));
   }, [ema.period]);
+
+  useEffect(() => {
+    setSupertrendPeriodDraft(String(supertrendConfig.period));
+  }, [supertrendConfig.period]);
+
+  useEffect(() => {
+    setSupertrendMultiplierDraft(String(supertrendConfig.multiplier));
+  }, [supertrendConfig.multiplier]);
 
   useEffect(() => {
     setSmcSwingDraft(String(smc.swingLength));
@@ -508,6 +543,16 @@ export function IndicatorToggles({
   }, [gcPushMomentumConfig.horizonBars]);
 
   useEffect(() => {
+    setGcPushSmoothingDraft(String(gcPushMomentumConfig.pushSmoothingBars));
+  }, [gcPushMomentumConfig.pushSmoothingBars]);
+
+  useEffect(() => {
+    setGcPushSignalSmoothingDraft(
+      String(gcPushMomentumConfig.signalSmoothingBars),
+    );
+  }, [gcPushMomentumConfig.signalSmoothingBars]);
+
+  useEffect(() => {
     setGcPushVolatilityHalfLifeDraft(
       String(gcPushMomentumConfig.volatilityHalfLifeBars),
     );
@@ -558,6 +603,7 @@ export function IndicatorToggles({
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
         setOpen(false);
         setCombinedSettingsOpen(false);
+        setSupertrendSettingsOpen(false);
         setDailyVolumeProfileSettingsOpen(false);
         setMgannSwingSettingsOpen(false);
         setGcPushMomentumSettingsOpen(false);
@@ -600,6 +646,7 @@ export function IndicatorToggles({
     (dailyVolumeProfile ? 1 : 0) +
     (mgannSwing && !mgannSwingDisabled ? 1 : 0) +
     (combinedIndicatorActive ? 1 : 0) +
+    (supertrendConfig.enabled ? 1 : 0) +
     (footprint ? 1 : 0) +
     (fvgGrader ? 1 : 0) +
     (mgannBreak ? 1 : 0) +
@@ -631,6 +678,30 @@ export function IndicatorToggles({
       onEmaChange({ ...ema, period: parsed });
     } else {
       setLengthDraft(String(ema.period)); // revert invalid input
+    }
+  };
+
+  const updateSupertrend = (next: Partial<SupertrendSettings>) => {
+    onSupertrendChange(
+      normalizeSupertrendSettings({ ...supertrendConfig, ...next }),
+    );
+  };
+
+  const commitSupertrendPeriod = () => {
+    const parsed = Math.round(Number(supertrendPeriodDraft));
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 500) {
+      updateSupertrend({ period: parsed });
+    } else {
+      setSupertrendPeriodDraft(String(supertrendConfig.period));
+    }
+  };
+
+  const commitSupertrendMultiplier = () => {
+    const parsed = Number(supertrendMultiplierDraft);
+    if (Number.isFinite(parsed) && parsed >= 0.1 && parsed <= 100) {
+      updateSupertrend({ multiplier: parsed });
+    } else {
+      setSupertrendMultiplierDraft(String(supertrendConfig.multiplier));
     }
   };
 
@@ -778,6 +849,26 @@ export function IndicatorToggles({
       updateGcPushMomentum({ horizonBars: parsed });
     } else {
       setGcPushHorizonDraft(String(gcPushMomentumConfig.horizonBars));
+    }
+  };
+
+  const commitGcPushSignalSmoothing = () => {
+    const parsed = Math.round(Number(gcPushSignalSmoothingDraft));
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 50) {
+      updateGcPushMomentum({ signalSmoothingBars: parsed });
+    } else {
+      setGcPushSignalSmoothingDraft(
+        String(gcPushMomentumConfig.signalSmoothingBars),
+      );
+    }
+  };
+
+  const commitGcPushSmoothing = () => {
+    const parsed = Math.round(Number(gcPushSmoothingDraft));
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 50) {
+      updateGcPushMomentum({ pushSmoothingBars: parsed });
+    } else {
+      setGcPushSmoothingDraft(String(gcPushMomentumConfig.pushSmoothingBars));
     }
   };
 
@@ -949,6 +1040,30 @@ export function IndicatorToggles({
               className="ema-settings"
               aria-label="GC Push Momentum settings panel"
             >
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={gcPushMomentumConfig.showLines}
+                  aria-label="GC Push Momentum Push and Signal lines"
+                  onChange={(event) =>
+                    updateGcPushMomentum({ showLines: event.currentTarget.checked })
+                  }
+                />
+                Push / Signal lines
+              </label>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={gcPushMomentumConfig.showDivergence}
+                  aria-label="GC Push Momentum confirmed divergence"
+                  onChange={(event) =>
+                    updateGcPushMomentum({
+                      showDivergence: event.currentTarget.checked,
+                    })
+                  }
+                />
+                Confirmed Div 2 / Div 3
+              </label>
               <label className="ema-setting-line">
                 <span className="ema-setting-label">Push horizon</span>
                 <input
@@ -965,6 +1080,44 @@ export function IndicatorToggles({
                   onBlur={commitGcPushHorizon}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") commitGcPushHorizon();
+                  }}
+                />
+              </label>
+              <label className="ema-setting-line">
+                <span className="ema-setting-label">Push smoothing</span>
+                <input
+                  className="ema-length-input"
+                  type="number"
+                  min={1}
+                  max={50}
+                  step={1}
+                  aria-label="GC Push Momentum push smoothing bars"
+                  value={gcPushSmoothingDraft}
+                  onChange={(event) =>
+                    setGcPushSmoothingDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitGcPushSmoothing}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") commitGcPushSmoothing();
+                  }}
+                />
+              </label>
+              <label className="ema-setting-line">
+                <span className="ema-setting-label">Signal smoothing</span>
+                <input
+                  className="ema-length-input"
+                  type="number"
+                  min={1}
+                  max={50}
+                  step={1}
+                  aria-label="GC Push Momentum signal smoothing bars"
+                  value={gcPushSignalSmoothingDraft}
+                  onChange={(event) =>
+                    setGcPushSignalSmoothingDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitGcPushSignalSmoothing}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") commitGcPushSignalSmoothing();
                   }}
                 />
               </label>
@@ -1626,6 +1779,156 @@ export function IndicatorToggles({
                 />
                 <span>Range &gt; prev 2</span>
               </label>
+            </div>
+          )}
+          <IndicatorRow
+            label="Supertrend"
+            checked={supertrendConfig.enabled}
+            title="ATR trailing trend regime; flips are confirmed on candle close"
+            onChange={(enabled) => updateSupertrend({ enabled })}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="Supertrend settings"
+                aria-expanded={supertrendSettingsOpen}
+                onClick={() => setSupertrendSettingsOpen((value) => !value)}
+              >
+                {"\u2699"}
+              </button>
+            }
+          />
+          {supertrendSettingsOpen && (
+            <div className="ema-settings" aria-label="Supertrend settings panel">
+              <label className="ema-setting-line">
+                <span className="ema-setting-label">ATR period</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  step={1}
+                  className="ema-length-input"
+                  aria-label="Supertrend ATR period"
+                  value={supertrendPeriodDraft}
+                  onChange={(event) =>
+                    setSupertrendPeriodDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitSupertrendPeriod}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitSupertrendPeriod();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </label>
+              <label className="ema-setting-line">
+                <span className="ema-setting-label">Multiplier</span>
+                <input
+                  type="number"
+                  min={0.1}
+                  max={100}
+                  step={0.1}
+                  className="ema-length-input"
+                  aria-label="Supertrend ATR multiplier"
+                  value={supertrendMultiplierDraft}
+                  onChange={(event) =>
+                    setSupertrendMultiplierDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitSupertrendMultiplier}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitSupertrendMultiplier();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </label>
+              <label className="ema-setting-line">
+                <span className="ema-setting-label">ATR method</span>
+                <select
+                  className="ema-length-input"
+                  aria-label="Supertrend ATR method"
+                  value={supertrendConfig.atrMethod}
+                  onChange={(event) =>
+                    updateSupertrend({
+                      atrMethod: event.currentTarget.value === "sma" ? "sma" : "rma",
+                    })
+                  }
+                >
+                  <option value="rma">Wilder / RMA</option>
+                  <option value="sma">SMA</option>
+                </select>
+              </label>
+              <label className="ema-setting-line">
+                <span className="ema-setting-label">Source</span>
+                <select
+                  className="ema-length-input"
+                  aria-label="Supertrend source"
+                  value={supertrendConfig.source}
+                  onChange={(event) =>
+                    updateSupertrend({
+                      source: event.currentTarget.value as SupertrendSettings["source"],
+                    })
+                  }
+                >
+                  <option value="hl2">HL2</option>
+                  <option value="close">Close</option>
+                  <option value="open">Open</option>
+                  <option value="high">High</option>
+                  <option value="low">Low</option>
+                  <option value="hlc3">HLC3</option>
+                  <option value="ohlc4">OHLC4</option>
+                </select>
+              </label>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={supertrendConfig.showSignals}
+                  aria-label="Supertrend confirmed flip markers"
+                  onChange={(event) =>
+                    updateSupertrend({ showSignals: event.currentTarget.checked })
+                  }
+                />
+                <span>Confirmed flip markers</span>
+              </label>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Bull</span>
+                <input
+                  type="color"
+                  className="ema-color-picker"
+                  aria-label="Supertrend bullish color"
+                  value={supertrendConfig.bullColor}
+                  onChange={(event) =>
+                    updateSupertrend({ bullColor: event.currentTarget.value })
+                  }
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Bear</span>
+                <input
+                  type="color"
+                  className="ema-color-picker"
+                  aria-label="Supertrend bearish color"
+                  value={supertrendConfig.bearColor}
+                  onChange={(event) =>
+                    updateSupertrend({ bearColor: event.currentTarget.value })
+                  }
+                />
+              </div>
+              <button
+                type="button"
+                className="indicator-alert-button"
+                disabled={supertrendAlertDisabled}
+                title={
+                  supertrendAlertDisabled
+                    ? "Supertrend server alerts require 1m or a higher supported timeframe"
+                    : "Create a close-confirmed direction-change alert"
+                }
+                onClick={onCreateSupertrendAlert}
+              >
+                Create server alert
+              </button>
             </div>
           )}
           <IndicatorRow

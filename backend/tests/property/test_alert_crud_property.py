@@ -60,6 +60,14 @@ from app.engines.alert_engine import (
     SMC_DEFAULT_SWING_LENGTH,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
     SWEEP_REVERSAL,
+    SUPERTREND_DIRECTION_CHANGE,
+)
+from app.engines.supertrend import (
+    SUPERTREND_ATR_METHODS,
+    SUPERTREND_DIRECTIONS,
+    SUPERTREND_MAX_PERIOD,
+    SUPERTREND_SOURCES,
+    SUPERTREND_TIMEFRAMES,
 )
 from app.engines.sweep_reversal import (
     SWEEP_REVERSAL_DEFAULT_ATR_LENGTH,
@@ -171,6 +179,20 @@ def _params_for(alert_type: str):
                     "liquidityAtrLength": SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_LENGTH,
                     "liquidityAtrMargin": SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_MARGIN,
                     "repeat": True,
+                }
+            )
+        elif alert_type == SUPERTREND_DIRECTION_CHANGE:
+            params.update(
+                {
+                    "timeframe": draw(st.sampled_from(SUPERTREND_TIMEFRAMES)),
+                    "period": draw(
+                        st.integers(min_value=1, max_value=SUPERTREND_MAX_PERIOD)
+                    ),
+                    "multiplier": draw(st.integers(min_value=1, max_value=100)),
+                    "atrMethod": draw(st.sampled_from(sorted(SUPERTREND_ATR_METHODS))),
+                    "source": draw(st.sampled_from(sorted(SUPERTREND_SOURCES))),
+                    "direction": draw(st.sampled_from(sorted(SUPERTREND_DIRECTIONS))),
+                    "repeat": draw(st.booleans()),
                 }
             )
         elif alert_type == MGANN_BREAK_LS:

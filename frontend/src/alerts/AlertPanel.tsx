@@ -162,6 +162,14 @@ function alertInputPlaceholder(type: AlertType): string {
 }
 
 function alertDescription(alert: Alert): string {
+  if (alert.type === "supertrend_direction_change") {
+    const timeframe = String(alert.params.timeframe ?? "1m").toUpperCase();
+    const period = String(alert.params.period ?? 10);
+    const multiplier = String(alert.params.multiplier ?? 3);
+    const method = String(alert.params.atrMethod ?? "rma").toUpperCase();
+    const repeat = alert.params.repeat === true ? " (repeat)" : "";
+    return `${timeframe} Supertrend ${period} / ${multiplier} ${method}${repeat}`;
+  }
   if (alert.type === "sweep_reversal") {
     const timeframe = String(alert.params.timeframe ?? "1m").toUpperCase();
     const pool = alert.params.equalSwingFilter === true

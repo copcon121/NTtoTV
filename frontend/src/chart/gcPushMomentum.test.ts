@@ -100,9 +100,47 @@ describe("GC Push Momentum", () => {
     expect(scaled).toHaveLength(base.length);
     base.forEach((point, index) => {
       expect(scaled[index].push).toBeCloseTo(point.push, 10);
+      expect(scaled[index].smoothedPush).toBeCloseTo(point.smoothedPush, 10);
+      expect(scaled[index].signal).toBeCloseTo(point.signal, 10);
+      expect(scaled[index].histogram).toBeCloseTo(point.histogram, 10);
       expect(scaled[index].acceleration).toBeCloseTo(point.acceleration, 10);
       expect(scaled[index].efficiency).toBeCloseTo(point.efficiency, 10);
     });
+  });
+
+  it("builds a causal EMA signal and Push-minus-Signal histogram", () => {
+    const settings = testSettings({
+      pushSmoothingBars: 3,
+      signalSmoothingBars: 3,
+    });
+    const points = calculateGcPushMomentum(
+      barsFromReturns([
+        0.001, -0.001, 0.002, 0.001, -0.002, 0.003, 0.004, -0.001,
+      ]),
+      [],
+      settings,
+    );
+
+    expect(points.length).toBeGreaterThan(1);
+    expect(points[0].smoothedPush).toBeCloseTo(points[0].push, 12);
+    expect(points[0].signal).toBeCloseTo(points[0].smoothedPush, 12);
+    expect(points[0].histogram).toBeCloseTo(0, 12);
+    for (let index = 1; index < points.length; index += 1) {
+      const expectedSmoothedPush =
+        0.5 * points[index].push + 0.5 * points[index - 1].smoothedPush;
+      const expectedSignal =
+        0.5 * points[index].smoothedPush + 0.5 * points[index - 1].signal;
+      expect(points[index].smoothedPush).toBeCloseTo(expectedSmoothedPush, 12);
+      expect(points[index].signal).toBeCloseTo(expectedSignal, 12);
+      expect(points[index].histogram).toBeCloseTo(
+        points[index].smoothedPush - points[index].signal,
+        12,
+      );
+      expect(points[index].histogramChange).toBeCloseTo(
+        points[index].histogram - points[index - 1].histogram,
+        12,
+      );
+    }
   });
 
   it("mirrors direction when every log return is negated", () => {
@@ -157,6 +195,9 @@ describe("GC Push Momentum", () => {
       second[0].time + 2 * MINUTE,
       second[0].time + 3 * MINUTE,
     ]);
+    expect(resumed[0].smoothedPush).toBeCloseTo(resumed[0].push, 12);
+    expect(resumed[0].signal).toBeCloseTo(resumed[0].smoothedPush, 12);
+    expect(resumed[0].histogram).toBeCloseTo(0, 12);
   });
 
   it("uses the configured five-minute duration when detecting M5 gaps", () => {
@@ -240,14 +281,22 @@ describe("GC Push Momentum", () => {
 
   it("normalizes malformed persisted settings", () => {
     const normalized = normalizeGcPushMomentumSettings({
+      showLines: true,
+      showDivergence: false,
       horizonBars: Number.NaN,
+      pushSmoothingBars: 0,
+      signalSmoothingBars: 0,
       accelerationBars: -10,
       strongPercentile: 5,
       flowPercentile: -1,
       epsilon: 0,
     });
 
+    expect(normalized.showLines).toBe(true);
+    expect(normalized.showDivergence).toBe(false);
     expect(normalized.horizonBars).toBe(DEFAULT_GC_PUSH_MOMENTUM_SETTINGS.horizonBars);
+    expect(normalized.pushSmoothingBars).toBe(1);
+    expect(normalized.signalSmoothingBars).toBe(1);
     expect(normalized.accelerationBars).toBe(1);
     expect(normalized.strongPercentile).toBe(1);
     expect(normalized.flowPercentile).toBe(0);

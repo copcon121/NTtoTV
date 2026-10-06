@@ -20,6 +20,7 @@ and tests can inject a temporary store via ``app.state.contract_state``.
 
 from __future__ import annotations
 
+import math
 import secrets
 from typing import Any
 
@@ -58,8 +59,21 @@ from ..engines.alert_engine import (
     SMC_DEFAULT_SWING_LENGTH,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
     SWEEP_REVERSAL,
+    SUPERTREND_DIRECTION_CHANGE,
     Alert,
     AlertEngine,
+)
+from ..engines.supertrend import (
+    SUPERTREND_ATR_METHODS,
+    SUPERTREND_DEFAULT_ATR_METHOD,
+    SUPERTREND_DEFAULT_DIRECTION,
+    SUPERTREND_DEFAULT_MULTIPLIER,
+    SUPERTREND_DEFAULT_PERIOD,
+    SUPERTREND_DEFAULT_SOURCE,
+    SUPERTREND_DIRECTIONS,
+    SUPERTREND_MAX_PERIOD,
+    SUPERTREND_SOURCES,
+    SUPERTREND_TIMEFRAMES,
 )
 from ..engines.sweep_reversal import (
     SWEEP_REVERSAL_DEFAULT_ATR_LENGTH,
@@ -250,6 +264,80 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 "liquidityLookbackBars": int(params.get("liquidityLookbackBars", SWEEP_REVERSAL_DEFAULT_LIQUIDITY_LOOKBACK_BARS)),
                 "liquidityAtrLength": int(params.get("liquidityAtrLength", SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_LENGTH)),
                 "liquidityAtrMargin": float(params.get("liquidityAtrMargin", SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_MARGIN)),
+                "repeat": params.get("repeat", True),
+            }
+        )
+    elif alert_type == SUPERTREND_DIRECTION_CHANGE:
+        timeframe = params.get("timeframe", "1m")
+        if not isinstance(timeframe, str) or timeframe not in SUPERTREND_TIMEFRAMES:
+            allowed = ", ".join(SUPERTREND_TIMEFRAMES)
+            raise validation_error(
+                f"'timeframe' must be one of: {allowed}",
+                field="timeframe",
+            )
+
+        period = params.get("period", SUPERTREND_DEFAULT_PERIOD)
+        if (
+            isinstance(period, bool)
+            or not isinstance(period, int)
+            or period < 1
+            or period > SUPERTREND_MAX_PERIOD
+        ):
+            raise validation_error(
+                f"'period' must be an integer between 1 and {SUPERTREND_MAX_PERIOD}",
+                field="period",
+            )
+
+        multiplier = params.get("multiplier", SUPERTREND_DEFAULT_MULTIPLIER)
+        if (
+            isinstance(multiplier, bool)
+            or not isinstance(multiplier, (int, float))
+            or not math.isfinite(float(multiplier))
+            or float(multiplier) <= 0
+        ):
+            raise validation_error(
+                "'multiplier' must be finite and greater than zero",
+                field="multiplier",
+            )
+
+        atr_method = params.get("atrMethod", SUPERTREND_DEFAULT_ATR_METHOD)
+        if isinstance(atr_method, str):
+            atr_method = atr_method.strip().lower()
+        if atr_method not in SUPERTREND_ATR_METHODS:
+            allowed = ", ".join(sorted(SUPERTREND_ATR_METHODS))
+            raise validation_error(
+                f"'atrMethod' must be one of: {allowed}",
+                field="atrMethod",
+            )
+
+        source = params.get("source", SUPERTREND_DEFAULT_SOURCE)
+        if isinstance(source, str):
+            source = source.strip().lower()
+        if source not in SUPERTREND_SOURCES:
+            allowed = ", ".join(sorted(SUPERTREND_SOURCES))
+            raise validation_error(
+                f"'source' must be one of: {allowed}",
+                field="source",
+            )
+
+        direction = params.get("direction", SUPERTREND_DEFAULT_DIRECTION)
+        if isinstance(direction, str):
+            direction = direction.strip().lower()
+        if direction not in SUPERTREND_DIRECTIONS:
+            allowed = ", ".join(sorted(SUPERTREND_DIRECTIONS))
+            raise validation_error(
+                f"'direction' must be one of: {allowed}",
+                field="direction",
+            )
+
+        params.update(
+            {
+                "timeframe": timeframe,
+                "period": period,
+                "multiplier": float(multiplier),
+                "atrMethod": atr_method,
+                "source": source,
+                "direction": direction,
                 "repeat": params.get("repeat", True),
             }
         )

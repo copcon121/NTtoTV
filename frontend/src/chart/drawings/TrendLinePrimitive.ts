@@ -15,6 +15,7 @@ import type {
   ISeriesPrimitive,
   PrimitivePaneViewZOrder,
   SeriesAttachedParameter,
+  SeriesType,
   Time,
 } from "lightweight-charts";
 import type {
@@ -248,7 +249,7 @@ export class TrendLinePrimitive implements ISeriesPrimitive<Time>, IDrawing {
   private optionsInternal: DrawingOptions;
 
   chart: IChartApiBase<Time> | undefined;
-  series: ISeriesApi<"Candlestick", Time> | undefined;
+  series: ISeriesApi<SeriesType, Time> | undefined;
 
   constructor(
     readonly id: string,
@@ -314,7 +315,7 @@ export class TrendLinePrimitive implements ISeriesPrimitive<Time>, IDrawing {
     return null;
   }
 
-  attached(params: SeriesAttachedParameter<Time, "Candlestick">): void {
+  attached(params: SeriesAttachedParameter<Time, SeriesType>): void {
     this.chart = params.chart;
     this.series = params.series;
     this.requestUpdateFn = params.requestUpdate;

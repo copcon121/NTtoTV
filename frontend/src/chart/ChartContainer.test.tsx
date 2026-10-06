@@ -33,6 +33,11 @@ import type {
 } from "../socket/messages";
 import type { SmcWorkerRequest, SmcWorkerResponse } from "./smcWorker";
 import type { GcPushMomentumSettings } from "./gcPushMomentum";
+import type {
+  SupertrendOverlay,
+  SupertrendPoint,
+  SupertrendSettings,
+} from "./supertrend";
 
 afterEach(() => {
   cleanup();
@@ -76,6 +81,16 @@ class FakePort implements DisposableChartPort {
   setEmaLinesCalls: EmaLineData[][] = [];
   updateEmaLineCalls: { id: string; point: { time: number; value: number } }[] = [];
   clearEmaLinesCalls = 0;
+  setSupertrendOverlayCalls: {
+    overlay: SupertrendOverlay;
+    settings: Partial<SupertrendSettings>;
+  }[] = [];
+  updateSupertrendPointCalls: {
+    point: SupertrendPoint;
+    confirmed: boolean;
+    settings: Partial<SupertrendSettings>;
+  }[] = [];
+  clearSupertrendCalls = 0;
   setBigTradesCalls: BigTradeMarker[][] = [];
   updateBigTradeCalls: BigTradeMarker[] = [];
   setSmcAiSignalsCalls: SmcAiSignalMarker[][] = [];
@@ -176,6 +191,33 @@ class FakePort implements DisposableChartPort {
   }
   clearEmaLines(): void {
     this.clearEmaLinesCalls += 1;
+  }
+  setSupertrendOverlay(
+    overlay: SupertrendOverlay,
+    settings: Partial<SupertrendSettings>,
+  ): void {
+    this.setSupertrendOverlayCalls.push({
+      overlay: {
+        bullish: overlay.bullish.map((point) => ({ ...point })),
+        bearish: overlay.bearish.map((point) => ({ ...point })),
+        markers: overlay.markers.map((marker) => ({ ...marker })),
+      },
+      settings: { ...settings },
+    });
+  }
+  updateSupertrendPoint(
+    point: SupertrendPoint,
+    confirmed: boolean,
+    settings: Partial<SupertrendSettings>,
+  ): void {
+    this.updateSupertrendPointCalls.push({
+      point: { ...point },
+      confirmed,
+      settings: { ...settings },
+    });
+  }
+  clearSupertrend(): void {
+    this.clearSupertrendCalls += 1;
   }
   setBigTrades(markers: readonly BigTradeMarker[]): void {
     this.setBigTradesCalls.push(markers.map((marker) => ({ ...marker })));
@@ -954,6 +996,106 @@ describe("ChartContainer", () => {
       "primary",
       "ema-200",
     ]);
+  });
+
+  it("rebuilds Supertrend from the controller's live tail after settings change", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const ws = new MockWebSocket();
+    const socket = new ChartSocket({ url: "ws://x/ws/chart", factory: () => ws });
+    socket.connect();
+    const history = [
+      { ...ohlc(0, 10, 11, 9, 10), closed: true },
+      { ...ohlc(60_000, 10, 12, 10, 11), closed: true },
+    ];
+
+    const { rerender } = render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={history}
+        supertrend={{ enabled: true, period: 2, multiplier: 1 }}
+        socket={socket}
+        portFactory={factory}
+      />,
+    );
+
+    ws.deliver(
+      barUpdate(ohlc(120_000, 11, 13, 10, 12), { closed: false }),
+    );
+    expect(
+      port.updateSupertrendPointCalls[port.updateSupertrendPointCalls.length - 1]
+        ?.point.time,
+    ).toBe(120_000);
+
+    rerender(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="1m"
+        bars={history}
+        supertrend={{ enabled: true, period: 2, multiplier: 2 }}
+        socket={socket}
+        portFactory={factory}
+      />,
+    );
+
+    const rebuilt =
+      port.setSupertrendOverlayCalls[port.setSupertrendOverlayCalls.length - 1]
+        ?.overlay;
+    expect(rebuilt?.bullish.map((point) => point.time)).toEqual([
+      0,
+      60_000,
+      120_000,
+    ]);
+  });
+
+  it("does not seed 15s Supertrend from temporary 1m fallback history", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const ws = new MockWebSocket();
+    const socket = new ChartSocket({ url: "ws://x/ws/chart", factory: () => ws });
+    socket.connect();
+
+    render(
+      <ChartContainer
+        symbol="GC"
+        contract="GC 08-26"
+        timeframe="15s"
+        barsTimeframe="1m"
+        bars={[
+          { ...ohlc(0, 10, 11, 9, 10), closed: true },
+          { ...ohlc(60_000, 10, 12, 10, 11), closed: true },
+        ]}
+        supertrend={{ enabled: true, period: 2, multiplier: 1 }}
+        socket={socket}
+        portFactory={factory}
+      />,
+    );
+
+    expect(
+      port.setSupertrendOverlayCalls[port.setSupertrendOverlayCalls.length - 1]
+        ?.overlay.bullish,
+    ).toEqual([]);
+    ws.deliver(
+      barUpdate(ohlc(120_000, 20, 21, 19, 20), {
+        tf: "15s",
+        closed: true,
+      }),
+    );
+    ws.deliver(
+      barUpdate(ohlc(135_000, 20, 22, 20, 21), {
+        tf: "15s",
+        closed: false,
+      }),
+    );
+
+    const live =
+      port.updateSupertrendPointCalls[port.updateSupertrendPointCalls.length - 1];
+    expect(live?.point).toMatchObject({ time: 135_000, index: 1 });
+    expect(live?.point.atr).toBe(2);
+    expect(live?.confirmed).toBe(false);
   });
 
   it("loads and clears BigTrade markers through the port", () => {

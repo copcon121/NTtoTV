@@ -1,11 +1,13 @@
 import type { CanvasRenderingTarget2D } from "fancy-canvas";
 import {
+  type AutoscaleInfo,
   type Coordinate,
   type IChartApiBase,
   type IPrimitivePaneRenderer,
   type IPrimitivePaneView,
   type ISeriesApi,
   type ISeriesPrimitive,
+  type Logical,
   type PrimitivePaneViewZOrder,
   type SeriesAttachedParameter,
   type Time,
@@ -21,6 +23,10 @@ export interface RenderableDivergenceLine {
   endValue: number;
   direction: 1 | -1;
   label?: string;
+  color?: string;
+  dashed?: boolean;
+  /** Expand the host series scale to include this primitive's values. */
+  autoscale?: boolean;
 }
 
 interface ViewDivergenceLine {
@@ -34,7 +40,7 @@ interface ViewDivergenceLine {
 }
 
 function colorFor(line: RenderableDivergenceLine): string {
-  return line.direction === 1 ? "#2f7bff" : "#ff4d6d";
+  return line.color ?? (line.direction === 1 ? "#2f7bff" : "#ff4d6d");
 }
 
 class DivergenceLineRenderer implements IPrimitivePaneRenderer {
@@ -59,7 +65,14 @@ class DivergenceLineRenderer implements IPrimitivePaneRenderer {
 
         ctx.strokeStyle = color;
         ctx.lineWidth = Math.max(2, Math.round(2 * scope.verticalPixelRatio));
-        ctx.setLineDash([]);
+        ctx.setLineDash(
+          view.line.dashed
+            ? [
+                Math.max(4, 6 * scope.horizontalPixelRatio),
+                Math.max(3, 4 * scope.horizontalPixelRatio),
+              ]
+            : [],
+        );
         ctx.beginPath();
         ctx.moveTo(x1, y1);
         ctx.lineTo(x2, y2);
@@ -137,6 +150,7 @@ export class DivergenceLinePrimitive implements ISeriesPrimitive<Time> {
   series:
     | ISeriesApi<"Candlestick", Time>
     | ISeriesApi<"Line", Time>
+    | ISeriesApi<"Histogram", Time>
     | undefined;
 
   constructor(lines: readonly RenderableDivergenceLine[] = []) {
@@ -165,10 +179,33 @@ export class DivergenceLinePrimitive implements ISeriesPrimitive<Time> {
     return [this.paneView];
   }
 
+  autoscaleInfo(startTimePoint: Logical, endTimePoint: Logical): AutoscaleInfo | null {
+    if (!this.chart) return null;
+    let minimum = Number.POSITIVE_INFINITY;
+    let maximum = Number.NEGATIVE_INFINITY;
+    for (const line of this.linesInternal) {
+      if (!line.autoscale) continue;
+      const indexes = [line.startTime, line.midTime, line.endTime]
+        .map((time) => this.chart?.timeScale().timeToIndex(time, true))
+        .filter((index): index is NonNullable<typeof index> => index !== null);
+      if (indexes.length === 0) continue;
+      const firstIndex = Math.min(...indexes.map(Number));
+      const lastIndex = Math.max(...indexes.map(Number));
+      if (lastIndex < Number(startTimePoint) || firstIndex > Number(endTimePoint)) {
+        continue;
+      }
+      minimum = Math.min(minimum, line.startValue, line.midValue, line.endValue);
+      maximum = Math.max(maximum, line.startValue, line.midValue, line.endValue);
+    }
+    if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) return null;
+    return { priceRange: { minValue: minimum, maxValue: maximum } };
+  }
+
   attached(
     params:
       | SeriesAttachedParameter<Time, "Candlestick">
-      | SeriesAttachedParameter<Time, "Line">,
+      | SeriesAttachedParameter<Time, "Line">
+      | SeriesAttachedParameter<Time, "Histogram">,
   ): void {
     this.chart = params.chart;
     this.series = params.series;

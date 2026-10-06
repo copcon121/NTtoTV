@@ -11,6 +11,7 @@ import type { MgannBreakSettings } from "../chart/mgannBreak";
 import type { GcPushMomentumSettings } from "../chart/gcPushMomentum";
 import type { SmcSettings } from "../chart/smc";
 import type { SweepReversalSettings } from "../chart/sweepReversal";
+import type { SupertrendSettings } from "../chart/supertrend";
 import type { Timeframe } from "../socket/messages";
 
 export interface ProfileMarketOrderSettings {
@@ -62,6 +63,8 @@ export interface ChartProfilePayload {
   mgannBreak?: MgannBreakSettings;
   showBigTrades: boolean;
   ema: EmaSettings;
+  /** Optional for profiles saved before Supertrend was introduced. */
+  supertrend?: SupertrendSettings;
   smc: SmcSettings;
   /** Optional for profiles saved before standalone Sweep Reversal existed. */
   sweepReversal?: SweepReversalSettings;

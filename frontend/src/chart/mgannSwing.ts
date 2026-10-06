@@ -99,7 +99,7 @@ export interface MgannSwingOverlay {
   impulseWaves: MgannSwingImpulseWave[];
 }
 
-interface MgannSwingPivot {
+export interface MgannSwingPivot {
   index: number;
   time: number;
   price: number;
@@ -209,7 +209,7 @@ function confirmedPivot(
   };
 }
 
-function collectPivots(bars: readonly Bar[]): MgannSwingPivot[] {
+export function collectMgannSwingPivots(bars: readonly Bar[]): MgannSwingPivot[] {
   const length = MGANN_SWING_SIZE;
   if (bars.length < length * 2 + 1) return [];
 
@@ -735,7 +735,7 @@ export function buildMgannSwingOverlay(
   settings?: Partial<MgannSwingSettings>,
 ): MgannSwingOverlay {
   const normalized = normalizeMgannSwingSettings(settings);
-  const pivots = collectPivots(bars);
+  const pivots = collectMgannSwingPivots(bars);
   const waves = buildWaves(bars, deltaByTime, pivots);
   const impulseWaves = buildImpulseWaves(bars, pivots, waves, normalized);
   const smartContext = normalized.smartFilter

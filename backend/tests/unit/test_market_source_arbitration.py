@@ -5,7 +5,11 @@ import asyncio
 import pytest
 
 from app.config import Settings
-from app.engines.alert_engine import Alert, MGANN_BREAK_LS
+from app.engines.alert_engine import (
+    MGANN_BREAK_LS,
+    SUPERTREND_DIRECTION_CHANGE,
+    Alert,
+)
 from app.engines.contract_resolver import ContractResolver
 from app.models import BarUpdate, NormalizedTrade, OHLCVBar, Side
 from app.models.messages import EventType, VolumeDeltaUpdate
@@ -1232,6 +1236,102 @@ def test_switch_resyncs_two_snapshots_without_emitting_alerts(tmp_path):
         finally:
             conn.close()
         assert tuple(switch) == ("nt", "bookmap", "test_resync")
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
+def test_supertrend_uses_authoritative_bookmap_closes_once(tmp_path):
+    pipeline, cache, ticks, captured = _pipeline(tmp_path)
+    try:
+        pipeline.alert_engine.upsert(
+            Alert(
+                id="supertrend",
+                symbol=_SYMBOL,
+                type=SUPERTREND_DIRECTION_CHANGE,
+                params={
+                    "timeframe": "1m",
+                    "period": 1,
+                    "multiplier": 1.0,
+                    "atrMethod": "rma",
+                    "source": "hl2",
+                    "direction": "both",
+                    "repeat": True,
+                },
+            )
+        )
+        live_now = now_ms()
+        state = pipeline._feed_states["bookmap"]
+        state.connected = True
+        state.last_heartbeat_at = live_now
+        state.healthy_since = live_now - 60_000
+        state.contract = _SOURCE
+        state.bar_ready = True
+        pipeline._active_feed = "bookmap"
+
+        def payload(index, open_, high, low, close, *, snapshot=False):
+            bar_time = _BASE + index * 60_000
+            return {
+                "contract": _SOURCE,
+                "tf": "1m",
+                "time": bar_time,
+                "bridgeTime": live_now + index,
+                "lastEventTimeNanos": (bar_time + 59_000) * 1_000_000,
+                "open": open_,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": 10,
+                **_bookmap_orderflow(10, close),
+                "closed": True,
+                "partialStart": False,
+                "snapshot": snapshot,
+            }
+
+        first = payload(0, 10.0, 11.0, 9.0, 10.0)
+        reversal = payload(1, 8.0, 9.0, 7.0, 7.9)
+        asyncio.run(pipeline.on_bookmap_bar(first))
+        asyncio.run(pipeline.on_bookmap_bar(reversal))
+        asyncio.run(pipeline.on_bookmap_bar(reversal))
+        asyncio.run(
+            pipeline.on_bookmap_bar(
+                payload(1, 8.0, 9.0, 7.0, 7.9, snapshot=True)
+            )
+        )
+
+        events = [
+            event.payload
+            for event in captured
+            if event.event_type == EventType.ALERT_EVENT
+            and event.payload["alertId"] == "supertrend"
+        ]
+        assert len(events) == 1
+        assert events[0]["direction"] == -1
+        assert events[0]["time"] == _BASE + 60_000
+        assert len(cache.read_alert_events("supertrend")) == 1
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
+def test_contract_roll_and_playback_rewind_reset_supertrend_differently(
+    tmp_path, monkeypatch
+):
+    pipeline, cache, ticks, _ = _pipeline(tmp_path, preferred="nt")
+    calls = []
+    monkeypatch.setattr(
+        pipeline.alert_engine,
+        "reset_supertrend",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    try:
+        switch_time = _BASE + 30_000
+        pipeline._switch_chart_source("GC 10-26", switch_time)
+        pipeline._reset_contract("GC 10-26")
+
+        assert calls == [{"warm_from": switch_time}, {}]
     finally:
         ticks.close()
         cache.close()

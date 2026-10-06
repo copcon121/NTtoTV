@@ -29,9 +29,55 @@ from app.engines.alert_engine import (
     SMC_DEFAULT_SWING_LENGTH,
     SMC_EXTERNAL_BREAK_BIG_TRADE,
     SWEEP_REVERSAL,
+    SUPERTREND_DIRECTION_CHANGE,
 )
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
+
+
+@pytest.mark.integration
+def test_rest_alerts_normalizes_supertrend_defaults_and_rejects_15s(tmp_path: Path):
+    settings = Settings(
+        data_dir=tmp_path,
+        supported_symbols=("GC",),
+        gc_candidate_contracts=("GC 12-26",),
+    )
+    cache = CacheStore(tmp_path / "app.sqlite")
+    app = create_app()
+    app.state.contract_state = ContractStateStore(cache, settings=settings)
+    try:
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/alerts",
+                json={
+                    "symbol": "GC",
+                    "type": SUPERTREND_DIRECTION_CHANGE,
+                    "params": {},
+                },
+            )
+            assert created.status_code == 201
+            assert created.json()["params"] == {
+                "timeframe": "1m",
+                "period": 10,
+                "multiplier": 3.0,
+                "atrMethod": "rma",
+                "source": "hl2",
+                "direction": "both",
+                "repeat": True,
+            }
+
+            invalid = client.post(
+                "/api/alerts",
+                json={
+                    "symbol": "GC",
+                    "type": SUPERTREND_DIRECTION_CHANGE,
+                    "params": {"timeframe": "15s"},
+                },
+            )
+            assert invalid.status_code == 422
+            assert invalid.json()["error"]["field"] == "timeframe"
+    finally:
+        cache.close()
 
 
 @pytest.mark.integration

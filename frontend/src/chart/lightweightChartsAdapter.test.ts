@@ -9,21 +9,35 @@ import {
   VOLUME_DELTA_OVERLAY_SCALE_MARGINS,
   WAVE_DELTA_OVERLAY_PRICE_SCALE_ID,
   WAVE_DELTA_OVERLAY_SCALE_MARGINS,
+  buildSupertrendLineSegments,
   buildWaveDeltaDivergences,
   buildWaveDeltaLineData,
   buildWaveDeltaMboxData,
   fvgSignalColor,
   gcPushMomentumColor,
+  gcPushMomentumSeriesVisibility,
   isMgannImpulseTimeframeDuration,
   isSessionHighlightTimeframeDuration,
   isUtcPlus7SessionHighlightTime,
   toBarDisplayTimestamp,
   toCandle,
+  toGcPushEarlyDivergenceMarker,
+  toGcPushEarlyDivergenceMomentumLines,
+  toGcPushEarlyDivergencePriceLines,
+  toGcPushDivergenceMomentumLines,
+  toGcPushDivergencePriceLines,
   toGcPushMomentumHistogram,
   toGcPushMomentumMarker,
+  toGcPushMomentumPushLine,
+  toGcPushMomentumSignalLine,
+  toSupertrendSignalDot,
   toUtcTimestamp,
 } from "./lightweightChartsAdapter";
 import type { GcPushMomentumPoint } from "./gcPushMomentum";
+import type {
+  GcPushMomentumDivergence,
+  GcPushMomentumEarlyDivergence,
+} from "./gcPushMomentumDivergence";
 import { DEFAULT_OUTSIDE_BAR_SETTINGS } from "./outsideBar";
 
 function bar(time: number, open: number, high: number, low: number, close: number): Bar {
@@ -111,6 +125,87 @@ describe("lightweightChartsAdapter volume overlay", () => {
       top: 0.76,
       bottom: 0,
     });
+  });
+});
+
+describe("lightweightChartsAdapter Supertrend line breaks", () => {
+  it("renders alternating trends as disjoint segments instead of bridged bands", () => {
+    const segments = buildSupertrendLineSegments({
+      bullish: [
+        { time: 1, value: 98 },
+        { time: 2, value: 99 },
+        { time: 3 },
+        { time: 4 },
+        { time: 5, value: 101 },
+        { time: 6 },
+        { time: 7, value: 103 },
+      ],
+      bearish: [
+        { time: 1 },
+        { time: 2 },
+        { time: 3, value: 104 },
+        { time: 4, value: 103 },
+        { time: 5 },
+        { time: 6 },
+        { time: 7 },
+      ],
+      markers: [],
+    });
+
+    expect(segments).toEqual([
+      {
+        direction: 1,
+        points: [
+          { time: 1, value: 98 },
+          { time: 2, value: 99 },
+        ],
+      },
+      {
+        direction: -1,
+        points: [
+          { time: 3, value: 104 },
+          { time: 4, value: 103 },
+        ],
+      },
+      { direction: 1, points: [{ time: 5, value: 101 }] },
+      { direction: 1, points: [{ time: 7, value: 103 }] },
+    ]);
+  });
+
+  it("never returns two active lines when malformed input overlaps", () => {
+    expect(
+      buildSupertrendLineSegments({
+        bullish: [{ time: 1, value: 99 }],
+        bearish: [{ time: 1, value: 101 }],
+        markers: [],
+      }),
+    ).toEqual([
+      { direction: 1, points: [{ time: 1, value: 99 }] },
+    ]);
+  });
+
+  it("renders a tiny price-anchored dot without arrow or Buy/Sell text", () => {
+    const dot = toSupertrendSignalDot(
+      {
+        time: 2_000,
+        direction: -1,
+        value: 103.5,
+        text: "Sell",
+      },
+      { bullColor: "green", bearColor: "red" },
+      1_000,
+    );
+
+    expect(dot).toEqual({
+      time: 3,
+      position: "atPriceMiddle",
+      price: 103.5,
+      shape: "circle",
+      color: "red",
+      id: "supertrend:-1:2000",
+      size: 0,
+    });
+    expect(dot).not.toHaveProperty("text");
   });
 });
 
@@ -273,6 +368,10 @@ describe("lightweightChartsAdapter GC Push Momentum", () => {
   const point: GcPushMomentumPoint = {
     time: 60_000,
     push: 2,
+    smoothedPush: 1.5,
+    signal: 1.25,
+    histogram: 0.75,
+    histogramChange: 0.25,
     acceleration: 1,
     efficiency: 0.8,
     strong: true,
@@ -280,26 +379,53 @@ describe("lightweightChartsAdapter GC Push Momentum", () => {
     absorptionCandidate: false,
   };
 
-  it("dims the unclosed preview without changing its value", () => {
+  it("keeps the histogram visible when optional lines are off", () => {
+    expect(gcPushMomentumSeriesVisibility(false)).toEqual({
+      histogram: true,
+      push: false,
+      signal: false,
+    });
+    expect(gcPushMomentumSeriesVisibility(true)).toEqual({
+      histogram: true,
+      push: true,
+      signal: true,
+    });
+  });
+
+  it("renders Push-minus-Signal and dims the unclosed preview", () => {
     const closed = toGcPushMomentumHistogram(point, true);
     const preview = toGcPushMomentumHistogram(point, false);
 
-    expect(closed.value).toBe(2);
-    expect(preview.value).toBe(2);
+    expect(closed.value).toBe(0.75);
+    expect(preview.value).toBe(0.75);
     expect(closed.color).not.toBe(preview.color);
     expect(preview.color).toContain("0.34");
   });
 
-  it("uses four MACD-style direction and acceleration colors", () => {
+  it("maps Push and Signal to separate line data", () => {
+    expect(toGcPushMomentumPushLine(point)).toEqual({ time: 60, value: 1.5 });
+    expect(toGcPushMomentumSignalLine(point)).toEqual({
+      time: 60,
+      value: 1.25,
+    });
+  });
+
+  it("uses four MACD-style histogram expansion colors", () => {
     expect(gcPushMomentumColor(point, true)).toContain("0, 200, 83");
     expect(
-      gcPushMomentumColor({ ...point, acceleration: -1 }, true),
+      gcPushMomentumColor({ ...point, histogramChange: -0.1 }, true),
     ).toContain("76, 139, 103");
     expect(
-      gcPushMomentumColor({ ...point, push: -2, acceleration: -1 }, true),
+      gcPushMomentumColor(
+        { ...point, histogram: -0.75, histogramChange: -0.25 },
+        true,
+      ),
     ).toContain("255, 23, 68");
     expect(
-      gcPushMomentumColor({ ...point, push: -2, acceleration: 1 }, true),
+      gcPushMomentumColor(
+        { ...point, histogram: -0.75, histogramChange: 0.1 },
+        true,
+      ),
     ).toContain("183, 87, 83");
   });
 
@@ -317,6 +443,87 @@ describe("lightweightChartsAdapter GC Push Momentum", () => {
       color: "rgba(245, 158, 11, 1)",
     });
     expect(toGcPushMomentumMarker(conflict, false)).toBeUndefined();
+  });
+
+  it("maps confirmed Push divergence onto price and momentum panes", () => {
+    const divergence: GcPushMomentumDivergence = {
+      id: "push-div:-1:60000:120000:180000",
+      direction: -1,
+      confirmedAt: 300_000,
+      score: 1.5,
+      pricePivots: [
+        { index: 1, time: 60_000, price: 100, pushIndex: 1, pushTime: 60_000, pushValue: 3 },
+        { index: 2, time: 120_000, price: 101, pushIndex: 2, pushTime: 120_000, pushValue: 2 },
+        { index: 3, time: 180_000, price: 102, pushIndex: 3, pushTime: 180_000, pushValue: 1 },
+      ],
+    };
+
+    expect(toGcPushDivergencePriceLines([divergence])).toEqual([
+      expect.objectContaining({
+        startTime: 60,
+        startValue: 100,
+        endTime: 180,
+        endValue: 102,
+        label: "Push Bear Div 3",
+        dashed: true,
+      }),
+    ]);
+    expect(toGcPushDivergenceMomentumLines([divergence])).toEqual([
+      expect.objectContaining({
+        startTime: 60,
+        startValue: 3,
+        endTime: 180,
+        endValue: 1,
+        dashed: true,
+      }),
+    ]);
+  });
+
+  it("maps Swing-5-confirmed Div 2 and marks its confirmation bar", () => {
+    const divergence: GcPushMomentumEarlyDivergence = {
+      id: "push-div-early:-1:60000:180000:300000",
+      direction: -1,
+      confirmedAt: 300_000,
+      confirmationPrice: 98,
+      displacementAtr: 1.4,
+      breakByWick: false,
+      confirmationSwing: {
+        index: 2,
+        time: 120_000,
+        price: 99,
+        kind: "low",
+      },
+      score: 1.2,
+      pricePivots: [
+        { index: 1, time: 60_000, price: 100, pushIndex: 1, pushTime: 60_000, pushValue: 3 },
+        { index: 3, time: 180_000, price: 102, pushIndex: 3, pushTime: 180_000, pushValue: 1 },
+      ],
+    };
+
+    expect(toGcPushEarlyDivergencePriceLines([divergence])).toEqual([
+      expect.objectContaining({
+        startTime: 60,
+        startValue: 100,
+        endTime: 180,
+        endValue: 102,
+        label: "Push Bear Div 2",
+      }),
+    ]);
+    expect(toGcPushEarlyDivergenceMomentumLines([divergence])).toEqual([
+      expect.objectContaining({
+        startTime: 60,
+        startValue: 3,
+        endTime: 180,
+        endValue: 1,
+        autoscale: true,
+      }),
+    ]);
+    expect(toGcPushEarlyDivergenceMarker(divergence)).toMatchObject({
+      time: 300,
+      position: "aboveBar",
+      shape: "arrowDown",
+      text: "Bear Div 2",
+    });
   });
 });
 

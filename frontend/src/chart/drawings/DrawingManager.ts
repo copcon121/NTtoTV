@@ -1,9 +1,9 @@
 /**
  * DrawingManager — orchestrates drawing lifecycle and interactive placement.
  *
- * Manages creating drawing primitives, attaching them to the candlestick
- * series via the v5 `attachPrimitive` API, and handling interactive
- * click-to-place mouse interactions on the chart.
+ * Manages creating drawing primitives, attaching them to the owning pane's
+ * series via the v5 `attachPrimitive` API, and handling interactive placement
+ * and editing across the main chart and supported indicator panes.
  */
 
 import type { IChartApi, ISeriesApi, MouseEventParams } from "lightweight-charts";
@@ -12,6 +12,10 @@ import type {
   AnchorPoint,
   DrawingOptions,
   DrawingLineStyle,
+  DrawingPaneId,
+  DrawingPaneResolver,
+  DrawingPaneTarget,
+  DrawingSeriesApi,
   DrawingState,
   DrawingToolType,
   FibRetracementLevel,
@@ -126,6 +130,9 @@ type DrawingPlacement = {
   rawPreviewAnchor?: AnchorPoint;
   pointerId?: number;
   lastPoint?: ChartPoint;
+  paneId?: DrawingPaneId;
+  paneIndex?: number;
+  series?: DrawingSeriesApi;
 };
 
 const MAX_HISTORY_ENTRIES = 100;
@@ -166,9 +173,13 @@ export class DrawingManager implements IDrawingManager {
   private _chart: IChartApi | undefined;
   private _series: ISeriesApi<"Candlestick"> | undefined;
   private _container: HTMLElement | undefined;
+  private _paneResolver: DrawingPaneResolver | undefined;
 
   /** All completed drawings, keyed by id. */
   private readonly _drawings = new Map<string, DrawingPrimitive>();
+  /** Stable pane ownership and the currently attached host series per drawing. */
+  private readonly _drawingPaneIds = new Map<string, DrawingPaneId>();
+  private readonly _drawingSeries = new Map<string, DrawingSeriesApi>();
 
   /** In-progress interactive placement state. */
   private _placement: DrawingPlacement | null = null;
@@ -237,10 +248,12 @@ export class DrawingManager implements IDrawingManager {
     chart: IChartApi,
     series: ISeriesApi<"Candlestick">,
     container: HTMLElement,
+    paneResolver?: DrawingPaneResolver,
   ): void {
     this._chart = chart;
     this._series = series;
     this._container = container;
+    this._paneResolver = paneResolver;
 
     // Escape key cancels placement
     this._onKeyDown = (e: KeyboardEvent) => {
@@ -345,9 +358,11 @@ export class DrawingManager implements IDrawingManager {
     // Subscribe to chart clicks for anchor placement
     this._onClick = (param: MouseEventParams) => {
       if (!this._placement || !this._series || !this._chart) return;
-      if (param.paneIndex !== undefined && param.paneIndex !== 0) return;
+      const paneIndex = param.paneIndex ?? 0;
+      const target = this._placementTargetForPane(paneIndex);
+      if (!target) return;
 
-      const anchor = this._anchorFromMouseParam(param);
+      const anchor = this._anchorFromMouseParam(param, target);
       if (anchor === null) return;
       this._addAnchor(anchor, this._isShiftConstraintActive(param.sourceEvent));
     };
@@ -358,14 +373,12 @@ export class DrawingManager implements IDrawingManager {
       this._onMouseMove = (param: MouseEventParams) => {
         if (!this._placement || this._placement.anchors.length < 1) return;
         if (!this._series || !this._chart) return;
-        if (
-          param.point === undefined ||
-          (param.paneIndex !== undefined && param.paneIndex !== 0)
-        ) {
-          return;
-        }
+        if (param.point === undefined) return;
+        const paneIndex = param.paneIndex ?? this._placement.paneIndex ?? 0;
+        const target = this._placementTargetForPane(paneIndex);
+        if (!target) return;
 
-        const rawPreviewAnchor = this._anchorFromMouseParam(param);
+        const rawPreviewAnchor = this._anchorFromMouseParam(param, target);
         if (rawPreviewAnchor === null) return;
         this._placement.rawPreviewAnchor = rawPreviewAnchor;
         const previewAnchor = this._constrainPlacementAnchor(
@@ -394,7 +407,9 @@ export class DrawingManager implements IDrawingManager {
           if (preview) {
             preview.setSelected(true);
             this._placement.preview = preview;
-            this._series.attachPrimitive(preview as unknown as Parameters<typeof this._series.attachPrimitive>[0]);
+            target.series.attachPrimitive(
+              preview as unknown as Parameters<typeof target.series.attachPrimitive>[0],
+            );
           }
         }
       };
@@ -406,8 +421,11 @@ export class DrawingManager implements IDrawingManager {
     if (!this._placement) return;
 
     // Remove preview primitive
-    if (this._placement.preview && this._series) {
-      this._series.detachPrimitive(this._placement.preview as unknown as Parameters<typeof this._series.detachPrimitive>[0]);
+    if (this._placement.preview && this._placement.series) {
+      const series = this._placement.series;
+      series.detachPrimitive(
+        this._placement.preview as unknown as Parameters<typeof series.detachPrimitive>[0],
+      );
     }
 
     this._placement = null;
@@ -417,12 +435,19 @@ export class DrawingManager implements IDrawingManager {
 
   removeDrawing(id: string): void {
     const drawing = this._drawings.get(id);
-    if (!drawing || !this._series) return;
+    if (!drawing) return;
     if (this._selectedDrawingId === id) {
       this._selectDrawing(null);
     }
-    this._series.detachPrimitive(drawing as unknown as Parameters<typeof this._series.detachPrimitive>[0]);
+    const series = this._drawingSeries.get(id);
+    if (series) {
+      series.detachPrimitive(
+        drawing as unknown as Parameters<typeof series.detachPrimitive>[0],
+      );
+    }
     this._drawings.delete(id);
+    this._drawingSeries.delete(id);
+    this._drawingPaneIds.delete(id);
     this._lockedDrawingIds.delete(id);
     this._notifyCountChange();
     this._notifyStateChange();
@@ -466,6 +491,7 @@ export class DrawingManager implements IDrawingManager {
   }
 
   requestUpdateAll(): void {
+    this._syncDrawingAttachments();
     this._placement?.preview?.requestUpdate();
     for (const drawing of this._drawings.values()) {
       drawing.requestUpdate();
@@ -476,9 +502,12 @@ export class DrawingManager implements IDrawingManager {
   exportState(): DrawingState[] {
     return [...this._drawings.values()].map((drawing) => {
       const state = drawing.toState();
-      return this._lockedDrawingIds.has(drawing.id)
-        ? { ...state, locked: true }
-        : state;
+      const paneId = this._drawingPaneIds.get(drawing.id);
+      return {
+        ...state,
+        ...(paneId !== undefined && paneId !== "main" ? { paneId } : {}),
+        ...(this._lockedDrawingIds.has(drawing.id) ? { locked: true } : {}),
+      };
     });
   }
 
@@ -493,8 +522,7 @@ export class DrawingManager implements IDrawingManager {
   }
 
   private _replaceState(states: readonly DrawingState[]): void {
-    const series = this._series;
-    if (!series) return;
+    if (!this._series) return;
     this.cancelDrawing();
     this._clearDrawings(false);
     for (const state of states) {
@@ -505,8 +533,9 @@ export class DrawingManager implements IDrawingManager {
         state.options,
       );
       if (!drawing) continue;
-      series.attachPrimitive(drawing as unknown as Parameters<typeof series.attachPrimitive>[0]);
       this._drawings.set(state.id, drawing);
+      this._drawingPaneIds.set(state.id, state.paneId ?? "main");
+      this._attachDrawingToCurrentPane(state.id, drawing);
       if (state.locked === true) {
         this._lockedDrawingIds.add(state.id);
       } else {
@@ -613,13 +642,37 @@ export class DrawingManager implements IDrawingManager {
     );
   }
 
-  private _anchorFromMouseParam(param: MouseEventParams): AnchorPoint | null {
-    if (!this._chart || !this._series || param.point === undefined) return null;
-    if (!this._isInCandlePane(param.point.y)) return null;
-    return anchorFromPoint(this._chart, this._series, {
+  private _anchorFromMouseParam(
+    param: MouseEventParams,
+    target: DrawingPaneTarget,
+  ): AnchorPoint | null {
+    if (!this._chart || param.point === undefined) return null;
+    if (!this._isInPane(param.point.y, target.paneIndex)) return null;
+    return anchorFromPoint(this._chart, target.series, {
       x: param.point.x,
       y: param.point.y,
     });
+  }
+
+  private _placementTargetForPane(paneIndex: number): DrawingPaneTarget | null {
+    const placement = this._placement;
+    if (!placement) return null;
+    if (placement.series && placement.paneId !== undefined) {
+      if (placement.paneIndex !== paneIndex) return null;
+      return {
+        id: placement.paneId,
+        paneIndex: placement.paneIndex ?? paneIndex,
+        series: placement.series,
+      };
+    }
+    const target = this._targetByIndex(paneIndex);
+    if (!target || (target.id !== "main" && placement.tool !== "trendline")) {
+      return null;
+    }
+    placement.paneId = target.id;
+    placement.paneIndex = target.paneIndex;
+    placement.series = target.series;
+    return target;
   }
 
   private _constrainPlacementAnchor(
@@ -667,11 +720,15 @@ export class DrawingManager implements IDrawingManager {
     ]);
   }
 
-  private _anchorFromPointerEvent(e: PointerEvent): AnchorPoint | null {
-    if (!this._chart || !this._series || !this._container) return null;
-    const point = this._localPoint(e.clientX, e.clientY);
-    if (point === null || !this._isInCandlePane(point.y)) return null;
-    return anchorFromPoint(this._chart, this._series, point);
+  private _anchorFromPointerEvent(
+    e: PointerEvent,
+    paneId: DrawingPaneId = "main",
+    series: DrawingSeriesApi | undefined = this._series as DrawingSeriesApi | undefined,
+  ): AnchorPoint | null {
+    if (!this._chart || !series || !this._container) return null;
+    const point = this._pointInPane(e.clientX, e.clientY, paneId);
+    if (point === null) return null;
+    return anchorFromPoint(this._chart, series, point);
   }
 
   private _localPoint(clientX: number, clientY: number) {
@@ -680,9 +737,44 @@ export class DrawingManager implements IDrawingManager {
     return { x: clientX - rect.left, y: clientY - rect.top };
   }
 
-  private _isInCandlePane(y: number): boolean {
+  private _isInPane(y: number, paneIndex: number): boolean {
     if (!this._chart) return false;
-    return y >= 0 && y <= this._chart.paneSize(0).height;
+    return y >= 0 && y <= this._chart.paneSize(paneIndex).height;
+  }
+
+  private _pointInPane(
+    clientX: number,
+    clientY: number,
+    paneId: DrawingPaneId,
+  ): ChartPoint | null {
+    const target = this._targetById(paneId);
+    if (!target || !this._chart) return null;
+    const paneElement = this._chart.panes?.()[target.paneIndex]?.getHTMLElement();
+    if (paneElement) {
+      const rect = paneElement.getBoundingClientRect();
+      const point = { x: clientX - rect.left, y: clientY - rect.top };
+      return this._isInPane(point.y, target.paneIndex) ? point : null;
+    }
+    if (target.paneIndex !== 0) return null;
+    const point = this._localPoint(clientX, clientY);
+    return point && this._isInPane(point.y, 0) ? point : null;
+  }
+
+  private _panePointToContainer(
+    paneId: DrawingPaneId,
+    point: ChartPoint,
+  ): ChartPoint | null {
+    if (!this._chart || !this._container) return null;
+    const target = this._targetById(paneId);
+    if (!target) return null;
+    const paneElement = this._chart.panes?.()[target.paneIndex]?.getHTMLElement();
+    if (!paneElement) return target.paneIndex === 0 ? point : null;
+    const paneRect = paneElement.getBoundingClientRect();
+    const containerRect = this._container.getBoundingClientRect();
+    return {
+      x: paneRect.left - containerRect.left + point.x,
+      y: paneRect.top - containerRect.top + point.y,
+    };
   }
 
   private _beginBrushPlacement(e: PointerEvent): void {
@@ -700,6 +792,9 @@ export class DrawingManager implements IDrawingManager {
     if (point === null || anchor === null) return;
 
     this._placement.pointerId = e.pointerId;
+    this._placement.paneId = "main";
+    this._placement.paneIndex = 0;
+    this._placement.series = this._series as DrawingSeriesApi;
     this._placement.lastPoint = point;
     this._placement.anchors = [anchor];
     const preview = this._createPrimitive(
@@ -785,6 +880,8 @@ export class DrawingManager implements IDrawingManager {
       if (drawing) {
         this._series.attachPrimitive(drawing as unknown as Parameters<typeof this._series.attachPrimitive>[0]);
         this._drawings.set(id, drawing);
+        this._drawingPaneIds.set(id, "main");
+        this._drawingSeries.set(id, this._series as DrawingSeriesApi);
         this._notifyCountChange();
         this._notifyStateChange();
       }
@@ -809,8 +906,10 @@ export class DrawingManager implements IDrawingManager {
       const drawingHit = this._hitDrawing(e.clientX, e.clientY);
       this._selectDrawing(drawingHit?.drawingId ?? null);
       if (drawingHit !== null) {
-        const point = this._localPoint(e.clientX, e.clientY);
         const drawing = this._drawings.get(drawingHit.drawingId);
+        const paneId = this._paneIdForDrawing(drawingHit.drawingId);
+        const series = this._seriesForDrawing(drawingHit.drawingId);
+        const point = this._pointInPane(e.clientX, e.clientY, paneId);
         if (this._lockedDrawingIds.has(drawingHit.drawingId)) {
           e.preventDefault();
           e.stopPropagation();
@@ -821,10 +920,10 @@ export class DrawingManager implements IDrawingManager {
             drawing.tool === "fixed_range_delta_profile" &&
             drawing.anchors.length >= 2 &&
             this._chart &&
-            this._series
+            series
           ) {
-            const p1 = anchorToPoint(this._chart, this._series, drawing.anchors[0]);
-            const p2 = anchorToPoint(this._chart, this._series, drawing.anchors[1]);
+            const p1 = anchorToPoint(this._chart, series, drawing.anchors[0]);
+            const p2 = anchorToPoint(this._chart, series, drawing.anchors[1]);
             if (p1 !== null && p2 !== null) {
               const leftX = Math.min(p1.x, p2.x);
               const rightX = Math.max(p1.x, p2.x);
@@ -881,13 +980,15 @@ export class DrawingManager implements IDrawingManager {
     }
     if (this._edit !== null) {
       const drawing = this._drawings.get(this._edit.drawingId);
+      const paneId = this._paneIdForDrawing(this._edit.drawingId);
+      const series = this._seriesForDrawing(this._edit.drawingId);
       if ("moveDrawing" in this._edit) {
-        const point = this._localPoint(e.clientX, e.clientY);
-        if (point !== null && drawing && this._chart && this._series) {
+        const point = this._pointInPane(e.clientX, e.clientY, paneId);
+        if (point !== null && drawing && this._chart && series) {
           drawing.setAnchors(
             moveDrawingAnchors(
               this._chart,
-              this._series,
+              series,
               this._edit.anchors,
               this._edit.startPoint,
               point,
@@ -896,7 +997,7 @@ export class DrawingManager implements IDrawingManager {
           this._updateSelectionActions();
         }
       } else {
-        const anchor = this._anchorFromPointerEvent(e);
+        const anchor = this._anchorFromPointerEvent(e, paneId, series);
         if (anchor !== null && drawing) {
           if ("rectangleHandle" in this._edit && drawing.tool === "rectangle") {
             drawing.setAnchors(
@@ -1001,8 +1102,6 @@ export class DrawingManager implements IDrawingManager {
     clientY: number,
   ): AnchorHit | null {
     if (!this._chart || !this._series) return null;
-    const point = this._localPoint(clientX, clientY);
-    if (point === null || !this._isInCandlePane(point.y)) return null;
     if (this._selectedDrawingId === null) return null;
     const HIT_PX = 9;
     const RECTANGLE_HIT_PX = 16;
@@ -1016,13 +1115,17 @@ export class DrawingManager implements IDrawingManager {
       ? [[this._selectedDrawingId, selectedDrawing] as const]
       : [];
     for (const [drawingId, drawing] of drawings) {
+      const paneId = this._paneIdForDrawing(drawingId);
+      const series = this._seriesForDrawing(drawingId);
+      const point = this._pointInPane(clientX, clientY, paneId);
+      if (!series || point === null) continue;
       if (drawing.tool === "brush") {
         continue;
       }
       if (drawing.tool === "rectangle" && drawing.anchors.length >= 2) {
         const rectangleHit = rectangleHandleHit(
           this._chart,
-          this._series,
+          series,
           drawingId,
           drawing.anchors,
           point,
@@ -1033,7 +1136,7 @@ export class DrawingManager implements IDrawingManager {
       if (drawing.tool === "fixed_range_delta_profile" && drawing.anchors.length >= 2) {
         const profileHit = fixedRangeProfileHandleHit(
           this._chart,
-          this._series,
+          series,
           drawingId,
           drawing.anchors,
           point,
@@ -1042,7 +1145,7 @@ export class DrawingManager implements IDrawingManager {
         if (profileHit !== null) return profileHit;
       }
       drawing.anchors.forEach((anchor, anchorIndex) => {
-        const anchorPoint = anchorToPoint(this._chart!, this._series!, anchor);
+        const anchorPoint = anchorToPoint(this._chart!, series, anchor);
         if (anchorPoint === null) return;
         if (
           drawing.tool === "vertical_line" &&
@@ -1067,15 +1170,17 @@ export class DrawingManager implements IDrawingManager {
 
   private _hitDrawing(clientX: number, clientY: number): { drawingId: string } | null {
     if (!this._chart || !this._series) return null;
-    const point = this._localPoint(clientX, clientY);
-    if (point === null || !this._isInCandlePane(point.y)) return null;
     const HIT_PX = 7;
     const drawings = [...this._drawings.entries()].reverse();
     for (const [drawingId, drawing] of drawings) {
+      const paneId = this._paneIdForDrawing(drawingId);
+      const series = this._seriesForDrawing(drawingId);
+      const point = this._pointInPane(clientX, clientY, paneId);
+      if (!series || point === null) continue;
       if (drawing.tool === "fixed_range_delta_profile" && drawing.anchors.length >= 2) {
         const rangeHit = fixedRangeProfileFrameHit(
           this._chart,
-          this._series,
+          series,
           drawing.anchors,
           point,
           HIT_PX,
@@ -1084,7 +1189,7 @@ export class DrawingManager implements IDrawingManager {
         continue;
       }
       const points = drawing.anchors
-        .map((anchor) => anchorToPoint(this._chart!, this._series!, anchor))
+        .map((anchor) => anchorToPoint(this._chart!, series, anchor))
         .filter((p): p is { x: number; y: number } => p !== null);
       if (points.length === 0) continue;
       switch (drawing.tool) {
@@ -1106,7 +1211,7 @@ export class DrawingManager implements IDrawingManager {
         case "fib_retracement":
           if (
             drawing instanceof FibRetracementPrimitive &&
-            hitFibRetracement(this._chart, this._series, drawing, point, HIT_PX)
+            hitFibRetracement(this._chart, series, drawing, point, HIT_PX)
           ) {
             return { drawingId };
           }
@@ -1149,11 +1254,15 @@ export class DrawingManager implements IDrawingManager {
   }
 
   private _finishPlacement(): void {
-    if (!this._placement || !this._series) return;
+    if (!this._placement || !this._placement.series || !this._placement.paneId) return;
+    const series = this._placement.series;
+    const paneId = this._placement.paneId;
 
     // Remove preview if it exists
     if (this._placement.preview) {
-      this._series.detachPrimitive(this._placement.preview as unknown as Parameters<typeof this._series.detachPrimitive>[0]);
+      series.detachPrimitive(
+        this._placement.preview as unknown as Parameters<typeof series.detachPrimitive>[0],
+      );
     }
 
     // Create the final drawing
@@ -1166,8 +1275,12 @@ export class DrawingManager implements IDrawingManager {
     );
 
     if (drawing) {
-      this._series.attachPrimitive(drawing as unknown as Parameters<typeof this._series.attachPrimitive>[0]);
+      series.attachPrimitive(
+        drawing as unknown as Parameters<typeof series.attachPrimitive>[0],
+      );
       this._drawings.set(id, drawing);
+      this._drawingPaneIds.set(id, paneId);
+      this._drawingSeries.set(id, series);
       this._notifyCountChange();
       this._notifyStateChange();
     }
@@ -1221,17 +1334,80 @@ export class DrawingManager implements IDrawingManager {
 
   private _clearDrawings(notify: boolean): void {
     this._selectDrawing(null);
-    if (this._series) {
-      for (const drawing of this._drawings.values()) {
-        this._series.detachPrimitive(drawing as unknown as Parameters<typeof this._series.detachPrimitive>[0]);
-      }
+    for (const [id, drawing] of this._drawings) {
+      const series = this._drawingSeries.get(id);
+      if (!series) continue;
+      series.detachPrimitive(
+        drawing as unknown as Parameters<typeof series.detachPrimitive>[0],
+      );
     }
     this._drawings.clear();
+    this._drawingPaneIds.clear();
+    this._drawingSeries.clear();
     this._lockedDrawingIds.clear();
     if (notify) {
       this._notifyCountChange();
       this._notifyStateChange();
     }
+  }
+
+  private _targetByIndex(paneIndex: number): DrawingPaneTarget | undefined {
+    const resolved = this._paneResolver?.byIndex(paneIndex);
+    if (resolved) return resolved;
+    if (paneIndex !== 0 || !this._series) return undefined;
+    return {
+      id: "main",
+      paneIndex: 0,
+      series: this._series as DrawingSeriesApi,
+    };
+  }
+
+  private _targetById(paneId: DrawingPaneId): DrawingPaneTarget | undefined {
+    const resolved = this._paneResolver?.byId(paneId);
+    if (resolved) return resolved;
+    return paneId === "main" ? this._targetByIndex(0) : undefined;
+  }
+
+  private _paneIdForDrawing(id: string): DrawingPaneId {
+    return this._drawingPaneIds.get(id) ?? "main";
+  }
+
+  private _seriesForDrawing(id: string): DrawingSeriesApi | undefined {
+    return this._drawingSeries.get(id) ?? this._targetById(this._paneIdForDrawing(id))?.series;
+  }
+
+  private _attachDrawingToCurrentPane(id: string, drawing: DrawingPrimitive): void {
+    const target = this._targetById(this._paneIdForDrawing(id));
+    if (!target) return;
+    target.series.attachPrimitive(
+      drawing as unknown as Parameters<typeof target.series.attachPrimitive>[0],
+    );
+    this._drawingSeries.set(id, target.series);
+  }
+
+  private _syncDrawingAttachments(): void {
+    for (const [id, drawing] of this._drawings) {
+      const attachedSeries = this._drawingSeries.get(id);
+      const targetSeries = this._targetById(this._paneIdForDrawing(id))?.series;
+      if (attachedSeries === targetSeries) continue;
+      if (attachedSeries && this._isLiveSeries(attachedSeries)) {
+        attachedSeries.detachPrimitive(
+          drawing as unknown as Parameters<typeof attachedSeries.detachPrimitive>[0],
+        );
+      }
+      this._drawingSeries.delete(id);
+      if (targetSeries) {
+        targetSeries.attachPrimitive(
+          drawing as unknown as Parameters<typeof targetSeries.attachPrimitive>[0],
+        );
+        this._drawingSeries.set(id, targetSeries);
+      }
+    }
+  }
+
+  private _isLiveSeries(series: DrawingSeriesApi): boolean {
+    if (series === (this._series as DrawingSeriesApi | undefined)) return true;
+    return this._chart?.panes?.().some((pane) => pane.getSeries().includes(series)) ?? false;
   }
 
   private _cleanupListeners(): void {
@@ -1300,7 +1476,7 @@ export class DrawingManager implements IDrawingManager {
   private _showDrawingSettingsFromMouse(e: MouseEvent): void {
     if (!this._chart || !this._series || !this._container) return;
     const point = this._localPoint(e.clientX, e.clientY);
-    if (point === null || !this._isInCandlePane(point.y)) return;
+    if (point === null || !this._isInPane(point.y, 0)) return;
 
     // Path placement is completed by double-clicking the final vertex. Add
     // the double-click point when the browser/chart did not already deliver
@@ -1333,7 +1509,7 @@ export class DrawingManager implements IDrawingManager {
   private _handleProfileTap(e: PointerEvent): void {
     if (!this._chart || !this._series || !this._container || this._placement) return;
     const point = this._localPoint(e.clientX, e.clientY);
-    if (point === null || !this._isInCandlePane(point.y)) return;
+    if (point === null || !this._isInPane(point.y, 0)) return;
     const hit = this._hitProfileBox(point);
     if (hit === null) {
       this._lastProfileTap = null;
@@ -1718,7 +1894,9 @@ export class DrawingManager implements IDrawingManager {
       this._hideFibContextMenu();
       return;
     }
-    const position = selectionActionPosition(this._chart, this._series, drawing);
+    const series = this._seriesForDrawing(id);
+    if (!series) return;
+    const position = selectionActionPosition(this._chart, series, drawing);
     this._showFibSettings(id, position ?? { x: this._chart.paneSize(0).width / 2, y: 20 });
   }
 
@@ -2022,22 +2200,30 @@ export class DrawingManager implements IDrawingManager {
       id === null ||
       !drawing ||
       !isActionTool(drawing.tool) ||
-      !this._chart ||
-      !this._series
+      !this._chart
     ) {
       el.hidden = true;
       el.setAttribute("aria-hidden", "true");
       return;
     }
 
-    const position = selectionActionPosition(this._chart, this._series, drawing);
-    if (position === null) {
+    const paneId = this._paneIdForDrawing(id);
+    const series = this._seriesForDrawing(id);
+    const panePosition = series
+      ? selectionActionPosition(this._chart, series, drawing)
+      : null;
+    const position = panePosition
+      ? this._panePointToContainer(paneId, panePosition)
+      : null;
+    if (position === null || !this._container) {
       el.hidden = true;
       el.setAttribute("aria-hidden", "true");
       return;
     }
 
-    const paneSize = this._chart.paneSize(0);
+    const containerRect = this._container.getBoundingClientRect();
+    const containerWidth = Math.max(1, containerRect.width);
+    const containerHeight = Math.max(1, containerRect.height);
     const styleDrawing =
       drawing instanceof TrendLinePrimitive ||
       drawing instanceof PathPrimitive ||
@@ -2087,12 +2273,12 @@ export class DrawingManager implements IDrawingManager {
           ? 118
           : 82;
     const actionHeight = 38;
-    const left = clamp(position.x - actionWidth / 2, 8, paneSize.width - actionWidth - 8);
+    const left = clamp(position.x - actionWidth / 2, 8, containerWidth - actionWidth - 8);
     let top = position.y - actionHeight - 10;
     if (top < 8) {
       top = position.y + 10;
     }
-    top = clamp(top, 8, paneSize.height - actionHeight - 8);
+    top = clamp(top, 8, containerHeight - actionHeight - 8);
 
     const locked = this._lockedDrawingIds.has(id);
     lockButton.title = locked ? "Unlock drawing" : "Lock drawing";
@@ -2133,7 +2319,7 @@ function isActionTool(tool: DrawingToolType): tool is DrawingSelectionActionTool
 
 function selectionActionPosition(
   chart: IChartApi,
-  series: ISeriesApi<"Candlestick">,
+  series: DrawingSeriesApi,
   drawing: DrawingPrimitive,
 ): ChartPoint | null {
   const points = drawing.anchors
@@ -2382,7 +2568,7 @@ function hitPolyline(
 
 function hitFibRetracement(
   chart: IChartApi,
-  series: ISeriesApi<"Candlestick">,
+  series: DrawingSeriesApi,
   drawing: FibRetracementPrimitive,
   point: { x: number; y: number },
   tolerance: number,
@@ -2412,7 +2598,7 @@ function hitFibRetracement(
 
 function moveDrawingAnchors(
   chart: IChartApi,
-  series: ISeriesApi<"Candlestick">,
+  series: DrawingSeriesApi,
   anchors: readonly AnchorPoint[],
   startPoint: ChartPoint,
   currentPoint: ChartPoint,
@@ -2466,7 +2652,7 @@ function rectangleFrameHit(
 
 function rectangleHandleHit(
   chart: IChartApi,
-  series: ISeriesApi<"Candlestick">,
+  series: DrawingSeriesApi,
   drawingId: string,
   anchors: readonly AnchorPoint[],
   point: { x: number; y: number },
@@ -2584,7 +2770,7 @@ function resizeRectangleAnchors(
 
 function fixedRangeProfileHandleHit(
   chart: IChartApi,
-  series: ISeriesApi<"Candlestick">,
+  series: DrawingSeriesApi,
   drawingId: string,
   anchors: readonly AnchorPoint[],
   point: { x: number; y: number },
@@ -2613,7 +2799,7 @@ function fixedRangeProfileHandleHit(
 
 function fixedRangeProfileFrameHit(
   chart: IChartApi,
-  series: ISeriesApi<"Candlestick">,
+  series: DrawingSeriesApi,
   anchors: readonly AnchorPoint[],
   point: { x: number; y: number },
   tolerance: number,
@@ -2626,7 +2812,7 @@ function fixedRangeProfileFrameHit(
 
 function fixedRangeProfileBoxHit(
   chart: IChartApi,
-  series: ISeriesApi<"Candlestick">,
+  series: DrawingSeriesApi,
   anchors: readonly AnchorPoint[],
   point: { x: number; y: number },
   tolerance: number,

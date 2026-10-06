@@ -1322,9 +1322,9 @@ class Pipeline:
             )
             await self._emit_alerts(self._alerts.evaluate(m5_ctx))
 
-        # Sweep Reversal is the only server alert that intentionally consumes
-        # every chart timeframe. Keep legacy alert types on their established
-        # M1/M5 paths by using the type-filtered evaluator here.
+        # Sweep Reversal and Supertrend consume the additional chart
+        # timeframes. Keep legacy types on their established M1/M5 paths by
+        # using type-filtered evaluators here.
         already_evaluated = {
             closed_bar.tf if closed_bar is not None else None,
             m5_bar.tf if m5_bar is not None else None,
@@ -1346,9 +1346,11 @@ class Pipeline:
                 bar_close=bar.close,
                 bar_volume=bar.volume,
             )
-            await self._emit_alerts(
-                self._alerts.evaluate_sweep_reversal_only(sweep_ctx)
+            extra_events = self._alerts.evaluate_sweep_reversal_only(sweep_ctx)
+            extra_events.extend(
+                self._alerts.evaluate_supertrend_only(sweep_ctx)
             )
+            await self._emit_alerts(extra_events)
 
         # Big-trade threshold alerts: one context per reconstructed big trade.
         for bt in big_trades:
@@ -2150,6 +2152,9 @@ class Pipeline:
                 footprint_snapshots,
                 bool(footprint_snapshots),
             )
+            # Rebuild recursive state from the newly authoritative closed
+            # logical-cache rows. Warmup never emits historical alerts.
+            self._alerts.rewarm_supertrend()
             for update in snapshots:
                 await self._enqueue(OutboundEvent.from_message(update))
             for update in delta_snapshots:
@@ -2333,6 +2338,11 @@ class Pipeline:
         self._pin_resolver_source(contract)
         if old != contract:
             logger.info("pipeline: chart source switched %s -> %s", old, contract)
+            if old is not None:
+                # Never turn a futures-roll price gap into a direction alert.
+                # A bucket begun before the handoff may contain mixed prices,
+                # so state starts at the first bucket beginning afterward.
+                self._alerts.reset_supertrend(warm_from=time_ms)
 
     def _reset_contract(self, contract: str) -> None:
         """Reset all per-contract engine + validator state (playback rewind).
@@ -2348,6 +2358,10 @@ class Pipeline:
         self._fvg.reset_contract(chart_contract)
         self._bt.reset_contract(chart_contract)
         self._breakout.reset_contract(chart_contract)
+        # Playback can rewind to timestamps older than the indicator's last
+        # confirmed bar. Clear its high-water mark so replayed closes advance
+        # normally; unlike a futures roll, there is no forward cutoff.
+        self._alerts.reset_supertrend()
         self._last_quote.pop(contract, None)
         validator = self._coordinator.validator
         for channel in (TRADE_CHANNEL, QUOTE_CHANNEL):

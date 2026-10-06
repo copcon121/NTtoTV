@@ -16,6 +16,8 @@ export interface Bar {
   low: number;
   close: number;
   volume: number;
+  /** REST now supplies this; optional keeps older cached/profile fixtures valid. */
+  closed?: boolean;
 }
 
 /**
