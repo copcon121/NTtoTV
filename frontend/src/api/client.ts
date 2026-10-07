@@ -222,6 +222,30 @@ export interface AutoTradeSettings {
   updatedAt: number;
 }
 
+export interface SupertrendTrailing {
+  targetType: "order" | "position";
+  targetId: string;
+  brokerPositionTicket: number;
+  side: Side;
+  timeframe: Timeframe;
+  period: number;
+  multiplier: number;
+  atrMethod: "rma" | "sma";
+  source: "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4";
+  lastBarTime?: number | null;
+  lastLine?: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SupertrendTrailingInput {
+  timeframe: Timeframe;
+  period: number;
+  multiplier: number;
+  atrMethod: SupertrendTrailing["atrMethod"];
+  source: SupertrendTrailing["source"];
+}
+
 export interface Mt5PendingOrder {
   brokerOrderTicket: number;
   orderId?: string | null;
@@ -519,6 +543,49 @@ export class ApiClient {
     if (!res.ok) throw new Error(await this.errorMessage(res, "PUT /auto-trade"));
     const body = (await res.json()) as { settings: AutoTradeSettings };
     return body.settings;
+  }
+
+  async supertrendTrailings(): Promise<SupertrendTrailing[]> {
+    const body = await this.getJson<{ trailings: SupertrendTrailing[] }>(
+      "/supertrend-trailing",
+    );
+    return body.trailings;
+  }
+
+  async enableSupertrendTrailing(
+    targetType: SupertrendTrailing["targetType"],
+    targetId: string | number,
+    input: SupertrendTrailingInput,
+  ): Promise<SupertrendTrailing> {
+    const segment = targetType === "order" ? "orders" : "positions";
+    const res = await this.fetchFn(
+      `${this.basePath}/supertrend-trailing/${segment}/${encodeURIComponent(String(targetId))}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(input),
+      },
+    );
+    if (!res.ok) {
+      throw new Error(await this.errorMessage(res, "PUT /supertrend-trailing"));
+    }
+    const body = (await res.json()) as { trailing: SupertrendTrailing };
+    return body.trailing;
+  }
+
+  async disableSupertrendTrailing(
+    targetType: SupertrendTrailing["targetType"],
+    targetId: string | number,
+  ): Promise<void> {
+    const segment = targetType === "order" ? "orders" : "positions";
+    const res = await this.fetchFn(
+      `${this.basePath}/supertrend-trailing/${segment}/${encodeURIComponent(String(targetId))}`,
+      { method: "DELETE", credentials: "same-origin" },
+    );
+    if (!res.ok) {
+      throw new Error(await this.errorMessage(res, "DELETE /supertrend-trailing"));
+    }
   }
 
   async patchOrder(

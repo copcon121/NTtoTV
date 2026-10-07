@@ -361,6 +361,7 @@ async def mt5_close_position(
         raise conflict(f"MT5 close failed: {exc}", field="account")
     if not result.accepted:
         raise conflict(result.error_message or "Broker rejected close", field="brokerPositionTicket")
+    cache.supertrend_trailing.delete_for_position(user.id, ticket)
     return {"brokerPositionTicket": ticket, "closed": True}
 
 

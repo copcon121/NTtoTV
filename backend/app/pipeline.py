@@ -205,6 +205,7 @@ AlertTextSender = Callable[[AlertEvent], Awaitable[None] | None]
 AnalystEventSink = Callable[[], None]
 AutoTradeClosedBarSink = Callable[[OHLCVBar, int | None], Awaitable[None] | None]
 AutoTradePriceSink = Callable[[float, int], Awaitable[None] | None]
+ManualTrailingClosedBarSink = Callable[[str, OHLCVBar], Awaitable[None] | None]
 
 
 class Pipeline:
@@ -232,6 +233,7 @@ class Pipeline:
         analyst_event_sink: AnalystEventSink | None = None,
         auto_trade_closed_bar_sink: AutoTradeClosedBarSink | None = None,
         auto_trade_price_sink: AutoTradePriceSink | None = None,
+        manual_trailing_closed_bar_sink: ManualTrailingClosedBarSink | None = None,
         control_plane: ControlPlaneCoordinator | None = None,
         validator: SequenceValidator | None = None,
         enable_tick_fvg_signal: bool = True,
@@ -244,6 +246,7 @@ class Pipeline:
         self._symbol = symbol
         self._auto_trade_closed_bar_sink = auto_trade_closed_bar_sink
         self._auto_trade_price_sink = auto_trade_price_sink
+        self._manual_trailing_closed_bar_sink = manual_trailing_closed_bar_sink
         self._bars = bar_aggregator or BarAggregator()
         self._source_bars: dict[str, BarAggregator] = {
             "nt": self._bars,
@@ -1303,6 +1306,7 @@ class Pipeline:
             )
             await self._emit_alerts(self._alerts.evaluate(bar_ctx))
             await self._run_auto_trade_closed_bar(bar_ctx)
+            await self._run_manual_trailing_closed_bar(bar_ctx)
 
         m5_bar = (closed_bars or {}).get("5m")
         if m5_bar is not None:
@@ -1321,6 +1325,7 @@ class Pipeline:
                 bar_volume=bar.volume,
             )
             await self._emit_alerts(self._alerts.evaluate(m5_ctx))
+            await self._run_manual_trailing_closed_bar(m5_ctx)
 
         # Sweep Reversal and Supertrend consume the additional chart
         # timeframes. Keep legacy types on their established M1/M5 paths by
@@ -1351,6 +1356,7 @@ class Pipeline:
                 self._alerts.evaluate_supertrend_only(sweep_ctx)
             )
             await self._emit_alerts(extra_events)
+            await self._run_manual_trailing_closed_bar(sweep_ctx)
 
         # Big-trade threshold alerts: one context per reconstructed big trade.
         for bt in big_trades:
@@ -1421,6 +1427,7 @@ class Pipeline:
             alert_events.extend(self._alerts.reconcile_mgann_closed_bar(ctx))
             await self._emit_alerts(alert_events)
             await self._run_auto_trade_closed_bar(ctx)
+            await self._run_manual_trailing_closed_bar(ctx)
 
     async def _run_auto_trade_closed_bar(self, ctx: MarketContext) -> None:
         """Pass only live finalized M1 bars and their volume delta to auto execution."""
@@ -1447,6 +1454,34 @@ class Pipeline:
                     volume=ctx.bar_volume,
                 ),
                 ctx.bar_volume_delta,
+            )
+        )
+
+    async def _run_manual_trailing_closed_bar(self, ctx: MarketContext) -> None:
+        """Pass every supported live finalized chart bar to manual trailing."""
+        if (
+            self._manual_trailing_closed_bar_sink is None
+            or not ctx.bar_closed
+            or ctx.bar_tf not in SUPPORTED_TFS
+            or ctx.bar_time is None
+            or ctx.bar_open is None
+            or ctx.bar_high is None
+            or ctx.bar_low is None
+            or ctx.bar_close is None
+            or ctx.bar_volume is None
+        ):
+            return
+        await _maybe_await(
+            self._manual_trailing_closed_bar_sink(
+                ctx.bar_tf,
+                OHLCVBar(
+                    time=ctx.bar_time,
+                    open=ctx.bar_open,
+                    high=ctx.bar_high,
+                    low=ctx.bar_low,
+                    close=ctx.bar_close,
+                    volume=ctx.bar_volume,
+                ),
             )
         )
 

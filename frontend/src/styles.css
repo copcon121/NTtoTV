@@ -1187,6 +1187,16 @@ body {
   min-width: 38px;
 }
 
+.market-order-row-actions .market-order-row-trailing {
+  min-width: 64px;
+}
+
+.market-order-row-actions .market-order-row-trailing.active {
+  border-color: rgba(38, 166, 154, 0.9);
+  background: rgba(38, 166, 154, 0.26);
+  color: #8df1e6;
+}
+
 .market-order-row-actions button:disabled {
   opacity: 0.55;
   cursor: wait;
@@ -1596,13 +1606,15 @@ body {
   margin-top: auto;
 }
 
-.drawing-tool-indicators.is-hidden {
+.drawing-tool-indicators.is-hidden,
+.drawing-tool-order-levels.is-hidden {
   background: rgba(41, 98, 255, 0.28);
   color: #ffffff;
   border-color: #3f6da8;
 }
 
-.drawing-tool-indicators.is-hidden:hover {
+.drawing-tool-indicators.is-hidden:hover,
+.drawing-tool-order-levels.is-hidden:hover {
   background: rgba(49, 93, 156, 0.7);
 }
 
@@ -3094,8 +3106,14 @@ body {
   }
 
   .market-order-row {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 5px;
+  }
+
+  .market-order-row-actions {
+    grid-column: 1 / -1;
+    width: 100%;
+    justify-content: flex-end;
   }
 
   .market-order-row-pnl {
@@ -3108,6 +3126,10 @@ body {
 
   .market-order-row-actions .market-order-row-break-even {
     min-width: 34px;
+  }
+
+  .market-order-row-actions .market-order-row-trailing {
+    min-width: 60px;
   }
 
   .order-action-rail {

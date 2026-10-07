@@ -186,6 +186,51 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
+  it("loads and toggles manual SuperTrend trailing", async () => {
+    const trailing = {
+      targetType: "order" as const,
+      targetId: "ord_1",
+      brokerPositionTicket: 7,
+      side: "buy" as const,
+      timeframe: "1m" as const,
+      period: 10,
+      multiplier: 3,
+      atrMethod: "rma" as const,
+      source: "hl2" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ trailings: [trailing] }))
+      .mockResolvedValueOnce(jsonResponse({ trailing }))
+      .mockResolvedValueOnce(jsonResponse({ disabled: true }));
+    const api = new ApiClient({ fetchFn });
+
+    await expect(api.supertrendTrailings()).resolves.toEqual([trailing]);
+    await expect(
+      api.enableSupertrendTrailing("order", "ord_1", {
+        timeframe: "1m",
+        period: 10,
+        multiplier: 3,
+        atrMethod: "rma",
+        source: "hl2",
+      }),
+    ).resolves.toEqual(trailing);
+    await api.disableSupertrendTrailing("order", "ord_1");
+
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      2,
+      "/api/supertrend-trailing/orders/ord_1",
+      expect.objectContaining({ method: "PUT", credentials: "same-origin" }),
+    );
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      3,
+      "/api/supertrend-trailing/orders/ord_1",
+      expect.objectContaining({ method: "DELETE", credentials: "same-origin" }),
+    );
+  });
+
   it("sends a partial app order close volume", async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({ order: { id: "ord_1", status: "filled", volumeLots: 0.05 } }),

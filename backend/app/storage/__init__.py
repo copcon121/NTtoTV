@@ -18,6 +18,7 @@ from .cache_store import CACHE_TABLES, CacheStore
 from .connection import DEFAULT_BUSY_TIMEOUT_MS, SingleWriter, connect, connect_reader
 from .keyed_store import KeyedStore
 from .profile_store import ProfileStore
+from .supertrend_trailing_store import SupertrendTrailingStore
 from .records import (
     AlertEventRecord,
     AlertRecord,
@@ -38,6 +39,7 @@ __all__ = [
     "AlertStore",
     "AutoTradeStore",
     "ProfileStore",
+    "SupertrendTrailingStore",
     "BarRecord",
     "VolumeDeltaRecord",
     "FootprintBarRecord",

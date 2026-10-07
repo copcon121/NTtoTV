@@ -24,6 +24,7 @@ from .connection import SingleWriter, connect, connect_reader
 from .keyed_store import KeyedStore
 from .order_store import OrderStore
 from .profile_store import ProfileStore
+from .supertrend_trailing_store import SupertrendTrailingStore
 from .records import (
     AlertEventRecord,
     AlertRecord,
@@ -344,6 +345,31 @@ CREATE TABLE IF NOT EXISTS auto_trade_settings (
 
 CREATE INDEX IF NOT EXISTS idx_auto_trade_settings_enabled
     ON auto_trade_settings(long_enabled, short_enabled, updated_at);
+
+-- User-armed virtual trailing exits for manual positions. These rules keep
+-- running server-side and deliberately never include auto_mgann orders.
+CREATE TABLE IF NOT EXISTS supertrend_trailing (
+    user_id                  TEXT NOT NULL,
+    account_id               TEXT NOT NULL,
+    target_type              TEXT NOT NULL, -- order | position
+    target_id                TEXT NOT NULL,
+    broker_position_ticket   INTEGER NOT NULL,
+    side                     TEXT NOT NULL,
+    timeframe                TEXT NOT NULL,
+    period                   INTEGER NOT NULL,
+    multiplier               REAL NOT NULL,
+    atr_method               TEXT NOT NULL,
+    source                   TEXT NOT NULL,
+    created_at               INTEGER NOT NULL,
+    updated_at               INTEGER NOT NULL,
+    last_bar_time            INTEGER,
+    last_line                REAL,
+    PRIMARY KEY (user_id, target_type, target_id),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_supertrend_trailing_timeframe
+    ON supertrend_trailing(timeframe, account_id, created_at);
 """
 
 
@@ -378,6 +404,9 @@ class CacheStore:
         self._users = UserStore(self._writer, self.reader)
         self._orders = OrderStore(self._writer, self.reader)
         self._auto_trade = AutoTradeStore(self._writer, self.reader)
+        self._supertrend_trailing = SupertrendTrailingStore(
+            self._writer, self.reader
+        )
 
     @classmethod
     def open(cls, settings: Settings | None = None) -> "CacheStore":
@@ -791,6 +820,11 @@ class CacheStore:
     def auto_trade(self) -> AutoTradeStore:
         """Per-user mGann automatic execution settings."""
         return self._auto_trade
+
+    @property
+    def supertrend_trailing(self) -> SupertrendTrailingStore:
+        """Persistent manual-position SuperTrend trailing rules."""
+        return self._supertrend_trailing
 
     def upsert_profile(self, profile: ProfileRecord) -> None:
         self._profiles.upsert_profile(profile)

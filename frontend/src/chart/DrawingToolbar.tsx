@@ -2,8 +2,8 @@
  * DrawingToolbar — TradingView-style vertical toolbar on the left of the chart.
  *
  * Renders SVG icon buttons for each drawing tool, plus the indicator visibility
- * toggle and a "Delete All" trash button at the bottom. Mirrors the left
- * toolbar layout from TradingView (see the screenshot in the user's request).
+ * toggle, order-level visibility toggle, and a "Delete All" trash button at
+ * the bottom. Mirrors the left toolbar layout from TradingView.
  */
 
 import { useState } from "react";
@@ -26,6 +26,10 @@ export interface DrawingToolbarProps {
   indicatorsVisible?: boolean;
   /** Toggles the temporary visibility of indicator overlays. */
   onIndicatorsVisibleChange?: (visible: boolean) => void;
+  /** Whether live ENTRY / SL / TP levels are currently visible. */
+  orderLevelsVisible?: boolean;
+  /** Toggles the temporary visibility of live ENTRY / SL / TP levels. */
+  onOrderLevelsVisibleChange?: (visible: boolean) => void;
 }
 
 export function DrawingToolbar({
@@ -36,6 +40,8 @@ export function DrawingToolbar({
   onDeleteAll,
   indicatorsVisible = true,
   onIndicatorsVisibleChange = () => {},
+  orderLevelsVisible = true,
+  onOrderLevelsVisibleChange = () => {},
 }: DrawingToolbarProps) {
   const isMobile = className?.includes("drawing-toolbar-mobile") === true;
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -104,6 +110,34 @@ export function DrawingToolbar({
       <div className="drawing-toolbar-separator" />
 
       <div className="drawing-toolbar-bottom">
+        <button
+          type="button"
+          className={`drawing-tool-btn drawing-tool-order-levels${
+            orderLevelsVisible ? "" : " is-hidden"
+          }`}
+          title={orderLevelsVisible ? "Hide order levels" : "Show order levels"}
+          aria-label={
+            orderLevelsVisible ? "Hide order levels" : "Show order levels"
+          }
+          aria-pressed={!orderLevelsVisible}
+          onClick={() => onOrderLevelsVisibleChange(!orderLevelsVisible)}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M3 7h18M3 12h18M3 17h18" />
+            <path d="M7 5v4M12 10v4M17 15v4" />
+            {!orderLevelsVisible && <path d="M4 4 20 20" />}
+          </svg>
+        </button>
+
         <button
           type="button"
           className={`drawing-tool-btn drawing-tool-indicators${

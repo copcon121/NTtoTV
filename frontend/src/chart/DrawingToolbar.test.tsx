@@ -72,6 +72,39 @@ describe("DrawingToolbar", () => {
 
     expect(
       screen.getByRole("button", { name: "Restore indicators" }),
+      ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("toggles live ENTRY, SL, and TP order levels", () => {
+    const onOrderLevelsVisibleChange = vi.fn();
+
+    const { rerender } = render(
+      <DrawingToolbar
+        activeTool={null}
+        drawingCount={0}
+        orderLevelsVisible
+        onToolSelect={vi.fn()}
+        onDeleteAll={vi.fn()}
+        onOrderLevelsVisibleChange={onOrderLevelsVisibleChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide order levels" }));
+    expect(onOrderLevelsVisibleChange).toHaveBeenCalledWith(false);
+
+    rerender(
+      <DrawingToolbar
+        activeTool={null}
+        drawingCount={0}
+        orderLevelsVisible={false}
+        onToolSelect={vi.fn()}
+        onDeleteAll={vi.fn()}
+        onOrderLevelsVisibleChange={onOrderLevelsVisibleChange}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Show order levels" }),
     ).toHaveAttribute("aria-pressed", "true");
   });
 

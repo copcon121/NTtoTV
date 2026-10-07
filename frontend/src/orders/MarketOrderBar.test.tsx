@@ -190,6 +190,7 @@ describe("MarketOrderBar", () => {
 
   it("renders one control row per open order", () => {
     const onOrderRowBreakEven = vi.fn();
+    const onOrderRowSupertrendTrailing = vi.fn();
     const onOrderRowClose = vi.fn();
     const onOrderRowCancel = vi.fn();
     render(
@@ -205,6 +206,9 @@ describe("MarketOrderBar", () => {
             pnlValue: 6.3,
             action: "close",
             canBreakEven: true,
+            canSupertrendTrail: true,
+            supertrendTrailing: true,
+            supertrendTrailingTimeframe: "1m",
           },
           {
             id: "mt5order:8",
@@ -218,14 +222,20 @@ describe("MarketOrderBar", () => {
         onSettingsChange={vi.fn()}
         onMarketOrder={vi.fn()}
         onOrderRowBreakEven={onOrderRowBreakEven}
+        onOrderRowSupertrendTrailing={onOrderRowSupertrendTrailing}
         onOrderRowClose={onOrderRowClose}
         onOrderRowCancel={onOrderRowCancel}
       />,
     );
 
     expect(screen.getAllByRole("button", { name: "BE" })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Trailing" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "BE" }));
+    fireEvent.click(screen.getByRole("button", { name: "Trailing" }));
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -233,6 +243,7 @@ describe("MarketOrderBar", () => {
     expect(screen.getByText("SELL limit")).toBeInTheDocument();
     expect(screen.getByText("+$6.30")).toBeInTheDocument();
     expect(onOrderRowBreakEven).toHaveBeenCalledWith("app:ord_1");
+    expect(onOrderRowSupertrendTrailing).toHaveBeenCalledWith("app:ord_1");
     expect(onOrderRowClose).toHaveBeenCalledWith("app:ord_1");
     expect(onOrderRowCancel).toHaveBeenCalledWith("mt5order:8");
   });

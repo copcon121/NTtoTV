@@ -31,6 +31,7 @@ from .engines.auto_mgann_trade import AutoMgannTradeEngine
 from .engines.basis_engine import BasisEngine
 from .engines.contract_resolver import ContractResolver
 from .engines.fvg_signal_engine import FvgSignalEngine
+from .engines.manual_supertrend_trailing import ManualSupertrendTrailingEngine
 from .engines.reconciliation import ReconciliationEngine
 from .ingest.control_plane import ControlPlaneCoordinator
 from .pipeline import Pipeline
@@ -111,6 +112,11 @@ class AppRuntime:
             self._registry,
             settings=s,
         )
+        self._manual_supertrend_trailing = ManualSupertrendTrailingEngine(
+            self._cache,
+            self._mt5_manager,
+            self._registry,
+        )
         # The pipeline; control plane is bound per /ws/nt connection so its
         # send_control targets the live socket.
         self._pipeline = Pipeline(
@@ -128,6 +134,7 @@ class AppRuntime:
             ),
             auto_trade_closed_bar_sink=self._on_auto_mgann_closed_bar,
             auto_trade_price_sink=self._on_auto_mgann_price,
+            manual_trailing_closed_bar_sink=self._on_manual_supertrend_closed_bar,
             enable_tick_fvg_signal=False,
         )
         self._flush_task: asyncio.Task[None] | None = None
@@ -196,6 +203,10 @@ class AppRuntime:
     @property
     def auto_mgann_trade(self) -> AutoMgannTradeEngine:
         return self._auto_mgann_trade
+
+    @property
+    def manual_supertrend_trailing(self) -> ManualSupertrendTrailingEngine:
+        return self._manual_supertrend_trailing
 
     @property
     def analyst_store(self) -> AnalystStore | None:
@@ -313,6 +324,13 @@ class AppRuntime:
             return
         await asyncio.to_thread(self._auto_mgann_trade.activate_ema21_trailing_at_1r, price)
         await asyncio.to_thread(self._auto_mgann_trade.cancel_unfilled_limits_at_1r, price)
+
+    async def _on_manual_supertrend_closed_bar(self, timeframe: str, bar) -> None:
+        await asyncio.to_thread(
+            self._manual_supertrend_trailing.on_closed_bar,
+            timeframe,
+            bar,
+        )
 
     async def _reconciliation_loop(self) -> None:
         while True:

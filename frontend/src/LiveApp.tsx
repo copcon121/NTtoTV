@@ -14,6 +14,7 @@ import {
   type Mt5PendingOrder,
   type Mt5Symbol,
   type Mt5Terminal,
+  type SupertrendTrailing,
   type VolumeDeltaBar,
 } from "./api/client";
 import { AlertPanel } from "./alerts/AlertPanel";
@@ -95,6 +96,7 @@ import {
   type SweepReversalSettings,
 } from "./chart/sweepReversal";
 import {
+  calculateSupertrend,
   DEFAULT_SUPERTREND_SETTINGS,
   normalizeSupertrendSettings,
   type SupertrendSettings,
@@ -894,6 +896,57 @@ function appOrderRowKey(orderId: string): string {
   return `app:${orderId}`;
 }
 
+function supertrendTrailingRowKey(trailing: SupertrendTrailing): string {
+  return trailing.targetType === "order"
+    ? appOrderRowKey(trailing.targetId)
+    : mt5PositionKey(Number(trailing.targetId));
+}
+
+function supertrendTrailingMap(
+  trailings: readonly SupertrendTrailing[],
+): ReadonlyMap<string, SupertrendTrailing> {
+  return new Map(trailings.map((trailing) => [supertrendTrailingRowKey(trailing), trailing]));
+}
+
+export function hasLiveSupertrendTrailing(
+  trailings: ReadonlyMap<string, SupertrendTrailing>,
+  positions: readonly TradingPosition[],
+): boolean {
+  if (trailings.size === 0 || positions.length === 0) return false;
+  const openPositionTickets = new Set(
+    positions.map((position) => position.brokerPositionTicket),
+  );
+  return [...trailings.values()].some((trailing) =>
+    openPositionTickets.has(trailing.brokerPositionTicket),
+  );
+}
+
+export function supertrendTrailingActivationError(
+  side: "buy" | "sell",
+  price: number | undefined,
+  chartBars: readonly Bar[],
+  settings: SupertrendSettings,
+): string | undefined {
+  if (!isFinitePrice(price) || chartBars.length === 0) {
+    return "Cannot enable Trailing: current SuperTrend data is unavailable.";
+  }
+  const points = calculateSupertrend(chartBars, settings).points;
+  const point = points[points.length - 1];
+  if (!point) {
+    return "Cannot enable Trailing: current SuperTrend data is unavailable.";
+  }
+  if (side === "buy") {
+    if (point.trend !== 1 || point.up === undefined || price <= point.up) {
+      return "Cannot enable BUY Trailing: price must be above the green SuperTrend line.";
+    }
+    return undefined;
+  }
+  if (point.trend !== -1 || point.down === undefined || price >= point.down) {
+    return "Cannot enable SELL Trailing: price must be below the red SuperTrend line.";
+  }
+  return undefined;
+}
+
 function parseActionRowId(id: string):
   | { source: "app"; orderId: string }
   | { source: "mt5pos"; ticket: number }
@@ -1037,6 +1090,8 @@ function toMarketOrderRows(
   closingIds: ReadonlySet<string>,
   cancellingIds: ReadonlySet<string>,
   breakingEvenIds: ReadonlySet<string>,
+  supertrendTrailings: ReadonlyMap<string, SupertrendTrailing>,
+  supertrendTrailingPendingIds: ReadonlySet<string>,
 ): MarketOrderRow[] {
   const rows: MarketOrderRow[] = [];
   const brokerPositionsByTicket = new Map(
@@ -1057,6 +1112,7 @@ function toMarketOrderRows(
     const hasBrokerPosition = order.brokerPositionTicket != null;
     const status = hasBrokerPosition || order.status === "filled" ? "fill" : order.status;
     const rowId = appOrderRowKey(order.id);
+    const trailing = supertrendTrailings.get(rowId);
     rows.push({
       id: rowId,
       side: order.side,
@@ -1072,6 +1128,10 @@ function toMarketOrderRows(
           : "cancel",
       canBreakEven: hasBrokerPosition && brokerPosition?.basisStale !== true,
       breakEvenPending: breakingEvenIds.has(rowId),
+      canSupertrendTrail: hasBrokerPosition && order.source !== "auto_mgann",
+      supertrendTrailing: trailing !== undefined,
+      supertrendTrailingPending: supertrendTrailingPendingIds.has(rowId),
+      supertrendTrailingTimeframe: trailing?.timeframe,
       pending: closingIds.has(order.id) || cancellingIds.has(order.id),
     });
   }
@@ -1080,6 +1140,7 @@ function toMarketOrderRows(
     if (appPositionTickets.has(position.brokerPositionTicket)) continue;
     const entry = position.entryGcEstimate;
     const rowId = mt5PositionKey(position.brokerPositionTicket);
+    const trailing = supertrendTrailings.get(rowId);
     rows.push({
       id: rowId,
       side: position.side,
@@ -1093,6 +1154,10 @@ function toMarketOrderRows(
       action: "close",
       canBreakEven: isFinitePrice(entry) && position.basisStale !== true,
       breakEvenPending: breakingEvenIds.has(rowId),
+      canSupertrendTrail: true,
+      supertrendTrailing: trailing !== undefined,
+      supertrendTrailingPending: supertrendTrailingPendingIds.has(rowId),
+      supertrendTrailingTimeframe: trailing?.timeframe,
       pending: closingIds.has(rowId),
     });
   }
@@ -1983,6 +2048,7 @@ export function LiveApp() {
   const [marketDataStatus, setMarketDataStatus] =
     useState<MarketDataStatusMessage>();
   const [indicatorsVisible, setIndicatorsVisible] = useState(true);
+  const [orderLevelsVisible, setOrderLevelsVisible] = useState(true);
   const [showDailyVolumeProfile, setShowDailyVolumeProfile] = useState(false);
   const [dailyVolumeProfileWidth, setDailyVolumeProfileWidth] = useState(
     DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
@@ -2102,6 +2168,13 @@ export function LiveApp() {
     () => new Set(),
   );
   const [breakingEvenOrderIds, setBreakingEvenOrderIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [supertrendTrailings, setSupertrendTrailings] = useState<
+    ReadonlyMap<string, SupertrendTrailing>
+  >(() => new Map());
+  const hadLiveSupertrendTrailingRef = useRef(false);
+  const [supertrendTrailingPendingIds, setSupertrendTrailingPendingIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
   const [latestPrice, setLatestPrice] = useState<number | undefined>(undefined);
@@ -2531,6 +2604,24 @@ export function LiveApp() {
     setReplaySelectionError("");
   }, [currentSeriesKey, replayDataset]);
 
+  const hasLiveTrailing = hasLiveSupertrendTrailing(
+    supertrendTrailings,
+    mt5OpenTrades.positions,
+  );
+  useEffect(() => {
+    const hadLiveTrailing = hadLiveSupertrendTrailingRef.current;
+    hadLiveSupertrendTrailingRef.current = hasLiveTrailing;
+    if (hasLiveTrailing && !supertrend.enabled) {
+      setSupertrend((current) =>
+        current.enabled ? current : { ...current, enabled: true },
+      );
+    } else if (!hasLiveTrailing && hadLiveTrailing && supertrend.enabled) {
+      setSupertrend((current) =>
+        current.enabled ? { ...current, enabled: false } : current,
+      );
+    }
+  }, [hasLiveTrailing, supertrend.enabled]);
+
   const firstLoadedBarTime = hasLoadedCurrentSeries ? bars[0]?.time : undefined;
   const latestLoadedBarTime = hasLoadedCurrentSeries
     ? bars[bars.length - 1]?.time
@@ -2553,6 +2644,7 @@ export function LiveApp() {
       setMt5Symbol(undefined);
       setOrders([]);
       setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
+      setSupertrendTrailings(new Map());
       if (status.error) {
         setOrderError(status.error);
       }
@@ -2561,10 +2653,11 @@ export function LiveApp() {
   );
 
   const refreshTradingState = useCallback(async () => {
-    const [ordersResult, openTradesResult, statusResult] = await Promise.allSettled([
+    const [ordersResult, openTradesResult, statusResult, trailingResult] = await Promise.allSettled([
       api.orders(true),
       api.mt5OpenTrades(),
       api.mt5Status(),
+      api.supertrendTrailings(),
     ]);
     if (ordersResult.status === "fulfilled") {
       setOrders(ordersResult.value);
@@ -2574,6 +2667,9 @@ export function LiveApp() {
     }
     if (statusResult.status === "fulfilled") {
       applyMt5Status(statusResult.value);
+    }
+    if (trailingResult.status === "fulfilled") {
+      setSupertrendTrailings(supertrendTrailingMap(trailingResult.value));
     }
   }, [api, applyMt5Status]);
 
@@ -4007,6 +4103,7 @@ export function LiveApp() {
         setMt5Symbol(undefined);
         setOrders([]);
         setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
+        setSupertrendTrailings(new Map());
         setAlerts([]);
         setLastAlert(undefined);
         setAnalystEventAi(undefined);
@@ -4524,6 +4621,102 @@ export function LiveApp() {
     })();
   };
 
+  const onOrderRowSupertrendTrailing = (rowId: string) => {
+    const parsed = parseActionRowId(rowId);
+    if (!parsed || supertrendTrailingPendingIds.has(rowId)) return;
+    let targetType: SupertrendTrailing["targetType"];
+    let targetId: string | number;
+    let targetSide: "buy" | "sell";
+    if (parsed.source === "app") {
+      const order = orders.find((item) => item.id === parsed.orderId);
+      if (!order || order.source === "auto_mgann" || order.brokerPositionTicket == null) {
+        setOrderError("SuperTrend trailing is only available for manual open positions");
+        return;
+      }
+      targetType = "order";
+      targetId = parsed.orderId;
+      targetSide = order.side;
+    } else if (parsed.source === "mt5pos") {
+      const position = mt5OpenTrades.positions.find(
+        (item) => item.brokerPositionTicket === parsed.ticket,
+      );
+      if (!position) {
+        setOrderError("MT5 position not found");
+        return;
+      }
+      targetType = "position";
+      targetId = parsed.ticket;
+      targetSide = position.side;
+    } else {
+      return;
+    }
+
+    const active = supertrendTrailings.get(rowId);
+    const settings = normalizeSupertrendSettings(supertrend);
+    if (active === undefined) {
+      const currentPrice =
+        latestPriceRef.current ??
+        latestPrice ??
+        (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
+      const activationError = supertrendTrailingActivationError(
+        targetSide,
+        currentPrice,
+        hasLoadedCurrentSeries ? bars : [],
+        settings,
+      );
+      if (activationError !== undefined) {
+        setOrderError(activationError);
+        window.alert(activationError);
+        return;
+      }
+    }
+    setOrderError("");
+    setSupertrendTrailingPendingIds((prev) => new Set(prev).add(rowId));
+    void (async () => {
+      try {
+        if (active !== undefined) {
+          await api.disableSupertrendTrailing(targetType, targetId);
+          setSupertrendTrailings((prev) => {
+            const next = new Map(prev);
+            next.delete(rowId);
+            return next;
+          });
+        } else {
+          const trailing = await api.enableSupertrendTrailing(targetType, targetId, {
+            timeframe,
+            period: settings.period,
+            multiplier: settings.multiplier,
+            atrMethod: settings.atrMethod,
+            source: settings.source,
+          });
+          setSupertrendTrailings((prev) => {
+            const next = new Map(prev);
+            next.set(rowId, trailing);
+            return next;
+          });
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "SuperTrend trailing failed";
+        setOrderError(message);
+        if (active === undefined) window.alert(message);
+        try {
+          setSupertrendTrailings(
+            supertrendTrailingMap(await api.supertrendTrailings()),
+          );
+        } catch {
+          /* Keep the current state if refresh also fails. */
+        }
+      } finally {
+        setSupertrendTrailingPendingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(rowId);
+          return next;
+        });
+      }
+    })();
+  };
+
   const onOrderRowClose = (rowId: string) => {
     const parsed = parseActionRowId(rowId);
     if (!parsed) return;
@@ -4836,10 +5029,11 @@ export function LiveApp() {
     }
 
     if (connectedAccount) {
-      const [symbolResult, orderResult, openTradesResult] = await Promise.allSettled([
+      const [symbolResult, orderResult, openTradesResult, trailingResult] = await Promise.allSettled([
         api.mt5Symbol(),
         api.orders(true),
         api.mt5OpenTrades(),
+        api.supertrendTrailings(),
       ]);
       setMt5Symbol(symbolResult.status === "fulfilled" ? symbolResult.value : undefined);
       setOrders(orderResult.status === "fulfilled" ? orderResult.value : []);
@@ -4848,10 +5042,16 @@ export function LiveApp() {
           ? openTradesResult.value
           : EMPTY_MT5_OPEN_TRADES,
       );
+      setSupertrendTrailings(
+        trailingResult.status === "fulfilled"
+          ? supertrendTrailingMap(trailingResult.value)
+          : new Map(),
+      );
     } else {
       setMt5Symbol(undefined);
       setOrders([]);
       setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
+      setSupertrendTrailings(new Map());
       if (options.openMt5Setup) {
         setMt5Error("");
         setMt5DialogOpen(true);
@@ -4879,6 +5079,7 @@ export function LiveApp() {
           setMt5Symbol(undefined);
           setOrders([]);
           setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
+          setSupertrendTrailings(new Map());
           setProfileId(DEFAULT_PROFILE_ID);
           setProfileLoading(false);
           setProfileHydrated(true);
@@ -4904,7 +5105,8 @@ export function LiveApp() {
         api.orders(true),
         api.mt5OpenTrades(),
         api.mt5Status(),
-      ]).then(([ordersResult, openTradesResult, statusResult]) => {
+        api.supertrendTrailings(),
+      ]).then(([ordersResult, openTradesResult, statusResult, trailingResult]) => {
         if (cancelled) return;
         if (ordersResult.status === "fulfilled") {
           const next = ordersResult.value;
@@ -4934,6 +5136,9 @@ export function LiveApp() {
         }
         if (statusResult.status === "fulfilled") {
           applyMt5Status(statusResult.value);
+        }
+        if (trailingResult.status === "fulfilled") {
+          setSupertrendTrailings(supertrendTrailingMap(trailingResult.value));
         }
       });
     };
@@ -4984,10 +5189,11 @@ export function LiveApp() {
       try {
         const account = await api.connectMt5(input);
         setMt5Account(account);
-        const [symbolResult, orderResult, openTradesResult] = await Promise.allSettled([
+        const [symbolResult, orderResult, openTradesResult, trailingResult] = await Promise.allSettled([
           api.mt5Symbol(),
           api.orders(true),
           api.mt5OpenTrades(),
+          api.supertrendTrailings(),
         ]);
         setMt5Symbol(symbolResult.status === "fulfilled" ? symbolResult.value : undefined);
         setOrders(orderResult.status === "fulfilled" ? orderResult.value : []);
@@ -4995,6 +5201,11 @@ export function LiveApp() {
           openTradesResult.status === "fulfilled"
             ? openTradesResult.value
             : EMPTY_MT5_OPEN_TRADES,
+        );
+        setSupertrendTrailings(
+          trailingResult.status === "fulfilled"
+            ? supertrendTrailingMap(trailingResult.value)
+            : new Map(),
         );
         setOrderError("");
         setMt5DialogOpen(false);
@@ -5028,6 +5239,8 @@ export function LiveApp() {
         closingOrderIds,
         cancellingOrderIds,
         breakingEvenOrderIds,
+        supertrendTrailings,
+        supertrendTrailingPendingIds,
       ),
     [
       orders,
@@ -5037,6 +5250,8 @@ export function LiveApp() {
       closingOrderIds,
       cancellingOrderIds,
       breakingEvenOrderIds,
+      supertrendTrailings,
+      supertrendTrailingPendingIds,
     ],
   );
   const orderControls = useMemo(
@@ -5494,6 +5709,8 @@ export function LiveApp() {
           onDeleteAll={deleteAllDrawings}
           indicatorsVisible={indicatorsVisible}
           onIndicatorsVisibleChange={setIndicatorsVisible}
+          orderLevelsVisible={orderLevelsVisible}
+          onOrderLevelsVisibleChange={setOrderLevelsVisible}
         />
         <div className="chart-stack">
           <ChartContainer
@@ -5513,8 +5730,14 @@ export function LiveApp() {
             smcAiSignals={chartSmcAiSignals}
             alertSignals={chartAlertSignals}
             alertLines={replayActive ? EMPTY_ALERT_LINES : alertLines}
-            orderLines={replayActive ? EMPTY_ORDER_LINES : orderLines}
-            orderControls={replayActive ? EMPTY_ORDER_CONTROLS : orderControls}
+            orderLines={
+              replayActive || !orderLevelsVisible ? EMPTY_ORDER_LINES : orderLines
+            }
+            orderControls={
+              replayActive || !orderLevelsVisible
+                ? EMPTY_ORDER_CONTROLS
+                : orderControls
+            }
             ema={visibleEma}
             supertrend={visibleSupertrend}
             smc={visibleSmc}
@@ -5642,6 +5865,8 @@ export function LiveApp() {
               onDeleteAll={deleteAllDrawings}
               indicatorsVisible={indicatorsVisible}
               onIndicatorsVisibleChange={setIndicatorsVisible}
+              orderLevelsVisible={orderLevelsVisible}
+              onOrderLevelsVisibleChange={setOrderLevelsVisible}
             />
           </ChartContainer>
           {authUser && !replayActive && (
@@ -5663,6 +5888,7 @@ export function LiveApp() {
               autoTradePending={autoTradePending}
               onAutoTradeSettingsChange={onAutoTradeSettingsChange}
               onOrderRowBreakEven={onOrderRowBreakEven}
+              onOrderRowSupertrendTrailing={onOrderRowSupertrendTrailing}
               onOrderRowClose={onOrderRowClose}
               onOrderRowClose50Percent={onOrderRowClose50Percent}
               onOrderRowCancel={onOrderRowCancel}

@@ -534,6 +534,7 @@ def _mark_order_closed(
     *,
     event_type: str,
 ) -> dict[str, Any]:
+    cache.supertrend_trailing.delete_for_order(order.user_id, order.id)
     order.status = OrderStatus.CLOSED
     order.last_broker_error_code = None
     order.last_broker_error_message = None

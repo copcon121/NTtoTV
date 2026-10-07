@@ -13,6 +13,7 @@ import {
   buildChartLimitOrderDraft,
   calculateRiskBasedLots,
   drawingVisibleOnTimeframe,
+  hasLiveSupertrendTrailing,
   historyBackfillLimit,
   initialHistoryWindow,
   mergeVisibleDrawingState,
@@ -24,14 +25,17 @@ import {
   readProfileHotSnapshot,
   resolveEndpoints,
   seriesDataKey,
+  supertrendTrailingActivationError,
   visibleDrawingsForTimeframe,
 } from "./LiveApp";
+import type { SupertrendTrailing } from "./api/client";
 import {
   DEFAULT_EMA_SETTINGS,
   DEFAULT_FOOTPRINT_SETTINGS,
 } from "./chart/IndicatorToggles";
 import type { DrawingState } from "./chart/drawings/types";
 import { DEFAULT_SMC_SETTINGS } from "./chart/smc";
+import { DEFAULT_SUPERTREND_SETTINGS } from "./chart/supertrend";
 import type { ChartProfilePayload } from "./profiles/types";
 
 afterEach(() => {
@@ -94,6 +98,88 @@ describe("chart focus layout", () => {
   it("adds the focus class only while chart focus mode is enabled", () => {
     expect(appShellClassName(false)).toBe("app-shell");
     expect(appShellClassName(true)).toBe("app-shell chart-focus");
+  });
+});
+
+describe("SuperTrend trailing activation", () => {
+  const settings = {
+    ...DEFAULT_SUPERTREND_SETTINGS,
+    enabled: true,
+    period: 1,
+    multiplier: 3,
+  };
+  const bullishBars = [
+    {
+      time: 60_000,
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100,
+      volume: 10,
+      closed: true,
+    },
+  ];
+
+  it("allows BUY only while price is above the green line", () => {
+    expect(
+      supertrendTrailingActivationError("buy", 100, bullishBars, settings),
+    ).toBeUndefined();
+    expect(
+      supertrendTrailingActivationError("sell", 100, bullishBars, settings),
+    ).toContain("SELL");
+  });
+
+  it("allows SELL only while price is below the red line", () => {
+    const bearishBars = [
+      ...bullishBars,
+      {
+        time: 120_000,
+        open: 100,
+        high: 100,
+        low: 89,
+        close: 90,
+        volume: 10,
+        closed: true,
+      },
+    ];
+    expect(
+      supertrendTrailingActivationError("buy", 90, bearishBars, settings),
+    ).toContain("BUY");
+    expect(
+      supertrendTrailingActivationError("sell", 90, bearishBars, settings),
+    ).toBeUndefined();
+  });
+
+  it("tracks whether a trailing target still has an open position", () => {
+    const trailing: SupertrendTrailing = {
+      targetType: "order",
+      targetId: "ord_1",
+      brokerPositionTicket: 7,
+      side: "buy",
+      timeframe: "1m",
+      period: 10,
+      multiplier: 3,
+      atrMethod: "rma",
+      source: "hl2",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const trailings = new Map([["app:ord_1", trailing]]);
+    const position = {
+      brokerPositionTicket: 7,
+      side: "buy" as const,
+      volumeLots: 0.1,
+      entryBroker: 2350,
+      updatedAt: 1,
+    };
+
+    expect(hasLiveSupertrendTrailing(trailings, [position])).toBe(true);
+    expect(hasLiveSupertrendTrailing(trailings, [])).toBe(false);
+    expect(
+      hasLiveSupertrendTrailing(trailings, [
+        { ...position, brokerPositionTicket: 8 },
+      ]),
+    ).toBe(false);
   });
 });
 

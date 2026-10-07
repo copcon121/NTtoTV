@@ -14,6 +14,7 @@ from app.models.timestamp import now_ms
 from app.mt5.manager import Mt5Manager
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
+from app.storage.records import BarRecord
 
 
 class _Manager:
@@ -547,6 +548,106 @@ def test_market_order_lifecycle_with_fake_mt5(client: TestClient):
     closed = client.post(f"/api/orders/{order['id']}/close")
     assert closed.status_code == 200
     assert closed.json()["order"]["status"] == "closed"
+
+
+@pytest.mark.integration
+def test_supertrend_trailing_arms_manual_order_and_rejects_auto_ls(client: TestClient):
+    _login_and_connect(client)
+    cache = client.app.state.contract_state._cache
+    cache.upsert_bar(
+        BarRecord(
+            symbol="GC",
+            contract="GC",
+            timeframe="1m",
+            time=60_000,
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.0,
+            volume=10,
+            closed=True,
+            source="bookmap",
+        )
+    )
+    payload = {
+        "side": "buy",
+        "kind": "market",
+        "volumeLots": 0.1,
+    }
+    manual = client.post(
+        "/api/orders",
+        json={
+            **payload,
+            "source": "market_bar",
+            "idempotencyKey": "manual-trailing",
+        },
+    ).json()["order"]
+    config = {
+        "timeframe": "1m",
+        "period": 1,
+        "multiplier": 3,
+        "atrMethod": "rma",
+        "source": "hl2",
+    }
+
+    armed = client.put(
+        f"/api/supertrend-trailing/orders/{manual['id']}", json=config
+    )
+    assert armed.status_code == 200
+    assert armed.json()["trailing"]["targetId"] == manual["id"]
+    assert armed.json()["trailing"]["timeframe"] == "1m"
+    listed = client.get("/api/supertrend-trailing")
+    assert [row["targetId"] for row in listed.json()["trailings"]] == [manual["id"]]
+
+    disabled = client.delete(
+        f"/api/supertrend-trailing/orders/{manual['id']}"
+    )
+    assert disabled.status_code == 200
+    assert client.get("/api/supertrend-trailing").json()["trailings"] == []
+
+    cache.upsert_bar(
+        BarRecord(
+            symbol="GC",
+            contract="GC",
+            timeframe="1m",
+            time=120_000,
+            open=100.0,
+            high=100.0,
+            low=89.0,
+            close=90.0,
+            volume=10,
+            closed=True,
+            source="bookmap",
+        )
+    )
+    wrong_side = client.post(
+        "/api/orders",
+        json={
+            **payload,
+            "source": "market_bar",
+            "idempotencyKey": "manual-trailing-wrong-side",
+        },
+    ).json()["order"]
+    rejected_side = client.put(
+        f"/api/supertrend-trailing/orders/{wrong_side['id']}", json=config
+    )
+    assert rejected_side.status_code == 409
+    assert "above the green SuperTrend line" in rejected_side.json()["error"]["message"]
+    assert client.get("/api/supertrend-trailing").json()["trailings"] == []
+
+    auto = client.post(
+        "/api/orders",
+        json={
+            **payload,
+            "source": "auto_mgann",
+            "idempotencyKey": "auto-no-manual-trailing",
+        },
+    ).json()["order"]
+    rejected = client.put(
+        f"/api/supertrend-trailing/orders/{auto['id']}", json=config
+    )
+    assert rejected.status_code == 409
+    assert "does not apply to Auto L/S" in rejected.json()["error"]["message"]
 
 
 @pytest.mark.integration

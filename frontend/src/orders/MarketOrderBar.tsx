@@ -20,6 +20,10 @@ export interface MarketOrderRow {
   action: "close" | "cancel";
   canBreakEven?: boolean;
   breakEvenPending?: boolean;
+  canSupertrendTrail?: boolean;
+  supertrendTrailing?: boolean;
+  supertrendTrailingPending?: boolean;
+  supertrendTrailingTimeframe?: string;
   pending?: boolean;
   volumeLots?: number;
 }
@@ -40,6 +44,7 @@ export interface MarketOrderBarProps {
   autoTradePending?: boolean;
   onAutoTradeSettingsChange?: (settings: AutoTradeSettings) => void;
   onOrderRowBreakEven?: (id: string) => void;
+  onOrderRowSupertrendTrailing?: (id: string) => void;
   onOrderRowClose?: (id: string) => void;
   onOrderRowClose50Percent?: (id: string, volumeLots: number) => void;
   onOrderRowCancel?: (id: string) => void;
@@ -69,6 +74,7 @@ export function MarketOrderBar({
   autoTradePending = false,
   onAutoTradeSettingsChange,
   onOrderRowBreakEven,
+  onOrderRowSupertrendTrailing,
   onOrderRowClose,
   onOrderRowClose50Percent,
   onOrderRowCancel,
@@ -237,17 +243,47 @@ export function MarketOrderBar({
                       <button
                         type="button"
                         className="market-order-row-break-even"
-                        disabled={row.pending || row.breakEvenPending}
+                        disabled={
+                          row.pending ||
+                          row.breakEvenPending ||
+                          row.supertrendTrailingPending
+                        }
                         onClick={() => onOrderRowBreakEven?.(row.id)}
                       >
                         {row.breakEvenPending ? "..." : "BE"}
+                      </button>
+                    )}
+                    {row.canSupertrendTrail && (
+                      <button
+                        type="button"
+                        className={`market-order-row-trailing${
+                          row.supertrendTrailing ? " active" : ""
+                        }`}
+                        disabled={
+                          row.pending ||
+                          row.breakEvenPending ||
+                          row.supertrendTrailingPending
+                        }
+                        aria-pressed={row.supertrendTrailing === true}
+                        title={
+                          row.supertrendTrailing
+                            ? `SuperTrend trailing active (${row.supertrendTrailingTimeframe ?? "chart"}); click to disable`
+                            : "Follow the current SuperTrend and close only after the bar crosses it"
+                        }
+                        onClick={() => onOrderRowSupertrendTrailing?.(row.id)}
+                      >
+                        {row.supertrendTrailingPending ? "..." : "Trailing"}
                       </button>
                     )}
                     {row.action === "close" && row.volumeLots !== undefined && row.volumeLots >= 0.02 && (
                       <button
                         type="button"
                         className="market-order-row-close-50"
-                        disabled={row.pending || row.breakEvenPending}
+                        disabled={
+                          row.pending ||
+                          row.breakEvenPending ||
+                          row.supertrendTrailingPending
+                        }
                         onClick={() => onOrderRowClose50Percent?.(row.id, row.volumeLots!)}
                       >
                         50%
@@ -255,7 +291,7 @@ export function MarketOrderBar({
                     )}
                     <button
                       type="button"
-                      disabled={row.pending}
+                      disabled={row.pending || row.supertrendTrailingPending}
                       onClick={() =>
                         row.action === "close"
                           ? onOrderRowClose?.(row.id)
