@@ -3,7 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_FOOTPRINT_SETTINGS } from "../chart/IndicatorToggles";
 import { type FootprintUpdateMessage } from "../socket/messages";
-import { FootprintCanvas, drawFootprint } from "./FootprintCanvas";
+import {
+  FootprintCanvas,
+  calculateFootprintXKontrolSignals,
+  drawFootprint,
+} from "./FootprintCanvas";
 import { type FootprintViewport } from "./footprintModel";
 
 afterEach(() => {
@@ -63,6 +67,8 @@ function makeCtx() {
     saveCalls: 0,
     restoreCalls: 0,
     fillCalls: 0,
+    arcCalls: [] as Array<{ x: number; y: number; radius: number }>,
+    fillStyles: [] as string[],
     clearRect() {
       this.clearRectCalls += 1;
     },
@@ -71,6 +77,7 @@ function makeCtx() {
     },
     fill() {
       this.fillCalls += 1;
+      this.fillStyles.push(this.fillStyle);
     },
     fillText(text: string) {
       this.fillTextCalls += 1;
@@ -96,6 +103,9 @@ function makeCtx() {
     moveTo() {},
     lineTo() {},
     ellipse() {},
+    arc(x: number, y: number, radius: number) {
+      this.arcCalls.push({ x, y, radius });
+    },
     stroke() {
       this.strokeCalls += 1;
     },
@@ -113,6 +123,47 @@ const viewport: FootprintViewport = {
 };
 
 describe("drawFootprint (Req 14.2, 19.4)", () => {
+  it("calculates XKontrol with ladder volume and honors level visibility", () => {
+    const bars = new Map<number, FootprintUpdateMessage>();
+    for (let index = 0; index < 20; index += 1) {
+      const current = fp(index * 60_000);
+      current.open = 9_000 + index;
+      current.high = 9_100 + index;
+      current.low = 8_900 + index;
+      current.close = 9_050 + index;
+      current.rows = [
+        { price: current.close, bid: 500_000, ask: 500_000, imbalance: null },
+      ];
+      bars.set(current.time, current);
+    }
+    const eligible = fp(20 * 60_000);
+    eligible.open = 2_600;
+    eligible.high = 2_601;
+    eligible.low = 2_599.8;
+    eligible.close = 2_600.7;
+    eligible.rows = [
+      { price: eligible.close, bid: 50, ask: 50, imbalance: null },
+    ];
+    bars.set(eligible.time, eligible);
+
+    expect(calculateFootprintXKontrolSignals(bars)).toEqual([
+      {
+        time: 20 * 60_000,
+        price: 2_599.8,
+        code: 3,
+        side: "offers",
+        level: 3,
+      },
+    ]);
+    expect(
+      calculateFootprintXKontrolSignals(bars, {
+        showInitial: true,
+        showStrong: true,
+        showTotal: false,
+      }),
+    ).toEqual([]);
+  });
+
   it("clears then draws a cell + label per row per bar", () => {
     const ctx = makeCtx();
     const bars = [fp(0), fp(60000)];
@@ -229,6 +280,33 @@ describe("drawFootprint (Req 14.2, 19.4)", () => {
     );
     expect(dashedRect).toBeDefined();
     expect(dashedRect?.width).toBeGreaterThan(30);
+  });
+
+  it("draws XKontrol signals on their matching footprint columns", () => {
+    const ctx = makeCtx();
+    const bars = [fp(0), fp(60_000)];
+
+    drawFootprint(
+      ctx as unknown as CanvasRenderingContext2D,
+      { bars, viewport, displayCount: 2 },
+      { ...DEFAULT_FOOTPRINT_SETTINGS, showImbalance: false },
+      {
+        signals: [
+          { time: 0, price: 100.0, code: 1, side: "offers", level: 1 },
+          {
+            time: 60_000,
+            price: 100.1,
+            code: -3,
+            side: "bids",
+            level: 3,
+          },
+        ],
+      },
+    );
+
+    expect(ctx.arcCalls.map((call) => call.radius)).toEqual([3, 7]);
+    expect(ctx.fillStyles).toContain("#008080");
+    expect(ctx.fillStyles).toContain("#ff1493");
   });
 
   it("draws nothing but a clear when there are no bars", () => {

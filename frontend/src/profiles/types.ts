@@ -9,6 +9,7 @@ import type { OutsideBarSettings } from "../chart/outsideBar";
 import type { MgannSwingSettings } from "../chart/mgannSwing";
 import type { MgannBreakSettings } from "../chart/mgannBreak";
 import type { GcPushMomentumSettings } from "../chart/gcPushMomentum";
+import type { XKontrolDisplaySettings } from "../chart/xKontrol";
 import type { SmcSettings } from "../chart/smc";
 import type { SweepReversalSettings } from "../chart/sweepReversal";
 import type { SupertrendSettings } from "../chart/supertrend";
@@ -32,8 +33,14 @@ export interface ChartProfilePayload {
   showVolume?: boolean;
   /** Optional for backwards compatibility with profiles saved before this toggle existed. */
   showVolumeDelta?: boolean;
+  /** Optional for profiles saved before the XKontrol overlay existed. */
+  showXKontrol?: boolean;
+  /** Optional level visibility for the XKontrol overlay. */
+  xKontrol?: XKontrolDisplaySettings;
   /** Optional for profiles saved before GC Push Momentum existed. */
   showGcPushMomentum?: boolean;
+  /** Original TDU triangles and candle/delta divergence overlay. */
+  showTduSignals?: boolean;
   /** Optional volatility/threshold configuration for GC Push Momentum. */
   gcPushMomentum?: GcPushMomentumSettings;
   /** Optional for backwards compatibility with profiles saved before this toggle existed. */

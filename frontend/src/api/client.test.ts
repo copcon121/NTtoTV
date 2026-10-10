@@ -513,6 +513,43 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
+  it("loads TDU momentum and delta-divergence rows", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        symbol: "GC",
+        contract: "GC",
+        tf: "5m",
+        signals: [
+          {
+            time: 1000,
+            momentumDirection: -1,
+            momentumLevel: 3,
+            deltaDivergence: 1,
+          },
+        ],
+      }),
+    );
+    const api = new ApiClient({ fetchFn });
+
+    await expect(api.tduSignals("GC", "GC", "5m", 500)).resolves.toEqual([
+      {
+        type: "tdu_signal_update",
+        symbol: "GC",
+        contract: "GC",
+        tf: "5m",
+        time: 1000,
+        momentumDirection: -1,
+        momentumLevel: 3,
+        deltaDivergence: 1,
+      },
+    ]);
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orderflow/tdu-signals?symbol=GC&contract=GC&tf=5m&limit=500",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
   it("loads SMC AI baseline signals for a chart range", async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({

@@ -13,6 +13,7 @@ import { DEFAULT_MGANN_BREAK_SETTINGS } from "./mgannBreak";
 import { DEFAULT_OUTSIDE_BAR_SETTINGS } from "./outsideBar";
 import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./smc";
 import { DEFAULT_GC_PUSH_MOMENTUM_SETTINGS } from "./gcPushMomentum";
+import { DEFAULT_XKONTROL_DISPLAY_SETTINGS } from "./xKontrol";
 
 afterEach(() => {
   cleanup();
@@ -26,6 +27,50 @@ function open() {
 }
 
 describe("IndicatorToggles", () => {
+  it("configures the three XKontrol levels independently", () => {
+    const onSettings = vi.fn();
+    render(
+      <IndicatorToggles
+        xKontrol
+        xKontrolSettings={DEFAULT_XKONTROL_DISPLAY_SETTINGS}
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        onXKontrolSettingsChange={onSettings}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    fireEvent.click(screen.getByLabelText("XKontrol settings"));
+    expect(screen.getByLabelText("XKontrol Level 1 Initial")).toBeChecked();
+    expect(screen.getByLabelText("XKontrol Level 2 Strong")).toBeChecked();
+    expect(screen.getByLabelText("XKontrol Level 3 Total")).toBeChecked();
+
+    fireEvent.click(screen.getByLabelText("XKontrol Level 1 Initial"));
+    fireEvent.click(screen.getByLabelText("XKontrol Level 2 Strong"));
+    fireEvent.click(screen.getByLabelText("XKontrol Level 3 Total"));
+
+    expect(onSettings).toHaveBeenNthCalledWith(1, {
+      ...DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+      showInitial: false,
+    });
+    expect(onSettings).toHaveBeenNthCalledWith(2, {
+      ...DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+      showStrong: false,
+    });
+    expect(onSettings).toHaveBeenNthCalledWith(3, {
+      ...DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+      showTotal: false,
+    });
+  });
+
   it("opens the dropdown and toggles each indicator", () => {
     const onVolumeDelta = vi.fn();
     const onMgannSwing = vi.fn();
@@ -563,7 +608,7 @@ describe("IndicatorToggles", () => {
         onFootprintSettingsChange={() => {}}
       />,
     );
-    expect(screen.getByText("5")).toBeInTheDocument();
+    expect(screen.getByText("6")).toBeInTheDocument();
   });
 
   it("shows the master visibility state without putting the toggle in the menu", () => {

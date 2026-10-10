@@ -88,6 +88,12 @@ import {
   normalizeGcPushMomentumSettings,
   type GcPushMomentumSettings,
 } from "./chart/gcPushMomentum";
+import {
+  DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+  normalizeXKontrolDisplaySettings,
+  XKONTROL_HISTORY_BARS,
+  type XKontrolDisplaySettings,
+} from "./chart/xKontrol";
 import { bigTradeMinVolumeForTime } from "./chart/bigTradeSessions";
 import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./chart/smc";
 import {
@@ -139,6 +145,7 @@ import {
   type ChartEventType,
   type FootprintUpdateMessage,
   type FvgSignalUpdateMessage,
+  type TduSignalUpdateMessage,
   type MarketDataStatusMessage,
   type TradingAccount,
   type TradingOrder,
@@ -233,6 +240,7 @@ export const TIMEFRAME_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "bar_update",
   "volume_delta_update",
   "fvg_signal_update",
+  "tdu_signal_update",
 ];
 export const FOOTPRINT_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "footprint_update",
@@ -247,6 +255,7 @@ const EMPTY_ORDER_LINES: readonly OrderLine[] = [];
 const EMPTY_ORDER_CONTROLS: readonly OrderControl[] = [];
 const EMPTY_FOOTPRINT_BARS: ReadonlyMap<number, FootprintBar> = new Map();
 const EMPTY_FVG_SIGNALS: ReadonlyMap<number, FvgSignalUpdateMessage> = new Map();
+const EMPTY_TDU_SIGNALS: ReadonlyMap<number, TduSignalUpdateMessage> = new Map();
 const SUB_MINUTE_HISTORY_FALLBACK_TF: Timeframe = "1m";
 const DEFERRED_INDICATOR_LOAD_MS = 75;
 const DEFERRED_OVERLAY_LOAD_MS = 250;
@@ -275,7 +284,7 @@ const ENABLE_REALTIME_FOOTPRINT_UPDATES = true;
 // React render halfway between two visible frames.
 const REALTIME_RENDER_BATCH_MS = 100;
 const MAX_RETAINED_BIG_TRADE_MARKERS = INITIAL_BIG_TRADE_LIMIT;
-const MAX_RETAINED_LIVE_FOOTPRINT_BARS = 20;
+const MAX_RETAINED_LIVE_FOOTPRINT_BARS = XKONTROL_HISTORY_BARS;
 const BAR_REPLAY_HISTORY_LIMIT = 5_000;
 
 interface BarReplayDataset {
@@ -2030,6 +2039,12 @@ export function LiveApp() {
   const [fvgSignalSeriesKey, setFvgSignalSeriesKey] = useState<
     string | undefined
   >(undefined);
+  const [tduSignals, setTduSignals] = useState<
+    ReadonlyMap<number, TduSignalUpdateMessage>
+  >(() => new Map());
+  const [tduSignalSeriesKey, setTduSignalSeriesKey] = useState<
+    string | undefined
+  >(undefined);
   const [loadedOverlayContract, setLoadedOverlayContract] = useState<
     string | undefined
   >(undefined);
@@ -2059,8 +2074,14 @@ export function LiveApp() {
   ] = useState(true);
   const [sessionVolumeProfile, setSessionVolumeProfile] =
     useState<DeltaProfileData | null>(null);
-  const [showVolumeDelta, setShowVolumeDelta] = useState(true);
+  const [showVolumeDelta, setShowVolumeDelta] = useState(false);
+  const [showXKontrol, setShowXKontrol] = useState(false);
+  const [xKontrolSettings, setXKontrolSettings] =
+    useState<XKontrolDisplaySettings>(() => ({
+      ...DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+    }));
   const [showGcPushMomentum, setShowGcPushMomentum] = useState(true);
+  const [showTduSignals, setShowTduSignals] = useState(true);
   const [gcPushMomentumSettings, setGcPushMomentumSettings] =
     useState<GcPushMomentumSettings>(() => ({
       ...DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
@@ -2266,7 +2287,10 @@ export function LiveApp() {
       chartBackgroundColor,
       showVolume: true,
       showVolumeDelta,
+      showXKontrol,
+      xKontrol: { ...xKontrolSettings },
       showGcPushMomentum,
+      showTduSignals,
       gcPushMomentum: { ...gcPushMomentumSettings },
       showDailyVolumeProfile,
       dailyVolumeProfileWidth,
@@ -2316,16 +2340,19 @@ export function LiveApp() {
       showMgannBreak,
       showMgannSwing,
       showVolumeDelta,
+      showXKontrol,
       showDailyVolumeProfile,
       showDailyVolumeProfileDevelopingPoc,
       showMgannWaveDelta,
       showGcPushMomentum,
+      showTduSignals,
       showFvgGrader,
       smc,
       supertrend,
       sweepReversal,
       timeframe,
       timezoneOffsetMinutes,
+      xKontrolSettings,
     ],
   );
 
@@ -3494,6 +3521,8 @@ export function LiveApp() {
     setFootprintBars(new Map());
     setFvgSignals(new Map());
     setFvgSignalSeriesKey(undefined);
+    setTduSignals(new Map());
+    setTduSignalSeriesKey(undefined);
     setBigTrades([]);
     setSmcAiSignals([]);
   }, [contract]);
@@ -3511,7 +3540,11 @@ export function LiveApp() {
       void (async () => {
         let footprint: Awaited<ReturnType<ApiClient["footprint"]>> | undefined;
         try {
-          footprint = await api.footprint(SYMBOL, contract);
+          footprint = await api.footprint(
+            SYMBOL,
+            contract,
+            MAX_RETAINED_LIVE_FOOTPRINT_BARS,
+          );
         } catch {
           footprint = undefined;
         }
@@ -3640,6 +3673,43 @@ export function LiveApp() {
   ]);
 
   useEffect(() => {
+    if (!hasLoadedCurrentSeries || !showTduSignals) return;
+    let cancelled = false;
+    const loadTduSignals = () => {
+      if (document.visibilityState === "hidden") return;
+      void api
+        .tduSignals(SYMBOL, contract, timeframe, DEFAULT_INITIAL_HISTORY_LIMIT)
+        .then((signals) => {
+          if (cancelled) return;
+          setTduSignals(
+            new Map(signals.map((signal) => [signal.time, signal] as const)),
+          );
+          setTduSignalSeriesKey(currentSeriesKey);
+        })
+        .catch(() => {
+          if (!cancelled) setTduSignalSeriesKey(currentSeriesKey);
+        });
+    };
+    const timer = window.setTimeout(loadTduSignals, DEFERRED_OVERLAY_LOAD_MS);
+    const interval = window.setInterval(
+      loadTduSignals,
+      REALTIME_OVERLAY_CATCH_UP_MS,
+    );
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      window.clearInterval(interval);
+    };
+  }, [
+    api,
+    contract,
+    timeframe,
+    hasLoadedCurrentSeries,
+    currentSeriesKey,
+    showTduSignals,
+  ]);
+
+  useEffect(() => {
     const matchesChartContract = (messageContract: string) =>
       contract === SYMBOL || messageContract === contract;
     const flushFootprint = () => {
@@ -3765,12 +3835,28 @@ export function LiveApp() {
         return next;
       });
     });
+    const offTduSignal = socket.on("tdu_signal_update", (msg) => {
+      if (
+        msg.symbol !== SYMBOL ||
+        !matchesChartContract(msg.contract) ||
+        msg.tf !== timeframe
+      ) {
+        return;
+      }
+      setTduSignalSeriesKey(seriesDataKey(SYMBOL, contract, timeframe));
+      setTduSignals((prev) => {
+        const next = new Map(prev);
+        next.set(msg.time, msg);
+        return next;
+      });
+    });
     return () => {
       offBarPrice();
       offQuotePrice();
       offFootprint();
       offBigTrade();
       offFvgSignal();
+      offTduSignal();
       if (footprintRenderTimerRef.current !== undefined) {
         window.clearTimeout(footprintRenderTimerRef.current);
         footprintRenderTimerRef.current = undefined;
@@ -4099,6 +4185,7 @@ export function LiveApp() {
         /* Local state still clears if the session was already gone. */
       } finally {
         setAuthUser(undefined);
+        setShowVolumeDelta(false);
         setMt5Account(undefined);
         setMt5Symbol(undefined);
         setOrders([]);
@@ -4919,7 +5006,10 @@ export function LiveApp() {
     setChartBackgroundColor(normalizeChartBackgroundColor(payload.chartBackgroundColor));
     setShowFootprint(Boolean(payload.showFootprint));
     setShowVolumeDelta(payload.showVolumeDelta !== false);
+    setShowXKontrol(payload.showXKontrol === true);
+    setXKontrolSettings(normalizeXKontrolDisplaySettings(payload.xKontrol));
     setShowGcPushMomentum(payload.showGcPushMomentum !== false);
+    setShowTduSignals(payload.showTduSignals !== false);
     setGcPushMomentumSettings(
       normalizeGcPushMomentumSettings(payload.gcPushMomentum),
     );
@@ -5014,6 +5104,7 @@ export function LiveApp() {
       applyProfilePayload(hotSnapshot.payload);
       setProfileId(hotSnapshot.profileId);
     } else {
+      setShowVolumeDelta(true);
       setProfileId(user.id);
     }
 
@@ -5075,6 +5166,7 @@ export function LiveApp() {
           await loadAuthenticatedState(user, { openMt5Setup: true });
         } else {
           setAuthUser(undefined);
+          setShowVolumeDelta(false);
           setMt5Account(undefined);
           setMt5Symbol(undefined);
           setOrders([]);
@@ -5087,6 +5179,7 @@ export function LiveApp() {
       } catch {
         if (!cancelled) {
           setAuthUser(undefined);
+          setShowVolumeDelta(false);
           setProfileLoading(false);
           setProfileHydrated(true);
         }
@@ -5345,6 +5438,14 @@ export function LiveApp() {
         ? replayChartFvgSignals ?? EMPTY_FVG_SIGNALS
         : fvgSignals
       : EMPTY_FVG_SIGNALS;
+  const chartTduSignals =
+    indicatorsVisible &&
+    !replayActive &&
+    hasLoadedCurrentSeries &&
+    showTduSignals &&
+    tduSignalSeriesKey === currentSeriesKey
+      ? tduSignals
+      : EMPTY_TDU_SIGNALS;
   const bigTradeOverlayEnabled = bigTradesEnabledForTimeframe(timeframe);
   const replayChartBigTrades = useMemo(
     () =>
@@ -5501,7 +5602,7 @@ export function LiveApp() {
   const activeSourceLag = activeSourceStatus?.eventLagMs.last;
   const sourceName =
     activeMarketSource === "bookmap"
-      ? "Bookmap"
+      ? "BM"
       : activeMarketSource === "nt"
         ? marketDataStatus?.preferredSource === "bookmap"
           ? "NT fallback"
@@ -5514,7 +5615,7 @@ export function LiveApp() {
         ? sourceName
         : `${sourceName} · ${Math.round(activeSourceLag)} ms`;
   const marketStatusReason = marketDataStatus
-    ? `${marketDataStatus.reason ?? "live"}; Bookmap p95 ${marketDataStatus.sources.bookmap?.eventLagMs.p95 ?? "-"} ms; NT p95 ${marketDataStatus.sources.nt?.eventLagMs.p95 ?? "-"} ms`
+    ? `${marketDataStatus.reason ?? "live"}; BM p95 ${marketDataStatus.sources.bookmap?.eventLagMs.p95 ?? "-"} ms; NT p95 ${marketDataStatus.sources.nt?.eventLagMs.p95 ?? "-"} ms`
     : undefined;
 
   return (
@@ -5538,7 +5639,10 @@ export function LiveApp() {
         <IndicatorToggles
           indicatorsVisible={indicatorsVisible}
           volumeDelta={showVolumeDelta}
+          xKontrol={showXKontrol}
+          xKontrolSettings={xKontrolSettings}
           gcPushMomentum={showGcPushMomentum}
+          tduSignals={showTduSignals}
           gcPushMomentumSettings={gcPushMomentumSettings}
           mgannSwing={showMgannSwing}
           mgannSwingSettings={mgannSwing}
@@ -5573,7 +5677,10 @@ export function LiveApp() {
             setShowDailyVolumeProfileDevelopingPoc
           }
           onVolumeDeltaChange={setShowVolumeDelta}
+          onXKontrolChange={setShowXKontrol}
+          onXKontrolSettingsChange={setXKontrolSettings}
           onGcPushMomentumChange={setShowGcPushMomentum}
+          onTduSignalsChange={setShowTduSignals}
           onGcPushMomentumSettingsChange={setGcPushMomentumSettings}
           onMgannSwingChange={setShowMgannSwing}
           onMgannSwingSettingsChange={setMgannSwing}
@@ -5726,6 +5833,7 @@ export function LiveApp() {
             volumeDelta={chartVolumeDelta}
             footprintBars={chartFootprintBars}
             fvgSignals={chartFvgSignals}
+            tduSignals={chartTduSignals}
             bigTrades={chartBigTrades}
             smcAiSignals={chartSmcAiSignals}
             alertSignals={chartAlertSignals}
@@ -5754,12 +5862,15 @@ export function LiveApp() {
             }
             showVolume
             showVolumeDelta={indicatorsVisible && showVolumeDelta}
+            showXKontrol={indicatorsVisible && showXKontrol}
+            xKontrolSettings={xKontrolSettings}
             showGcPushMomentum={
               indicatorsVisible &&
               showGcPushMomentum &&
               gcPushMomentumEnabledForTimeframe(timeframe)
             }
             gcPushMomentumSettings={gcPushMomentumSettings}
+            showTduSignals={indicatorsVisible && showTduSignals && !replayActive}
             showCvd={indicatorsVisible && showMgannWaveDelta}
             showMgannSwing={indicatorsVisible && showMgannSwingForTimeframe}
             mgannSwing={mgannSwing}

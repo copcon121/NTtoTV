@@ -25,6 +25,7 @@ EXPECTED_TABLES = {
     "footprint_bars",
     "footprint_levels",
     "fvg_signals",
+    "tdu_signals",
     "big_trades",
     "market_source_switches",
     "alerts",

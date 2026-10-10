@@ -83,6 +83,7 @@ import type { ChartSocket } from "../socket/ChartSocket";
 import type {
   BarUpdateMessage,
   FvgSignalUpdateMessage,
+  TduSignalUpdateMessage,
   Timeframe,
   VolumeDeltaUpdateMessage,
 } from "../socket/messages";
@@ -112,6 +113,11 @@ import {
   type GcPushMomentumSettings,
 } from "./gcPushMomentum";
 import {
+  DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+  normalizeXKontrolDisplaySettings,
+  type XKontrolDisplaySettings,
+} from "./xKontrol";
+import {
   calculateSupertrend,
   DEFAULT_SUPERTREND_SETTINGS,
   normalizeSupertrendSettings,
@@ -139,6 +145,8 @@ export interface DisposableChartPort extends ChartSeriesPort {
   scrollToLatest?(force?: boolean): void;
   setVolumeVisible?(visible: boolean): void;
   setVolumeDeltaVisible?(visible: boolean): void;
+  setXKontrolVisible?(visible: boolean): void;
+  setXKontrolSettings?(settings: XKontrolDisplaySettings): void;
   setGcPushMomentumVisible?(visible: boolean): void;
   setGcPushMomentumSettings?(settings: GcPushMomentumSettings): void;
   setCvdVisible?(visible: boolean): void;
@@ -149,6 +157,9 @@ export interface DisposableChartPort extends ChartSeriesPort {
   setFvgSignals?(signals: ReadonlyMap<number, FvgSignalUpdateMessage>): void;
   updateFvgSignal?(signal: FvgSignalUpdateMessage): void;
   setFvgGraderVisible?(visible: boolean): void;
+  setTduSignals?(signals: ReadonlyMap<number, TduSignalUpdateMessage>): void;
+  updateTduSignal?(signal: TduSignalUpdateMessage): void;
+  setTduSignalsVisible?(visible: boolean): void;
   setBigTrades?(markers: readonly BigTradeMarker[]): void;
   updateBigTrade?(marker: BigTradeMarker): void;
   setSmcAiSignals?(markers: readonly SmcAiSignalMarker[]): void;
@@ -304,6 +315,8 @@ export interface ChartContainerProps {
   footprintBars?: ReadonlyMap<number, FootprintBar>;
   /** Initial/live FVG Signal Grader candle colors keyed by M1 source-bar time. */
   fvgSignals?: ReadonlyMap<number, FvgSignalUpdateMessage>;
+  /** Original TDU momentum triangles and candle/delta divergence. */
+  tduSignals?: ReadonlyMap<number, TduSignalUpdateMessage>;
   /** Initial/live BigTrade markers. */
   bigTrades?: readonly BigTradeMarker[];
   /** Read-only Phase 0 SMC AI entry markers. */
@@ -336,8 +349,14 @@ export interface ChartContainerProps {
   showVolume?: boolean;
   /** Show MyVolumeDelta-style candles at the bottom of the chart. */
   showVolumeDelta?: boolean;
+  /** Show the MBoxWave XKontrol signal dots on the footprint overlay. */
+  showXKontrol?: boolean;
+  /** Select which XKontrol strength levels are rendered. */
+  xKontrolSettings?: Partial<XKontrolDisplaySettings>;
   /** Show volatility-normalized price push in its own pane (M1/M5 UI feature). */
   showGcPushMomentum?: boolean;
+  /** Show original-style TDU signals directly inside price bars. */
+  showTduSignals?: boolean;
   /** GC Push Momentum calculation settings. */
   gcPushMomentumSettings?: Partial<GcPushMomentumSettings>;
   /** Show current wave delta as an MBox histogram at the bottom of the chart. */
@@ -606,6 +625,7 @@ export function ChartContainer({
   volumeDelta,
   footprintBars,
   fvgSignals,
+  tduSignals,
   bigTrades,
   smcAiSignals,
   alertLines,
@@ -620,7 +640,10 @@ export function ChartContainer({
   sessionVolumeProfileDevelopingPoc = true,
   showVolume = true,
   showVolumeDelta = true,
+  showXKontrol = false,
+  xKontrolSettings = DEFAULT_XKONTROL_DISPLAY_SETTINGS,
   showGcPushMomentum = false,
+  showTduSignals = true,
   gcPushMomentumSettings = DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
   showCvd = false,
   showMgannSwing = false,
@@ -764,6 +787,7 @@ export function ChartContainer({
   const fvgSignalsInputRef = useRef<ReadonlyMap<number, FvgSignalUpdateMessage>>();
   const fvgSignalsSeriesRef = useRef<string>();
   const fvgSignalsReplayRef = useRef(false);
+  const tduSignalsInputRef = useRef<ReadonlyMap<number, TduSignalUpdateMessage>>();
   const bigTradesInputRef = useRef<readonly BigTradeMarker[]>();
   const bigTradesSeriesRef = useRef<string>();
   const bigTradesReplayRef = useRef(false);
@@ -1255,6 +1279,17 @@ export function ChartContainer({
   }, [showVolumeDelta]);
 
   useEffect(() => {
+    // XKontrol now belongs to the footprint canvas, not the candle pane.
+    portRef.current?.setXKontrolVisible?.(false);
+  }, [showXKontrol]);
+
+  useEffect(() => {
+    portRef.current?.setXKontrolSettings?.(
+      normalizeXKontrolDisplaySettings(xKontrolSettings),
+    );
+  }, [xKontrolSettings]);
+
+  useEffect(() => {
     portRef.current?.setGcPushMomentumSettings?.(
       normalizeGcPushMomentumSettings({
         ...gcPushMomentumSettings,
@@ -1305,6 +1340,10 @@ export function ChartContainer({
   useEffect(() => {
     portRef.current?.setFvgGraderVisible?.(showFvgGrader);
   }, [showFvgGrader]);
+
+  useEffect(() => {
+    portRef.current?.setTduSignalsVisible?.(showTduSignals);
+  }, [showTduSignals]);
 
   useEffect(() => {
     const controller = controllerRef.current;
@@ -1405,6 +1444,13 @@ export function ChartContainer({
     fvgSignalsSeriesRef.current = seriesKey;
     fvgSignalsReplayRef.current = suspendRealtime;
   }, [symbol, contract, timeframe, fvgSignals, suspendRealtime]);
+
+  useEffect(() => {
+    const next = tduSignals ?? new Map<number, TduSignalUpdateMessage>();
+    if (tduSignalsInputRef.current === next) return;
+    portRef.current?.setTduSignals?.(next);
+    tduSignalsInputRef.current = next;
+  }, [symbol, contract, timeframe, tduSignals]);
 
   useEffect(() => {
     portRef.current?.setChartBackgroundColor?.(chartBackgroundColor);
@@ -1999,6 +2045,8 @@ export function ChartContainer({
           bars={footprintBars ?? new Map()}
           viewport={footprintViewport}
           settings={footprintSettings}
+          showXKontrol={showXKontrol}
+          xKontrolSettings={xKontrolSettings}
         />
       )}
       {positionedOrderControls.length > 0 && (

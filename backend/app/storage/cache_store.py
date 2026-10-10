@@ -34,6 +34,7 @@ from .records import (
     FootprintLevelRecord,
     FvgSignalRecord,
     ProfileRecord,
+    TduSignalRecord,
     VolumeDeltaRecord,
 )
 from .user_store import UserStore
@@ -52,6 +53,7 @@ CACHE_TABLES: tuple[str, ...] = (
     "footprint_bars",
     "footprint_levels",
     "fvg_signals",
+    "tdu_signals",
     "big_trades",
     "market_source_switches",
     "alerts",
@@ -175,6 +177,18 @@ CREATE TABLE IF NOT EXISTS fvg_signals (
     top            REAL NOT NULL,
     bottom         REAL NOT NULL,
     breakout_ratio REAL NOT NULL,
+    PRIMARY KEY (symbol, contract, timeframe, time)
+);
+
+-- Original-style TDU momentum and candle/delta divergence state.
+CREATE TABLE IF NOT EXISTS tdu_signals (
+    symbol             TEXT NOT NULL,
+    contract           TEXT NOT NULL,
+    timeframe          TEXT NOT NULL,
+    time               INTEGER NOT NULL,
+    momentum_direction INTEGER NOT NULL,
+    momentum_level     INTEGER NOT NULL,
+    delta_divergence   INTEGER NOT NULL,
     PRIMARY KEY (symbol, contract, timeframe, time)
 );
 
@@ -628,6 +642,7 @@ class CacheStore:
         footprint_levels: Iterable[FootprintLevelRecord] = (),
         replace_footprint_levels: bool = False,
         fvg_signals: Iterable[FvgSignalRecord] = (),
+        tdu_signals: Iterable[TduSignalRecord] = (),
         big_trades: Iterable[BigTradeRecord] = (),
     ) -> None:
         self._keyed.upsert_derived_batch(
@@ -638,6 +653,7 @@ class CacheStore:
             footprint_levels=footprint_levels,
             replace_footprint_levels=replace_footprint_levels,
             fvg_signals=fvg_signals,
+            tdu_signals=tdu_signals,
             big_trades=big_trades,
         )
 
@@ -757,6 +773,25 @@ class CacheStore:
         limit: int | None = None,
     ) -> list[FvgSignalRecord]:
         return self._keyed.read_fvg_signals(
+            symbol, contract, timeframe, frm, to, limit
+        )
+
+    def upsert_tdu_signal(self, rec: TduSignalRecord) -> None:
+        self._keyed.upsert_tdu_signal(rec)
+
+    def upsert_tdu_signals(self, recs: Iterable[TduSignalRecord]) -> None:
+        self._keyed.upsert_tdu_signals(recs)
+
+    def read_tdu_signals(
+        self,
+        symbol: str,
+        contract: str,
+        timeframe: str,
+        frm: int | None = None,
+        to: int | None = None,
+        limit: int | None = None,
+    ) -> list[TduSignalRecord]:
+        return self._keyed.read_tdu_signals(
             symbol, contract, timeframe, frm, to, limit
         )
 

@@ -44,6 +44,7 @@ from app.models.messages import (
     StackedImbalance,
     StatusState,
     Subscribe,
+    TduSignalUpdate,
     UnfinishedAuction,
     Unsubscribe,
     VolumeDeltaUpdate,
@@ -667,6 +668,32 @@ def test_fvg_signal_update_wire_shape_matches_design():
         "phase": "preview",
     }
     assert EventType.FVG_SIGNAL_UPDATE.value == "fvg_signal_update"
+
+
+@pytest.mark.unit
+def test_tdu_signal_update_round_trips_with_camel_case_wire_fields():
+    update = TduSignalUpdate(
+        symbol="GC",
+        contract="GC",
+        tf="1m",
+        time=1730313600000,
+        momentum_direction=-1,
+        momentum_level=3,
+        delta_divergence=1,
+    )
+
+    assert TduSignalUpdate.from_dict(update.to_dict()) == update
+    assert update.to_dict() == {
+        "type": "tdu_signal_update",
+        "symbol": "GC",
+        "contract": "GC",
+        "tf": "1m",
+        "time": 1730313600000,
+        "momentumDirection": -1,
+        "momentumLevel": 3,
+        "deltaDivergence": 1,
+    }
+    assert EventType.TDU_SIGNAL_UPDATE.value == "tdu_signal_update"
 
 
 # ===========================================================================

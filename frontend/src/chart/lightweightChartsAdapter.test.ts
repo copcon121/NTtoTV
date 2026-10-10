@@ -19,6 +19,8 @@ import {
   isMgannImpulseTimeframeDuration,
   isSessionHighlightTimeframeDuration,
   isUtcPlus7SessionHighlightTime,
+  recentGcPushMomentumPoints,
+  tduDeltaDivergence,
   toBarDisplayTimestamp,
   toCandle,
   toGcPushEarlyDivergenceMarker,
@@ -26,6 +28,7 @@ import {
   toGcPushEarlyDivergencePriceLines,
   toGcPushDivergenceMomentumLines,
   toGcPushDivergencePriceLines,
+  toGcPushMomentumClusterMarkers,
   toGcPushMomentumHistogram,
   toGcPushMomentumMarker,
   toGcPushMomentumPushLine,
@@ -182,6 +185,24 @@ describe("lightweightChartsAdapter Supertrend line breaks", () => {
     ).toEqual([
       { direction: 1, points: [{ time: 1, value: 99 }] },
     ]);
+  });
+
+  it("limits Supertrend line rendering to the latest 500 bars", () => {
+    const bullish = Array.from({ length: 505 }, (_, index) => ({
+      time: index + 1,
+      value: 100 + index,
+    }));
+    const bearish = bullish.map(({ time }) => ({ time }));
+    const segments = buildSupertrendLineSegments({
+      bullish,
+      bearish,
+      markers: [],
+    });
+
+    expect(segments).toHaveLength(1);
+    expect(segments[0].points).toHaveLength(500);
+    expect(segments[0].points[0].time).toBe(6);
+    expect(segments[0].points[499].time).toBe(505);
   });
 
   it("renders a tiny price-anchored dot without arrow or Buy/Sell text", () => {
@@ -392,6 +413,18 @@ describe("lightweightChartsAdapter GC Push Momentum", () => {
     });
   });
 
+  it("limits GC Push Momentum rendering to the latest 500 bars", () => {
+    const points = Array.from({ length: 505 }, (_, index) => ({
+      ...point,
+      time: (index + 1) * 60_000,
+    }));
+    const recent = recentGcPushMomentumPoints(points);
+
+    expect(recent).toHaveLength(500);
+    expect(recent[0].time).toBe(6 * 60_000);
+    expect(recent[499].time).toBe(505 * 60_000);
+  });
+
   it("renders Push-minus-Signal and dims the unclosed preview", () => {
     const closed = toGcPushMomentumHistogram(point, true);
     const preview = toGcPushMomentumHistogram(point, false);
@@ -443,6 +476,55 @@ describe("lightweightChartsAdapter GC Push Momentum", () => {
       color: "rgba(245, 158, 11, 1)",
     });
     expect(toGcPushMomentumMarker(conflict, false)).toBeUndefined();
+  });
+
+  it("keeps only closed conflict marker runs of at least three bars", () => {
+    const conflictAt = (time: number): GcPushMomentumPoint => ({
+      ...point,
+      time,
+      flowState: "conflict",
+      absorptionCandidate: true,
+    });
+    const confirmedAt = (time: number): GcPushMomentumPoint => ({
+      ...point,
+      time,
+    });
+    const points = [
+      conflictAt(60_000),
+      confirmedAt(120_000),
+      conflictAt(180_000),
+      conflictAt(240_000),
+      confirmedAt(300_000),
+      conflictAt(360_000),
+      conflictAt(420_000),
+      conflictAt(480_000),
+    ];
+    const closed = new Set(points.map(({ time }) => time));
+
+    expect(
+      toGcPushMomentumClusterMarkers(points, closed).map(({ time }) => time),
+    ).toEqual([360, 420, 480]);
+  });
+
+  it("waits for the third conflict bar to close before showing the cluster", () => {
+    const points = [60_000, 120_000, 180_000].map(
+      (time): GcPushMomentumPoint => ({
+        ...point,
+        time,
+        flowState: "conflict",
+        absorptionCandidate: true,
+      }),
+    );
+
+    expect(
+      toGcPushMomentumClusterMarkers(points, new Set([60_000, 120_000])),
+    ).toEqual([]);
+    expect(
+      toGcPushMomentumClusterMarkers(
+        points,
+        new Set([60_000, 120_000, 180_000]),
+      ).map(({ time }) => time),
+    ).toEqual([60, 120, 180]);
   });
 
   it("maps confirmed Push divergence onto price and momentum panes", () => {
@@ -524,6 +606,23 @@ describe("lightweightChartsAdapter GC Push Momentum", () => {
       shape: "arrowDown",
       text: "Bear Div 2",
     });
+  });
+});
+
+describe("TDU candle-color delta divergence", () => {
+  it("marks bearish candles with positive delta", () => {
+    expect(tduDeltaDivergence(101, 100, 25)).toBe(-1);
+  });
+
+  it("marks bullish candles with negative delta", () => {
+    expect(tduDeltaDivergence(100, 101, -25)).toBe(1);
+  });
+
+  it("ignores matching direction, zero delta, and doji bars", () => {
+    expect(tduDeltaDivergence(100, 101, 25)).toBe(0);
+    expect(tduDeltaDivergence(101, 100, -25)).toBe(0);
+    expect(tduDeltaDivergence(100, 101, 0)).toBe(0);
+    expect(tduDeltaDivergence(100, 100, 25)).toBe(0);
   });
 });
 

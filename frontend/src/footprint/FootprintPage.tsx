@@ -15,6 +15,11 @@ import {
   DEFAULT_FOOTPRINT_SETTINGS,
   type FootprintSettings,
 } from "../chart/IndicatorToggles";
+import {
+  DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+  XKONTROL_HISTORY_BARS,
+  type XKontrolDisplaySettings,
+} from "../chart/xKontrol";
 import { resolveEndpoints } from "../endpoints";
 import { ChartSocket } from "../socket/ChartSocket";
 import type { ChartEventType } from "../socket/messages";
@@ -134,6 +139,11 @@ export function FootprintPage() {
   const [footprintSettings, setFootprintSettings] = useState<FootprintSettings>(
     () => ({ ...DEFAULT_PAGE_FOOTPRINT_SETTINGS }),
   );
+  const [showXKontrol, setShowXKontrol] = useState(true);
+  const [xKontrolSettings, setXKontrolSettings] =
+    useState<XKontrolDisplaySettings>(() => ({
+      ...DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+    }));
   const [vaPercentInput, setVaPercentInput] = useState(
     String(DEFAULT_PAGE_FOOTPRINT_SETTINGS.vaPercent),
   );
@@ -161,7 +171,7 @@ export function FootprintPage() {
       setHistoryMeta(null);
       try {
         const result = await api.footprintDetails(SYMBOL, CHART_CONTRACT, {
-          count: nextCount,
+          count: Math.max(nextCount, XKONTROL_HISTORY_BARS),
         });
         if (seq !== requestSeq.current) return;
         pendingLatestScrollRef.current = true;
@@ -241,7 +251,10 @@ export function FootprintPage() {
         return;
       }
       setBars((prev) =>
-        trimBarsMap(mergeFootprint(prev, msg), Math.max(1, barCount)),
+        trimBarsMap(
+          mergeFootprint(prev, msg),
+          Math.max(1, barCount, XKONTROL_HISTORY_BARS),
+        ),
       );
     });
     return () => {
@@ -721,6 +734,60 @@ export function FootprintPage() {
               }}
             />
           </label>
+          <label className="footprint-page-toggle">
+            <input
+              type="checkbox"
+              aria-label="XKontrol on Footprint"
+              checked={showXKontrol}
+              onChange={(event) => setShowXKontrol(event.currentTarget.checked)}
+            />
+            XKontrol
+          </label>
+          <label className="footprint-page-toggle">
+            <input
+              type="checkbox"
+              aria-label="XKontrol Level 1 Initial"
+              checked={xKontrolSettings.showInitial}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                setXKontrolSettings((prev) => ({
+                  ...prev,
+                  showInitial: checked,
+                }));
+              }}
+            />
+            XK L1
+          </label>
+          <label className="footprint-page-toggle">
+            <input
+              type="checkbox"
+              aria-label="XKontrol Level 2 Strong"
+              checked={xKontrolSettings.showStrong}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                setXKontrolSettings((prev) => ({
+                  ...prev,
+                  showStrong: checked,
+                }));
+              }}
+            />
+            XK L2
+          </label>
+          <label className="footprint-page-toggle">
+            <input
+              type="checkbox"
+              aria-label="XKontrol Level 3 Total"
+              checked={xKontrolSettings.showTotal}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                setXKontrolSettings((prev) => ({
+                  ...prev,
+                  showTotal: checked,
+                }));
+              }}
+            />
+            XK L3
+          </label>
         </form>
         <div className="footprint-page-status" aria-live="polite">
           {statusText}
@@ -745,6 +812,8 @@ export function FootprintPage() {
             displayCount={displayBarCount}
             rowHeightPx={rowHeightPx}
             layout="standalone"
+            showXKontrol={showXKontrol}
+            xKontrolSettings={xKontrolSettings}
           />
         </main>
         <FootprintStickyAxes

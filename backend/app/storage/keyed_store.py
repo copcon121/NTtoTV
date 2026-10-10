@@ -32,6 +32,7 @@ from .records import (
     FootprintBarRecord,
     FootprintLevelRecord,
     FvgSignalRecord,
+    TduSignalRecord,
     VolumeDeltaRecord,
 )
 
@@ -120,6 +121,17 @@ ON CONFLICT(symbol, contract, timeframe, time) DO UPDATE SET
     breakout_ratio=excluded.breakout_ratio
 """
 
+_UPSERT_TDU_SIGNAL = """
+INSERT INTO tdu_signals
+    (symbol, contract, timeframe, time, momentum_direction, momentum_level,
+     delta_divergence)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, contract, timeframe, time) DO UPDATE SET
+    momentum_direction=excluded.momentum_direction,
+    momentum_level=excluded.momentum_level,
+    delta_divergence=excluded.delta_divergence
+"""
+
 _UPSERT_BIG_TRADE = """
 INSERT INTO big_trades
     (symbol, contract, time, price, volume, side, trade_id, source)
@@ -181,6 +193,7 @@ class KeyedStore:
         footprint_levels: Iterable[FootprintLevelRecord] = (),
         replace_footprint_levels: bool = False,
         fvg_signals: Iterable[FvgSignalRecord] = (),
+        tdu_signals: Iterable[TduSignalRecord] = (),
         big_trades: Iterable[BigTradeRecord] = (),
     ) -> None:
         """Persist one trade's derived outputs in a single transaction.
@@ -197,6 +210,7 @@ class KeyedStore:
         footprint_rows = [_footprint_bar_params(rec) for rec in footprint_records]
         level_rows = [_footprint_level_params(rec) for rec in footprint_levels]
         fvg_rows = [_fvg_signal_params(rec) for rec in fvg_signals]
+        tdu_rows = [_tdu_signal_params(rec) for rec in tdu_signals]
         big_trade_rows = [_big_trade_params(rec) for rec in big_trades]
         if footprint_bar is not None:
             footprint_rows.append(_footprint_bar_params(footprint_bar))
@@ -211,6 +225,7 @@ class KeyedStore:
             or footprint_rows
             or level_rows
             or fvg_rows
+            or tdu_rows
             or big_trade_rows
         ):
             return
@@ -232,6 +247,8 @@ class KeyedStore:
                 conn.executemany(_UPSERT_FOOTPRINT_LEVEL, level_rows)
             if fvg_rows:
                 conn.executemany(_UPSERT_FVG_SIGNAL, fvg_rows)
+            if tdu_rows:
+                conn.executemany(_UPSERT_TDU_SIGNAL, tdu_rows)
             if big_trade_rows:
                 conn.executemany(_UPSERT_BIG_TRADE, big_trade_rows)
 
@@ -569,6 +586,51 @@ class KeyedStore:
             for r in rows
         ]
 
+    # -- TDU signals ----------------------------------------------------------
+
+    def upsert_tdu_signal(self, rec: TduSignalRecord) -> None:
+        self._writer.execute(_UPSERT_TDU_SIGNAL, _tdu_signal_params(rec))
+
+    def upsert_tdu_signals(self, recs: Iterable[TduSignalRecord]) -> None:
+        rows = [_tdu_signal_params(rec) for rec in recs]
+        if rows:
+            self._writer.executemany(_UPSERT_TDU_SIGNAL, rows)
+
+    def read_tdu_signals(
+        self,
+        symbol: str,
+        contract: str,
+        timeframe: str,
+        frm: int | None = None,
+        to: int | None = None,
+        limit: int | None = None,
+    ) -> list[TduSignalRecord]:
+        rows = self._read_keyed(
+            table="tdu_signals",
+            columns=(
+                "symbol, contract, timeframe, time, momentum_direction, "
+                "momentum_level, delta_divergence"
+            ),
+            symbol=symbol,
+            contract=contract,
+            timeframe=timeframe,
+            frm=frm,
+            to=to,
+            limit=limit,
+        )
+        return [
+            TduSignalRecord(
+                symbol=r["symbol"],
+                contract=r["contract"],
+                timeframe=r["timeframe"],
+                time=r["time"],
+                momentum_direction=r["momentum_direction"],
+                momentum_level=r["momentum_level"],
+                delta_divergence=r["delta_divergence"],
+            )
+            for r in rows
+        ]
+
     # -- big trades -----------------------------------------------------------
 
     def upsert_big_trade(self, rec: BigTradeRecord) -> None:
@@ -839,6 +901,18 @@ def _footprint_level_params(r: FootprintLevelRecord) -> tuple[object, ...]:
         r.bid_volume,
         r.ask_volume,
         None if r.imbalance is None else r.imbalance.value,
+    )
+
+
+def _tdu_signal_params(r: TduSignalRecord) -> tuple[object, ...]:
+    return (
+        r.symbol,
+        r.contract,
+        r.timeframe,
+        int(r.time),
+        r.momentum_direction,
+        r.momentum_level,
+        r.delta_divergence,
     )
 
 

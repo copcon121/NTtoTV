@@ -9,6 +9,14 @@ import {
   shouldRedraw,
 } from "./footprintModel";
 import type { FootprintSettings } from "../chart/IndicatorToggles";
+import {
+  calculateXKontrol,
+  DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+  normalizeXKontrolDisplaySettings,
+  xKontrolLevelVisible,
+  type XKontrolDisplaySettings,
+  type XKontrolSignal,
+} from "../chart/xKontrol";
 
 /**
  * FootprintCanvas - NT-style panel mode for the last 5 live M1 footprint bars.
@@ -40,6 +48,16 @@ export interface FootprintCanvasProps {
   rowHeightPx?: number;
   /** Compact chart overlay or full standalone page canvas. */
   layout?: "overlay" | "standalone";
+  /** Show MBoxWave XKontrol signal dots on the footprint columns. */
+  showXKontrol?: boolean;
+  /** Select which XKontrol signal strengths are drawn. */
+  xKontrolSettings?: Partial<XKontrolDisplaySettings>;
+  /** Optional longer M1 history used only to warm up XKontrol. */
+  xKontrolBars?: ReadonlyMap<number, FootprintBar>;
+}
+
+export interface FootprintXKontrolOverlay {
+  signals: readonly XKontrolSignal[];
 }
 
 const MIN_THROTTLE_MS = 100;
@@ -57,10 +75,17 @@ const MZ_THEME = {
   deltaPos: "#008000",
   deltaNeg: "#ff0000",
   unfinishedAuction: "#ffd700",
+  xKontrolOffers: "#008080",
+  xKontrolBids: "#ff1493",
   candleUp: "#00aa20",
   candleDown: "#8b0000",
   axis: "#737373",
   grid: "rgba(0, 0, 0, 0.08)",
+};
+const XKONTROL_RADIUS_BY_LEVEL: Readonly<Record<1 | 2 | 3, number>> = {
+  1: 3,
+  2: 5,
+  3: 7,
 };
 
 function clampThrottle(ms: number): number {
@@ -72,6 +97,7 @@ export function drawFootprint(
   ctx: CanvasRenderingContext2D,
   inputs: FootprintRenderInputs,
   settings?: FootprintSettings,
+  xKontrol?: FootprintXKontrolOverlay,
 ): void {
   const showVA = settings?.showVA ?? false;
   const showImbalance = settings?.showImbalance ?? true;
@@ -180,6 +206,9 @@ export function drawFootprint(
     ? Math.max(6, Math.min(13, rowH * 0.72))
     : 10;
   const textColor = viewport.textColor ?? MZ_THEME.text;
+  const xKontrolByTime = new Map(
+    (xKontrol?.signals ?? []).map((signal) => [signal.time, signal]),
+  );
 
   ctx.save();
   ctx.beginPath();
@@ -300,8 +329,57 @@ export function drawFootprint(
       }
       ctx.setLineDash([]);
     }
+
+    const xKontrolSignal = xKontrolByTime.get(bar.time);
+    if (xKontrolSignal) {
+      drawXKontrolDot(
+        ctx,
+        xCenter,
+        yForPrice(xKontrolSignal.price),
+        xKontrolSignal.code,
+      );
+    }
   });
 
+  ctx.restore();
+}
+
+/** Calculate XKontrol from M1 footprint OHLC plus ladder-derived volume. */
+export function calculateFootprintXKontrolSignals(
+  bars: ReadonlyMap<number, FootprintBar>,
+  settings: Partial<XKontrolDisplaySettings> = DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+): XKontrolSignal[] {
+  const normalized = normalizeXKontrolDisplaySettings(settings);
+  const calculationBars = [...bars.values()]
+    .sort((left, right) => left.time - right.time)
+    .map((bar) => ({
+      time: bar.time,
+      open: bar.open,
+      high: bar.high,
+      low: bar.low,
+      close: bar.close,
+      volume: bar.rows.reduce(
+        (total, row) => total + Math.max(0, row.bid) + Math.max(0, row.ask),
+        0,
+      ),
+    }));
+  return calculateXKontrol(calculationBars).filter((signal) =>
+    xKontrolLevelVisible(signal.level, normalized),
+  );
+}
+
+function drawXKontrolDot(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  code: XKontrolSignal["code"],
+): void {
+  const level = Math.abs(code) as 1 | 2 | 3;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, XKONTROL_RADIUS_BY_LEVEL[level], 0, Math.PI * 2);
+  ctx.fillStyle = code > 0 ? MZ_THEME.xKontrolOffers : MZ_THEME.xKontrolBids;
+  ctx.fill();
   ctx.restore();
 }
 
@@ -583,7 +661,10 @@ function drawDashedRect(
   ctx.restore();
 }
 
-function footprintSettingsKey(settings?: FootprintSettings): string {
+function footprintSettingsKey(
+  settings?: FootprintSettings,
+  xKontrol?: FootprintXKontrolOverlay,
+): string {
   return [
     settings?.showVA ?? false,
     settings?.vaPercent ?? 70,
@@ -594,6 +675,7 @@ function footprintSettingsKey(settings?: FootprintSettings): string {
     settings?.absorptionDepth ?? 5,
     settings?.absorptionFilter ?? 3,
     settings?.showUnfinishedAuction ?? true,
+    ...(xKontrol?.signals.map((signal) => `${signal.time}:${signal.code}`) ?? []),
   ].join("|");
 }
 
@@ -639,6 +721,9 @@ export function FootprintCanvas({
   displayCount = FOOTPRINT_DISPLAY_COUNT,
   rowHeightPx,
   layout = "overlay",
+  showXKontrol = false,
+  xKontrolSettings = DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+  xKontrolBars,
 }: FootprintCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const prevInputsRef = useRef<FootprintRenderInputs | null>(null);
@@ -648,6 +733,7 @@ export function FootprintCanvas({
     ctx: CanvasRenderingContext2D;
     inputs: FootprintRenderInputs;
     settings?: FootprintSettings;
+    xKontrol?: FootprintXKontrolOverlay;
   } | null>(null);
 
   const interval = clampThrottle(throttleMs);
@@ -659,13 +745,22 @@ export function FootprintCanvas({
     const ctx = canvas.getContext("2d");
     if (ctx === null) return;
 
+    const xKontrol = showXKontrol
+      ? {
+          signals: calculateFootprintXKontrolSignals(
+            xKontrolBars ?? bars,
+            xKontrolSettings,
+          ),
+        }
+      : undefined;
+
     const next: FootprintRenderInputs = {
       bars: selectDisplayBars(bars, effectiveDisplayCount),
       viewport,
       displayCount: effectiveDisplayCount,
       rowHeightPx,
       layout,
-      settingsKey: footprintSettingsKey(settings),
+      settingsKey: footprintSettingsKey(settings, xKontrol),
     };
 
     if (!shouldRedraw(prevInputsRef.current, next)) {
@@ -675,13 +770,18 @@ export function FootprintCanvas({
       return; // retain current rendering (Req 14.6, 14.7)
     }
 
-    pendingRenderRef.current = { ctx, inputs: next, settings };
+    pendingRenderRef.current = { ctx, inputs: next, settings, xKontrol };
     const renderLatest = () => {
       const pending = pendingRenderRef.current;
       pendingRenderRef.current = null;
       timerRef.current = null;
       if (pending === null) return;
-      drawFootprint(pending.ctx, pending.inputs, pending.settings);
+      drawFootprint(
+        pending.ctx,
+        pending.inputs,
+        pending.settings,
+        pending.xKontrol,
+      );
       prevInputsRef.current = pending.inputs;
       lastDrawAtRef.current = now();
     };
@@ -693,7 +793,19 @@ export function FootprintCanvas({
       // Trailing-edge: collapse a burst to one draw per interval (Req 14.8).
       timerRef.current = setTimeout(renderLatest, Math.max(0, interval - elapsed));
     }
-  }, [bars, viewport, interval, now, settings, effectiveDisplayCount, rowHeightPx, layout]);
+  }, [
+    bars,
+    viewport,
+    interval,
+    now,
+    settings,
+    effectiveDisplayCount,
+    rowHeightPx,
+    layout,
+    showXKontrol,
+    xKontrolSettings,
+    xKontrolBars,
+  ]);
 
   useEffect(
     () => () => {

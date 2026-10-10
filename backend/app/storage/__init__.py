@@ -28,6 +28,7 @@ from .records import (
     FootprintLevelRecord,
     FvgSignalRecord,
     ProfileRecord,
+    TduSignalRecord,
     VolumeDeltaRecord,
 )
 from .tick_store import SYMBOL, TICK_SHARD_SCHEMA, TickStore, sanitize_contract
@@ -45,6 +46,7 @@ __all__ = [
     "FootprintBarRecord",
     "FootprintLevelRecord",
     "FvgSignalRecord",
+    "TduSignalRecord",
     "BigTradeRecord",
     "ProfileRecord",
     "AlertRecord",

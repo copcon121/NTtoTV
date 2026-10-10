@@ -458,6 +458,7 @@ describe("live chart series identity", () => {
       "bar_update",
       "volume_delta_update",
       "fvg_signal_update",
+      "tdu_signal_update",
     ]);
     expect(GLOBAL_SUBSCRIBED_EVENTS).toEqual([
       "quote_update",

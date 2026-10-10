@@ -24,6 +24,7 @@ from app.storage.records import (
     FootprintBarRecord,
     FootprintLevelRecord,
     FvgSignalRecord,
+    TduSignalRecord,
     VolumeDeltaRecord,
 )
 from app.storage.tick_store import TickStore
@@ -273,6 +274,42 @@ def test_fvg_signals_rejects_non_m1_timeframe(env):
     )
     assert resp.status_code == 404
     assert resp.json()["error"]["field"] == "tf"
+
+
+@pytest.mark.integration
+def test_tdu_signals_returns_chart_contract_rows(env):
+    client, cache = env
+    cache.upsert_tdu_signal(
+        TduSignalRecord(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            timeframe="5m",
+            time=_BASE_MS,
+            momentum_direction=-1,
+            momentum_level=2,
+            delta_divergence=1,
+        )
+    )
+
+    response = client.get(
+        "/api/orderflow/tdu-signals",
+        params={"symbol": _SYMBOL, "contract": _SYMBOL, "tf": "5m"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "symbol": _SYMBOL,
+        "contract": _SYMBOL,
+        "tf": "5m",
+        "signals": [
+            {
+                "time": _BASE_MS,
+                "momentumDirection": -1,
+                "momentumLevel": 2,
+                "deltaDivergence": 1,
+            }
+        ],
+    }
 
 
 def _seed_footprint_bar(cache: CacheStore, time_ms: int) -> None:

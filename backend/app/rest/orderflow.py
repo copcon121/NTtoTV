@@ -44,6 +44,7 @@ from ..storage.records import (
     FootprintBarRecord,
     FootprintLevelRecord,
     FvgSignalRecord,
+    TduSignalRecord,
     VolumeDeltaRecord,
 )
 from ..storage.tick_store import TickStore
@@ -311,6 +312,15 @@ def _fvg_signal_to_dict(rec: FvgSignalRecord) -> dict[str, Any]:
         "bottom": rec.bottom,
         "breakoutRatio": rec.breakout_ratio,
         "phase": "confirmed",
+    }
+
+
+def _tdu_signal_to_dict(rec: TduSignalRecord) -> dict[str, Any]:
+    return {
+        "time": rec.time,
+        "momentumDirection": rec.momentum_direction,
+        "momentumLevel": rec.momentum_level,
+        "deltaDivergence": rec.delta_divergence,
     }
 
 
@@ -954,6 +964,35 @@ async def get_fvg_signals(
         "contract": resolved,
         "tf": FVG_SIGNAL_TIMEFRAME,
         "signals": [_fvg_signal_to_dict(row) for row in rows],
+    }
+
+
+@router.get("/orderflow/tdu-signals")
+async def get_tdu_signals(
+    symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
+    tf: str = Query(..., description="Chart timeframe"),
+    contract: str | None = Query(None, description="Logical chart contract"),
+    frm: int | None = Query(None, alias="from"),
+    to: int | None = Query(None),
+    limit: int | None = Query(None),
+    state: ContractStateStore = Depends(get_contract_state),
+    cache: CacheStore = Depends(get_cache),
+) -> dict[str, Any]:
+    """Return persisted TDU momentum/divergence states for chart bars."""
+
+    _validate_symbol_tf(state, symbol, tf)
+    resolved = _resolve_contract(state, symbol, contract)
+    if frm is not None and to is not None and frm > to:
+        raise bad_request("'from' must be less than or equal to 'to'", field="from")
+    if limit is not None and limit < 1:
+        raise bad_request("'limit' must be a positive integer", field="limit")
+    effective_limit = MAX_ROWS if limit is None else min(limit, MAX_ROWS)
+    rows = cache.read_tdu_signals(symbol, resolved, tf, frm, to, effective_limit)
+    return {
+        "symbol": symbol,
+        "contract": resolved,
+        "tf": tf,
+        "signals": [_tdu_signal_to_dict(row) for row in rows],
     }
 
 

@@ -22,6 +22,7 @@ import type {
 import {
   type BigTradeMessage,
   type FvgSignalUpdateMessage,
+  type TduSignalUpdateMessage,
   type FootprintRow,
   type FootprintUpdateMessage,
   type Side,
@@ -103,6 +104,13 @@ export interface FvgSignalRestRow {
   bottom: number | null;
   breakoutRatio: number;
   phase: "confirmed";
+}
+
+export interface TduSignalRestRow {
+  time: number;
+  momentumDirection: number;
+  momentumLevel: number;
+  deltaDivergence: number;
 }
 
 export interface BigTradeRestRow {
@@ -1090,6 +1098,36 @@ export class ApiClient {
       bottom: signal.bottom,
       breakoutRatio: signal.breakoutRatio,
       phase: signal.phase,
+    }));
+  }
+
+  /** Original-style TDU momentum triangles and bar delta divergence. */
+  async tduSignals(
+    symbol: string,
+    contract: string,
+    timeframe: Timeframe,
+    limit?: number,
+    range?: { from?: number; to?: number },
+  ): Promise<TduSignalUpdateMessage[]> {
+    const params = new URLSearchParams({ symbol, contract, tf: timeframe });
+    if (limit !== undefined) params.set("limit", String(limit));
+    if (range?.from !== undefined) params.set("from", String(range.from));
+    if (range?.to !== undefined) params.set("to", String(range.to));
+    const body = await this.getJson<{
+      symbol: string;
+      contract: string;
+      tf: Timeframe;
+      signals: TduSignalRestRow[];
+    }>(`/orderflow/tdu-signals?${params.toString()}`);
+    return body.signals.map((signal) => ({
+      type: "tdu_signal_update",
+      symbol: body.symbol,
+      contract: body.contract,
+      tf: body.tf,
+      time: signal.time,
+      momentumDirection: signal.momentumDirection,
+      momentumLevel: signal.momentumLevel,
+      deltaDivergence: signal.deltaDivergence,
     }));
   }
 

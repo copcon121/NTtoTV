@@ -69,9 +69,25 @@ import {
   type RenderableBigTradeBubble,
 } from "./BigTradeBubblePrimitive";
 import {
+  XKontrolPrimitive,
+  type RenderableXKontrolSignal,
+} from "./XKontrolPrimitive";
+import {
+  DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+  XKontrolEngine,
+  normalizeXKontrolDisplaySettings,
+  xKontrolLevelVisible,
+  type XKontrolDisplaySettings,
+} from "./xKontrol";
+import {
   DivergenceLinePrimitive,
   type RenderableDivergenceLine,
 } from "./DivergenceLinePrimitive";
+import {
+  TduSignalPrimitive,
+  type RenderableTduSignal,
+} from "./TduSignalPrimitive";
+import type { TduSignalUpdateMessage } from "../socket/messages";
 import {
   WaveDeltaMboxPrimitive,
   type RenderableWaveDeltaMbox,
@@ -140,6 +156,9 @@ interface SupertrendLineSample {
   value?: number;
 }
 
+export const MAX_GC_PUSH_MOMENTUM_DISPLAY_BARS = 500;
+export const MAX_SUPERTREND_DISPLAY_BARS = 500;
+
 export interface SupertrendLineSegment {
   direction: SupertrendDirection;
   points: readonly {
@@ -186,6 +205,14 @@ function supertrendLineSamples(
     });
 }
 
+function recentSupertrendLineSamples(
+  overlay: SupertrendOverlay,
+  maxBars = MAX_SUPERTREND_DISPLAY_BARS,
+): SupertrendLineSample[] {
+  const limit = Math.max(1, Math.round(maxBars));
+  return supertrendLineSamples(overlay).slice(-limit);
+}
+
 function segmentSupertrendLineSamples(
   samples: readonly SupertrendLineSample[],
 ): SupertrendLineSegment[] {
@@ -215,8 +242,11 @@ function segmentSupertrendLineSamples(
  */
 export function buildSupertrendLineSegments(
   overlay: SupertrendOverlay,
+  maxBars = MAX_SUPERTREND_DISPLAY_BARS,
 ): SupertrendLineSegment[] {
-  return segmentSupertrendLineSamples(supertrendLineSamples(overlay));
+  return segmentSupertrendLineSamples(
+    recentSupertrendLineSamples(overlay, maxBars),
+  );
 }
 
 /** TradingView-style signal dot placed at the exact Supertrend band price. */
@@ -249,6 +279,16 @@ export interface VolumeDeltaDatum {
   openDelta: number;
   closeDelta: number;
   cumulativeDelta?: number;
+}
+
+export function tduDeltaDivergence(
+  open: number,
+  close: number,
+  delta: number,
+): -1 | 0 | 1 {
+  if (delta > 0 && close < open) return -1;
+  if (delta < 0 && close > open) return 1;
+  return 0;
 }
 
 const FVG_BULL_COLORS: Record<number, string> = {
@@ -699,6 +739,53 @@ export function toGcPushMomentumMarker(
     id: `gc-push-flow-${point.time}`,
     size: point.absorptionCandidate ? 0.8 : 0.65,
   };
+}
+
+export const GC_PUSH_MIN_CONFLICT_CLUSTER_BARS = 3;
+
+export function recentGcPushMomentumPoints(
+  points: readonly GcPushMomentumPoint[],
+  maxBars = MAX_GC_PUSH_MOMENTUM_DISPLAY_BARS,
+): GcPushMomentumPoint[] {
+  const limit = Math.max(1, Math.round(maxBars));
+  return points.slice(-limit);
+}
+
+/**
+ * Keep conflict/absorption markers only when they form a sustained run.
+ * An open bar cannot complete a run, so realtime markers appear only after
+ * the third consecutive candidate has closed.
+ */
+export function toGcPushMomentumClusterMarkers(
+  points: readonly GcPushMomentumPoint[],
+  closedBarTimes: ReadonlySet<number>,
+  displayTimeOffsetMs = 0,
+  minClusterBars = GC_PUSH_MIN_CONFLICT_CLUSTER_BARS,
+): SeriesMarker<Time>[] {
+  const minimum = Math.max(1, Math.round(minClusterBars));
+  const markers: SeriesMarker<Time>[] = [];
+  let run: SeriesMarker<Time>[] = [];
+
+  const flushRun = (): void => {
+    if (run.length >= minimum) markers.push(...run);
+    run = [];
+  };
+
+  for (const point of [...points].sort((left, right) => left.time - right.time)) {
+    const marker = toGcPushMomentumMarker(
+      point,
+      closedBarTimes.has(point.time),
+      displayTimeOffsetMs,
+    );
+    if (marker === undefined) {
+      flushRun();
+    } else {
+      run.push(marker);
+    }
+  }
+  flushRun();
+
+  return markers;
 }
 
 export function toBarDisplayTimestamp(
@@ -1402,6 +1489,15 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly mgannSwingMarkers: ISeriesMarkersPluginApi<Time>;
   private readonly supertrendMarkers: ISeriesMarkersPluginApi<Time>;
   private bigTradePrimitive: BigTradeBubblePrimitive | undefined;
+  private tduSignalPrimitive: TduSignalPrimitive | undefined;
+  private readonly tduSignalsByTime = new Map<number, TduSignalUpdateMessage>();
+  private tduSignalsVisible = true;
+  private xKontrolPrimitive: XKontrolPrimitive | undefined;
+  private readonly xKontrolEngine = new XKontrolEngine();
+  private xKontrolVisible = false;
+  private xKontrolSettings: XKontrolDisplaySettings = {
+    ...DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+  };
   private smcPrimitive: SmcOverlayPrimitive | undefined;
   private sweepReversalPrimitive: SweepReversalPrimitive | undefined;
   private priceDivergencePrimitive: DivergenceLinePrimitive | undefined;
@@ -1432,10 +1528,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     | ISeriesMarkersPluginApi<Time>
     | undefined;
   private gcPushMomentumDivergencePrimitive: DivergenceLinePrimitive | undefined;
-  private readonly gcPushMomentumMarkerByTime = new Map<
-    number,
-    SeriesMarker<Time>
-  >();
   private readonly gcPushMomentumPointByTime = new Map<
     number,
     GcPushMomentumPoint
@@ -1580,6 +1672,18 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.bigTradePrimitive = new BigTradeBubblePrimitive([]);
     this.candleSeries.attachPrimitive(
       this.bigTradePrimitive as unknown as Parameters<
+        typeof this.candleSeries.attachPrimitive
+      >[0],
+    );
+    this.tduSignalPrimitive = new TduSignalPrimitive();
+    this.candleSeries.attachPrimitive(
+      this.tduSignalPrimitive as unknown as Parameters<
+        typeof this.candleSeries.attachPrimitive
+      >[0],
+    );
+    this.xKontrolPrimitive = new XKontrolPrimitive();
+    this.candleSeries.attachPrimitive(
+      this.xKontrolPrimitive as unknown as Parameters<
         typeof this.candleSeries.attachPrimitive
       >[0],
     );
@@ -1786,7 +1890,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderWaveDeltaSeries();
     this.renderMgannSwing();
     this.renderGcPushMomentumSeries();
+    this.renderTduSignals();
     this.renderBigTradeMarkers();
+    this.renderXKontrolSignals();
     this.renderSmcOverlay();
     this.renderSmcAiSignals();
   }
@@ -1899,7 +2005,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.renderWaveDeltaSeries();
       this.renderMgannSwing();
       this.renderGcPushMomentumSeries();
+      this.renderTduSignals();
     }
+    if (barsDirty) this.renderXKontrolSignals();
     if (barsDirty) this.updateBarCountdown();
   }
 
@@ -1950,6 +2058,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   /** Bulk-load the full candle series. Delta history is loaded separately. */
   setBars(bars: BarSeries): void {
     this.candleBars = bars.map((bar) => ({ ...bar }));
+    this.xKontrolEngine.setBars(this.candleBars);
     this.closedBarTimes.clear();
     const now = Date.now();
     for (let index = 0; index < this.candleBars.length; index += 1) {
@@ -1976,6 +2085,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderWaveDeltaSeries();
     this.renderMgannSwing();
     this.renderGcPushMomentumSeries();
+    this.renderTduSignals();
+    this.renderXKontrolSignals();
     this.updateBarCountdown();
   }
 
@@ -1983,6 +2094,18 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   updateBar(bar: Bar, closed?: boolean): void {
     const result = applyBarUpdate(this.candleBars, bar);
     this.candleBars = result.bars;
+    if (result.kind === "append" && result.index === this.xKontrolEngine.length) {
+      this.xKontrolEngine.appendBar(result.bar);
+    } else if (
+      result.kind === "overwrite" &&
+      result.index === this.xKontrolEngine.length - 1
+    ) {
+      this.xKontrolEngine.updateLastBar(result.bar);
+    } else if (result.kind !== "noop") {
+      // Out-of-order inserts/older overwrites change absolute bar indexes, so
+      // replay the native ring from the normalized chart history.
+      this.xKontrolEngine.setBars(this.candleBars);
+    }
     if (result.kind === "append" || result.kind === "insert") {
       const previous = this.candleBars[result.index - 1];
       if (previous !== undefined) this.closedBarTimes.add(previous.time);
@@ -2022,6 +2145,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       if (this.volumeVisible) {
         this.updateVolumeAt(result.index);
       }
+      this.renderXKontrolSignals();
       this.scheduleGcPushMomentumUpdate(result.index);
       this.scheduleMgannRender();
     }
@@ -2029,6 +2153,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       toUtcTimestamp(bar.time, this.displayTimeOffsetMs) as number,
       { ...bar },
     );
+    this.renderTduSignals();
     const previousLatestTime = this.latestBar?.time;
     if (this.latestBar === undefined || bar.time >= this.latestBar.time) {
       if (previousLatestTime === undefined || bar.time > previousLatestTime) {
@@ -2077,6 +2202,22 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
   }
 
+  /** Show or hide the 1:1 MBoxWave XKontrol price overlay. */
+  setXKontrolVisible(visible: boolean): void {
+    if (this.xKontrolVisible === visible) return;
+    this.xKontrolVisible = visible;
+    this.xKontrolPrimitive?.setVisible(visible);
+    if (visible) this.renderXKontrolSignals();
+  }
+
+  setXKontrolSettings(settings: Partial<XKontrolDisplaySettings>): void {
+    this.xKontrolSettings = normalizeXKontrolDisplaySettings({
+      ...this.xKontrolSettings,
+      ...settings,
+    });
+    this.renderXKontrolSignals();
+  }
+
   /** Create/remove the dedicated GC Push Momentum pane. */
   setGcPushMomentumVisible(visible: boolean): void {
     if (this.gcPushMomentumVisible === visible) return;
@@ -2104,6 +2245,23 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.gcPushMomentumPushSeries?.applyOptions({ visible: visibility.push });
     this.gcPushMomentumSignalSeries?.applyOptions({ visible: visibility.signal });
     this.renderGcPushMomentumSeries();
+  }
+
+  setTduSignalsVisible(visible: boolean): void {
+    this.tduSignalsVisible = visible;
+    this.tduSignalPrimitive?.setVisible(visible);
+    if (visible) this.renderTduSignals();
+  }
+
+  setTduSignals(signals: ReadonlyMap<number, TduSignalUpdateMessage>): void {
+    this.tduSignalsByTime.clear();
+    for (const [time, signal] of signals) this.tduSignalsByTime.set(time, signal);
+    this.renderTduSignals();
+  }
+
+  updateTduSignal(signal: TduSignalUpdateMessage): void {
+    this.tduSignalsByTime.set(signal.time, signal);
+    this.renderTduSignals();
   }
 
   /** Show or hide the wave-delta MBox overlay. */
@@ -2350,7 +2508,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.gcPushMomentumMarkers = undefined;
     this.gcPushMomentumDivergenceMarkers?.detach();
     this.gcPushMomentumDivergenceMarkers = undefined;
-    this.gcPushMomentumMarkerByTime.clear();
     this.gcPushMomentumPointByTime.clear();
     this.gcPushPriceDivergencePrimitive?.setLines([]);
     this.gcPushMomentumDivergencePrimitive?.setLines([]);
@@ -2413,14 +2570,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     );
   }
 
-  private renderGcPushMomentumSeries(): void {
-    if (!this.gcPushMomentumVisible) return;
-    this.ensureGcPushMomentumPane();
-    const points = calculateGcPushMomentum(
-      this.candleBars,
-      this.gcPushMomentumDeltas(),
-      this.gcPushMomentumSettings,
-    );
+  private setGcPushMomentumSeriesData(
+    points: readonly GcPushMomentumPoint[],
+  ): void {
     this.gcPushMomentumSeries?.setData(
       points.map((point) =>
         toGcPushMomentumHistogram(
@@ -2440,29 +2592,77 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         toGcPushMomentumSignalLine(point, this.displayTimeOffsetMs),
       ),
     );
+  }
+
+  private trimGcPushMomentumDisplayPoints(): boolean {
+    const overflow =
+      this.gcPushMomentumPointByTime.size - MAX_GC_PUSH_MOMENTUM_DISPLAY_BARS;
+    if (overflow <= 0) return false;
+    const staleTimes = [...this.gcPushMomentumPointByTime.keys()]
+      .sort((left, right) => left - right)
+      .slice(0, overflow);
+    for (const time of staleTimes) {
+      this.gcPushMomentumPointByTime.delete(time);
+    }
+    return true;
+  }
+
+  private renderGcPushMomentumSeries(): void {
+    if (!this.gcPushMomentumVisible) return;
+    this.ensureGcPushMomentumPane();
+    const points = recentGcPushMomentumPoints(
+      calculateGcPushMomentum(
+        this.candleBars,
+        this.gcPushMomentumDeltas(),
+        this.gcPushMomentumSettings,
+      ),
+    );
+    this.setGcPushMomentumSeriesData(points);
     this.gcPushMomentumPointByTime.clear();
     for (const point of points) {
       this.gcPushMomentumPointByTime.set(point.time, point);
-    }
-    this.gcPushMomentumMarkerByTime.clear();
-    for (const point of points) {
-      const marker = toGcPushMomentumMarker(
-        point,
-        this.closedBarTimes.has(point.time),
-        this.displayTimeOffsetMs,
-      );
-      if (marker !== undefined) {
-        this.gcPushMomentumMarkerByTime.set(point.time, marker);
-      }
     }
     this.renderGcPushMomentumMarkers();
     this.renderGcPushMomentumDivergences();
   }
 
+  private renderTduSignals(): void {
+    if (!this.tduSignalPrimitive || !this.tduSignalsVisible) return;
+    const signals: RenderableTduSignal[] = [];
+    for (const bar of this.candleBars) {
+      const signal = this.tduSignalsByTime.get(bar.time);
+      const delta = this.volumeDeltaByTime.get(bar.time)?.delta;
+      const historicalDivergence =
+        delta === undefined ? 0 : tduDeltaDivergence(bar.open, bar.close, delta);
+      const momentumLevel = signal?.momentumLevel ?? 0;
+      const momentumDirection = signal?.momentumDirection ?? 0;
+      const deltaDivergence =
+        delta === undefined
+          ? (signal?.deltaDivergence ?? 0)
+          : historicalDivergence;
+      if (momentumLevel === 0 && deltaDivergence === 0) {
+        continue;
+      }
+      signals.push({
+        time: toUtcTimestamp(bar.time, this.displayTimeOffsetMs),
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        momentumDirection,
+        momentumLevel,
+        deltaDivergence,
+      });
+    }
+    this.tduSignalPrimitive.setSignals(signals);
+  }
+
   private renderGcPushMomentumMarkers(): void {
     this.gcPushMomentumMarkers?.setMarkers(
-      [...this.gcPushMomentumMarkerByTime.values()].sort(
-        (left, right) => Number(left.time) - Number(right.time),
+      toGcPushMomentumClusterMarkers(
+        [...this.gcPushMomentumPointByTime.values()],
+        this.closedBarTimes,
+        this.displayTimeOffsetMs,
       ),
     );
   }
@@ -2541,7 +2741,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       if (bar === undefined) continue;
       const point = byTime.get(bar.time);
       const historicalUpdate = currentIndex < this.candleBars.length - 1;
-      this.gcPushMomentumMarkerByTime.delete(bar.time);
       if (point === undefined) {
         this.gcPushMomentumPointByTime.delete(bar.time);
         const whitespace = {
@@ -2552,14 +2751,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         this.gcPushMomentumSignalSeries?.update(whitespace, historicalUpdate);
       } else {
         this.gcPushMomentumPointByTime.set(point.time, point);
-        const marker = toGcPushMomentumMarker(
-          point,
-          this.closedBarTimes.has(point.time),
-          this.displayTimeOffsetMs,
-        );
-        if (marker !== undefined) {
-          this.gcPushMomentumMarkerByTime.set(point.time, marker);
-        }
         series.update(
           toGcPushMomentumHistogram(
             point,
@@ -2577,6 +2768,13 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
           historicalUpdate,
         );
       }
+    }
+    if (this.trimGcPushMomentumDisplayPoints()) {
+      this.setGcPushMomentumSeriesData(
+        [...this.gcPushMomentumPointByTime.values()].sort(
+          (left, right) => left.time - right.time,
+        ),
+      );
     }
     this.renderGcPushMomentumMarkers();
     this.renderGcPushMomentumDivergences();
@@ -2907,10 +3105,16 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.clearSupertrend();
       return;
     }
-    this.supertrendLineHistory = supertrendLineSamples(overlay);
+    this.supertrendLineHistory = recentSupertrendLineSamples(overlay);
     this.renderSupertrendSegments(settings);
     this.supertrendMarkerByTime.clear();
-    for (const marker of overlay.markers.slice(-MAX_SUPERTREND_MARKERS)) {
+    const oldestDisplayedTime = this.supertrendLineHistory[0]?.time;
+    for (const marker of overlay.markers
+      .filter(
+        (candidate) =>
+          oldestDisplayedTime === undefined || candidate.time >= oldestDisplayedTime,
+      )
+      .slice(-MAX_SUPERTREND_MARKERS)) {
       this.supertrendMarkerByTime.set(marker.time, { ...marker });
     }
     this.renderSupertrendMarkers(settings);
@@ -2960,7 +3164,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       }
     }
 
-    if (canUpdateLastSegment) {
+    const historyTrimmed = this.trimSupertrendDisplayHistory();
+
+    if (canUpdateLastSegment && !historyTrimmed) {
       const activeSeries =
         this.supertrendSegmentSeries[this.supertrendSegmentSeries.length - 1];
       if (activeSeries === undefined || sample.value === undefined) {
@@ -2988,6 +3194,20 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.supertrendMarkerByTime.set(point.time, marker);
     }
     this.renderSupertrendMarkers(settings);
+  }
+
+  private trimSupertrendDisplayHistory(): boolean {
+    const overflow =
+      this.supertrendLineHistory.length - MAX_SUPERTREND_DISPLAY_BARS;
+    if (overflow <= 0) return false;
+    this.supertrendLineHistory.splice(0, overflow);
+    const oldestDisplayedTime = this.supertrendLineHistory[0]?.time;
+    if (oldestDisplayedTime !== undefined) {
+      for (const time of this.supertrendMarkerByTime.keys()) {
+        if (time < oldestDisplayedTime) this.supertrendMarkerByTime.delete(time);
+      }
+    }
+    return true;
   }
 
   /** Remove every Supertrend line-break run and its independent marker layer. */
@@ -3039,7 +3259,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   private renderSupertrendMarkers(settings: SupertrendSettings): void {
+    const oldestDisplayedTime = this.supertrendLineHistory[0]?.time;
     const markers: SeriesMarker<Time>[] = [...this.supertrendMarkerByTime.values()]
+      .filter(
+        (marker) =>
+          oldestDisplayedTime === undefined || marker.time >= oldestDisplayedTime,
+      )
       .sort((a, b) => a.time - b.time)
       .slice(-MAX_SUPERTREND_MARKERS)
       .map((marker) =>
@@ -3067,6 +3292,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     if (this.mgannSwingVisible) {
       this.renderMgannSwing();
     }
+    this.renderTduSignals();
   }
 
   /** Apply one incremental volume-delta update. */
@@ -3091,6 +3317,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.scheduleGcPushMomentumUpdate(
       this.candleBars.findIndex((bar) => bar.time === point.time),
     );
+    this.renderTduSignals();
     this.scheduleMgannRender();
   }
 
@@ -3898,6 +4125,21 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.bigTradePrimitive?.setMarkers(bubbleMarkers);
   }
 
+  private renderXKontrolSignals(): void {
+    if (!this.xKontrolVisible) return;
+    const signals: RenderableXKontrolSignal[] = this.xKontrolEngine
+      .signals(this.candleBars)
+      .filter((signal) =>
+        xKontrolLevelVisible(signal.level, this.xKontrolSettings),
+      )
+      .map((signal) => ({
+        time: toUtcTimestamp(signal.time, this.displayTimeOffsetMs),
+        price: signal.price,
+        code: signal.code,
+      }));
+    this.xKontrolPrimitive?.setSignals(signals);
+  }
+
   private renderSmcAiSignals(): void {
     const markers: SeriesMarker<Time>[] = this.smcAiSignals
       .slice()
@@ -4305,7 +4547,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
     if (hasBarUpdates || hasDeltaUpdates) {
       this.scheduleMgannRender();
+      this.renderTduSignals();
     }
+    if (hasBarUpdates) this.renderXKontrolSignals();
 
     this.deferredBarTimes.clear();
     this.deferredVolumeDeltaTimes.clear();
@@ -4362,6 +4606,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         >[0],
       );
       this.bigTradePrimitive = undefined;
+    }
+    if (this.xKontrolPrimitive !== undefined) {
+      this.candleSeries.detachPrimitive(
+        this.xKontrolPrimitive as unknown as Parameters<
+          typeof this.candleSeries.detachPrimitive
+        >[0],
+      );
+      this.xKontrolPrimitive = undefined;
     }
     if (this.sessionVolumeProfilePrimitive !== undefined) {
       this.candleSeries.detachPrimitive(

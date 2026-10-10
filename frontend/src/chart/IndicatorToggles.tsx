@@ -44,6 +44,11 @@ import {
   normalizeSupertrendSettings,
   type SupertrendSettings,
 } from "./supertrend";
+import {
+  DEFAULT_XKONTROL_DISPLAY_SETTINGS,
+  normalizeXKontrolDisplaySettings,
+  type XKontrolDisplaySettings,
+} from "./xKontrol";
 
 /**
  * IndicatorToggles â€” TradingView-style "Indicators" dropdown.
@@ -175,7 +180,10 @@ export interface IndicatorTogglesProps {
   /** Temporary master visibility; individual indicator settings stay unchanged. */
   indicatorsVisible?: boolean;
   volumeDelta?: boolean;
+  xKontrol?: boolean;
+  xKontrolSettings?: Partial<XKontrolDisplaySettings>;
   gcPushMomentum?: boolean;
+  tduSignals?: boolean;
   gcPushMomentumSettings?: Partial<GcPushMomentumSettings>;
   mgannSwing?: boolean;
   mgannSwingSettings?: Partial<MgannSwingSettings>;
@@ -201,7 +209,10 @@ export interface IndicatorTogglesProps {
   fvgGraderDisabled?: boolean;
   bigTradeDisabled?: boolean;
   onVolumeDeltaChange?: (enabled: boolean) => void;
+  onXKontrolChange?: (enabled: boolean) => void;
+  onXKontrolSettingsChange?: (next: XKontrolDisplaySettings) => void;
   onGcPushMomentumChange?: (enabled: boolean) => void;
+  onTduSignalsChange?: (enabled: boolean) => void;
   onGcPushMomentumSettingsChange?: (next: GcPushMomentumSettings) => void;
   onMgannSwingChange?: (enabled: boolean) => void;
   onMgannSwingSettingsChange?: (next: MgannSwingSettings) => void;
@@ -281,7 +292,10 @@ function IndicatorRow({
 export function IndicatorToggles({
   indicatorsVisible = true,
   volumeDelta = false,
+  xKontrol = false,
+  xKontrolSettings = DEFAULT_XKONTROL_DISPLAY_SETTINGS,
   gcPushMomentum = false,
+  tduSignals = true,
   gcPushMomentumSettings = DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
   mgannSwing = false,
   mgannSwingSettings = DEFAULT_MGANN_SWING_SETTINGS,
@@ -309,7 +323,10 @@ export function IndicatorToggles({
   fvgGraderDisabled = false,
   bigTradeDisabled = false,
   onVolumeDeltaChange = () => {},
+  onXKontrolChange = () => {},
+  onXKontrolSettingsChange = () => {},
   onGcPushMomentumChange = () => {},
+  onTduSignalsChange = () => {},
   onGcPushMomentumSettingsChange = () => {},
   onMgannSwingChange = () => {},
   onMgannSwingSettingsChange = () => {},
@@ -344,6 +361,7 @@ export function IndicatorToggles({
   const gcPushMomentumConfig = normalizeGcPushMomentumSettings(
     gcPushMomentumSettings,
   );
+  const xKontrolConfig = normalizeXKontrolDisplaySettings(xKontrolSettings);
   const outsideBarDeltaFilter = outsideBarConfig.deltaFilter;
   const [open, setOpen] = useState(false);
   const [combinedSettingsOpen, setCombinedSettingsOpen] = useState(false);
@@ -353,6 +371,7 @@ export function IndicatorToggles({
   const [mgannSwingSettingsOpen, setMgannSwingSettingsOpen] = useState(false);
   const [gcPushMomentumSettingsOpen, setGcPushMomentumSettingsOpen] =
     useState(false);
+  const [xKontrolSettingsOpen, setXKontrolSettingsOpen] = useState(false);
   const [smcSettingsOpen, setSmcSettingsOpen] = useState(false);
   const [sweepSettingsOpen, setSweepSettingsOpen] = useState(false);
   const [fpSettingsOpen, setFpSettingsOpen] = useState(false);
@@ -642,7 +661,9 @@ export function IndicatorToggles({
   const activeCount =
     1 +
     (volumeDelta ? 1 : 0) +
+    (xKontrol ? 1 : 0) +
     (gcPushMomentum && !gcPushMomentumDisabled ? 1 : 0) +
+    (tduSignals ? 1 : 0) +
     (dailyVolumeProfile ? 1 : 0) +
     (mgannSwing && !mgannSwingDisabled ? 1 : 0) +
     (combinedIndicatorActive ? 1 : 0) +
@@ -1013,6 +1034,69 @@ export function IndicatorToggles({
             onChange={onVolumeDeltaChange}
           />
           <IndicatorRow
+            label="XKontrol (MBoxWave)"
+            checked={xKontrol}
+            title="MBoxWave XKontrol 3.0.2.5 signal dots on Footprint"
+            onChange={onXKontrolChange}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="XKontrol settings"
+                aria-expanded={xKontrolSettingsOpen}
+                onClick={() => setXKontrolSettingsOpen((value) => !value)}
+              >
+                {"\u2699"}
+              </button>
+            }
+          />
+          {xKontrolSettingsOpen && (
+            <div className="ema-settings" aria-label="XKontrol settings panel">
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={xKontrolConfig.showInitial}
+                  aria-label="XKontrol Level 1 Initial"
+                  onChange={(event) =>
+                    onXKontrolSettingsChange({
+                      ...xKontrolConfig,
+                      showInitial: event.currentTarget.checked,
+                    })
+                  }
+                />
+                Level 1 - Initial
+              </label>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={xKontrolConfig.showStrong}
+                  aria-label="XKontrol Level 2 Strong"
+                  onChange={(event) =>
+                    onXKontrolSettingsChange({
+                      ...xKontrolConfig,
+                      showStrong: event.currentTarget.checked,
+                    })
+                  }
+                />
+                Level 2 - Strong
+              </label>
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  checked={xKontrolConfig.showTotal}
+                  aria-label="XKontrol Level 3 Total"
+                  onChange={(event) =>
+                    onXKontrolSettingsChange({
+                      ...xKontrolConfig,
+                      showTotal: event.currentTarget.checked,
+                    })
+                  }
+                />
+                Level 3 - Total
+              </label>
+            </div>
+          )}
+          <IndicatorRow
             label="GC Push Momentum"
             checked={gcPushMomentum}
             disabled={gcPushMomentumDisabled}
@@ -1163,6 +1247,12 @@ export function IndicatorToggles({
               </label>
             </div>
           )}
+          <IndicatorRow
+            label="TDU Buy/Sell Momentum"
+            checked={tduSignals}
+            title="TDU 10-second volume momentum triangles and candle/delta divergence"
+            onChange={onTduSignalsChange}
+          />
           <IndicatorRow
             label="Volume Profile"
             checked={dailyVolumeProfile}

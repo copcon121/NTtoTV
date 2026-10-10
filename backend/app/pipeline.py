@@ -51,6 +51,7 @@ from .engines.breakout_box_engine import BreakoutBoxEngine, BreakoutBoxEvent
 from .engines.contract_resolver import ContractResolver
 from .engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
 from .engines.fvg_signal_engine import FvgSignalEngine
+from .engines.tdu_signal_engine import TduSignalEngine
 from .engines.session_calendar import TF_MS, is_gc_session_open, timeframe_bucket_start
 from .engines.volume_delta_engine import VolumeDeltaEngine, VolumeDeltaMode
 from .engines.alert_engine import AlertEngine, MarketContext
@@ -70,6 +71,7 @@ from .models.messages import (
     NTStatusEvent,
     OHLCVBar,
     QuoteUpdate,
+    TduSignalUpdate,
     VolumeDeltaUpdate,
 )
 from .registry.registry import OutboundEvent, WebSocketRegistry
@@ -81,6 +83,7 @@ from .storage.records import (
     FootprintBarRecord,
     FootprintLevelRecord,
     FvgSignalRecord,
+    TduSignalRecord,
     VolumeDeltaRecord,
 )
 from .models.timestamp import now_ms
@@ -278,6 +281,10 @@ class Pipeline:
         # historical NT engine.  Live routing uses the source-scoped map above.
         self._vds = self._source_vds["nt"]
         self._source_footprints = {"bookmap": FootprintEngine()}
+        self._source_tdu = {
+            "nt": TduSignalEngine(),
+            "bookmap": TduSignalEngine(),
+        }
         self._fvg = fvg_signal or FvgSignalEngine()
         self._native_fvg_signal = native_fvg_signal
         self._native_fvg_seeded = (
@@ -1076,6 +1083,7 @@ class Pipeline:
         # broadcast the shared chart keys below.
         source_bar_updates = self._source_bars[source].on_trade(trade)
         self._remember_source_updates(source, source_bar_updates)
+        source_tdu_updates = self._source_tdu[source].on_trade(trade)
         source_vd_updates: list[VolumeDeltaUpdate] = []
         for engine in self._source_vds[source].values():
             update = engine.on_trade(trade)
@@ -1137,6 +1145,7 @@ class Pipeline:
         bar_updates: list[BarUpdate] = []
         vd_updates: list[VolumeDeltaUpdate] = []
         big_trades: list[BigTrade] = []
+        tdu_updates: list[TduSignalUpdate] = []
         breakout_events: list[BreakoutBoxEvent] = []
         active = False
         async with self._derived_source_lock:
@@ -1145,6 +1154,7 @@ class Pipeline:
                 bar_updates = source_bar_updates
                 vd_updates = source_vd_updates
                 big_trades = source_big_trades
+                tdu_updates = source_tdu_updates
                 fp_update = source_fp_update
                 use_trade_built_bar_alerts = source != "bookmap"
                 for update in bar_updates:
@@ -1191,6 +1201,7 @@ class Pipeline:
                     big_trades,
                     fp_persist or None,
                     bool(fp_persist),
+                    tdu_signal_updates=tdu_updates,
                 )
                 if self._analyst_event_sink is not None and (
                     bar_updates
@@ -1212,6 +1223,8 @@ class Pipeline:
                 for update in fvg_updates:
                     await self._enqueue(OutboundEvent.from_message(update))
                 for update in native_fvg_preview_updates:
+                    await self._enqueue(OutboundEvent.from_message(update))
+                for update in tdu_updates:
                     await self._enqueue(OutboundEvent.from_message(update))
                 for bt in big_trades:
                     await self._enqueue(OutboundEvent.from_message(bt))
@@ -1495,6 +1508,7 @@ class Pipeline:
         big_trades: list[BigTrade],
         footprint_updates: list[FootprintUpdate] | None = None,
         replace_footprint_levels: bool = False,
+        tdu_signal_updates: list[TduSignalUpdate] | None = None,
     ) -> None:
         footprint_bars: list[FootprintBarRecord] = []
         footprint_levels: list[FootprintLevelRecord] = []
@@ -1589,6 +1603,18 @@ class Pipeline:
             footprint_levels=footprint_levels,
             replace_footprint_levels=replace_footprint_levels,
             fvg_signals=fvg_signals,
+            tdu_signals=(
+                TduSignalRecord(
+                    symbol=update.symbol,
+                    contract=update.contract,
+                    timeframe=update.tf,
+                    time=update.time,
+                    momentum_direction=update.momentum_direction,
+                    momentum_level=update.momentum_level,
+                    delta_divergence=update.delta_divergence,
+                )
+                for update in (tdu_signal_updates or [])
+            ),
             big_trades=(
                 BigTradeRecord(
                     symbol=bt.symbol,
@@ -2172,6 +2198,9 @@ class Pipeline:
                 )
                 if update is not None
             ]
+            tdu_snapshots = self._source_tdu[source].current_updates(
+                self._chart_contract(), self._symbol
+            )
             footprint_snapshots: list[FootprintUpdate] = []
             footprint_engine = self._source_footprints.get(source)
             if footprint_engine is not None:
@@ -2186,6 +2215,7 @@ class Pipeline:
                 [],
                 footprint_snapshots,
                 bool(footprint_snapshots),
+                tdu_signal_updates=tdu_snapshots,
             )
             # Rebuild recursive state from the newly authoritative closed
             # logical-cache rows. Warmup never emits historical alerts.
@@ -2195,6 +2225,8 @@ class Pipeline:
             for update in delta_snapshots:
                 await self._enqueue(OutboundEvent.from_message(update))
             for update in footprint_snapshots:
+                await self._enqueue(OutboundEvent.from_message(update))
+            for update in tdu_snapshots:
                 await self._enqueue(OutboundEvent.from_message(update))
 
     def _remember_source_updates(
@@ -2296,6 +2328,27 @@ class Pipeline:
                     close_delta=delta.close_delta,
                     last_price=bar.close,
                 )
+                signals = self._cache.read_tdu_signals(
+                    self._symbol, chart_contract, tf, bar.time, bar.time, 1
+                )
+                signal = signals[-1] if signals else None
+                self._source_tdu[source].seed_bar(
+                    chart_contract,
+                    tf,
+                    time=bar.time,
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    delta=delta.delta,
+                    momentum_direction=(
+                        0 if signal is None else signal.momentum_direction
+                    ),
+                    momentum_level=0 if signal is None else signal.momentum_level,
+                    delta_divergence=(
+                        None if signal is None else signal.delta_divergence
+                    ),
+                )
             if source == "bookmap" and tf == FOOTPRINT_TIMEFRAME:
                 levels = self._cache.read_footprint_levels(
                     self._symbol,
@@ -2390,6 +2443,7 @@ class Pipeline:
         self._bars.reset_contract(chart_contract)
         for engine in self._source_vds["nt"].values():
             engine.reset_contract(chart_contract)
+        self._source_tdu["nt"].reset_contract(chart_contract)
         self._fvg.reset_contract(chart_contract)
         self._bt.reset_contract(chart_contract)
         self._breakout.reset_contract(chart_contract)

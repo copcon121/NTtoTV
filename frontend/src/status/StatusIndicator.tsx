@@ -26,7 +26,7 @@ export interface StatusIndicatorProps {
   state: ConnectionState;
   /** Optional override of the per-state display labels. */
   labels?: Partial<Record<ConnectionState, string>>;
-  /** Optional live feed label, e.g. `Bookmap · 120 ms`. */
+  /** Optional live feed label, e.g. `BM · 120 ms`. */
   label?: string;
   /**
    * Optional reason/detail (e.g. from StatusMessage.reason) shown as a tooltip

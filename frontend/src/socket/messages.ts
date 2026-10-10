@@ -31,6 +31,7 @@ export type ChartEventType =
   | "volume_delta_update"
   | "footprint_update"
   | "fvg_signal_update"
+  | "tdu_signal_update"
   | "big_trade"
   | "market_data_status"
   | "alert_event"
@@ -189,6 +190,17 @@ export interface FvgSignalUpdateMessage {
   bottom: number | null;
   breakoutRatio: number;
   phase: FvgSignalPhase;
+}
+
+export interface TduSignalUpdateMessage {
+  type: "tdu_signal_update";
+  symbol: string;
+  contract: string;
+  tf: Timeframe;
+  time: number;
+  momentumDirection: number;
+  momentumLevel: number;
+  deltaDivergence: number;
 }
 
 /** Big trade marker (Req 5.2, 15.4, 15.5). */
@@ -379,6 +391,7 @@ export type InboundMessage =
   | VolumeDeltaUpdateMessage
   | FootprintUpdateMessage
   | FvgSignalUpdateMessage
+  | TduSignalUpdateMessage
   | BigTradeMessage
   | MarketDataStatusMessage
   | AlertEventMessage

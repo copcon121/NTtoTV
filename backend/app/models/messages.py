@@ -69,6 +69,7 @@ __all__ = [
     "UnfinishedAuction",
     "FootprintUpdate",
     "FvgSignalUpdate",
+    "TduSignalUpdate",
     "BigTrade",
     "MarketDataStatus",
     "AlertEvent",
@@ -124,6 +125,7 @@ class EventType(str, Enum):
     VOLUME_DELTA_UPDATE = "volume_delta_update"
     FOOTPRINT_UPDATE = "footprint_update"
     FVG_SIGNAL_UPDATE = "fvg_signal_update"
+    TDU_SIGNAL_UPDATE = "tdu_signal_update"
     BIG_TRADE = "big_trade"
     MARKET_DATA_STATUS = "market_data_status"
     ALERT_EVENT = "alert_event"
@@ -824,6 +826,46 @@ class FvgSignalUpdate:
             bottom=None if data.get("bottom") is None else float(data["bottom"]),
             breakout_ratio=float(data["breakoutRatio"]),
             phase=str(data["phase"]),
+        )
+
+
+@dataclass(slots=True)
+class TduSignalUpdate:
+    """Original-style TDU momentum and candle/delta divergence state."""
+
+    type: ClassVar[str] = "tdu_signal_update"
+
+    symbol: str
+    contract: str
+    tf: str
+    time: CanonicalTimestamp
+    momentum_direction: int
+    momentum_level: int
+    delta_divergence: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.type,
+            "symbol": self.symbol,
+            "contract": self.contract,
+            "tf": self.tf,
+            "time": self.time,
+            "momentumDirection": self.momentum_direction,
+            "momentumLevel": self.momentum_level,
+            "deltaDivergence": self.delta_divergence,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TduSignalUpdate":
+        _expect_type(data, cls.type)
+        return cls(
+            symbol=data["symbol"],
+            contract=data["contract"],
+            tf=data["tf"],
+            time=int(data["time"]),
+            momentum_direction=int(data["momentumDirection"]),
+            momentum_level=int(data["momentumLevel"]),
+            delta_divergence=int(data["deltaDivergence"]),
         )
 
 

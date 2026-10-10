@@ -54,6 +54,7 @@ from ..models.messages import (
     FvgSignalUpdate,
     Ping,
     QuoteUpdate,
+    TduSignalUpdate,
     VolumeDeltaUpdate,
 )
 from ..models.timestamp import now_ms
@@ -110,6 +111,7 @@ OutboundMessage = (
     | VolumeDeltaUpdate
     | FootprintUpdate
     | FvgSignalUpdate
+    | TduSignalUpdate
     | BigTrade
     | MarketDataStatus
     | AlertEvent
@@ -123,6 +125,7 @@ _TIMEFRAME_SCOPED_EVENT_TYPES = frozenset(
         EventType.VOLUME_DELTA_UPDATE,
         EventType.FOOTPRINT_UPDATE,
         EventType.FVG_SIGNAL_UPDATE,
+        EventType.TDU_SIGNAL_UPDATE,
     }
 )
 
@@ -169,6 +172,8 @@ def coalescing_subkey(payload: Mapping[str, Any]) -> Hashable:
             payload["time"],
             payload["phase"],
         )
+    if t == "tdu_signal_update":
+        return ("tdu_signal_update", payload["tf"], payload["time"])
     if t == "quote_update":
         return ("quote_update", payload["contract"])
     if t == "big_trade":

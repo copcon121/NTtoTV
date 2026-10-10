@@ -36,11 +36,11 @@ describe("StatusIndicator", () => {
   });
 
   it("uses a live market-data label when provided", () => {
-    render(<StatusIndicator state="connected" label="Bookmap - 120 ms" />);
-    expect(screen.getByTestId("status-label")).toHaveTextContent("Bookmap - 120 ms");
+    render(<StatusIndicator state="connected" label="BM - 120 ms" />);
+    expect(screen.getByTestId("status-label")).toHaveTextContent("BM - 120 ms");
     expect(screen.getByRole("status")).toHaveAttribute(
       "aria-label",
-      "Connection status: Bookmap - 120 ms",
+      "Connection status: BM - 120 ms",
     );
   });
 });

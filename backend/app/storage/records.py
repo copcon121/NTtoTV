@@ -28,6 +28,7 @@ __all__ = [
     "FootprintBarRecord",
     "FootprintLevelRecord",
     "FvgSignalRecord",
+    "TduSignalRecord",
     "BigTradeRecord",
     "ProfileRecord",
     "AlertRecord",
@@ -140,6 +141,19 @@ class FvgSignalRecord:
     top: float
     bottom: float
     breakout_ratio: float
+
+
+@dataclass(slots=True)
+class TduSignalRecord:
+    """One TDU momentum/divergence state keyed to a chart bar."""
+
+    symbol: str
+    contract: str
+    timeframe: str
+    time: CanonicalTimestamp
+    momentum_direction: int
+    momentum_level: int
+    delta_divergence: int
 
 
 @dataclass(slots=True)
