@@ -306,6 +306,8 @@ const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
   volumeLots: 0.1,
   slDistanceGc: 3,
   tpDistanceGc: 6,
+  takeProfit1rEnabled: true,
+  autoSupertrendAfter1rEnabled: false,
   sizingMode: "lots",
   riskAmount: 100,
 };
@@ -349,6 +351,8 @@ export interface ChartLimitOrderDraft {
   slGc: number;
   tpGc: number;
   gcAnchored: true;
+  takeProfit1rEnabled: boolean;
+  autoSupertrendAfter1rEnabled: boolean;
 }
 
 export interface ChartMenuState {
@@ -656,6 +660,9 @@ export function buildChartLimitOrderDraft(input: {
     slGc,
     tpGc,
     gcAnchored: true,
+    takeProfit1rEnabled: settings.takeProfit1rEnabled,
+    autoSupertrendAfter1rEnabled:
+      settings.takeProfit1rEnabled && settings.autoSupertrendAfter1rEnabled,
   };
 }
 
@@ -676,6 +683,11 @@ function sanitizeMarketOrderSettings(
     tpDistanceGc: Number.isFinite(tpDistanceGc)
       ? Math.max(0.1, roundGcPrice(tpDistanceGc))
       : DEFAULT_MARKET_ORDER_SETTINGS.tpDistanceGc,
+    takeProfit1rEnabled:
+      value?.takeProfit1rEnabled === undefined
+        ? DEFAULT_MARKET_ORDER_SETTINGS.takeProfit1rEnabled
+        : value.takeProfit1rEnabled === true,
+    autoSupertrendAfter1rEnabled: value?.autoSupertrendAfter1rEnabled === true,
     sizingMode: value?.sizingMode === "risk" ? "risk" : "lots",
     riskAmount: Number.isFinite(riskAmount)
       ? Math.max(1, Math.round(riskAmount * 100) / 100)
@@ -744,6 +756,26 @@ function resolveOrderVolumeLots(input: {
     stopGc: input.slGc,
     symbol: input.symbol,
   });
+}
+
+function supertrendAfter1rOrderFields(
+  enabled: boolean,
+  timeframe: Timeframe,
+  settings: SupertrendSettings,
+) {
+  const normalized = normalizeSupertrendSettings(settings);
+  return {
+    autoSupertrendAfter1rEnabled: enabled,
+    ...(enabled
+      ? {
+          trailingTimeframe: timeframe,
+          trailingPeriod: normalized.period,
+          trailingMultiplier: normalized.multiplier,
+          trailingAtrMethod: normalized.atrMethod,
+          trailingSource: normalized.source,
+        }
+      : {}),
+  };
 }
 
 function readMarketOrderSettings(
@@ -4246,6 +4278,13 @@ export function LiveApp() {
             : {}),
           slDistanceGc: marketOrderSettings.slDistanceGc,
           tpDistanceGc: marketOrderSettings.tpDistanceGc,
+          takeProfit1rEnabled: marketOrderSettings.takeProfit1rEnabled,
+          ...supertrendAfter1rOrderFields(
+            marketOrderSettings.takeProfit1rEnabled &&
+              marketOrderSettings.autoSupertrendAfter1rEnabled,
+            timeframe,
+            supertrend,
+          ),
           gcAnchored: true,
           idempotencyKey: newIdempotencyKey(),
         });
@@ -4316,6 +4355,15 @@ export function LiveApp() {
           referenceGc: roundGcPrice(referencePrice),
           slGc,
           tpGc,
+          takeProfit1rEnabled:
+            kind === "limit" && marketOrderSettings.takeProfit1rEnabled,
+          ...supertrendAfter1rOrderFields(
+            kind === "limit" &&
+              marketOrderSettings.takeProfit1rEnabled &&
+              marketOrderSettings.autoSupertrendAfter1rEnabled,
+            timeframe,
+            supertrend,
+          ),
           gcAnchored: true,
           idempotencyKey: newIdempotencyKey(),
         });
@@ -4974,6 +5022,11 @@ export function LiveApp() {
       try {
         const order = await api.createOrder({
           ...draft,
+          ...supertrendAfter1rOrderFields(
+            draft.takeProfit1rEnabled && draft.autoSupertrendAfter1rEnabled,
+            timeframe,
+            supertrend,
+          ),
           idempotencyKey: newIdempotencyKey(),
         });
         setOrders((prev) => {

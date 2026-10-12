@@ -316,6 +316,21 @@ export interface TradingOrder {
   kind: "market" | "limit" | "stop";
   volumeLots: number;
   gcAnchored: boolean;
+  takeProfit1rEnabled: boolean;
+  autoSupertrendAfter1rEnabled: boolean;
+  trailingTimeframe?: Timeframe | null;
+  trailingPeriod?: number | null;
+  trailingMultiplier?: number | null;
+  trailingAtrMethod?: "rma" | "sma" | null;
+  trailingSource?:
+    | "open"
+    | "high"
+    | "low"
+    | "close"
+    | "hl2"
+    | "hlc3"
+    | "ohlc4"
+    | null;
   status:
     | "pending_submit"
     | "submitted"

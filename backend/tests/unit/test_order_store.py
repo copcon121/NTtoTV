@@ -58,6 +58,13 @@ def _order(
         idempotency_key=idem,
         created_at=1,
         updated_at=1,
+        take_profit_1r_enabled=True,
+        auto_supertrend_after_1r_enabled=True,
+        trailing_timeframe="5m",
+        trailing_period=14,
+        trailing_multiplier=2.5,
+        trailing_atr_method="sma",
+        trailing_source="close",
         entry_gc=2350.0,
         sl_gc=2347.0,
         tp_gc=2356.0,
@@ -72,6 +79,13 @@ def test_order_store_round_trip_and_version(cache: CacheStore):
     saved = cache.orders.read(created.id, user_id)
     assert saved is not None
     assert saved.entry_gc == 2350.0
+    assert saved.take_profit_1r_enabled is True
+    assert saved.auto_supertrend_after_1r_enabled is True
+    assert saved.trailing_timeframe == "5m"
+    assert saved.trailing_period == 14
+    assert saved.trailing_multiplier == 2.5
+    assert saved.trailing_atr_method == "sma"
+    assert saved.trailing_source == "close"
     assert saved.version == 1
 
     saved.sl_gc = 2348.0

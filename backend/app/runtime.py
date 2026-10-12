@@ -28,6 +28,7 @@ from .analyst.poi_scanner import PoiScanner
 from .analyst.store import AnalystStore
 from .engines.anchored_sync import AnchoredSyncEngine
 from .engines.auto_mgann_trade import AutoMgannTradeEngine
+from .engines.chart_limit_take_profit import ChartLimitTakeProfitEngine
 from .engines.basis_engine import BasisEngine
 from .engines.contract_resolver import ContractResolver
 from .engines.fvg_signal_engine import FvgSignalEngine
@@ -111,6 +112,11 @@ class AppRuntime:
             self._basis_engine,
             self._registry,
             settings=s,
+        )
+        self._chart_limit_take_profit = ChartLimitTakeProfitEngine(
+            self._cache,
+            self._mt5_manager,
+            self._registry,
         )
         self._manual_supertrend_trailing = ManualSupertrendTrailingEngine(
             self._cache,
@@ -203,6 +209,10 @@ class AppRuntime:
     @property
     def auto_mgann_trade(self) -> AutoMgannTradeEngine:
         return self._auto_mgann_trade
+
+    @property
+    def chart_limit_take_profit(self) -> ChartLimitTakeProfitEngine:
+        return self._chart_limit_take_profit
 
     @property
     def manual_supertrend_trailing(self) -> ManualSupertrendTrailingEngine:
@@ -322,6 +332,7 @@ class AppRuntime:
     async def _on_auto_mgann_price(self, price: float, at: int) -> None:
         if not self._auto_mgann_trade.should_scan_open_order_management(at):
             return
+        await asyncio.to_thread(self._chart_limit_take_profit.take_profit_at_1r, price)
         await asyncio.to_thread(self._auto_mgann_trade.activate_ema21_trailing_at_1r, price)
         await asyncio.to_thread(self._auto_mgann_trade.cancel_unfilled_limits_at_1r, price)
 

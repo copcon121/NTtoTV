@@ -22,6 +22,10 @@ router = APIRouter(prefix="/api/mt5", tags=["mt5"])
 
 _AUTO_SYMBOL_SENTINELS = {"", "auto", "auto-detect", "autodetect", "detect"}
 _BROKER_SYMBOL_CANDIDATES = ("XAUUSD", "XAUUSDm", "XAUUSDc")
+_CONFIGURED_TERMINALS = (
+    ("hieu", r"C:\Program Files\MetaTrader 5\terminal64.exe"),
+    ("hai", r"C:\MT5Hai\terminal64.exe"),
+)
 
 
 @router.get("/terminals")
@@ -30,7 +34,8 @@ async def mt5_terminals(
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Detect running MT5 terminal processes on this machine."""
-    terminals = await asyncio.to_thread(_detect_terminals)
+    detected = await asyncio.to_thread(_detect_terminals)
+    terminals = _terminal_choices(detected)
     return {"terminals": terminals}
 
 
@@ -100,6 +105,37 @@ def _parse_server_from_title(title: str) -> str | None:
     return None
 
 
+def _terminal_choices(detected: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    detected_by_path = {
+        key: terminal
+        for terminal in detected
+        if (key := _terminal_path_key(str(terminal.get("path") or ""))) is not None
+    }
+    choices: list[dict[str, Any]] = []
+    configured_keys: set[str] = set()
+    for label, path in _CONFIGURED_TERMINALS:
+        key = _terminal_path_key(path)
+        if key is None:
+            continue
+        configured_keys.add(key)
+        running = detected_by_path.get(key, {})
+        choices.append(
+            {
+                "path": path,
+                "login": running.get("login"),
+                "server": running.get("server"),
+                "title": str(running.get("title") or ""),
+                "label": label,
+            }
+        )
+    for terminal in detected:
+        key = _terminal_path_key(str(terminal.get("path") or ""))
+        if key is None or key in configured_keys:
+            continue
+        choices.append(terminal)
+    return choices
+
+
 def _runtime_manager(request: Request):
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is not None:
@@ -164,6 +200,28 @@ async def connect_mt5(
     requested_symbol = _requested_symbol(symbol_value)
 
     manager = _runtime_manager(request)
+    terminal_owner = _configured_terminal_owner(terminal)
+    if terminal_owner is not None and terminal_owner.casefold() != user.username.casefold():
+        raise bad_request(
+            f"MT5 terminal is reserved for user {terminal_owner}; "
+            f"sign in as {terminal_owner} or choose your own terminal",
+            field="terminalPath",
+        )
+    terminal_conflict = None
+    if terminal_owner is None:
+        terminal_conflict = _terminal_account_conflict(
+            cache,
+            user_id=user.id,
+            login=login,
+            server=server,
+            terminal_path=terminal,
+        )
+    if terminal_conflict is not None:
+        raise bad_request(
+            "MT5 terminal path is assigned to another user's account "
+            f"{terminal_conflict.login}; choose that user's terminal or a different path",
+            field="terminalPath",
+        )
 
     def _blocking_connect():
         connect_session = getattr(manager, "connect_account_session", None)
@@ -173,6 +231,7 @@ async def connect_mt5(
                 password=password,
                 server=server,
                 terminal_path=terminal,
+                allow_terminal_switch=True,
             )
         else:
             session = manager.backend_session()
@@ -212,6 +271,47 @@ async def connect_mt5(
         trade_mode=info.trade_mode,
     )
     return {"account": _account_to_dict(account, info)}
+
+
+def _terminal_account_conflict(
+    cache: CacheStore,
+    *,
+    user_id: str,
+    login: int,
+    server: str,
+    terminal_path: str | None,
+):
+    path_key = _terminal_path_key(terminal_path)
+    if path_key is None:
+        return None
+    server_key = server.strip().lower()
+    for account in cache.users.read_mt5_accounts():
+        if account.user_id == user_id:
+            continue
+        if _terminal_path_key(account.terminal_path) != path_key:
+            continue
+        if account.login == int(login) and account.server.strip().lower() == server_key:
+            continue
+        return account
+    return None
+
+
+def _configured_terminal_owner(path: str | None) -> str | None:
+    path_key = _terminal_path_key(path)
+    if path_key is None:
+        return None
+    for owner, terminal_path in _CONFIGURED_TERMINALS:
+        if _terminal_path_key(terminal_path) == path_key:
+            return owner
+    return None
+
+
+def _terminal_path_key(path: str | None) -> str | None:
+    if path is None or not path.strip():
+        return None
+    from pathlib import Path
+
+    return str(Path(path.strip()).expanduser().resolve()).lower()
 
 
 def _requested_symbol(value: Any) -> str | None:

@@ -11,6 +11,8 @@ import type {
   Time,
 } from "lightweight-charts";
 
+import { shouldRenderDenseOverlay } from "./zoomVisibility";
+
 export interface RenderableTduSignal {
   time: Time;
   open: number;
@@ -54,6 +56,7 @@ class TduSignalRenderer implements IPrimitivePaneRenderer {
       }
       const halfWidth = Math.max(2, Math.min(8, spacing * 0.36));
       const triangleHeight = Math.max(3, Math.min(9, halfWidth * 1.35));
+      const divergenceSize = Math.max(7, Math.min(9, spacing * 0.75));
 
       ctx.save();
       for (const view of this.signals) {
@@ -61,19 +64,26 @@ class TduSignalRenderer implements IPrimitivePaneRenderer {
         const x = px(view.x, rx);
         const width = Math.max(2, px(halfWidth, rx));
 
-        // The original default draws a translucent one-tick band at the high
-        // for bearish divergence and at the low for bullish divergence.
+        // Keep divergence anchored directly on the bar's high/low, but use a
+        // compact square instead of a very thin band so it stays visible at a
+        // glance without covering the candle body.
         if (signal.deltaDivergence !== 0) {
           const y = px(
             signal.deltaDivergence > 0 ? view.lowY : view.highY,
             ry,
           );
-          const bandHeight = Math.max(2, px(3, ry));
+          const boxWidth = Math.max(2, px(divergenceSize, rx));
+          const boxHeight = Math.max(2, px(divergenceSize, ry));
+          const left = Math.round(x - boxWidth / 2);
+          const top = Math.round(y - boxHeight / 2);
+          const isBullish = signal.deltaDivergence > 0;
           ctx.fillStyle =
-            signal.deltaDivergence > 0
-              ? "rgba(0, 255, 0, 0.20)"
-              : "rgba(255, 0, 0, 0.20)";
-          ctx.fillRect(x - width, y - bandHeight / 2, width * 2, bandHeight);
+            isBullish ? "rgba(0, 255, 0, 0.24)" : "rgba(255, 0, 0, 0.24)";
+          ctx.fillRect(left, top, boxWidth, boxHeight);
+          ctx.strokeStyle =
+            isBullish ? "rgba(0, 190, 0, 0.38)" : "rgba(220, 0, 0, 0.38)";
+          ctx.lineWidth = Math.max(1, px(0.75, Math.min(rx, ry)));
+          ctx.strokeRect(left, top, boxWidth, boxHeight);
         }
 
         const level = Math.max(0, Math.min(3, Math.trunc(signal.momentumLevel)));
@@ -114,7 +124,12 @@ class TduSignalPaneView implements IPrimitivePaneView {
       this.signals = [];
       return;
     }
-    const visible = chart.timeScale().getVisibleRange();
+    const timeScale = chart.timeScale();
+    if (!shouldRenderDenseOverlay(timeScale.options().barSpacing)) {
+      this.signals = [];
+      return;
+    }
+    const visible = timeScale.getVisibleRange();
     const next: ViewSignal[] = [];
     for (const signal of this.source.signals) {
       if (
@@ -126,7 +141,7 @@ class TduSignalPaneView implements IPrimitivePaneView {
       ) {
         continue;
       }
-      const x = chart.timeScale().timeToCoordinate(signal.time);
+      const x = timeScale.timeToCoordinate(signal.time);
       const openY = series.priceToCoordinate(signal.open);
       const closeY = series.priceToCoordinate(signal.close);
       const highY = series.priceToCoordinate(signal.high);

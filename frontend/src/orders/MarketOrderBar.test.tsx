@@ -7,6 +7,8 @@ const settings = {
   volumeLots: 0.1,
   slDistanceGc: 3,
   tpDistanceGc: 6,
+  takeProfit1rEnabled: true,
+  autoSupertrendAfter1rEnabled: false,
 };
 
 describe("MarketOrderBar", () => {
@@ -138,6 +140,47 @@ describe("MarketOrderBar", () => {
       shortEnabled: true,
       volumeLots: 0.1,
       updatedAt: 1,
+    });
+  });
+
+  it("toggles automatic 50% take profit at 1R", () => {
+    const onSettingsChange = vi.fn();
+    render(
+      <MarketOrderBar
+        openOrderCount={0}
+        settings={settings}
+        onSettingsChange={onSettingsChange}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+
+    const toggle = screen.getByLabelText("Take profit 50% at 1R");
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    expect(onSettingsChange).toHaveBeenCalledWith({
+      ...settings,
+      takeProfit1rEnabled: false,
+    });
+  });
+
+  it("toggles SuperTrend trailing for the remainder after 1R", () => {
+    const onSettingsChange = vi.fn();
+    render(
+      <MarketOrderBar
+        openOrderCount={0}
+        settings={settings}
+        onSettingsChange={onSettingsChange}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+
+    const toggle = screen.getByLabelText("Auto SuperTrend trailing after 1R");
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeEnabled();
+    fireEvent.click(toggle);
+    expect(onSettingsChange).toHaveBeenCalledWith({
+      ...settings,
+      autoSupertrendAfter1rEnabled: true,
     });
   });
 

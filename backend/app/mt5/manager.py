@@ -81,10 +81,14 @@ class Mt5Manager:
         password: str,
         server: str,
         terminal_path: str | None = None,
+        allow_terminal_switch: bool = False,
     ) -> Iterator[Mt5Backend]:
         if self._backend is None:
             binding = self._binding_for(login, server, terminal_path)
-            backend = self._worker_backend_for(binding)
+            backend = self._worker_backend_for(
+                binding,
+                allow_terminal_switch=allow_terminal_switch,
+            )
             try:
                 backend.connect_account(
                     login=login,
@@ -99,7 +103,10 @@ class Mt5Manager:
             return
         with self._lock:
             binding = self._binding_for(login, server, terminal_path)
-            reserved = self._reserve_terminal_binding(binding)
+            reserved = self._reserve_terminal_binding(
+                binding,
+                allow_terminal_switch=allow_terminal_switch,
+            )
             connector = getattr(self._backend, "connect_account", None)
             try:
                 if callable(connector):
@@ -197,26 +204,35 @@ class Mt5Manager:
             terminal_path=_normalize_terminal_path(terminal_path),
         )
 
-    def _reserve_terminal_binding(self, binding: _TerminalBinding) -> bool:
+    def _reserve_terminal_binding(
+        self,
+        binding: _TerminalBinding,
+        *,
+        allow_terminal_switch: bool = False,
+    ) -> bool:
         if self._settings.mt5_backend.lower() != "real" or self._backend is None:
             return False
         current = self._terminal_binding
         if current is None:
             live_login = self._current_backend_login()
             if live_login is not None and live_login != binding.login:
+                if not allow_terminal_switch:
+                    raise RuntimeError(
+                        "MT5 terminal is already logged into "
+                        f"{live_login}; refusing to switch to {binding.login}. "
+                        "Run a separate backend/MT5 terminal per real account."
+                    )
+            self._terminal_binding = binding
+            return True
+        if current != binding:
+            if not allow_terminal_switch:
                 raise RuntimeError(
-                    "MT5 terminal is already logged into "
-                    f"{live_login}; refusing to switch to {binding.login}. "
+                    "This backend is already bound to MT5 login "
+                    f"{current.login}; refusing to switch to {binding.login}. "
                     "Run a separate backend/MT5 terminal per real account."
                 )
             self._terminal_binding = binding
             return True
-        if current != binding:
-            raise RuntimeError(
-                "This backend is already bound to MT5 login "
-                f"{current.login}; refusing to switch to {binding.login}. "
-                "Run a separate backend/MT5 terminal per real account."
-            )
         return False
 
     def _current_backend_login(self) -> int | None:
@@ -229,18 +245,40 @@ class Mt5Manager:
             return None
         return None if login is None else int(login)
 
-    def _worker_backend_for(self, binding: _TerminalBinding) -> Mt5Backend:
+    def _worker_backend_for(
+        self,
+        binding: _TerminalBinding,
+        *,
+        allow_terminal_switch: bool = False,
+    ) -> Mt5Backend:
         with self._lock:
             existing = self._worker_backends.get(binding)
             if existing is not None:
                 return existing
             self._evict_stale_bindings(binding)
+            if allow_terminal_switch:
+                self._evict_terminal_path_binding(binding)
             self._validate_worker_binding(binding)
             from .process_client import Mt5WorkerProcessBackend
 
             backend = Mt5WorkerProcessBackend()
             self._worker_backends[binding] = backend
             return backend
+
+    def _evict_terminal_path_binding(self, binding: _TerminalBinding) -> None:
+        """Close the previous worker when an authorized terminal changes login."""
+        if binding.terminal_path is None:
+            return
+        stale = [
+            key
+            for key in self._worker_backends
+            if key.terminal_path == binding.terminal_path and key != binding
+        ]
+        for key in stale:
+            backend = self._worker_backends.pop(key, None)
+            closer = getattr(backend, "close", None)
+            if callable(closer):
+                closer()
 
     def _drop_worker_backend(self, binding: _TerminalBinding) -> None:
         with self._lock:

@@ -65,8 +65,8 @@ export function Mt5AccountDialog({
     password.length > 0 &&
     server.trim().length > 0;
 
-  // Show detected terminals as quick-select buttons when multiple are running.
-  const terminalHints = terminals.filter((t) => t.login !== null);
+  // Configured terminals remain selectable even when a terminal is not running.
+  const terminalHints = terminals;
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -140,16 +140,10 @@ export function Mt5AccountDialog({
                 className={`terminal-hint${t.path === terminalPath ? " active" : ""}`}
                 onClick={() => {
                   setTerminalPath(t.path);
-                  if (t.login !== null) {
-                    setLogin(String(t.login));
-                  }
-                  if (t.server) {
-                    setServer(t.server);
-                  }
-                  userEditedTerminal.current = false;
+                  userEditedTerminal.current = true;
                 }}
               >
-                {t.login ?? "?"} — {t.title.split(" - ").slice(1, 2).join("")  || "MT5"}
+                {t.label ?? `${t.login ?? "?"} — ${t.server || "MT5"}`}
               </button>
             ))}
           </div>

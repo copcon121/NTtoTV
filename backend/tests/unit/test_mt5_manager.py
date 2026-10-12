@@ -10,6 +10,7 @@ class _Backend:
     def __init__(self, current_login: int | None = None) -> None:
         self.current_login_value = current_login
         self.login_calls: list[int] = []
+        self.close_calls = 0
 
     def current_login(self) -> int | None:
         return self.current_login_value
@@ -24,6 +25,9 @@ class _Backend:
     ) -> None:
         self.login_calls.append(int(login))
         self.current_login_value = int(login)
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def _real_settings() -> Settings:
@@ -80,6 +84,21 @@ def test_real_manager_refuses_to_switch_existing_terminal_login() -> None:
             pass
 
     assert backend.login_calls == []
+
+
+def test_real_manager_allows_authorized_terminal_login_switch() -> None:
+    backend = _Backend(current_login=111)
+    manager = Mt5Manager(settings=_real_settings(), backend=backend)
+
+    with manager.connect_account_session(
+        login=222,
+        password="pw",
+        server="Broker",
+        allow_terminal_switch=True,
+    ):
+        pass
+
+    assert backend.login_calls == [222]
 
 
 def test_fake_manager_keeps_multi_account_test_behavior() -> None:
@@ -157,3 +176,40 @@ def test_real_process_manager_rejects_same_terminal_path_for_two_logins(
             terminal_path=terminal,
         ):
             pass
+
+
+def test_real_process_manager_switches_same_terminal_path_when_allowed(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from app.mt5 import process_client
+
+    workers: list[_Backend] = []
+
+    class _Worker(_Backend):
+        def __init__(self) -> None:
+            super().__init__()
+            workers.append(self)
+
+    monkeypatch.setattr(process_client, "Mt5WorkerProcessBackend", _Worker)
+    manager = Mt5Manager(settings=_real_settings())
+    terminal = str(tmp_path / "mt5" / "terminal64.exe")
+
+    with manager.connect_account_session(
+        login=111,
+        password="pw",
+        server="Broker",
+        terminal_path=terminal,
+    ):
+        pass
+    with manager.connect_account_session(
+        login=222,
+        password="pw",
+        server="Broker2",
+        terminal_path=terminal,
+        allow_terminal_switch=True,
+    ):
+        pass
+
+    assert [worker.login_calls for worker in workers] == [[111], [222]]
+    assert workers[0].close_calls == 1

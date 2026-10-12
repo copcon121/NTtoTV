@@ -69,6 +69,13 @@ class OrderRecord:
     created_at: CanonicalTimestamp
     updated_at: CanonicalTimestamp
     version: int = 1
+    take_profit_1r_enabled: bool = False
+    auto_supertrend_after_1r_enabled: bool = False
+    trailing_timeframe: str | None = None
+    trailing_period: int | None = None
+    trailing_multiplier: float | None = None
+    trailing_atr_method: str | None = None
+    trailing_source: str | None = None
     entry_gc: float | None = None
     sl_gc: float | None = None
     tp_gc: float | None = None

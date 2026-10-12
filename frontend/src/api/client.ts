@@ -206,6 +206,7 @@ export interface Mt5Terminal {
   login: number | null;
   server: string | null;
   title: string;
+  label?: string;
 }
 
 export interface OrderSubmitInput {
@@ -219,6 +220,13 @@ export interface OrderSubmitInput {
   tpGc?: number;
   slDistanceGc?: number;
   tpDistanceGc?: number;
+  takeProfit1rEnabled?: boolean;
+  autoSupertrendAfter1rEnabled?: boolean;
+  trailingTimeframe?: Timeframe;
+  trailingPeriod?: number;
+  trailingMultiplier?: number;
+  trailingAtrMethod?: SupertrendTrailing["atrMethod"];
+  trailingSource?: SupertrendTrailing["source"];
   gcAnchored?: boolean;
   idempotencyKey: string;
 }

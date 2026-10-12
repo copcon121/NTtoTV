@@ -301,6 +301,13 @@ CREATE TABLE IF NOT EXISTS orders (
     kind                       TEXT NOT NULL,
     volume_lots                REAL NOT NULL,
     gc_anchored                INTEGER NOT NULL,
+    take_profit_1r_enabled     INTEGER NOT NULL DEFAULT 0,
+    auto_supertrend_after_1r_enabled INTEGER NOT NULL DEFAULT 0,
+    trailing_timeframe         TEXT,
+    trailing_period            INTEGER,
+    trailing_multiplier        REAL,
+    trailing_atr_method        TEXT,
+    trailing_source            TEXT,
     status                     TEXT NOT NULL,
     idempotency_key            TEXT NOT NULL,
     created_at                 INTEGER NOT NULL,
@@ -444,6 +451,24 @@ class CacheStore:
         self._migrate_profiles_and_alerts()
         self._migrate_big_trades()
         self._migrate_market_sources()
+        self._migrate_orders()
+
+    def _migrate_orders(self) -> None:
+        """Add opt-in order-management fields to existing cache files."""
+        rows = self._writer.connection.execute("PRAGMA table_info(orders)").fetchall()
+        existing = {str(row["name"]) for row in rows}
+        columns = {
+            "take_profit_1r_enabled": "INTEGER NOT NULL DEFAULT 0",
+            "auto_supertrend_after_1r_enabled": "INTEGER NOT NULL DEFAULT 0",
+            "trailing_timeframe": "TEXT",
+            "trailing_period": "INTEGER",
+            "trailing_multiplier": "REAL",
+            "trailing_atr_method": "TEXT",
+            "trailing_source": "TEXT",
+        }
+        for name, ddl in columns.items():
+            if name not in existing:
+                self._writer.execute(f"ALTER TABLE orders ADD COLUMN {name} {ddl}")
 
     def _migrate_footprint_bars(self) -> None:
         """Add v2 footprint panel/profile columns to existing cache files."""

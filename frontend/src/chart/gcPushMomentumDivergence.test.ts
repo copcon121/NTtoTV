@@ -39,7 +39,6 @@ function pointsFor(
     efficiency: 1,
     strong: false,
     flowState: "neutral",
-    absorptionCandidate: false,
   }));
 }
 

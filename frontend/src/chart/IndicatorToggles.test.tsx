@@ -290,6 +290,11 @@ describe("IndicatorToggles", () => {
     );
     expect(divergenceToggle).toBeChecked();
     fireEvent.click(divergenceToggle);
+    const displayMode = screen.getByLabelText(
+      "GC Push Momentum display mode",
+    );
+    expect(displayMode).toHaveValue("mgann_wave");
+    fireEvent.change(displayMode, { target: { value: "native" } });
 
     expect(onEnabled).toHaveBeenCalledWith(true);
     expect(onSettings).toHaveBeenNthCalledWith(
@@ -319,6 +324,10 @@ describe("IndicatorToggles", () => {
     expect(onSettings).toHaveBeenNthCalledWith(
       7,
       expect.objectContaining({ showDivergence: false }),
+    );
+    expect(onSettings).toHaveBeenNthCalledWith(
+      8,
+      expect.objectContaining({ displayMode: "native" }),
     );
   });
 

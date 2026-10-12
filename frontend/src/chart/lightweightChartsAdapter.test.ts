@@ -15,6 +15,7 @@ import {
   buildWaveDeltaMboxData,
   fvgSignalColor,
   gcPushMomentumColor,
+  gcPushMomentumWaveDisplayStates,
   gcPushMomentumSeriesVisibility,
   isMgannImpulseTimeframeDuration,
   isSessionHighlightTimeframeDuration,
@@ -28,9 +29,7 @@ import {
   toGcPushEarlyDivergencePriceLines,
   toGcPushDivergenceMomentumLines,
   toGcPushDivergencePriceLines,
-  toGcPushMomentumClusterMarkers,
   toGcPushMomentumHistogram,
-  toGcPushMomentumMarker,
   toGcPushMomentumPushLine,
   toGcPushMomentumSignalLine,
   toSupertrendSignalDot,
@@ -397,7 +396,6 @@ describe("lightweightChartsAdapter GC Push Momentum", () => {
     efficiency: 0.8,
     strong: true,
     flowState: "confirmed",
-    absorptionCandidate: false,
   };
 
   it("keeps the histogram visible when optional lines are off", () => {
@@ -462,69 +460,68 @@ describe("lightweightChartsAdapter GC Push Momentum", () => {
     ).toContain("183, 87, 83");
   });
 
-  it("keeps direction color and marks closed flow conflict separately", () => {
-    const conflict = {
-      ...point,
-      flowState: "conflict" as const,
-      absorptionCandidate: true,
-    };
-
-    expect(gcPushMomentumColor(conflict, true)).toContain("0, 200, 83");
-    expect(toGcPushMomentumMarker(conflict, true)).toMatchObject({
-      position: "aboveBar",
-      shape: "square",
-      color: "rgba(245, 158, 11, 1)",
+  it("projects every MGann down-wave histogram below zero in red", () => {
+    const display = toGcPushMomentumHistogram(point, true, 0, "mgann_wave", {
+      direction: -1,
+      confirmed: true,
+      expanding: true,
     });
-    expect(toGcPushMomentumMarker(conflict, false)).toBeUndefined();
+
+    expect(display.value).toBe(-0.75);
+    expect(display.color).toContain("255, 23, 68");
   });
 
-  it("keeps only closed conflict marker runs of at least three bars", () => {
-    const conflictAt = (time: number): GcPushMomentumPoint => ({
-      ...point,
-      time,
-      flowState: "conflict",
-      absorptionCandidate: true,
+  it("projects MGann up waves above zero and dims a developing wave", () => {
+    const display = toGcPushMomentumHistogram(point, true, 0, "mgann_wave", {
+      direction: 1,
+      confirmed: false,
+      expanding: false,
     });
-    const confirmedAt = (time: number): GcPushMomentumPoint => ({
-      ...point,
-      time,
-    });
-    const points = [
-      conflictAt(60_000),
-      confirmedAt(120_000),
-      conflictAt(180_000),
-      conflictAt(240_000),
-      confirmedAt(300_000),
-      conflictAt(360_000),
-      conflictAt(420_000),
-      conflictAt(480_000),
-    ];
-    const closed = new Set(points.map(({ time }) => time));
 
-    expect(
-      toGcPushMomentumClusterMarkers(points, closed).map(({ time }) => time),
-    ).toEqual([360, 420, 480]);
+    expect(display.value).toBe(0.75);
+    expect(display.color).toContain("76, 139, 103");
+    expect(display.color).toContain("0.34");
   });
 
-  it("waits for the third conflict bar to close before showing the cluster", () => {
-    const points = [60_000, 120_000, 180_000].map(
-      (time): GcPushMomentumPoint => ({
-        ...point,
-        time,
-        flowState: "conflict",
-        absorptionCandidate: true,
-      }),
+  it("resets MGann momentum expansion at each wave boundary", () => {
+    const bars = [0, 60_000, 120_000, 180_000].map((time) =>
+      bar(time, 100, 101, 99, 100),
     );
+    const points: GcPushMomentumPoint[] = [
+      { ...point, time: 60_000, histogram: -0.5 },
+      { ...point, time: 120_000, histogram: 0.25 },
+      { ...point, time: 180_000, histogram: 0.1 },
+    ];
+    const states = gcPushMomentumWaveDisplayStates(bars, points, [
+      {
+        id: "down",
+        startIndex: 0,
+        endIndex: 2,
+        direction: -1,
+        confirmed: true,
+      },
+      {
+        id: "up",
+        startIndex: 2,
+        endIndex: 3,
+        direction: 1,
+        confirmed: false,
+      },
+    ]);
 
-    expect(
-      toGcPushMomentumClusterMarkers(points, new Set([60_000, 120_000])),
-    ).toEqual([]);
-    expect(
-      toGcPushMomentumClusterMarkers(
-        points,
-        new Set([60_000, 120_000, 180_000]),
-      ).map(({ time }) => time),
-    ).toEqual([60, 120, 180]);
+    expect(states.get(60_000)).toMatchObject({
+      direction: -1,
+      expanding: true,
+    });
+    expect(states.get(120_000)).toMatchObject({
+      direction: -1,
+      expanding: false,
+    });
+    expect(states.get(180_000)).toMatchObject({
+      direction: 1,
+      confirmed: false,
+      expanding: true,
+    });
   });
 
   it("maps confirmed Push divergence onto price and momentum panes", () => {

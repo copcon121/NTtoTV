@@ -281,6 +281,7 @@ describe("GC Push Momentum", () => {
 
   it("normalizes malformed persisted settings", () => {
     const normalized = normalizeGcPushMomentumSettings({
+      displayMode: "broken" as GcPushMomentumSettings["displayMode"],
       showLines: true,
       showDivergence: false,
       horizonBars: Number.NaN,
@@ -292,6 +293,9 @@ describe("GC Push Momentum", () => {
       epsilon: 0,
     });
 
+    expect(normalized.displayMode).toBe(
+      DEFAULT_GC_PUSH_MOMENTUM_SETTINGS.displayMode,
+    );
     expect(normalized.showLines).toBe(true);
     expect(normalized.showDivergence).toBe(false);
     expect(normalized.horizonBars).toBe(DEFAULT_GC_PUSH_MOMENTUM_SETTINGS.horizonBars);

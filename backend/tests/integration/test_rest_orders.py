@@ -265,6 +265,113 @@ def test_mt5_connect_auto_detects_symbol_when_omitted(client: TestClient):
 
 
 @pytest.mark.integration
+def test_user_can_switch_login_on_their_existing_terminal_path(client: TestClient):
+    client.app.state.mt5_manager = _Manager(_StrictSymbolBackend())
+    assert client.post(
+        "/api/auth/login", json={"username": "local", "password": "local"}
+    ).status_code == 200
+    terminal_path = r"C:\MT5\terminal64.exe"
+
+    first = client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 11,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+            "terminalPath": terminal_path,
+        },
+    )
+    switched = client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 22,
+            "password": "fake",
+            "server": "Fake-Demo-2",
+            "symbolBroker": "XAUUSDm",
+            "terminalPath": terminal_path,
+        },
+    )
+
+    assert first.status_code == 200
+    assert switched.status_code == 200
+    assert switched.json()["account"]["login"] == 22
+
+
+@pytest.mark.integration
+def test_user_cannot_switch_terminal_assigned_to_another_user(client: TestClient):
+    terminal_path = r"C:\MT5\terminal64.exe"
+    assert client.post(
+        "/api/auth/register", json=_registration("terminal-owner", "pw")
+    ).status_code == 200
+    assert client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 11,
+            "password": "fake",
+            "server": "Fake-Demo",
+            "symbolBroker": "XAUUSDm",
+            "terminalPath": terminal_path,
+        },
+    ).status_code == 200
+    assert client.post("/api/auth/logout").status_code == 200
+    assert client.post(
+        "/api/auth/register", json=_registration("terminal-contender", "pw")
+    ).status_code == 200
+
+    rejected = client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 22,
+            "password": "fake",
+            "server": "Fake-Demo-2",
+            "symbolBroker": "XAUUSDm",
+            "terminalPath": terminal_path,
+        },
+    )
+
+    assert rejected.status_code == 400
+    assert "assigned to another user's account 11" in rejected.json()["error"]["message"]
+
+
+@pytest.mark.integration
+def test_configured_terminal_can_only_be_used_by_its_named_user(client: TestClient):
+    terminal_path = r"C:\Program Files\MetaTrader 5\terminal64.exe"
+    assert client.post(
+        "/api/auth/register", json=_registration("hieu", "pw")
+    ).status_code == 200
+    allowed = client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 263466221,
+            "password": "fake",
+            "server": "Exness-MT5Real37",
+            "symbolBroker": "XAUUSDm",
+            "terminalPath": terminal_path,
+        },
+    )
+    assert allowed.status_code == 200
+
+    assert client.post("/api/auth/logout").status_code == 200
+    assert client.post(
+        "/api/auth/register", json=_registration("someone-else", "pw")
+    ).status_code == 200
+    rejected = client.post(
+        "/api/mt5/connect",
+        json={
+            "login": 263466221,
+            "password": "fake",
+            "server": "Exness-MT5Real37",
+            "symbolBroker": "XAUUSDm",
+            "terminalPath": terminal_path,
+        },
+    )
+
+    assert rejected.status_code == 400
+    assert "reserved for user hieu" in rejected.json()["error"]["message"]
+
+
+@pytest.mark.integration
 def test_two_users_place_orders_with_their_own_mt5_logins(client: TestClient):
     backend = _StrictSymbolBackend()
     client.app.state.mt5_manager = _Manager(backend)
@@ -355,6 +462,13 @@ def test_market_order_distances_are_anchored_to_broker_tick(client: TestClient):
             "entryGc": 9999.0,
             "slDistanceGc": 3,
             "tpDistanceGc": 6,
+            "takeProfit1rEnabled": True,
+            "autoSupertrendAfter1rEnabled": True,
+            "trailingTimeframe": "5m",
+            "trailingPeriod": 14,
+            "trailingMultiplier": 2.5,
+            "trailingAtrMethod": "sma",
+            "trailingSource": "close",
             "idempotencyKey": "market-stops-anchor",
         },
     )
@@ -364,6 +478,15 @@ def test_market_order_distances_are_anchored_to_broker_tick(client: TestClient):
     assert placed.entry_broker == 2350.1
     assert placed.sl_broker == 2347.1
     assert placed.tp_broker == 2356.1
+    assert placed.take_profit_1r_enabled is True
+    assert placed.auto_supertrend_after_1r_enabled is True
+    assert placed.trailing_timeframe == "5m"
+    assert placed.trailing_period == 14
+    assert placed.trailing_multiplier == 2.5
+    assert placed.trailing_atr_method == "sma"
+    assert placed.trailing_source == "close"
+    assert resp.json()["order"]["takeProfit1rEnabled"] is True
+    assert resp.json()["order"]["autoSupertrendAfter1rEnabled"] is True
 
 
 @pytest.mark.integration

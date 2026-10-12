@@ -6,6 +6,8 @@ export interface MarketOrderSettings {
   volumeLots: number;
   slDistanceGc: number;
   tpDistanceGc: number;
+  takeProfit1rEnabled: boolean;
+  autoSupertrendAfter1rEnabled: boolean;
   sizingMode?: "lots" | "risk";
   riskAmount?: number;
 }
@@ -164,6 +166,45 @@ export function MarketOrderBar({
                   step="0.1"
                   onCommit={(tpDistanceGc) => update({ tpDistanceGc })}
                 />
+              </label>
+              <label
+                className={
+                  settings.takeProfit1rEnabled
+                    ? "auto-trade-toggle active take-profit-1r"
+                    : "auto-trade-toggle take-profit-1r"
+                }
+                title="Close 50% once a new Market or Limit order reaches +1R"
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.takeProfit1rEnabled}
+                  aria-label="Take profit 50% at 1R"
+                  onChange={(event) =>
+                    update({ takeProfit1rEnabled: event.currentTarget.checked })
+                  }
+                />
+                <span>50% @ 1R</span>
+              </label>
+              <label
+                className={
+                  settings.autoSupertrendAfter1rEnabled
+                    ? "auto-trade-toggle active supertrend-after-1r"
+                    : "auto-trade-toggle supertrend-after-1r"
+                }
+                title="After the 1R partial close, trail the remainder with the current SuperTrend settings"
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.autoSupertrendAfter1rEnabled}
+                  disabled={!settings.takeProfit1rEnabled}
+                  aria-label="Auto SuperTrend trailing after 1R"
+                  onChange={(event) =>
+                    update({
+                      autoSupertrendAfter1rEnabled: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <span>ST @ 1R</span>
               </label>
               {connected && autoTradeSettings && onAutoTradeSettingsChange && (
                 <span className="auto-trade-controls" aria-label="Automatic mGann trading">

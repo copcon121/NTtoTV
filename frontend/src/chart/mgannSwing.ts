@@ -40,6 +40,13 @@ export interface MgannSwingLinePoint {
   value: number;
 }
 
+export interface MgannSwingCalculationOptions {
+  /** Include the still-repainting Internal-5 tail in signal calculations. */
+  includeDeveloping?: boolean;
+  /** Known closed bars. When omitted, every supplied bar is treated as closed. */
+  closedBarTimes?: ReadonlySet<number>;
+}
+
 export type MgannSwingPivotKind = "high" | "low";
 export type MgannSwingSignalLabel =
   | "PB"
@@ -55,6 +62,8 @@ export interface MgannSwingSignal {
   price: number;
   kind: MgannSwingPivotKind;
   labels: MgannSwingSignalLabel[];
+  /** False while the deciding Internal-5 pivot is still repaintable. */
+  confirmed: boolean;
 }
 
 export interface MgannSwingWaveDeltaLabel {
@@ -90,8 +99,19 @@ export interface MgannSwingImpulseWave {
   w3Delta: number;
 }
 
+export interface MgannSwingMomentumWave {
+  id: string;
+  startIndex: number;
+  endIndex: number;
+  direction: 1 | -1;
+  /** False for any wave whose destination pivot can still repaint. */
+  confirmed: boolean;
+}
+
 export interface MgannSwingOverlay {
   line: MgannSwingLinePoint[];
+  /** Repainting tail, including the last confirmed point used as its anchor. */
+  liveLine: MgannSwingLinePoint[];
   signals: MgannSwingSignal[];
   waveDeltaLabels: MgannSwingWaveDeltaLabel[];
   waveDeltaBoxes: MgannSwingWaveDeltaBox[];
@@ -104,6 +124,10 @@ export interface MgannSwingPivot {
   time: number;
   price: number;
   kind: MgannSwingPivotKind;
+}
+
+interface MgannSwingCalculationPivot extends MgannSwingPivot {
+  confirmed: boolean;
 }
 
 interface MgannSwingWave {
@@ -194,6 +218,23 @@ function appendConfirmedPivot(
   pivots.push(pivot);
 }
 
+function appendCalculationPivot(
+  pivots: MgannSwingCalculationPivot[],
+  pivot: MgannSwingCalculationPivot,
+): void {
+  const last = pivots[pivots.length - 1];
+  if (last === undefined) {
+    pivots.push(pivot);
+    return;
+  }
+  if (last.index === pivot.index) return;
+  if (last.kind === pivot.kind) {
+    if (isMoreExtremePivot(pivot, last)) pivots[pivots.length - 1] = pivot;
+    return;
+  }
+  pivots.push(pivot);
+}
+
 function confirmedPivot(
   bars: readonly Bar[],
   index: number,
@@ -249,6 +290,115 @@ export function collectMgannSwingPivots(bars: readonly Bar[]): MgannSwingPivot[]
 
 
   return pivots;
+}
+
+function collectMgannSwingCalculationPivots(
+  bars: readonly Bar[],
+  includeDeveloping: boolean,
+  closedBarTimes?: ReadonlySet<number>,
+): MgannSwingCalculationPivot[] {
+  const length = MGANN_SWING_SIZE;
+  if (bars.length < length + 1) return [];
+
+  const pivots: MgannSwingCalculationPivot[] = [];
+  const lastCandidateIndex = includeDeveloping
+    ? bars.length - 1
+    : bars.length - length - 1;
+
+  for (let index = length; index <= lastCandidateIndex; index += 1) {
+    const candidate = bars[index];
+    if (candidate === undefined) continue;
+
+    const left = bars.slice(index - length, index);
+    const right = bars.slice(index + 1, index + 1 + length);
+    const hasFullClosedRightSide =
+      right.length === length &&
+      (closedBarTimes === undefined ||
+        right.every((bar) => closedBarTimes.has(bar.time)));
+    if (!includeDeveloping && !hasFullClosedRightSide) continue;
+
+    const leftHigh = Math.max(...left.map((bar) => bar.high));
+    const rightHigh =
+      right.length > 0
+        ? Math.max(...right.map((bar) => bar.high))
+        : Number.NEGATIVE_INFINITY;
+    const leftLow = Math.min(...left.map((bar) => bar.low));
+    const rightLow =
+      right.length > 0
+        ? Math.min(...right.map((bar) => bar.low))
+        : Number.POSITIVE_INFINITY;
+
+    const highPivot = candidate.high > leftHigh && candidate.high >= rightHigh;
+    const lowPivot = candidate.low < leftLow && candidate.low <= rightLow;
+    const previousKind = pivots[pivots.length - 1]?.kind;
+    const kinds: MgannSwingPivotKind[] =
+      highPivot && lowPivot
+        ? previousKind === "high"
+          ? ["low", "high"]
+          : ["high", "low"]
+        : highPivot
+          ? ["high"]
+          : lowPivot
+            ? ["low"]
+            : [];
+
+    for (const kind of kinds) {
+      appendCalculationPivot(pivots, {
+        index,
+        time: candidate.time,
+        price: kind === "high" ? candidate.high : candidate.low,
+        kind,
+        confirmed: hasFullClosedRightSide,
+      });
+    }
+  }
+
+  return pivots;
+}
+
+/**
+ * Map the canonical Internal-5 structure into directional display waves.
+ * The final segment remains provisional so a realtime oscillator can mirror
+ * the same repaint boundary as the dashed MGannSwing tail.
+ */
+export function buildMgannSwingMomentumWaves(
+  bars: readonly Bar[],
+  closedBarTimes?: ReadonlySet<number>,
+): MgannSwingMomentumWave[] {
+  const pivots = collectMgannSwingCalculationPivots(
+    bars,
+    true,
+    closedBarTimes,
+  );
+  if (pivots.length === 0) return [];
+
+  const waves: MgannSwingMomentumWave[] = [];
+  for (let index = 1; index < pivots.length; index += 1) {
+    const start = pivots[index - 1];
+    const end = pivots[index];
+    if (end.index <= start.index) continue;
+    waves.push({
+      id: `mgann-momentum:${start.time}:${end.time}`,
+      startIndex: start.index,
+      endIndex: end.index,
+      direction: end.kind === "high" ? 1 : -1,
+      confirmed: end.confirmed,
+    });
+  }
+
+  const last = pivots[pivots.length - 1];
+  const lastBarIndex = bars.length - 1;
+  if (last.index < lastBarIndex) {
+    waves.push({
+      id: `mgann-momentum-live:${last.time}:${bars[lastBarIndex].time}`,
+      startIndex: last.index,
+      endIndex: lastBarIndex,
+      direction: last.kind === "high" ? -1 : 1,
+      confirmed: false,
+    });
+  }
+
+  return waves;
 }
 
 function waveDeltaBetween(
@@ -449,22 +599,34 @@ function highestHighBetween(bars: readonly Bar[], fromIndex: number, toIndex: nu
 }
 
 function addSignal(
-  signalsByPivot: Map<number, MgannSwingSignalLabel[]>,
+  signalsByPivot: Map<
+    number,
+    Array<{ label: MgannSwingSignalLabel; confirmed: boolean }>
+  >,
   pivotIndex: number,
   label: MgannSwingSignalLabel,
+  confirmed: boolean,
 ): void {
-  const labels = signalsByPivot.get(pivotIndex) ?? [];
-  if (!labels.includes(label)) labels.push(label);
-  signalsByPivot.set(pivotIndex, labels);
+  const signals = signalsByPivot.get(pivotIndex) ?? [];
+  const existing = signals.find((signal) => signal.label === label);
+  if (existing === undefined) {
+    signals.push({ label, confirmed });
+  } else if (confirmed) {
+    existing.confirmed = true;
+  }
+  signalsByPivot.set(pivotIndex, signals);
 }
 
 function buildSignals(
   bars: readonly Bar[],
-  pivots: readonly MgannSwingPivot[],
+  pivots: readonly MgannSwingCalculationPivot[],
   waves: readonly MgannSwingWave[],
   context?: MgannSwingSmartContext,
 ): MgannSwingSignal[] {
-  const signalsByPivot = new Map<number, MgannSwingSignalLabel[]>();
+  const signalsByPivot = new Map<
+    number,
+    Array<{ label: MgannSwingSignalLabel; confirmed: boolean }>
+  >();
 
   for (let pivotIndex = 4; pivotIndex < pivots.length; pivotIndex += 1) {
     const i1 = pivots[pivotIndex];
@@ -488,6 +650,7 @@ function buildSignals(
     }
 
     const dir = current.direction;
+    const confirmed = i1.confirmed;
     const i1Close = pivotClose(bars, i1);
     const i2Close = pivotClose(bars, i2);
     const numClose = pivotClose(bars, num);
@@ -507,7 +670,12 @@ function buildSignals(
       current.volume <= priorSame.volume &&
       priorSame.volume <= priorSame2.volume
     ) {
-      addSignal(signalsByPivot, pivotIndex, bracket ? "[#]" : "#");
+      addSignal(
+        signalsByPivot,
+        pivotIndex,
+        bracket ? "[#]" : "#",
+        confirmed,
+      );
     }
 
     if (
@@ -518,7 +686,12 @@ function buildSignals(
         current.delta >= priorSame.delta &&
         priorSame.delta >= priorSame2.delta)
     ) {
-      addSignal(signalsByPivot, pivotIndex, bracket ? "[#]" : "#");
+      addSignal(
+        signalsByPivot,
+        pivotIndex,
+        bracket ? "[#]" : "#",
+        confirmed,
+      );
     }
 
     const currentBar = bars[i1.index];
@@ -536,7 +709,12 @@ function buildSignals(
             ratio(priorSame.delta, priorSame.width) ||
           current.delta < priorSame.delta)
       ) {
-        addSignal(signalsByPivot, pivotIndex, bracket ? "[PB]" : "PB");
+        addSignal(
+          signalsByPivot,
+          pivotIndex,
+          bracket ? "[PB]" : "PB",
+          confirmed,
+        );
       } else if (
         dir === -1 &&
         i1Close >= numClose &&
@@ -549,7 +727,12 @@ function buildSignals(
             ratio(priorSame.delta, priorSame.width) ||
           current.delta > priorSame.delta)
       ) {
-        addSignal(signalsByPivot, pivotIndex, bracket ? "[PB]" : "PB");
+        addSignal(
+          signalsByPivot,
+          pivotIndex,
+          bracket ? "[PB]" : "PB",
+          confirmed,
+        );
       }
     }
 
@@ -571,7 +754,7 @@ function buildSignals(
         priorOpposite.delta > priorOpposite2.delta ||
         (priorOpposite.delta === 0 && priorSame.delta === 0))
     ) {
-      addSignal(signalsByPivot, pivotIndex - 1, "SP");
+      addSignal(signalsByPivot, pivotIndex - 1, "SP", confirmed);
     } else if (
       dir === -1 &&
       highestHighBetween(bars, i2.index, i1.index) >=
@@ -590,15 +773,15 @@ function buildSignals(
         priorOpposite.delta < priorOpposite2.delta ||
         (priorOpposite.delta === 0 && priorSame.delta === 0))
     ) {
-      addSignal(signalsByPivot, pivotIndex - 1, "UT");
+      addSignal(signalsByPivot, pivotIndex - 1, "UT", confirmed);
     }
   }
 
   return Array.from(signalsByPivot.entries())
     .sort(([left], [right]) => left - right)
-    .flatMap(([pivotIndex, labels]) => {
+    .flatMap(([pivotIndex, signalStates]) => {
       const pivot = pivots[pivotIndex];
-      if (pivot === undefined || labels.length === 0) return [];
+      if (pivot === undefined || signalStates.length === 0) return [];
       if (!passesSmartFilter(bars, context, pivot)) return [];
       return [
         {
@@ -606,7 +789,8 @@ function buildSignals(
           time: pivot.time,
           price: pivot.price,
           kind: pivot.kind,
-          labels,
+          labels: signalStates.map((signal) => signal.label),
+          confirmed: signalStates.every((signal) => signal.confirmed),
         },
       ];
     });
@@ -733,10 +917,46 @@ export function buildMgannSwingOverlay(
   bars: readonly Bar[],
   deltaByTime: ReadonlyMap<number, MgannSwingDeltaPoint>,
   settings?: Partial<MgannSwingSettings>,
+  calculation: MgannSwingCalculationOptions = {},
 ): MgannSwingOverlay {
   const normalized = normalizeMgannSwingSettings(settings);
-  const pivots = collectMgannSwingPivots(bars);
+  const confirmedPivots = calculation.includeDeveloping
+    ? collectMgannSwingCalculationPivots(
+        bars,
+        false,
+        calculation.closedBarTimes,
+      )
+    : collectMgannSwingPivots(bars).map((pivot) => ({
+        ...pivot,
+        confirmed: true,
+      }));
+  const rawCalculationPivots = calculation.includeDeveloping
+    ? collectMgannSwingCalculationPivots(
+        bars,
+        true,
+        calculation.closedBarTimes,
+      )
+    : confirmedPivots;
+  const firstDevelopingIndex = rawCalculationPivots.findIndex(
+    (pivot) => !pivot.confirmed,
+  );
+  // Only the next swing can be developing. A later opposite extreme belongs
+  // to the following wave and must wait until this pivot itself confirms.
+  const calculationPivots =
+    firstDevelopingIndex < 0
+      ? rawCalculationPivots
+      : rawCalculationPivots.slice(0, firstDevelopingIndex + 1);
+  const livePivots =
+    firstDevelopingIndex < 0
+      ? []
+      : calculationPivots.slice(Math.max(0, firstDevelopingIndex - 1));
+  const pivots: MgannSwingPivot[] = confirmedPivots;
   const waves = buildWaves(bars, deltaByTime, pivots);
+  const calculationWaves = buildWaves(
+    bars,
+    deltaByTime,
+    calculationPivots,
+  );
   const impulseWaves = buildImpulseWaves(bars, pivots, waves, normalized);
   const smartContext = normalized.smartFilter
     ? {
@@ -746,7 +966,16 @@ export function buildMgannSwingOverlay(
     : undefined;
   return {
     line: pivots.map((pivot) => ({ time: pivot.time, value: pivot.price })),
-    signals: buildSignals(bars, pivots, waves, smartContext),
+    liveLine: livePivots.map((pivot) => ({
+      time: pivot.time,
+      value: pivot.price,
+    })),
+    signals: buildSignals(
+      bars,
+      calculationPivots,
+      calculationWaves,
+      smartContext,
+    ),
     waveDeltaLabels: buildWaveDeltaLabels(
       waves,
       impulseWaves,

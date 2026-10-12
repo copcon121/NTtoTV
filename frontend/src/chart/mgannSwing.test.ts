@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildMgannSwingMomentumWaves,
   buildMgannSwingOverlay,
   MGANN_SWING_SIZE,
   normalizeMgannSwingSettings,
@@ -236,6 +237,88 @@ describe("MGannSwing model", () => {
     });
     expect(overlay.signals.map((signal) => signal.labels)).toEqual([["#"]]);
     expect(overlay.signals.map((signal) => signal.time)).toEqual([35]);
+    expect(overlay.signals[0]?.confirmed).toBe(true);
+    expect(overlay.liveLine).toEqual([]);
+  });
+
+  it("calculates the repainting signal tail live and keeps it dashed until confirmation", () => {
+    const bars = internalFiveSwingBars([10, 16, 12, 15, 13, 14], 11);
+    const closedBeforeLastBar = new Set(
+      bars.slice(0, -1).map((source) => source.time),
+    );
+
+    const developing = buildMgannSwingOverlay(
+      bars,
+      delta([]),
+      { smartFilter: false },
+      {
+        includeDeveloping: true,
+        closedBarTimes: closedBeforeLastBar,
+      },
+    );
+
+    expect(developing.line[developing.line.length - 1]?.time).toBe(29);
+    expect(developing.liveLine.map((point) => point.time)).toEqual([29, 35]);
+    expect(
+      developing.signals.find((signal) => signal.time === 35),
+    ).toMatchObject({ labels: ["#"], confirmed: false });
+
+    const confirmed = buildMgannSwingOverlay(
+      bars,
+      delta([]),
+      { smartFilter: false },
+      {
+        includeDeveloping: true,
+        closedBarTimes: new Set(bars.map((source) => source.time)),
+      },
+    );
+
+    expect(confirmed.line[confirmed.line.length - 1]?.time).toBe(35);
+    expect(
+      confirmed.signals.find((signal) => signal.time === 35),
+    ).toMatchObject({ labels: ["#"], confirmed: true });
+  });
+
+  it("keeps SP live when its label is anchored to the prior confirmed pivot", () => {
+    const bars = internalFiveSwingBars([10, 16, 12, 15, 11, 14], 12, true);
+    const developing = buildMgannSwingOverlay(
+      bars,
+      delta([]),
+      { smartFilter: false },
+      {
+        includeDeveloping: true,
+        closedBarTimes: new Set(
+          bars.slice(0, -1).map((source) => source.time),
+        ),
+      },
+    );
+
+    expect(
+      developing.signals.find((signal) => signal.labels.includes("SP")),
+    ).toMatchObject({ time: 29, confirmed: false });
+  });
+
+  it("maps confirmed and developing Internal-5 legs for momentum display", () => {
+    const bars = internalFiveSwingBars([10, 16, 12, 15, 13, 14], 11);
+    const waves = buildMgannSwingMomentumWaves(
+      bars,
+      new Set(bars.slice(0, -1).map((source) => source.time)),
+    );
+
+    expect(waves.find((wave) => wave.endIndex === 29)).toMatchObject({
+      direction: -1,
+      confirmed: true,
+    });
+    expect(waves.find((wave) => wave.endIndex === 35)).toMatchObject({
+      direction: 1,
+      confirmed: false,
+    });
+    expect(waves[waves.length - 1]).toMatchObject({
+      startIndex: 35,
+      endIndex: 40,
+      direction: -1,
+      confirmed: false,
+    });
   });
 
   it("normalizes missing settings to line and signals enabled", () => {

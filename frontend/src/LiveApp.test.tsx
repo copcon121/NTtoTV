@@ -188,6 +188,8 @@ describe("mobile chart limit order draft", () => {
     volumeLots: 0.12,
     slDistanceGc: 3,
     tpDistanceGc: 6,
+    takeProfit1rEnabled: true,
+    autoSupertrendAfter1rEnabled: true,
   };
 
   it("builds a buy limit bracket below the reference price", () => {
@@ -207,6 +209,8 @@ describe("mobile chart limit order draft", () => {
       slGc: 2357,
       tpGc: 2366,
       gcAnchored: true,
+      takeProfit1rEnabled: true,
+      autoSupertrendAfter1rEnabled: true,
     });
   });
 
@@ -227,6 +231,8 @@ describe("mobile chart limit order draft", () => {
       slGc: 2383,
       tpGc: 2374,
       gcAnchored: true,
+      takeProfit1rEnabled: true,
+      autoSupertrendAfter1rEnabled: true,
     });
   });
 
@@ -285,6 +291,8 @@ describe("ChartContextMenu", () => {
         volumeLots: 0.12,
         slDistanceGc: 3,
         tpDistanceGc: 6,
+        takeProfit1rEnabled: true,
+        autoSupertrendAfter1rEnabled: true,
       },
     });
     expect(draft).toBeDefined();

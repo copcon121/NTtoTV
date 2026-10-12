@@ -7,7 +7,11 @@
 
 import { type Bar } from "../cache/types";
 
+export type GcPushMomentumDisplayMode = "native" | "mgann_wave";
+
 export interface GcPushMomentumSettings {
+  /** Visual projection for the histogram; calculations always retain raw values. */
+  displayMode: GcPushMomentumDisplayMode;
   /** Show the optional smoothed Push and Signal lines above the histogram. */
   showLines: boolean;
   /** Show confirmed regular divergence on both price and momentum panes. */
@@ -43,6 +47,7 @@ export interface GcPushMomentumSettings {
 }
 
 export const DEFAULT_GC_PUSH_MOMENTUM_SETTINGS: GcPushMomentumSettings = {
+  displayMode: "mgann_wave",
   showLines: false,
   showDivergence: true,
   horizonBars: 3,
@@ -92,7 +97,6 @@ export interface GcPushMomentumPoint {
   strongThreshold?: number;
   strong: boolean;
   flowState: GcPushMomentumFlowState;
-  absorptionCandidate: boolean;
 }
 
 function finiteOr(value: number | undefined, fallback: number): number {
@@ -128,6 +132,11 @@ export function normalizeGcPushMomentumSettings(
 ): GcPushMomentumSettings {
   const defaults = DEFAULT_GC_PUSH_MOMENTUM_SETTINGS;
   return {
+    displayMode:
+      settings?.displayMode === "native" ||
+      settings?.displayMode === "mgann_wave"
+        ? settings.displayMode
+        : defaults.displayMode,
     showLines:
       typeof settings?.showLines === "boolean"
         ? settings.showLines
@@ -539,8 +548,6 @@ export function calculateGcPushMomentum(
     let flowRatio: number | undefined;
     let participationRatio: number | undefined;
     let flowState: GcPushMomentumFlowState = "unavailable";
-    let absorptionCandidate = false;
-
     if (flow !== undefined) {
       flowRatio = flow.ratio;
       const flowThreshold = priorAbsFlow.quantile(settings.flowPercentile);
@@ -564,12 +571,6 @@ export function calculateGcPushMomentum(
         flowState = "conflict";
       }
 
-      // Strong executed imbalance without directional price progress is a
-      // candidate only; it is not treated as an automatic reversal signal.
-      absorptionCandidate =
-        qualifiedFlow &&
-        (flowState === "conflict" || (!strong && efficiency < 0.35));
-
       priorAbsFlow.push(Math.abs(flow.ratio));
       priorHorizonVolume.push(flow.volume);
     }
@@ -585,7 +586,6 @@ export function calculateGcPushMomentum(
       efficiency,
       strong,
       flowState,
-      absorptionCandidate,
     };
     if (flowRatio !== undefined) point.flowRatio = flowRatio;
     if (participationRatio !== undefined) {

@@ -22,7 +22,10 @@ __all__ = ["OrderStore"]
 _ORDER_COLUMNS = (
     "id, user_id, account_id, source, symbol_internal, contract_internal, "
     "source_contract, symbol_broker, side, kind, volume_lots, gc_anchored, "
-    "status, idempotency_key, created_at, updated_at, version, entry_gc, sl_gc, "
+    "take_profit_1r_enabled, auto_supertrend_after_1r_enabled, "
+    "trailing_timeframe, trailing_period, trailing_multiplier, "
+    "trailing_atr_method, trailing_source, status, idempotency_key, created_at, "
+    "updated_at, version, entry_gc, sl_gc, "
     "tp_gc, entry_broker, sl_broker, tp_broker, fill_price_broker, "
     "fill_price_gc_estimate, basis_at_submit, basis_at_last_sync, basis_at_fill, "
     "basis_stale_at_submit, broker_order_ticket, broker_position_ticket, "
@@ -45,6 +48,15 @@ def _row_to_order(row: sqlite3.Row) -> OrderRecord:
         kind=OrderKind(str(row["kind"])),
         volume_lots=float(row["volume_lots"]),
         gc_anchored=bool(row["gc_anchored"]),
+        take_profit_1r_enabled=bool(row["take_profit_1r_enabled"]),
+        auto_supertrend_after_1r_enabled=bool(
+            row["auto_supertrend_after_1r_enabled"]
+        ),
+        trailing_timeframe=row["trailing_timeframe"],
+        trailing_period=row["trailing_period"],
+        trailing_multiplier=row["trailing_multiplier"],
+        trailing_atr_method=row["trailing_atr_method"],
+        trailing_source=row["trailing_source"],
         status=OrderStatus(str(row["status"])),
         idempotency_key=str(row["idempotency_key"]),
         created_at=int(row["created_at"]),
@@ -89,6 +101,13 @@ def _order_params(o: OrderRecord) -> tuple[object, ...]:
         o.kind.value,
         o.volume_lots,
         1 if o.gc_anchored else 0,
+        1 if o.take_profit_1r_enabled else 0,
+        1 if o.auto_supertrend_after_1r_enabled else 0,
+        o.trailing_timeframe,
+        o.trailing_period,
+        o.trailing_multiplier,
+        o.trailing_atr_method,
+        o.trailing_source,
         o.status.value,
         o.idempotency_key,
         o.created_at,

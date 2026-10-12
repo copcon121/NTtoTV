@@ -19,6 +19,10 @@ export interface ProfileMarketOrderSettings {
   volumeLots: number;
   slDistanceGc: number;
   tpDistanceGc: number;
+  /** Close half of each new manual Market/Limit order once it reaches +1R. */
+  takeProfit1rEnabled?: boolean;
+  /** Arm the current SuperTrend trailing configuration after the 1R partial. */
+  autoSupertrendAfter1rEnabled?: boolean;
   /** Optional sizing mode for backwards compatibility with older profiles. */
   sizingMode?: "lots" | "risk";
   /** Target account-currency risk for chart orders when sizingMode is "risk". */

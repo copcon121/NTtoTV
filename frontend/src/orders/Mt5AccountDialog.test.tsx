@@ -68,4 +68,49 @@ describe("Mt5AccountDialog", () => {
       terminalPath: "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
     });
   });
+
+  it("selects a user terminal path without replacing login or server", () => {
+    render(
+      <Mt5AccountDialog
+        open
+        terminals={[
+          {
+            path: "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+            login: 263466221,
+            server: "Exness-MT5Real37",
+            title: "263466221 - Exness-MT5Real37",
+            label: "hieu",
+          },
+          {
+            path: "C:\\MT5Hai\\terminal64.exe",
+            login: 263535660,
+            server: "Exness-MT5Real37",
+            title: "263535660 - Exness-MT5Real37",
+            label: "hai",
+          },
+        ]}
+        onSubmit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Login"), {
+      target: { value: "257101455" },
+    });
+    fireEvent.change(screen.getByLabelText("Server"), {
+      target: { value: "Exness-MT5Real36" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "hai" }));
+
+    expect(screen.getByLabelText("Terminal path")).toHaveValue(
+      "C:\\MT5Hai\\terminal64.exe",
+    );
+    expect(screen.getByLabelText("Login")).toHaveValue("257101455");
+    expect(screen.getByLabelText("Server")).toHaveValue("Exness-MT5Real36");
+
+    fireEvent.click(screen.getByRole("button", { name: "hieu" }));
+    expect(screen.getByLabelText("Terminal path")).toHaveValue(
+      "C:\\Program Files\\MetaTrader 5\\terminal64.exe",
+    );
+  });
 });

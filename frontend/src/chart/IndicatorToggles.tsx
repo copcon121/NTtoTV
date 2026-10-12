@@ -1124,6 +1124,25 @@ export function IndicatorToggles({
               className="ema-settings"
               aria-label="GC Push Momentum settings panel"
             >
+              <label className="ema-setting-line">
+                <span className="ema-setting-label">Momentum display</span>
+                <select
+                  className="ema-length-input"
+                  aria-label="GC Push Momentum display mode"
+                  value={gcPushMomentumConfig.displayMode}
+                  onChange={(event) =>
+                    updateGcPushMomentum({
+                      displayMode:
+                        event.currentTarget.value === "native"
+                          ? "native"
+                          : "mgann_wave",
+                    })
+                  }
+                >
+                  <option value="mgann_wave">MGann Wave Direction</option>
+                  <option value="native">Native Push - Signal</option>
+                </select>
+              </label>
               <label className="fp-toggle-label">
                 <input
                   type="checkbox"

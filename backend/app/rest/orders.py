@@ -13,7 +13,9 @@ from fastapi import APIRouter, Depends, Request
 
 from ..config import settings as default_settings
 from ..engines.basis_engine import BasisEngine, ConvertedPrice
+from ..engines.bar_aggregator import SUPPORTED_TFS
 from ..engines.reconciliation import ReconciliationEngine
+from ..engines.supertrend import SupertrendConfig
 from ..engines.symbol_map import SymbolMap
 from ..models.auth import AuthenticatedUser
 from ..models.orders import (
@@ -116,6 +118,18 @@ async def create_order(
     source = OrderSource(str(body.get("source", OrderSource.API.value)))
     volume = _required_number(body, "volumeLots")
     gc_anchored = bool(body.get("gcAnchored", True))
+    take_profit_1r_enabled = _optional_bool(body, "takeProfit1rEnabled", False)
+    auto_supertrend_after_1r_enabled = _optional_bool(
+        body, "autoSupertrendAfter1rEnabled", False
+    )
+    if auto_supertrend_after_1r_enabled and not take_profit_1r_enabled:
+        raise bad_request(
+            "Auto SuperTrend after 1R requires 50% take profit at 1R",
+            field="autoSupertrendAfter1rEnabled",
+        )
+    trailing_timeframe, trailing_config = _trailing_config(
+        body, enabled=auto_supertrend_after_1r_enabled
+    )
 
     with _mt5_session(request, cache, account) as mt5:
         try:
@@ -228,6 +242,17 @@ async def create_order(
             kind=kind,
             volume_lots=volume,
             gc_anchored=gc_anchored,
+            take_profit_1r_enabled=take_profit_1r_enabled,
+            auto_supertrend_after_1r_enabled=auto_supertrend_after_1r_enabled,
+            trailing_timeframe=trailing_timeframe,
+            trailing_period=None if trailing_config is None else trailing_config.period,
+            trailing_multiplier=(
+                None if trailing_config is None else trailing_config.multiplier
+            ),
+            trailing_atr_method=(
+                None if trailing_config is None else trailing_config.atr_method
+            ),
+            trailing_source=None if trailing_config is None else trailing_config.source,
             status=OrderStatus.PENDING_SUBMIT,
             idempotency_key=idempotency,
             created_at=now,
@@ -726,6 +751,42 @@ def _guard_trading(trade_mode: str) -> None:
         raise conflict("Trading is disabled", field="trading")
     if trade_mode == "live" and not default_settings.live_trading_enabled:
         raise conflict("Live trading is disabled", field="trading")
+
+
+def _optional_bool(body: dict[str, Any], field: str, fallback: bool) -> bool:
+    value = body.get(field, fallback)
+    if not isinstance(value, bool):
+        raise bad_request(f"'{field}' must be a boolean", field=field)
+    return value
+
+
+def _trailing_config(
+    body: dict[str, Any], *, enabled: bool
+) -> tuple[str | None, SupertrendConfig | None]:
+    if not enabled:
+        return None, None
+    timeframe = str(body.get("trailingTimeframe") or "")
+    if timeframe not in SUPPORTED_TFS:
+        raise bad_request("Unsupported trailing timeframe", field="trailingTimeframe")
+    period = body.get("trailingPeriod")
+    if isinstance(period, bool) or not isinstance(period, int):
+        raise bad_request("trailingPeriod must be an integer", field="trailingPeriod")
+    try:
+        multiplier = float(body.get("trailingMultiplier"))
+    except (TypeError, ValueError):
+        raise bad_request(
+            "trailingMultiplier must be a number", field="trailingMultiplier"
+        )
+    try:
+        config = SupertrendConfig(
+            period=period,
+            multiplier=multiplier,
+            atr_method=str(body.get("trailingAtrMethod") or ""),
+            source=str(body.get("trailingSource") or ""),
+        )
+    except ValueError as exc:
+        raise bad_request(str(exc), field="supertrend")
+    return timeframe, config
 
 
 def _guard_volume(volume: float, min_lot: float, max_lot: float, step: float) -> None:

@@ -1052,6 +1052,23 @@ body {
   background: rgba(235, 77, 97, 0.14);
 }
 
+.auto-trade-toggle.active.take-profit-1r {
+  border-color: rgba(70, 154, 255, 0.95);
+  color: #9bc8ff !important;
+  background: rgba(70, 154, 255, 0.14);
+}
+
+.auto-trade-toggle.active.supertrend-after-1r {
+  border-color: rgba(194, 126, 255, 0.95);
+  color: #ddb5ff !important;
+  background: rgba(194, 126, 255, 0.14);
+}
+
+.auto-trade-toggle:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .auto-trade-detail {
   color: #9da8bb;
   font-size: 10px;
