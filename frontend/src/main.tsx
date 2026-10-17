@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { LiveApp } from "./LiveApp";
 import { FootprintPage } from "./footprint/FootprintPage";
 import { MarketProfilePage } from "./marketProfile/MarketProfilePage";
+import { LiquidityPage } from "./liquidity/LiquidityPage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { routeForPathname } from "./routes";
 import { registerServiceWorker } from "./webPush";
@@ -22,6 +23,8 @@ const app =
     <FootprintPage />
   ) : route === "marketProfile" ? (
     <MarketProfilePage />
+  ) : route === "liquidity" ? (
+    <LiquidityPage />
   ) : (
     <LiveApp />
   );

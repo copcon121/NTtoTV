@@ -9,6 +9,10 @@ from app.app import create_app
 from app.config import Settings
 from app.engines.basis_engine import BasisEngine
 from app.rest import auth as auth_routes
+from app.rest.profiles import (
+    MGANN_BREAK_SETTINGS_VERSION,
+    _default_mgann_break_settings,
+)
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
 
@@ -130,12 +134,62 @@ def test_me_profile_requires_auth_and_is_scoped_by_user(app_client: TestClient):
     ).status_code == 200
     bob_profile = app_client.get("/api/me/profile").json()["profile"]
     assert bob_profile["id"] != alice_id
-    assert bob_profile["payload"] == {}
+    assert bob_profile["payload"] == {
+        "mgannBreak": _default_mgann_break_settings(),
+        "mgannBreakSettingsVersion": MGANN_BREAK_SETTINGS_VERSION,
+    }
 
     app_client.post("/api/auth/logout")
     app_client.post("/api/auth/login", json={"username": "alice", "password": "pw"})
     reloaded = app_client.get("/api/me/profile").json()["profile"]
-    assert reloaded["payload"] == {"timeframe": "5m", "drawings": []}
+    assert reloaded["payload"] == {
+        "timeframe": "5m",
+        "drawings": [],
+        "mgannBreak": _default_mgann_break_settings(),
+        "mgannBreakSettingsVersion": MGANN_BREAK_SETTINGS_VERSION,
+    }
+
+
+@pytest.mark.integration
+def test_me_profile_retires_stale_mgann_settings_but_keeps_current_customization(
+    app_client: TestClient,
+):
+    assert app_client.post(
+        "/api/auth/register", json={"username": "alice", "password": "pw"}
+    ).status_code == 200
+
+    stale = app_client.put(
+        "/api/me/profile",
+        json={
+            "payload": {
+                "timeframe": "1m",
+                "mgannBreak": {
+                    "volumeDeltaMultiplier": 3,
+                    "minSpreadTicks": 0,
+                    "spreadLookback": 20,
+                    "spreadMultiplier": 3,
+                    "filterLiquidity": False,
+                    "confirmationBars": 2,
+                    "breakTicks": 0,
+                },
+            }
+        },
+    ).json()["profile"]["payload"]
+    assert stale["mgannBreak"] == _default_mgann_break_settings()
+    assert stale["mgannBreakSettingsVersion"] == MGANN_BREAK_SETTINGS_VERSION
+
+    custom = {**_default_mgann_break_settings(), "spreadLookback": 40}
+    current = app_client.put(
+        "/api/me/profile",
+        json={
+            "payload": {
+                "timeframe": "1m",
+                "mgannBreak": custom,
+                "mgannBreakSettingsVersion": MGANN_BREAK_SETTINGS_VERSION,
+            }
+        },
+    ).json()["profile"]["payload"]
+    assert current["mgannBreak"] == custom
 
 
 @pytest.mark.integration
@@ -178,6 +232,10 @@ def test_first_user_profile_seeds_from_legacy_default(
             ).status_code == 200
             profile = client.get("/api/me/profile").json()["profile"]
             assert profile["name"] == "Legacy"
-            assert profile["payload"] == {"timeframe": "15m"}
+            assert profile["payload"] == {
+                "timeframe": "15m",
+                "mgannBreak": _default_mgann_break_settings(),
+                "mgannBreakSettingsVersion": MGANN_BREAK_SETTINGS_VERSION,
+            }
     finally:
         cache.close()

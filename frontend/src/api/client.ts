@@ -71,6 +71,7 @@ export interface FootprintRestBar {
 
 export interface FootprintQuery {
   count?: number;
+  from?: number;
   at?: number;
   context?: number;
 }
@@ -1037,7 +1038,7 @@ export class ApiClient {
     return body.bars;
   }
 
-  /** M1 footprint bars plus optional centered-history metadata. */
+  /** M1 footprint bars for a latest/range request plus centered-history metadata. */
   async footprintDetails(
     symbol: string,
     contract: string,
@@ -1049,6 +1050,9 @@ export class ApiClient {
     });
     if (query.count !== undefined) {
       params.set("count", String(query.count));
+    }
+    if (query.from !== undefined) {
+      params.set("from", String(query.from));
     }
     if (query.at !== undefined) {
       params.set("at", String(query.at));

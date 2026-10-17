@@ -47,6 +47,7 @@ foreach ($target in @($classes, $testClasses)) {
 $sourceRoot = Join-Path $resolvedBridgeRoot "src\main\java\com\nttotv\bookmap"
 $sources = @(
     Join-Path $sourceRoot "BookmapFootprintAccumulator.java"
+    Join-Path $sourceRoot "BookmapLiquidityTracker.java"
     Join-Path $sourceRoot "BookmapWebSocketSender.java"
     Join-Path $sourceRoot "BookmapMarketDataBridge.java"
 )
@@ -66,6 +67,7 @@ if (!$SkipTests) {
     $testRoot = Join-Path $resolvedBridgeRoot "src\test\java\com\nttotv\bookmap"
     $testSources = @(
         Join-Path $testRoot "BookmapFootprintAccumulatorTest.java"
+        Join-Path $testRoot "BookmapLiquidityTrackerTest.java"
         Join-Path $testRoot "BookmapWebSocketSenderTest.java"
     )
     foreach ($testSource in $testSources) {
@@ -86,6 +88,10 @@ if (!$SkipTests) {
     & $java -classpath $runClasspath com.nttotv.bookmap.BookmapFootprintAccumulatorTest
     if ($LASTEXITCODE -ne 0) {
         throw "market-data bridge tests failed with exit code $LASTEXITCODE"
+    }
+    & $java -classpath $runClasspath com.nttotv.bookmap.BookmapLiquidityTrackerTest
+    if ($LASTEXITCODE -ne 0) {
+        throw "liquidity tracker tests failed with exit code $LASTEXITCODE"
     }
     & $java -classpath $runClasspath com.nttotv.bookmap.BookmapWebSocketSenderTest
     if ($LASTEXITCODE -ne 0) {

@@ -252,8 +252,8 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(screen.getByText("Delta x")).toBeInTheDocument();
     expect(screen.getByText("Spread x")).toBeInTheDocument();
     expect(screen.queryByLabelText("mGann break direction")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Volume Delta multiplier")).toHaveValue(2);
-    expect(screen.getByLabelText("Spread multiplier")).toHaveValue(2);
+    expect(screen.getByLabelText("Volume Delta multiplier")).toHaveValue(2.5);
+    expect(screen.getByLabelText("Spread multiplier")).toHaveValue(3.5);
     expect(
       screen.queryByLabelText("mGann Break L/S history limit"),
     ).not.toBeInTheDocument();
@@ -278,17 +278,17 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
         timeframe: "1m",
         volumeDeltaLookback: 20,
         volumeDeltaMultiplier: 2.5,
-        minSpreadTicks: 0,
-        spreadLookback: 20,
+        minSpreadTicks: 10,
+        spreadLookback: 30,
         spreadMultiplier: 2.2,
         swingSize: 5,
         pivotLookbackBars: 120,
-        minPivotCuts: 2,
-        confirmationBars: 2,
-        breakTicks: 0,
+        minPivotCuts: 3,
+        confirmationBars: 0,
+        breakTicks: 3,
         filterLiquidity: true,
         liquidityAtrMargin: 4,
-        liquiditySweepLookbackBars: 5,
+        liquiditySweepLookbackBars: 10,
         repeat: true,
       },
     });
@@ -306,8 +306,8 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     expect(screen.queryByText("BigTrade >")).not.toBeInTheDocument();
     expect(screen.getByText("Delta x")).toBeInTheDocument();
     expect(screen.getByText("Spread x")).toBeInTheDocument();
-    expect(screen.getByLabelText("Volume Delta multiplier")).toHaveValue(2);
-    expect(screen.getByLabelText("Spread multiplier")).toHaveValue(2);
+    expect(screen.getByLabelText("Volume Delta multiplier")).toHaveValue(2.5);
+    expect(screen.getByLabelText("Spread multiplier")).toHaveValue(3.5);
     expect(
       screen.queryByLabelText("mGann Break L/S history limit"),
     ).not.toBeInTheDocument();
@@ -329,17 +329,17 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
         timeframe: "1m",
         volumeDeltaLookback: 20,
         volumeDeltaMultiplier: 2.5,
-        minSpreadTicks: 0,
-        spreadLookback: 20,
+        minSpreadTicks: 10,
+        spreadLookback: 30,
         spreadMultiplier: 2.2,
         swingSize: 5,
         pivotLookbackBars: 120,
-        minPivotCuts: 2,
-        confirmationBars: 2,
-        breakTicks: 0,
+        minPivotCuts: 3,
+        confirmationBars: 0,
+        breakTicks: 3,
         filterLiquidity: true,
         liquidityAtrMargin: 4,
-        liquiditySweepLookbackBars: 5,
+        liquiditySweepLookbackBars: 10,
         repeat: true,
       },
     });
@@ -364,7 +364,7 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
           filterLiquidity: true,
           minPivotCuts: 4,
           liquidityAtrMargin: 4,
-          liquiditySweepLookbackBars: 5,
+          liquiditySweepLookbackBars: 10,
         }),
       }),
     );

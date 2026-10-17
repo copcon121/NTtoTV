@@ -1537,6 +1537,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private smcOverlay: SmcOverlay = emptySmcOverlay();
   private smcOverlaySignature = "";
   private sweepReversalOverlaySignature = "";
+  private sweepReversalSetups: RenderableSweepSetup[] = [];
   private readonly emaSeriesById = new Map<string, ISeriesApi<"Line">>();
   private readonly emaLastTimeById = new Map<string, number>();
   private readonly emaColorById = new Map<string, string>();
@@ -1582,6 +1583,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     );
     if (visible === this.denseOverlaysVisibleForZoom) return;
     this.denseOverlaysVisibleForZoom = visible;
+    this.renderBigTradeMarkers();
+    this.renderSweepReversalOverlay();
     if (!this.mgannSwingVisible) return;
     const overlay = this.currentMgannOverlay();
     this.renderCandleSeries(overlay);
@@ -3519,7 +3522,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const signature = JSON.stringify(overlay);
     if (signature === this.sweepReversalOverlaySignature) return;
     this.sweepReversalOverlaySignature = signature;
-    const setups: RenderableSweepSetup[] = overlay.setups.map((setup) => ({
+    this.sweepReversalSetups = overlay.setups.map((setup) => ({
       id: setup.id,
       direction: setup.direction,
       phase: setup.phase,
@@ -3535,6 +3538,13 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       zoneColor: overlay.zoneColor,
       levelColor: overlay.levelColor,
     }));
+    this.renderSweepReversalOverlay();
+  }
+
+  private renderSweepReversalOverlay(): void {
+    const setups = this.denseOverlaysVisibleForZoom
+      ? this.sweepReversalSetups
+      : [];
     if (setups.length === 0) {
       if (this.sweepReversalPrimitive !== undefined) {
         this.candleSeries.detachPrimitive(
@@ -4212,7 +4222,10 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   private renderBigTradeMarkers(): void {
-    const markers = [...this.bigTradesByKey.values()].sort((a, b) => {
+    const markers = (this.denseOverlaysVisibleForZoom
+      ? [...this.bigTradesByKey.values()]
+      : []
+    ).sort((a, b) => {
       if (a.time !== b.time) return a.time - b.time;
       if ((a.tradeId ?? 0) !== (b.tradeId ?? 0)) {
         return (a.tradeId ?? 0) - (b.tradeId ?? 0);

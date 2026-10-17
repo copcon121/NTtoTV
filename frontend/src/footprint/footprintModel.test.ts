@@ -115,6 +115,14 @@ describe("footprintModel — redraw decision (Req 14.6, 14.7)", () => {
     expect(shouldRedraw(prev, next)).toBe(true);
   });
 
+  it("redraws when the standalone virtual scroll offset changes", () => {
+    const vp = viewport();
+    const bar = fp(0);
+    const prev = { bars: [bar], viewport: vp, scrollTopPx: 0 };
+    const next = { bars: [bar], viewport: vp, scrollTopPx: 120 };
+    expect(shouldRedraw(prev, next)).toBe(true);
+  });
+
   it("redraws when a displayed bar's data changes", () => {
     const vp = viewport();
     const prev = { bars: [fp(0, 100.1)], viewport: vp };

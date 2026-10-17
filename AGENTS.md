@@ -76,6 +76,8 @@ user explicitly asks.
 - `storage/`: SQLite stores.
   - `tick_store.py`: raw tick/quote day shards under `backend/data/ticks`.
   - `cache_store.py`, `keyed_store.py`: derived cache DB `backend/data/app.sqlite`.
+  - `liquidity_store.py`: compact Bookmap depth signals in
+    `backend/data/liquidity.sqlite`; raw full-depth frames are never stored.
   - `profile_store.py`, `alert_store.py`: profiles/alerts in cache DB.
 - `registry/`: `/ws/chart` endpoint and throttled websocket registry.
 - `rest/`: REST API for health/symbols/contracts/history/orderflow/big-trades,
@@ -88,6 +90,8 @@ Backend storage:
 - `backend/data/app.sqlite`: derived bars, order-flow, alerts, profiles,
   metadata.
 - `backend/data/ticks/GC/<contract>/<YYYY-MM-DD>.sqlite`: raw trade/quote shards.
+- `backend/data/liquidity.sqlite`: relative/absolute liquidity markers and
+  long-term line lifecycles, retained for 24 hours by default.
 - Raw tick retention is 2 calendar UTC days by default.
 - Historical/deep imports should generally write bars + volume delta only; do
   not import full raw Bid/Ask history unless explicitly needed.
@@ -102,6 +106,7 @@ Key REST endpoints:
 - `GET /api/orderflow/volume-delta?symbol=GC&contract=GC&tf=1m&limit=...`
 - `GET /api/orderflow/footprint?symbol=GC&contract=GC&count=...`
 - `GET /api/big-trades?symbol=GC&contract=GC&limit=...`
+- `GET /api/liquidity?symbol=GC&contract=GC&tf=1m|5m&from=...&to=...`
 
 ## Frontend Layout
 
@@ -123,6 +128,7 @@ Stack:
 - `alerts/`: alert panel/types.
 - `status/`: connection status indicator.
 - `profiles/`: profile payload types.
+- `liquidity/`: standalone `/lq` M1/M5 liquidity timing chart.
 - `test/`: fast-check setup and property helpers.
 - `styles.css`: global layout and responsive/mobile toolbar styles.
 
@@ -183,6 +189,9 @@ Current NinjaScript behavior:
 - Bookmap is the primary realtime source for OHLCV, BigTrade, Volume Delta, and
   Footprint. Its exchange-side trades update delta/footprint tick by tick; full
   1m ladder snapshots reconcile reconnects and transport gaps.
+- The Bookmap bridge reduces full-depth updates in-process into TTW-style
+  Relative/Absolute events and persistent long-term liquidity lines. Only those
+  compact signals cross `/ws/bookmap`; `/lq` displays them over M1/M5 candles.
 - The native chart indicator supplies finalized 1m delta/footprint only while NT
   is the selected fallback. Default behavior posts realtime closed bars, not
   historical reloads, to avoid a large startup burst.

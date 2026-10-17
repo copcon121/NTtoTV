@@ -321,6 +321,25 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
+  it("loads footprint details from a session start", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({
+        symbol: "GC",
+        contract: "GC",
+        tf: "1m",
+        bars: [],
+      }),
+    );
+    const api = new ApiClient({ fetchFn });
+
+    await api.footprintDetails("GC", "GC", { from: 1_000 });
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orderflow/footprint?symbol=GC&contract=GC&from=1000",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
   it("can request cached big trades without a raw-tick rebuild", async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({

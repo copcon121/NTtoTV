@@ -19,4 +19,12 @@ export {
   type FootprintViewport,
   type FootprintRenderInputs,
 } from "./footprintModel";
-export { FootprintCanvas, drawFootprint, type FootprintCanvasProps } from "./FootprintCanvas";
+export {
+  FootprintCanvas,
+  calculateOrderflowGapSignals,
+  drawFootprint,
+  type FootprintCanvasProps,
+  type OrderflowGapOptions,
+  type OrderflowGapSide,
+  type OrderflowGapSignal,
+} from "./FootprintCanvas";

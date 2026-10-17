@@ -18,6 +18,11 @@ describe("routeForPathname", () => {
     expect(routeForPathname("/mp/")).toBe("marketProfile");
   });
 
+  it("routes /lq to the liquidity page", () => {
+    expect(routeForPathname("/lq")).toBe("liquidity");
+    expect(routeForPathname("/lq/")).toBe("liquidity");
+  });
+
   it("routes other paths to the live chart app", () => {
     expect(routeForPathname("/")).toBe("live");
     expect(routeForPathname("/anything")).toBe("live");

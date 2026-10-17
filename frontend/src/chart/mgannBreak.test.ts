@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_MGANN_BREAK_SETTINGS,
+  MGANN_BREAK_SETTINGS_VERSION,
   mgannBreakAlertParams,
+  mgannBreakSettingsFromProfile,
   mgannBreakSettingsMatchParams,
   normalizeMgannBreakSettings,
 } from "./mgannBreak";
@@ -40,6 +42,26 @@ describe("mGann Break settings", () => {
       timeframe: "1m",
       repeat: true,
     });
+  });
+
+  it("retires unversioned profile settings without changing current profiles", () => {
+    const stale = {
+      ...DEFAULT_MGANN_BREAK_SETTINGS,
+      volumeDeltaMultiplier: 3,
+      minSpreadTicks: 0,
+      spreadLookback: 20,
+      spreadMultiplier: 3,
+      filterLiquidity: false,
+      confirmationBars: 2,
+      breakTicks: 0,
+    };
+
+    expect(mgannBreakSettingsFromProfile(stale, undefined)).toEqual(
+      DEFAULT_MGANN_BREAK_SETTINGS,
+    );
+    expect(
+      mgannBreakSettingsFromProfile(stale, MGANN_BREAK_SETTINGS_VERSION),
+    ).toEqual(stale);
   });
 
   it("matches alert params by detector settings and ignores alert metadata", () => {

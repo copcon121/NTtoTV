@@ -40,6 +40,7 @@ from app.engines.alert_engine import (
     MGANN_BIG_TRADE_SWEEP,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_FILTER_LIQUIDITY,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
@@ -220,6 +221,15 @@ def _params_for(alert_type: str):
             )
             params["minPivotWickTicks"] = (
                 MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS
+            )
+            params["filterLiquidity"] = (
+                MGANN_BIG_TRADE_SWEEP_DEFAULT_FILTER_LIQUIDITY
+            )
+            params["liquidityAtrMargin"] = (
+                MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN
+            )
+            params["liquiditySweepLookbackBars"] = (
+                MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS
             )
             params["confirmationBars"] = (
                 MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS

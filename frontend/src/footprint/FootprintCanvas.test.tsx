@@ -6,6 +6,7 @@ import { type FootprintUpdateMessage } from "../socket/messages";
 import {
   FootprintCanvas,
   calculateFootprintXKontrolSignals,
+  calculateOrderflowGapSignals,
   drawFootprint,
 } from "./FootprintCanvas";
 import { type FootprintViewport } from "./footprintModel";
@@ -116,6 +117,32 @@ function makeCtx() {
   };
 }
 
+function profileBar(
+  time: number,
+  center: number,
+  open: number,
+  close: number,
+  low = Math.min(open, close),
+  high = Math.max(open, close),
+): FootprintUpdateMessage {
+  const bar = fp(time, center);
+  bar.rows = [
+    { price: center + 0.1, bid: 1, ask: 0, imbalance: null },
+    { price: center, bid: 50, ask: 50, imbalance: null },
+    { price: center - 0.1, bid: 0, ask: 1, imbalance: null },
+  ];
+  bar.open = open;
+  bar.high = high;
+  bar.low = low;
+  bar.close = close;
+  bar.poc = center;
+  bar.pocVolume = 100;
+  bar.vah = center;
+  bar.val = center;
+  bar.unfinishedAuction = { high: false, low: false };
+  return bar;
+}
+
 const viewport: FootprintViewport = {
   priceToY: (p) => (200 - p) * 2,
   width: 300,
@@ -160,6 +187,85 @@ describe("drawFootprint (Req 14.2, 19.4)", () => {
         showInitial: true,
         showStrong: true,
         showTotal: false,
+      }),
+    ).toEqual([]);
+  });
+
+  it("detects buy and sell Orderflows Gaps and removes one tick per zone edge", () => {
+    const buyBars = new Map<number, FootprintUpdateMessage>([
+      [0, profileBar(0, 100.0, 99.9, 100.1)],
+      [60_000, profileBar(60_000, 100.3, 100.2, 100.4)],
+    ]);
+    expect(calculateOrderflowGapSignals(buyBars)).toEqual([
+      {
+        time: 60_000,
+        side: "buy",
+        zoneLow: 100.1,
+        zoneHigh: 100.2,
+        markerPrice: 100.2,
+      },
+    ]);
+
+    const sellBars = new Map<number, FootprintUpdateMessage>([
+      [0, profileBar(0, 100.3, 100.2, 100.4)],
+      [60_000, profileBar(60_000, 100.0, 100.1, 99.9)],
+    ]);
+    expect(calculateOrderflowGapSignals(sellBars)).toEqual([
+      {
+        time: 60_000,
+        side: "sell",
+        zoneLow: 100.1,
+        zoneHigh: 100.2,
+        markerPrice: 100.1,
+      },
+    ]);
+  });
+
+  it("requires more than one tick and the matching candle direction", () => {
+    const oneTick = new Map<number, FootprintUpdateMessage>([
+      [0, profileBar(0, 100.0, 99.9, 100.1)],
+      [60_000, profileBar(60_000, 100.1, 100.0, 100.2)],
+    ]);
+    expect(calculateOrderflowGapSignals(oneTick)).toEqual([]);
+
+    const wrongDirection = new Map<number, FootprintUpdateMessage>([
+      [0, profileBar(0, 100.0, 99.9, 100.1)],
+      [60_000, profileBar(60_000, 100.3, 100.4, 100.2)],
+    ]);
+    expect(calculateOrderflowGapSignals(wrongDirection)).toEqual([]);
+  });
+
+  it("optionally requires the prior bar to pass the offset-1 swing filter", () => {
+    const bars = new Map<number, FootprintUpdateMessage>();
+    for (let index = 0; index < 6; index += 1) {
+      bars.set(
+        index * 60_000,
+        profileBar(index * 60_000, 100.0, 99.9, 100.1, 99.8, 100.2),
+      );
+    }
+    bars.set(
+      6 * 60_000,
+      profileBar(6 * 60_000, 100.0, 99.9, 100.1, 95.0, 100.2),
+    );
+    bars.set(
+      7 * 60_000,
+      profileBar(7 * 60_000, 100.3, 100.2, 100.4),
+    );
+
+    expect(
+      calculateOrderflowGapSignals(bars, {
+        useSwingFilter: true,
+        lookbackPeriod: 5,
+      }),
+    ).toHaveLength(1);
+
+    const prior = bars.get(6 * 60_000);
+    if (!prior) throw new Error("missing prior test bar");
+    prior.low = 99.8;
+    expect(
+      calculateOrderflowGapSignals(bars, {
+        useSwingFilter: true,
+        lookbackPeriod: 5,
       }),
     ).toEqual([]);
   });
@@ -309,6 +415,34 @@ describe("drawFootprint (Req 14.2, 19.4)", () => {
     expect(ctx.fillStyles).toContain("#ff1493");
   });
 
+  it("draws an Orderflows Gap zone without a text label", () => {
+    const ctx = makeCtx();
+    const bars = [fp(0), fp(60_000)];
+
+    drawFootprint(
+      ctx as unknown as CanvasRenderingContext2D,
+      { bars, viewport, displayCount: 2 },
+      { ...DEFAULT_FOOTPRINT_SETTINGS, showOrderflowsGaps: true },
+      undefined,
+      {
+        signals: [
+          {
+            time: 60_000,
+            side: "buy",
+            zoneLow: 100.0,
+            zoneHigh: 100.1,
+            markerPrice: 100.0,
+          },
+        ],
+      },
+    );
+
+    expect(ctx.texts).not.toContain("OFG B");
+    expect(ctx.texts).not.toContain("OFG S");
+    expect(ctx.fillRectCalls).toBeGreaterThan(0);
+    expect(ctx.strokeRectCalls).toBeGreaterThan(0);
+  });
+
   it("draws nothing but a clear when there are no bars", () => {
     const ctx = makeCtx();
     drawFootprint(ctx as unknown as CanvasRenderingContext2D, { bars: [], viewport });
@@ -333,6 +467,29 @@ describe("FootprintCanvas component (Req 14.6, 14.7, 14.8)", () => {
     expect(ctx.clearRectCalls).toBe(1);
   });
 
+  it("always draws Orderflows Gaps in the compact preview without labels", () => {
+    const bars = new Map<number, FootprintUpdateMessage>([
+      [0, profileBar(0, 100.0, 99.9, 100.1)],
+      [60_000, profileBar(60_000, 100.3, 100.2, 100.4)],
+    ]);
+
+    render(
+      <FootprintCanvas
+        bars={bars}
+        viewport={viewport}
+        settings={{
+          ...DEFAULT_FOOTPRINT_SETTINGS,
+          showOrderflowsGaps: false,
+        }}
+        now={() => 0}
+      />,
+    );
+
+    expect(ctx.fillRectCalls).toBeGreaterThan(0);
+    expect(ctx.texts).not.toContain("OFG B");
+    expect(ctx.texts).not.toContain("OFG S");
+  });
+
   it("renders standalone mode with a custom display count", () => {
     const bars = new Map(Array.from({ length: 50 }, (_, i) => [i * 60000, fp(i)]));
     const { container } = render(
@@ -348,6 +505,23 @@ describe("FootprintCanvas component (Req 14.6, 14.7, 14.8)", () => {
     expect(container.querySelector("canvas")).toHaveClass(
       "footprint-canvas-standalone",
     );
+  });
+
+  it("keeps the standalone bitmap at viewport height inside a taller virtual range", () => {
+    const bars = new Map([[0, fp(0)]]);
+    const { container } = render(
+      <FootprintCanvas
+        bars={bars}
+        viewport={{ ...viewport, width: 2200, height: 9800 }}
+        renderHeightPx={849}
+        scrollTopPx={1200}
+        now={() => 0}
+        layout="standalone"
+      />,
+    );
+    const canvas = container.querySelector("canvas");
+    expect(canvas).toHaveAttribute("height", "849");
+    expect(canvas).toHaveStyle({ height: "849px" });
   });
 
   it("retains the rendering when bars/viewport are unchanged (Req 14.6, 14.7)", () => {

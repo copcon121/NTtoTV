@@ -72,6 +72,8 @@ export interface ChartProfilePayload {
   mgannBreakSignalLimit?: number;
   /** Detection settings for the standalone mGann Break L/S indicator. */
   mgannBreak?: MgannBreakSettings;
+  /** Version of the mGann Break detector settings, used to retire stale snapshots. */
+  mgannBreakSettingsVersion?: number;
   showBigTrades: boolean;
   ema: EmaSettings;
   /** Optional for profiles saved before Supertrend was introduced. */

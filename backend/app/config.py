@@ -48,6 +48,7 @@ class Settings:
     data_dir: Path = DEFAULT_DATA_DIR
     cache_db_name: str = "app.sqlite"
     ticks_subdir: str = "ticks"
+    liquidity_db_name: str = "liquidity.sqlite"
 
     # Streaming / lifecycle timing (see Requirements 5, 6).
     ui_throttle_min_ms: int = 100
@@ -91,6 +92,13 @@ class Settings:
     # Raw tick retention (see Requirements 7.4, 7.5). This is a calendar-day
     # count including today's UTC shard; v1 keeps today and yesterday only.
     tick_retention_days: int = 2
+    # Compact threshold events and persistent-line lifecycles only. Raw depth
+    # is deliberately never written by the backend.
+    liquidity_retention_hours: int = field(
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_LIQUIDITY_RETENTION_HOURS", "24")
+        )
+    )
 
     # Contract_Resolver scoring (see Requirement 10.2).
     resolver_window_ms: int = DEFAULT_RESOLVER_WINDOW_MS
@@ -212,6 +220,10 @@ class Settings:
     @property
     def ticks_dir(self) -> Path:
         return self.data_dir / self.ticks_subdir
+
+    @property
+    def liquidity_db_path(self) -> Path:
+        return self.data_dir / self.liquidity_db_name
 
     @property
     def analyst_db_path(self) -> Path:

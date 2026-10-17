@@ -52,6 +52,7 @@ from ..models.messages import (
     EventType,
     FootprintUpdate,
     FvgSignalUpdate,
+    LiquidityUpdate,
     Ping,
     QuoteUpdate,
     TduSignalUpdate,
@@ -111,6 +112,7 @@ OutboundMessage = (
     | VolumeDeltaUpdate
     | FootprintUpdate
     | FvgSignalUpdate
+    | LiquidityUpdate
     | TduSignalUpdate
     | BigTrade
     | MarketDataStatus
@@ -184,6 +186,10 @@ def coalescing_subkey(payload: Mapping[str, Any]) -> Hashable:
             payload["price"],
             payload["side"],
         )
+    if t == "liquidity_update":
+        if payload.get("eventKind") == "long_term":
+            return ("liquidity_update", "long_term", payload.get("lineId"))
+        return ("liquidity_update", payload.get("sequence"), payload.get("time"))
     if t == "market_data_status":
         return ("market_data_status",)
     if t == "alert_event":

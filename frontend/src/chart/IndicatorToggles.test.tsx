@@ -27,6 +27,34 @@ function open() {
 }
 
 describe("IndicatorToggles", () => {
+  it("configures the optional Orderflows Gaps swing filter", () => {
+    const onSettings = vi.fn();
+    render(
+      <IndicatorToggles
+        footprint
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        onFootprintSettingsChange={onSettings}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+      />,
+    );
+
+    open();
+    fireEvent.click(screen.getByLabelText("Footprint settings"));
+    const swingToggle = screen.getByLabelText("Orderflows Gaps swing filter");
+    expect(swingToggle).not.toBeDisabled();
+    fireEvent.click(swingToggle);
+    expect(onSettings).toHaveBeenLastCalledWith({
+      ...DEFAULT_FOOTPRINT_SETTINGS,
+      orderflowsGapsUseSwingFilter: true,
+    });
+  });
+
   it("configures the three XKontrol levels independently", () => {
     const onSettings = vi.fn();
     render(
@@ -331,7 +359,7 @@ describe("IndicatorToggles", () => {
     );
   });
 
-  it("disables GC Push Momentum outside M1", () => {
+  it("disables GC Push Momentum outside M1 and M5", () => {
     render(
       <IndicatorToggles
         gcPushMomentum
@@ -352,6 +380,28 @@ describe("IndicatorToggles", () => {
     open();
     expect(screen.getByLabelText("GC Push Momentum")).toBeDisabled();
     expect(screen.getByLabelText("GC Push Momentum settings")).toBeDisabled();
+  });
+
+  it("disables TDU Buy/Sell Momentum outside M1 and M5", () => {
+    render(
+      <IndicatorToggles
+        tduSignals
+        tduSignalsDisabled
+        footprint={false}
+        bigTrades={false}
+        ema={EMA}
+        smc={SMC}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onFootprintSettingsChange={() => {}}
+      />,
+    );
+
+    open();
+    expect(screen.getByLabelText("TDU Buy/Sell Momentum")).toBeDisabled();
   });
 
   it("can disable MGannSwing independently", () => {
@@ -573,7 +623,7 @@ describe("IndicatorToggles", () => {
     });
     expect(onSettings).toHaveBeenNthCalledWith(3, {
       ...DEFAULT_MGANN_BREAK_SETTINGS,
-      filterLiquidity: true,
+      filterLiquidity: false,
     });
     expect(onCreateAlert).toHaveBeenCalledTimes(1);
   });

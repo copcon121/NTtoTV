@@ -34,6 +34,11 @@ export function gcPushMomentumEnabledForTimeframe(
   return timeframe === "1m" || timeframe === "5m";
 }
 
+/** TDU Buy/Sell Momentum is intended for the M1 and M5 chart views only. */
+export function tduSignalsEnabledForTimeframe(timeframe: Timeframe): boolean {
+  return timeframe === "1m" || timeframe === "5m";
+}
+
 export function fixedRangeMsFromAnchors(
   anchors: readonly AnchorPoint[],
   timeframe: Timeframe,

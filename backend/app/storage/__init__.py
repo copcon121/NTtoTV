@@ -17,6 +17,7 @@ from .auto_trade_store import AutoTradeStore
 from .cache_store import CACHE_TABLES, CacheStore
 from .connection import DEFAULT_BUSY_TIMEOUT_MS, SingleWriter, connect, connect_reader
 from .keyed_store import KeyedStore
+from .liquidity_store import LiquidityStore
 from .profile_store import ProfileStore
 from .supertrend_trailing_store import SupertrendTrailingStore
 from .records import (
@@ -37,6 +38,7 @@ __all__ = [
     "CacheStore",
     "CACHE_TABLES",
     "KeyedStore",
+    "LiquidityStore",
     "AlertStore",
     "AutoTradeStore",
     "ProfileStore",

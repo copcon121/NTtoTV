@@ -32,6 +32,7 @@ export type ChartEventType =
   | "footprint_update"
   | "fvg_signal_update"
   | "tdu_signal_update"
+  | "liquidity_update"
   | "big_trade"
   | "market_data_status"
   | "alert_event"
@@ -201,6 +202,39 @@ export interface TduSignalUpdateMessage {
   momentumDirection: number;
   momentumLevel: number;
   deltaDivergence: number;
+}
+
+export type LiquidityEventKind = "relative" | "absolute" | "long_term";
+export type LiquidityAction =
+  | "added"
+  | "removed"
+  | "crossed"
+  | "start"
+  | "update"
+  | "end"
+  | "snapshot";
+
+/** Compact signal derived inside Bookmap from full-depth updates. */
+export interface LiquidityUpdateMessage {
+  type: "liquidity_update";
+  symbol: string;
+  contract: string;
+  sourceContract?: string;
+  sequence: number;
+  time: number;
+  eventKind: LiquidityEventKind;
+  action: LiquidityAction;
+  side: "bid" | "ask";
+  price: number;
+  size: number;
+  previousSize: number;
+  change: number;
+  threshold: number;
+  domDistance: number | null;
+  strength: number;
+  lineId?: string;
+  lineStartTime?: number;
+  snapshot: boolean;
 }
 
 /** Big trade marker (Req 5.2, 15.4, 15.5). */
@@ -407,6 +441,7 @@ export type InboundMessage =
   | FootprintUpdateMessage
   | FvgSignalUpdateMessage
   | TduSignalUpdateMessage
+  | LiquidityUpdateMessage
   | BigTradeMessage
   | MarketDataStatusMessage
   | AlertEventMessage

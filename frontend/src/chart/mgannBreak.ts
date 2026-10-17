@@ -18,24 +18,26 @@ export interface MgannBreakSettings {
   breakTicks: number;
 }
 
+export const MGANN_BREAK_SETTINGS_VERSION = 1;
+
 export const DEFAULT_MGANN_BREAK_SETTINGS: MgannBreakSettings = {
   requireBigTrade: false,
   bigTradeThreshold: 70,
   volumeDeltaLookback: 20,
-  volumeDeltaMultiplier: 2,
-  minSpreadTicks: 0,
-  spreadLookback: 20,
-  spreadMultiplier: 2,
+  volumeDeltaMultiplier: 2.5,
+  minSpreadTicks: 10,
+  spreadLookback: 30,
+  spreadMultiplier: 3.5,
   swingSize: 5,
   pivotLookbackBars: 120,
-  minPivotCuts: 2,
+  minPivotCuts: 3,
   pivotToleranceTicks: 5,
   minPivotWickTicks: 2,
-  filterLiquidity: false,
+  filterLiquidity: true,
   liquidityAtrMargin: 4,
-  liquiditySweepLookbackBars: 5,
-  confirmationBars: 2,
-  breakTicks: 0,
+  liquiditySweepLookbackBars: 10,
+  confirmationBars: 0,
+  breakTicks: 3,
 };
 
 function positiveInteger(value: unknown, fallback: number, maximum = 5_000): number {
@@ -109,7 +111,10 @@ export function normalizeMgannBreakSettings(
       input?.minPivotWickTicks,
       defaults.minPivotWickTicks,
     ),
-    filterLiquidity: input?.filterLiquidity === true,
+    filterLiquidity:
+      typeof input?.filterLiquidity === "boolean"
+        ? input.filterLiquidity
+        : defaults.filterLiquidity,
     liquidityAtrMargin: positiveNumber(
       input?.liquidityAtrMargin,
       defaults.liquidityAtrMargin,
@@ -125,6 +130,21 @@ export function normalizeMgannBreakSettings(
     ),
     breakTicks: nonnegativeInteger(input?.breakTicks, defaults.breakTicks),
   };
+}
+
+/**
+ * Profiles saved before the optimized detector settings were introduced do
+ * not carry a settings version. Reset only that stale section while keeping
+ * the rest of the chart profile intact.
+ */
+export function mgannBreakSettingsFromProfile(
+  input: Partial<MgannBreakSettings> | null | undefined,
+  version: number | undefined,
+): MgannBreakSettings {
+  if (version !== MGANN_BREAK_SETTINGS_VERSION) {
+    return { ...DEFAULT_MGANN_BREAK_SETTINGS };
+  }
+  return normalizeMgannBreakSettings(input);
 }
 
 export function mgannBreakAlertParams(

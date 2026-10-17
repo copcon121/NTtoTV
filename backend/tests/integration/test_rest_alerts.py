@@ -378,7 +378,7 @@ def test_rest_alerts_accept_and_normalize_mgann_break_ls_params(
                 body["params"]["minPivotCuts"]
                 == MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS
             )
-            assert "filterLiquidity" not in body["params"]
+            assert body["params"]["filterLiquidity"] is True
             assert "liquidityAtrMargin" not in body["params"]
             assert "liquiditySweepLookbackBars" not in body["params"]
             assert (

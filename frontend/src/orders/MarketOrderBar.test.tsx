@@ -126,6 +126,14 @@ describe("MarketOrderBar", () => {
     );
 
     expect(screen.queryByText(/BOS\/CHoCH/)).not.toBeInTheDocument();
+    expect(screen.getByText("Auto L").closest("label")).toHaveAttribute(
+      "title",
+      expect.stringContaining("close 50% at +1R"),
+    );
+    expect(screen.getByText("Auto S").closest("label")).toHaveAttribute(
+      "title",
+      expect.stringContaining("remaining 50% at +3R"),
+    );
     fireEvent.click(screen.getByLabelText("Auto trade L"));
     fireEvent.click(screen.getByLabelText("Auto trade S"));
 
@@ -285,10 +293,77 @@ describe("MarketOrderBar", () => {
     expect(screen.getByText("BUY fill")).toBeInTheDocument();
     expect(screen.getByText("SELL limit")).toBeInTheDocument();
     expect(screen.getByText("+$6.30")).toBeInTheDocument();
+    expect(screen.getByLabelText("Open order controls").parentElement).toHaveClass(
+      "market-order-main",
+    );
     expect(onOrderRowBreakEven).toHaveBeenCalledWith("app:ord_1");
     expect(onOrderRowSupertrendTrailing).toHaveBeenCalledWith("app:ord_1");
     expect(onOrderRowClose).toHaveBeenCalledWith("app:ord_1");
     expect(onOrderRowCancel).toHaveBeenCalledWith("mt5order:8");
+  });
+
+  it("keeps open order rows in place when realtime updates arrive out of order", () => {
+    const firstRows = [
+      {
+        id: "app:older",
+        side: "buy" as const,
+        title: "BUY older",
+        detail: "0.06 @ 4181.1",
+        pnlText: "+$5.70",
+        pnlValue: 5.7,
+        action: "close" as const,
+      },
+      {
+        id: "app:newer",
+        side: "buy" as const,
+        title: "BUY newer",
+        detail: "0.06 @ 4182.4",
+        pnlText: "-$1.20",
+        pnlValue: -1.2,
+        action: "close" as const,
+      },
+    ];
+    const { container, rerender } = render(
+      <MarketOrderBar
+        openOrderCount={firstRows.length}
+        orderRows={firstRows}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+
+    const visibleTitles = () =>
+      Array.from(container.querySelectorAll(".market-order-row-title")).map(
+        (node) => node.textContent,
+      );
+    expect(visibleTitles()).toEqual(["BUY older", "BUY newer"]);
+
+    rerender(
+      <MarketOrderBar
+        openOrderCount={3}
+        orderRows={[
+          { ...firstRows[1], pnlText: "+$2.40", pnlValue: 2.4 },
+          { ...firstRows[0], pnlText: "+$8.10", pnlValue: 8.1 },
+          {
+            id: "app:latest",
+            side: "sell",
+            title: "SELL latest",
+            detail: "0.03 @ 4184.0",
+            pnlText: "+$0.20",
+            pnlValue: 0.2,
+            action: "close",
+          },
+        ]}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+
+    expect(visibleTitles()).toEqual(["BUY older", "BUY newer", "SELL latest"]);
+    expect(screen.getByText("+$8.10")).toBeInTheDocument();
+    expect(screen.getByText("+$2.40")).toBeInTheDocument();
   });
 
   it("lets mobile users clear and replace numeric settings before commit", () => {

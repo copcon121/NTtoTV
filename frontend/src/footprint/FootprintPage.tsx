@@ -20,6 +20,15 @@ import {
   XKONTROL_HISTORY_BARS,
   type XKontrolDisplaySettings,
 } from "../chart/xKontrol";
+import {
+  BarReplayControls,
+  type BarReplayPhase,
+} from "../chart/BarReplayControls";
+import {
+  barReplayDelayMs,
+  replayCursorBeforeSelection,
+  type BarReplaySpeed,
+} from "../chart/barReplay";
 import { resolveEndpoints } from "../endpoints";
 import { ChartSocket } from "../socket/ChartSocket";
 import type { ChartEventType } from "../socket/messages";
@@ -29,18 +38,18 @@ import {
   mergeFootprint,
   selectDisplayBars,
 } from "./footprintModel";
-import { parseFootprintSearchTime } from "./timeSearch";
+import { footprintSessionStartMs, parseFootprintSearchTime } from "./timeSearch";
 
 const SYMBOL = "GC";
 const CHART_CONTRACT = SYMBOL;
-const DEFAULT_LATEST_COUNT = 50;
+const DEFAULT_LATEST_COUNT = 500;
 const MIN_LATEST_COUNT = 10;
-const MAX_LATEST_COUNT = 500;
+const MAX_LATEST_COUNT = 24 * 60;
 const DEFAULT_HISTORY_CONTEXT = 3;
 const MIN_HISTORY_CONTEXT = 3;
-const MAX_HISTORY_CONTEXT = 20;
+const MAX_HISTORY_CONTEXT = 500;
 const FOOTPRINT_EVENTS: ChartEventType[] = ["footprint_update"];
-const DEFAULT_BAR_WIDTH_PX = 56;
+const DEFAULT_BAR_WIDTH_PX = 64;
 const MIN_BAR_WIDTH_PX = 18;
 const MAX_BAR_WIDTH_PX = 180;
 const MIN_CANVAS_HEIGHT_PX = 360;
@@ -49,14 +58,14 @@ const MIN_ROW_HEIGHT_PX = 5;
 const MAX_ROW_HEIGHT_PX = 32;
 const PRICE_AXIS_HIT_WIDTH_PX = 86;
 const SCALE_DRAG_SENSITIVITY = 0.08;
-const MAX_CANVAS_HEIGHT_PX = 6_000;
-const MAX_CANVAS_AREA_PX = 16_000_000;
-const MAX_FOCUSED_SCALE_CANVAS_HEIGHT_PX = 12_000;
-const MAX_FOCUSED_SCALE_CANVAS_AREA_PX = 64_000_000;
-const FOCUSED_SCALE_BAR_COUNT = 240;
+const MAX_VIRTUAL_CANVAS_HEIGHT_PX = 50_000;
+const MAX_CANVAS_WIDTH_PX = 32_000;
+const STANDALONE_PLOT_LEFT_PX = 20;
+const STANDALONE_PLOT_RIGHT_INSET_PX = 78;
 const DEFAULT_PAGE_FOOTPRINT_SETTINGS: FootprintSettings = {
   ...DEFAULT_FOOTPRINT_SETTINGS,
   showVA: true,
+  showOrderflowsGaps: true,
 };
 const identityPriceToY = (price: number) => price;
 
@@ -107,10 +116,13 @@ export function FootprintPage() {
   const api = useMemo(() => new ApiClient({ basePath: endpoints.api }), [endpoints.api]);
   const socket = useMemo(() => new ChartSocket({ url: endpoints.ws }), [endpoints.ws]);
   const requestSeq = useRef(0);
+  const loadedSessionStartRef = useRef<number | null>(null);
   const dragStateRef = useRef<ChartDragState | null>(null);
   const activePointersRef = useRef<Map<number, ChartPointerState>>(new Map());
   const canvasShellRef = useRef<HTMLElement | null>(null);
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const pendingLatestScrollRef = useRef(false);
+  const pendingCenterTimeRef = useRef<number | null>(null);
   const [measureCanvasHostRef, canvasHostSize] = useElementSize();
   const canvasHostRef = useCallback(
     (node: HTMLElement | null) => {
@@ -134,6 +146,19 @@ export function FootprintPage() {
   const [isDraggingChart, setIsDraggingChart] = useState(false);
   const [isScalingPrice, setIsScalingPrice] = useState(false);
   const [isPinchingChart, setIsPinchingChart] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [replaySelecting, setReplaySelecting] = useState(false);
+  const [replaySelectionError, setReplaySelectionError] = useState("");
+  const [replaySelectionBars, setReplaySelectionBars] = useState<
+    readonly FootprintBar[]
+  >([]);
+  const [replayDataset, setReplayDataset] = useState<
+    readonly FootprintBar[] | undefined
+  >();
+  const [replayCursorIndex, setReplayCursorIndex] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState<BarReplaySpeed>(1);
+  const [centerRequestNonce, setCenterRequestNonce] = useState(0);
   const [barWidthPx, setBarWidthPx] = useState(DEFAULT_BAR_WIDTH_PX);
   const [rowHeightPx, setRowHeightPx] = useState(DEFAULT_ROW_HEIGHT_PX);
   const [footprintSettings, setFootprintSettings] = useState<FootprintSettings>(
@@ -163,18 +188,43 @@ export function FootprintPage() {
     targetFound: boolean;
   } | null>(null);
 
+  useEffect(() => {
+    if (!isSettingsOpen) return;
+
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!settingsMenuRef.current?.contains(event.target as Node)) {
+        setIsSettingsOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsSettingsOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [isSettingsOpen]);
+
   const loadLatest = useCallback(
-    async (nextCount: number) => {
+    async () => {
       const seq = ++requestSeq.current;
+      const sessionStart = footprintSessionStartMs();
       setLoading(true);
       setError(null);
       setHistoryMeta(null);
       try {
         const result = await api.footprintDetails(SYMBOL, CHART_CONTRACT, {
-          count: Math.max(nextCount, XKONTROL_HISTORY_BARS),
+          from: sessionStart,
         });
         if (seq !== requestSeq.current) return;
+        loadedSessionStartRef.current = sessionStart;
         pendingLatestScrollRef.current = true;
+        pendingCenterTimeRef.current = null;
         setMode("latest");
         setBars(mapFromBars(result.bars));
       } catch (err) {
@@ -201,6 +251,7 @@ export function FootprintPage() {
         });
         if (seq !== requestSeq.current) return;
         pendingLatestScrollRef.current = false;
+        pendingCenterTimeRef.current = at;
         setMode("history");
         setHistoryMeta({
           at,
@@ -208,6 +259,7 @@ export function FootprintPage() {
           targetFound: result.targetFound ?? false,
         });
         setBars(mapFromBars(result.bars));
+        setCenterRequestNonce((nonce) => nonce + 1);
       } catch (err) {
         if (seq !== requestSeq.current) return;
         setError(errorMessage(err));
@@ -221,8 +273,18 @@ export function FootprintPage() {
   );
 
   useEffect(() => {
-    void loadLatest(DEFAULT_LATEST_COUNT);
+    void loadLatest();
   }, [loadLatest]);
+
+  useEffect(() => {
+    if (mode !== "latest") return;
+    const timer = window.setInterval(() => {
+      if (loadedSessionStartRef.current !== footprintSessionStartMs()) {
+        void loadLatest();
+      }
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [loadLatest, mode]);
 
   useEffect(() => {
     const offOpen = socket.onOpen(() => setConnection("connected"));
@@ -263,8 +325,34 @@ export function FootprintPage() {
     };
   }, [barCount, mode, socket]);
 
-  const visibleBars = useMemo(() => selectDisplayBars(bars, barCount), [bars, barCount]);
-  const displayBarCount = Math.max(1, visibleBars.length);
+  const liveVisibleBars = useMemo(
+    () => selectDisplayBars(bars, barCount),
+    [bars, barCount],
+  );
+  const replayActive = replayDataset !== undefined;
+  const replayPhase: BarReplayPhase = replayActive
+    ? "active"
+    : replaySelecting
+      ? "selecting"
+      : "idle";
+  const replaySourceBars = replayActive
+    ? replayDataset
+    : replaySelecting
+      ? replaySelectionBars
+      : liveVisibleBars;
+  const visibleBars = useMemo(
+    () =>
+      replayDataset === undefined
+        ? replaySourceBars
+        : replayDataset.slice(0, replayCursorIndex + 1),
+    [replayCursorIndex, replayDataset, replaySourceBars],
+  );
+  const renderBars = useMemo(
+    () =>
+      replayActive || replaySelecting ? mapFromBars(visibleBars) : bars,
+    [bars, replayActive, replaySelecting, visibleBars],
+  );
+  const displayBarCount = Math.max(1, replaySourceBars.length);
   const canvasWidth = canvasWidthForBarWidth(
     displayBarCount,
     canvasHostSize.width,
@@ -316,7 +404,34 @@ export function FootprintPage() {
     updateScrollView,
     visibleBars,
   ]);
-  const statusText = statusFor({
+  useLayoutEffect(() => {
+    const targetTime = pendingCenterTimeRef.current;
+    if (targetTime === null || visibleBars.length === 0) return;
+    const element = canvasShellRef.current;
+    if (!element) return;
+    const frame = window.requestAnimationFrame(() => {
+      centerFootprintBarInView(element, {
+        bars: visibleBars,
+        barCount: displayBarCount,
+        targetTime,
+        rowHeightPx,
+        canvasWidth,
+        canvasHeight,
+      });
+      updateScrollView(element);
+      pendingCenterTimeRef.current = null;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    canvasHeight,
+    canvasWidth,
+    centerRequestNonce,
+    displayBarCount,
+    rowHeightPx,
+    updateScrollView,
+    visibleBars,
+  ]);
+  const liveStatusText = statusFor({
     mode,
     loading,
     error,
@@ -325,9 +440,163 @@ export function FootprintPage() {
     historyMeta,
     rowHeightPx,
   });
+  const statusText = replayActive
+    ? `Replay ${replayCursorIndex + 1}/${replayDataset.length} - ${liveStatusText}`
+    : replaySelecting
+      ? `Select replay start - ${liveStatusText}`
+      : liveStatusText;
+
+  const exitBarReplay = useCallback(() => {
+    setReplaySelecting(false);
+    setReplaySelectionError("");
+    setReplaySelectionBars([]);
+    setReplayPlaying(false);
+    setReplayDataset(undefined);
+    pendingLatestScrollRef.current = mode === "latest";
+  }, [mode]);
+
+  const beginBarReplaySelection = useCallback(() => {
+    if (liveVisibleBars.length < 3) return;
+    setReplayDataset(undefined);
+    setReplayPlaying(false);
+    setReplaySelectionError("");
+    setReplaySelectionBars(liveVisibleBars.slice());
+    setReplaySelecting(true);
+    setIsSettingsOpen(false);
+  }, [liveVisibleBars]);
+
+  const cancelBarReplaySelection = useCallback(() => {
+    setReplaySelecting(false);
+    setReplaySelectionError("");
+    setReplaySelectionBars([]);
+  }, []);
+
+  const selectBarReplayStart = useCallback(
+    (event: Pick<ReactPointerEvent<HTMLElement>, "clientX" | "currentTarget">) => {
+      if (!replaySelecting) return;
+      const target = event.currentTarget;
+      const selectedIndex = footprintBarIndexAtCanvasX({
+        clientX: event.clientX,
+        rectLeft: target.getBoundingClientRect().left,
+        scrollLeft: target.scrollLeft,
+        canvasWidth,
+        barCount: replaySelectionBars.length,
+      });
+      if (selectedIndex < 0) {
+        setReplaySelectionError("Click inside a footprint bar");
+        return;
+      }
+      if (selectedIndex <= 0) {
+        setReplaySelectionError("Choose a bar after the first loaded bar");
+        return;
+      }
+      if (selectedIndex >= replaySelectionBars.length - 1) {
+        setReplaySelectionError("Choose an earlier bar so replay has future bars");
+        return;
+      }
+
+      setReplayDataset(replaySelectionBars.slice());
+      setReplayCursorIndex(replayCursorBeforeSelection(selectedIndex));
+      setReplayPlaying(false);
+      setReplaySelecting(false);
+      setReplaySelectionError("");
+    },
+    [canvasWidth, replaySelecting, replaySelectionBars],
+  );
+
+  const stepBarReplay = useCallback(
+    (direction: -1 | 1) => {
+      setReplayPlaying(false);
+      setReplayCursorIndex((current) => {
+        const last = Math.max(0, (replayDataset?.length ?? 1) - 1);
+        return Math.min(last, Math.max(0, current + direction));
+      });
+    },
+    [replayDataset],
+  );
+
+  useEffect(() => {
+    if (!replayActive || !replayPlaying || replayDataset === undefined) return;
+    if (replayCursorIndex >= replayDataset.length - 1) {
+      setReplayPlaying(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setReplayCursorIndex((current) =>
+        Math.min(current + 1, replayDataset.length - 1),
+      );
+    }, barReplayDelayMs(replaySpeed));
+    return () => window.clearTimeout(timer);
+  }, [
+    replayActive,
+    replayCursorIndex,
+    replayDataset,
+    replayPlaying,
+    replaySpeed,
+  ]);
+
+  useEffect(() => {
+    if (!replayActive && !replaySelecting) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches("input, select, textarea, button, [contenteditable='true']")) {
+        return;
+      }
+      if (event.key === "Escape") {
+        if (replayActive) exitBarReplay();
+        else cancelBarReplaySelection();
+        event.preventDefault();
+      } else if (replayActive && event.code === "Space") {
+        setReplayPlaying((playing) => !playing);
+        event.preventDefault();
+      } else if (replayActive && event.key === "ArrowRight") {
+        stepBarReplay(1);
+        event.preventDefault();
+      } else if (replayActive && event.key === "ArrowLeft") {
+        stepBarReplay(-1);
+        event.preventDefault();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [
+    cancelBarReplaySelection,
+    exitBarReplay,
+    replayActive,
+    replaySelecting,
+    stepBarReplay,
+  ]);
+
+  useLayoutEffect(() => {
+    if (!replayActive || visibleBars.length === 0) return;
+    const element = canvasShellRef.current;
+    if (!element) return;
+    const frame = window.requestAnimationFrame(() => {
+      scrollReplayBarIntoView(element, {
+        bars: visibleBars,
+        barCount: displayBarCount,
+        barIndex: replayCursorIndex,
+        rowHeightPx,
+        canvasWidth,
+        canvasHeight,
+      });
+      updateScrollView(element);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    canvasHeight,
+    canvasWidth,
+    displayBarCount,
+    replayActive,
+    replayCursorIndex,
+    rowHeightPx,
+    updateScrollView,
+    visibleBars,
+  ]);
 
   const submitLatest = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    exitBarReplay();
     const nextCount = clampInteger(
       barCountInput,
       MIN_LATEST_COUNT,
@@ -336,7 +605,7 @@ export function FootprintPage() {
     );
     setBarCount(nextCount);
     setBarCountInput(String(nextCount));
-    void loadLatest(nextCount);
+    void loadLatest();
   };
 
   const submitHistory = (event: FormEvent<HTMLFormElement>) => {
@@ -346,6 +615,7 @@ export function FootprintPage() {
       setError("Invalid time");
       return;
     }
+    exitBarReplay();
     const context = clampInteger(
       contextInput,
       MIN_HISTORY_CONTEXT,
@@ -360,6 +630,11 @@ export function FootprintPage() {
 
   const startChartDrag = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (replaySelecting) {
+      selectBarReplayStart(event);
+      event.preventDefault();
+      return;
+    }
     const target = event.currentTarget;
     activePointersRef.current.set(event.pointerId, {
       pointerId: event.pointerId,
@@ -373,7 +648,7 @@ export function FootprintPage() {
       return;
     }
 
-    if (isPointerOnPriceAxis(event, target, canvasWidth)) {
+    if (isPointerOnPriceAxis(event, target)) {
       dragStateRef.current = {
         mode: "scale",
         pointerId: event.pointerId,
@@ -507,7 +782,16 @@ export function FootprintPage() {
   };
 
   const resetPriceScale = (event: ReactMouseEvent<HTMLElement>) => {
-    if (!isPointerOnPriceAxis(event, event.currentTarget, canvasWidth)) return;
+    if (!isPointerOnPriceAxis(event, event.currentTarget)) return;
+    const targetTime = replayActive
+      ? visibleBars[visibleBars.length - 1]?.time
+      : mode === "history" && historyMeta
+        ? historyMeta.at
+        : visibleBars[visibleBars.length - 1]?.time;
+    if (targetTime !== undefined) {
+      pendingCenterTimeRef.current = targetTime;
+      setCenterRequestNonce((nonce) => nonce + 1);
+    }
     setRowHeightPx(DEFAULT_ROW_HEIGHT_PX);
   };
 
@@ -532,9 +816,12 @@ export function FootprintPage() {
         <a className="footprint-page-back" href="/mp">
           MP
         </a>
+        <a className="footprint-page-back" href="/lq">
+          LQ
+        </a>
         <div className="footprint-page-title">
           <span>GC Footprint</span>
-          <span>{mode === "latest" ? "Latest" : "History"}</span>
+          <span>{mode === "latest" ? "From 05:00 UTC+7" : "History"}</span>
         </div>
         <form className="footprint-page-form" onSubmit={submitLatest}>
           <label>
@@ -571,11 +858,65 @@ export function FootprintPage() {
           </label>
           <button type="submit">History</button>
         </form>
-        <form
-          className="footprint-page-form footprint-page-absorption"
-          aria-label="Footprint display settings"
-          onSubmit={(event) => event.preventDefault()}
+        <button
+          type="button"
+          className={`footprint-page-replay-button${
+            replayPhase !== "idle" ? " is-active" : ""
+          }`}
+          title={
+            replayActive
+              ? "Exit Bar Replay and return to live footprint"
+              : replaySelecting
+                ? "Cancel replay selection"
+                : "Bar Replay"
+          }
+          aria-label={replayActive ? "Exit Bar Replay" : "Bar Replay"}
+          aria-pressed={replayPhase !== "idle"}
+          disabled={liveVisibleBars.length < 3 && replayPhase === "idle"}
+          onClick={() => {
+            if (replayActive) exitBarReplay();
+            else if (replaySelecting) cancelBarReplaySelection();
+            else beginBarReplaySelection();
+          }}
         >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+            <path d="M20 4v7h-7" />
+            <path d="m10 8 5 4-5 4z" fill="currentColor" stroke="none" />
+          </svg>
+          Replay
+        </button>
+        <div className="footprint-page-settings" ref={settingsMenuRef}>
+          <button
+            type="button"
+            className="footprint-page-settings-button"
+            aria-expanded={isSettingsOpen}
+            aria-controls="footprint-display-settings"
+            onClick={() => setIsSettingsOpen((open) => !open)}
+          >
+            Settings
+            <span className="footprint-page-settings-chevron" aria-hidden="true" />
+          </button>
+          {isSettingsOpen ? (
+            <form
+              id="footprint-display-settings"
+              className="footprint-page-form footprint-page-settings-panel"
+              aria-label="Footprint display settings"
+              onSubmit={(event) => event.preventDefault()}
+            >
+              <fieldset className="footprint-page-settings-group">
+                <legend>Value Area</legend>
+                <div className="footprint-page-settings-controls">
           <label className="footprint-page-toggle">
             <input
               type="checkbox"
@@ -621,6 +962,47 @@ export function FootprintPage() {
               }}
             />
           </label>
+                </div>
+              </fieldset>
+              <fieldset className="footprint-page-settings-group">
+                <legend>Orderflow Gaps</legend>
+                <div className="footprint-page-settings-controls">
+          <label className="footprint-page-toggle">
+            <input
+              type="checkbox"
+              aria-label="Orderflows Gaps on Footprint"
+              checked={footprintSettings.showOrderflowsGaps}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                setFootprintSettings((prev) => ({
+                  ...prev,
+                  showOrderflowsGaps: checked,
+                }));
+              }}
+            />
+            OF Gap
+          </label>
+          <label className="footprint-page-toggle">
+            <input
+              type="checkbox"
+              aria-label="Orderflows Gaps swing filter"
+              checked={footprintSettings.orderflowsGapsUseSwingFilter}
+              disabled={!footprintSettings.showOrderflowsGaps}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                setFootprintSettings((prev) => ({
+                  ...prev,
+                  orderflowsGapsUseSwingFilter: checked,
+                }));
+              }}
+            />
+            OFG Swing 5
+          </label>
+                </div>
+              </fieldset>
+              <fieldset className="footprint-page-settings-group footprint-page-settings-group-wide">
+                <legend>Absorption</legend>
+                <div className="footprint-page-settings-controls">
           <label className="footprint-page-toggle">
             <input
               type="checkbox"
@@ -734,6 +1116,11 @@ export function FootprintPage() {
               }}
             />
           </label>
+                </div>
+              </fieldset>
+              <fieldset className="footprint-page-settings-group footprint-page-settings-group-wide">
+                <legend>XKontrol</legend>
+                <div className="footprint-page-settings-controls">
           <label className="footprint-page-toggle">
             <input
               type="checkbox"
@@ -788,7 +1175,11 @@ export function FootprintPage() {
             />
             XK L3
           </label>
-        </form>
+                </div>
+              </fieldset>
+            </form>
+          ) : null}
+        </div>
         <div className="footprint-page-status" aria-live="polite">
           {statusText}
         </div>
@@ -797,7 +1188,8 @@ export function FootprintPage() {
         <main
           ref={canvasHostRef}
           className={`footprint-page-canvas-shell${isDraggingChart ? " is-dragging" : ""
-            }${isScalingPrice ? " is-scaling-price" : ""}${isPinchingChart ? " is-pinching" : ""}`}
+            }${isScalingPrice ? " is-scaling-price" : ""}${isPinchingChart ? " is-pinching" : ""
+            }${replaySelecting ? " is-replay-selecting" : ""}`}
           onPointerDown={startChartDrag}
           onPointerMove={moveChartDrag}
           onPointerUp={stopChartDrag}
@@ -805,16 +1197,23 @@ export function FootprintPage() {
           onDoubleClick={resetPriceScale}
           onScroll={(event) => updateScrollView(event.currentTarget)}
         >
-          <FootprintCanvas
-            bars={bars}
-            viewport={viewport}
-            settings={footprintSettings}
-            displayCount={displayBarCount}
-            rowHeightPx={rowHeightPx}
-            layout="standalone"
-            showXKontrol={showXKontrol}
-            xKontrolSettings={xKontrolSettings}
-          />
+          <div
+            className="footprint-page-canvas-stage"
+            style={{ width: canvasWidth, height: canvasHeight }}
+          >
+            <FootprintCanvas
+              bars={renderBars}
+              viewport={viewport}
+              settings={footprintSettings}
+              displayCount={displayBarCount}
+              rowHeightPx={rowHeightPx}
+              renderHeightPx={canvasHostSize.height}
+              scrollTopPx={scrollView.top}
+              layout="standalone"
+              showXKontrol={showXKontrol}
+              xKontrolSettings={xKontrolSettings}
+            />
+          </div>
         </main>
         <FootprintStickyAxes
           bars={visibleBars}
@@ -826,6 +1225,27 @@ export function FootprintPage() {
           viewportHeight={canvasHostSize.height}
           scrollLeft={scrollView.left}
           scrollTop={scrollView.top}
+        />
+        <BarReplayControls
+          phase={replayPhase}
+          playing={replayPlaying}
+          speed={replaySpeed}
+          currentBar={replayActive ? replayCursorIndex + 1 : 0}
+          totalBars={replayDataset?.length ?? 0}
+          selectionError={replaySelectionError}
+          onCancelSelection={cancelBarReplaySelection}
+          onTogglePlaying={() => {
+            if (
+              replayDataset !== undefined &&
+              replayCursorIndex < replayDataset.length - 1
+            ) {
+              setReplayPlaying((playing) => !playing);
+            }
+          }}
+          onStepBack={() => stepBarReplay(-1)}
+          onStepForward={() => stepBarReplay(1)}
+          onSpeedChange={setReplaySpeed}
+          onExit={exitBarReplay}
         />
       </div>
     </div>
@@ -841,34 +1261,50 @@ function canvasWidthForBarWidth(
   hostWidth: number,
   barWidthPx: number,
 ): number {
-  return Math.max(hostWidth, displayBarCount * barWidthPx + 20);
+  return Math.min(
+    MAX_CANVAS_WIDTH_PX,
+    Math.max(hostWidth, displayBarCount * barWidthPx + 20),
+  );
 }
 
-function canvasHeightForFootprint(input: {
+export function footprintBarIndexAtCanvasX(input: {
+  clientX: number;
+  rectLeft: number;
+  scrollLeft: number;
+  canvasWidth: number;
+  barCount: number;
+}): number {
+  if (input.barCount <= 0 || input.canvasWidth <= 0) return -1;
+  const canvasX = input.clientX - input.rectLeft + input.scrollLeft;
+  const plotRight = input.canvasWidth - STANDALONE_PLOT_RIGHT_INSET_PX;
+  if (canvasX < STANDALONE_PLOT_LEFT_PX || canvasX >= plotRight) return -1;
+  const barWidth =
+    (plotRight - STANDALONE_PLOT_LEFT_PX) / input.barCount;
+  if (!(barWidth > 0)) return -1;
+  return Math.min(
+    input.barCount - 1,
+    Math.floor((canvasX - STANDALONE_PLOT_LEFT_PX) / barWidth),
+  );
+}
+
+export function canvasHeightForFootprint(input: {
   bars: readonly FootprintBar[];
   displayBarCount: number;
   canvasWidth: number;
   hostHeight: number;
   rowHeightPx: number;
 }): number {
-  const canvasAreaLimit =
-    input.displayBarCount <= FOCUSED_SCALE_BAR_COUNT
-      ? MAX_FOCUSED_SCALE_CANVAS_AREA_PX
-      : MAX_CANVAS_AREA_PX;
-  const canvasHeightLimit =
-    input.displayBarCount <= FOCUSED_SCALE_BAR_COUNT
-      ? MAX_FOCUSED_SCALE_CANVAS_HEIGHT_PX
-      : MAX_CANVAS_HEIGHT_PX;
-  const maxCanvasHeightByArea = Math.max(
-    MIN_CANVAS_HEIGHT_PX,
-    Math.floor(canvasAreaLimit / Math.max(1, input.canvasWidth)),
+  const minimumVisibleHeight = Math.min(
+    MAX_VIRTUAL_CANVAS_HEIGHT_PX,
+    Math.max(MIN_CANVAS_HEIGHT_PX, Math.round(input.hostHeight)),
   );
+  // This is the virtual scroll height, not the backing bitmap height. Keeping
+  // those separate lets wide datasets retain their full vertical price range
+  // without allocating a width x full-height canvas.
   return Math.min(
-    canvasHeightLimit,
-    maxCanvasHeightByArea,
+    MAX_VIRTUAL_CANVAS_HEIGHT_PX,
     Math.max(
-      input.hostHeight,
-      MIN_CANVAS_HEIGHT_PX,
+      minimumVisibleHeight,
       estimateStandaloneCanvasHeight(input.bars, input.rowHeightPx),
     ),
   );
@@ -1032,9 +1468,7 @@ function computeStandaloneLayout(input: {
   dataMinPrice -= 5 * priceStep;
   dataMaxPrice += 5 * priceStep;
 
-  const panelX = 10;
   const panelY = 20;
-  const panelW = Math.max(40, input.canvasWidth - 20);
   const panelH = Math.max(40, input.canvasHeight - 40);
   const panelBottom = panelY + panelH;
   const contentTop = panelY + 25;
@@ -1047,8 +1481,8 @@ function computeStandaloneLayout(input: {
   const visibleRange = Math.max(priceRange, (contentHeight / rowH) * priceStep);
   const viewportTopPrice =
     dataMaxPrice + Math.max(0, visibleRange - priceRange) / 2;
-  const plotLeft = panelX + 10;
-  const plotRight = panelX + panelW - 58 - 10;
+  const plotLeft = STANDALONE_PLOT_LEFT_PX;
+  const plotRight = input.canvasWidth - STANDALONE_PLOT_RIGHT_INSET_PX;
   const plotW = Math.max(20, plotRight - plotLeft);
   const barW = plotW / Math.max(1, input.barCount);
   return {
@@ -1094,6 +1528,120 @@ function scrollLatestBarIntoView(
   element.scrollTop = clampScroll(
     layout.yForPrice(targetPrice) - element.clientHeight / 2,
     maxTop,
+  );
+}
+
+export function centerFootprintBarInView(
+  element: HTMLElement,
+  input: {
+    bars: readonly FootprintBar[];
+    barCount: number;
+    targetTime: number;
+    rowHeightPx: number;
+    canvasWidth: number;
+    canvasHeight: number;
+  },
+): void {
+  const targetIndex = nearestFootprintBarIndex(input.bars, input.targetTime);
+  const target = input.bars[targetIndex];
+  const layout = computeStandaloneLayout(input);
+  if (!target || !layout) return;
+
+  const targetX =
+    layout.plotLeft + layout.barW * targetIndex + layout.barW / 2;
+  const usableViewportWidth = Math.max(
+    1,
+    element.clientWidth - PRICE_AXIS_HIT_WIDTH_PX,
+  );
+  element.scrollLeft = clampScroll(
+    targetX - usableViewportWidth / 2,
+    Math.max(0, element.scrollWidth - element.clientWidth),
+  );
+
+  const targetPrice = isFiniteNumber(target.close)
+    ? target.close
+    : isFiniteNumber(target.poc)
+      ? target.poc
+      : null;
+  if (targetPrice === null) return;
+  element.scrollTop = clampScroll(
+    layout.yForPrice(targetPrice) - element.clientHeight / 2,
+    Math.max(0, element.scrollHeight - element.clientHeight),
+  );
+}
+
+function nearestFootprintBarIndex(
+  bars: readonly FootprintBar[],
+  targetTime: number,
+): number {
+  if (bars.length === 0) return -1;
+  let low = 0;
+  let high = bars.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (bars[middle].time < targetTime) low = middle + 1;
+    else high = middle;
+  }
+  if (low === 0) return 0;
+  if (low === bars.length) return bars.length - 1;
+  return targetTime - bars[low - 1].time <= bars[low].time - targetTime
+    ? low - 1
+    : low;
+}
+
+function scrollReplayBarIntoView(
+  element: HTMLElement,
+  input: {
+    bars: readonly FootprintBar[];
+    barCount: number;
+    barIndex: number;
+    rowHeightPx: number;
+    canvasWidth: number;
+    canvasHeight: number;
+  },
+): void {
+  const current = input.bars[input.bars.length - 1];
+  const layout = computeStandaloneLayout(input);
+  if (!current || !layout) return;
+
+  const barX =
+    layout.plotLeft + layout.barW * input.barIndex + layout.barW / 2;
+  const viewportX = barX - element.scrollLeft;
+  const leftMargin = 48;
+  const rightMargin = Math.max(
+    leftMargin,
+    element.clientWidth - PRICE_AXIS_HIT_WIDTH_PX - 48,
+  );
+  let nextLeft = element.scrollLeft;
+  if (viewportX < leftMargin) {
+    nextLeft = barX - leftMargin;
+  } else if (viewportX > rightMargin) {
+    nextLeft = barX - rightMargin;
+  }
+  element.scrollLeft = clampScroll(
+    nextLeft,
+    Math.max(0, element.scrollWidth - element.clientWidth),
+  );
+
+  const targetPrice = isFiniteNumber(current.close)
+    ? current.close
+    : isFiniteNumber(current.poc)
+      ? current.poc
+      : null;
+  if (targetPrice === null) return;
+  const priceY = layout.yForPrice(targetPrice);
+  const viewportY = priceY - element.scrollTop;
+  const topMargin = 48;
+  const bottomMargin = Math.max(topMargin, element.clientHeight - 70);
+  let nextTop = element.scrollTop;
+  if (viewportY < topMargin) {
+    nextTop = priceY - topMargin;
+  } else if (viewportY > bottomMargin) {
+    nextTop = priceY - bottomMargin;
+  }
+  element.scrollTop = clampScroll(
+    nextTop,
+    Math.max(0, element.scrollHeight - element.clientHeight),
   );
 }
 
@@ -1188,14 +1736,13 @@ function formatAxisTime(time: number): string {
   }).format(new Date(time));
 }
 
-function isPointerOnPriceAxis(
+export function isPointerOnPriceAxis(
   event: Pick<ReactPointerEvent<HTMLElement>, "clientX"> | Pick<ReactMouseEvent<HTMLElement>, "clientX">,
   element: HTMLElement,
-  canvasWidth: number,
 ): boolean {
   const rect = element.getBoundingClientRect();
-  const canvasX = event.clientX - rect.left + element.scrollLeft;
-  return canvasX >= canvasWidth - PRICE_AXIS_HIT_WIDTH_PX;
+  const viewportX = event.clientX - rect.left;
+  return viewportX >= element.clientWidth - PRICE_AXIS_HIT_WIDTH_PX;
 }
 
 function pinchDistances(

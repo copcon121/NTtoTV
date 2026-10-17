@@ -78,9 +78,10 @@ import {
 } from "./chart/mgannSwing";
 import {
   DEFAULT_MGANN_BREAK_SETTINGS,
+  MGANN_BREAK_SETTINGS_VERSION,
   mgannBreakAlertParams,
+  mgannBreakSettingsFromProfile,
   mgannBreakSettingsMatchParams,
-  normalizeMgannBreakSettings,
   type MgannBreakSettings,
 } from "./chart/mgannBreak";
 import {
@@ -169,6 +170,7 @@ import {
   footprintEnabledForTimeframe,
   fixedRangeMsFromAnchors,
   gcPushMomentumEnabledForTimeframe,
+  tduSignalsEnabledForTimeframe,
 } from "./chart/timeframeRange";
 import {
   DEFAULT_TIMEZONE_OFFSET_MINUTES,
@@ -2334,6 +2336,7 @@ export function LiveApp() {
       showFvgGrader,
       showMgannBreak,
       mgannBreak: { ...mgannBreakSettings },
+      mgannBreakSettingsVersion: MGANN_BREAK_SETTINGS_VERSION,
       fvgSignalLimit,
       mgannBreakSignalHistoryBars,
       mgannBreakSignalLimit,
@@ -3705,7 +3708,13 @@ export function LiveApp() {
   ]);
 
   useEffect(() => {
-    if (!hasLoadedCurrentSeries || !showTduSignals) return;
+    if (
+      !hasLoadedCurrentSeries ||
+      !showTduSignals ||
+      !tduSignalsEnabledForTimeframe(timeframe)
+    ) {
+      return;
+    }
     let cancelled = false;
     const loadTduSignals = () => {
       if (document.visibilityState === "hidden") return;
@@ -3871,6 +3880,7 @@ export function LiveApp() {
       if (
         msg.symbol !== SYMBOL ||
         !matchesChartContract(msg.contract) ||
+        !tduSignalsEnabledForTimeframe(timeframe) ||
         msg.tf !== timeframe
       ) {
         return;
@@ -5083,7 +5093,12 @@ export function LiveApp() {
     );
     setShowFvgGrader(payload.showFvgGrader !== false);
     setShowMgannBreak(payload.showMgannBreak !== false);
-    setMgannBreakSettings(normalizeMgannBreakSettings(payload.mgannBreak));
+    setMgannBreakSettings(
+      mgannBreakSettingsFromProfile(
+        payload.mgannBreak,
+        payload.mgannBreakSettingsVersion,
+      ),
+    );
     setFvgSignalLimit(normalizeFvgSignalLimit(payload.fvgSignalLimit));
     setMgannBreakSignalHistoryBars(
       normalizeMgannBreakSignalHistoryBars(payload.mgannBreakSignalHistoryBars),
@@ -5496,6 +5511,7 @@ export function LiveApp() {
     !replayActive &&
     hasLoadedCurrentSeries &&
     showTduSignals &&
+    tduSignalsEnabledForTimeframe(timeframe) &&
     tduSignalSeriesKey === currentSeriesKey
       ? tduSignals
       : EMPTY_TDU_SIGNALS;
@@ -5678,6 +5694,7 @@ export function LiveApp() {
         <nav className="toolbar-page-links" aria-label="Chart pages">
           <a href="/fp">FP</a>
           <a href="/mp">MP</a>
+          <a href="/lq">LQ</a>
         </nav>
         <TimeframeSelector
           value={timeframe}
@@ -5718,6 +5735,7 @@ export function LiveApp() {
           gcPushMomentumDisabled={
             !gcPushMomentumEnabledForTimeframe(timeframe)
           }
+          tduSignalsDisabled={!tduSignalsEnabledForTimeframe(timeframe)}
           footprintDisabled={!footprintEnabledForTimeframe(timeframe)}
           fvgGraderDisabled={timeframe !== "1m"}
           bigTradeDisabled={!bigTradeOverlayEnabled}
@@ -5923,7 +5941,12 @@ export function LiveApp() {
               gcPushMomentumEnabledForTimeframe(timeframe)
             }
             gcPushMomentumSettings={gcPushMomentumSettings}
-            showTduSignals={indicatorsVisible && showTduSignals && !replayActive}
+            showTduSignals={
+              indicatorsVisible &&
+              showTduSignals &&
+              tduSignalsEnabledForTimeframe(timeframe) &&
+              !replayActive
+            }
             showCvd={indicatorsVisible && showMgannWaveDelta}
             showMgannSwing={indicatorsVisible && showMgannSwingForTimeframe}
             mgannSwing={mgannSwing}

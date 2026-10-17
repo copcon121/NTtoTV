@@ -5,6 +5,7 @@ import {
   fixedRangeMsFromAnchors,
   footprintEnabledForTimeframe,
   gcPushMomentumEnabledForTimeframe,
+  tduSignalsEnabledForTimeframe,
 } from "./timeframeRange";
 
 function ts(value: number): AnchorPoint["time"] {
@@ -71,5 +72,16 @@ describe("gcPushMomentumEnabledForTimeframe", () => {
     expect(gcPushMomentumEnabledForTimeframe("5m")).toBe(true);
     expect(gcPushMomentumEnabledForTimeframe("3m")).toBe(false);
     expect(gcPushMomentumEnabledForTimeframe("15m")).toBe(false);
+  });
+});
+
+describe("tduSignalsEnabledForTimeframe", () => {
+  it("supports M1 and M5 only", () => {
+    expect(tduSignalsEnabledForTimeframe("1m")).toBe(true);
+    expect(tduSignalsEnabledForTimeframe("5m")).toBe(true);
+    expect(tduSignalsEnabledForTimeframe("15s")).toBe(false);
+    expect(tduSignalsEnabledForTimeframe("3m")).toBe(false);
+    expect(tduSignalsEnabledForTimeframe("15m")).toBe(false);
+    expect(tduSignalsEnabledForTimeframe("1D")).toBe(false);
   });
 });

@@ -39,6 +39,7 @@ from .pipeline import Pipeline
 from .registry.registry import OutboundEvent, WebSocketRegistry
 from .rest.contract_state import ContractStateStore
 from .storage.cache_store import CacheStore
+from .storage.liquidity_store import LiquidityStore
 from .storage.tick_store import TickStore
 from .mt5.manager import Mt5Manager
 
@@ -56,6 +57,7 @@ class AppRuntime:
         settings: Settings | None = None,
         cache: CacheStore | None = None,
         tick_store: TickStore | None = None,
+        liquidity_store: LiquidityStore | None = None,
         resolver: ContractResolver | None = None,
         registry: WebSocketRegistry | None = None,
         mt5_manager: Mt5Manager | None = None,
@@ -66,6 +68,7 @@ class AppRuntime:
         self._symbol = s.supported_symbols[0]
         self._cache = cache or CacheStore.open(s)
         self._tick_store = tick_store or TickStore(s.ticks_dir)
+        self._liquidity_store = liquidity_store or LiquidityStore(s.liquidity_db_path)
         self._resolver = resolver or ContractResolver(
             list(s.gc_candidate_contracts),
             window_ms=s.resolver_window_ms,
@@ -129,6 +132,7 @@ class AppRuntime:
             registry=self._registry,
             cache=self._cache,
             tick_store=self._tick_store,
+            liquidity_store=self._liquidity_store,
             resolver=self._resolver,
             settings=s,
             symbol=self._symbol,
@@ -189,6 +193,10 @@ class AppRuntime:
     @property
     def cache(self) -> CacheStore:
         return self._cache
+
+    @property
+    def liquidity_store(self) -> LiquidityStore:
+        return self._liquidity_store
 
     @property
     def mt5_manager(self) -> Mt5Manager:
@@ -309,10 +317,13 @@ class AppRuntime:
             self._tick_store.close()
         finally:
             try:
-                self._cache.close()
+                self._liquidity_store.close()
             finally:
-                if self._analyst_store is not None:
-                    self._analyst_store.close()
+                try:
+                    self._cache.close()
+                finally:
+                    if self._analyst_store is not None:
+                        self._analyst_store.close()
 
     async def _anchored_sync_loop(self) -> None:
         while True:
@@ -333,7 +344,7 @@ class AppRuntime:
         if not self._auto_mgann_trade.should_scan_open_order_management(at):
             return
         await asyncio.to_thread(self._chart_limit_take_profit.take_profit_at_1r, price)
-        await asyncio.to_thread(self._auto_mgann_trade.activate_ema21_trailing_at_1r, price)
+        await asyncio.to_thread(self._auto_mgann_trade.take_profit_half_at_1r, price)
         await asyncio.to_thread(self._auto_mgann_trade.cancel_unfilled_limits_at_1r, price)
 
     async def _on_manual_supertrend_closed_bar(self, timeframe: str, bar) -> None:
@@ -352,12 +363,13 @@ class AppRuntime:
             await asyncio.sleep(2.0)
 
     async def _retention_loop(self) -> None:
-        """Keep raw tick shards within the configured calendar-day retention."""
+        """Keep raw ticks and compact liquidity data within retention."""
         while True:
             try:
                 await self._purge_expired_ticks()
+                await self._purge_expired_liquidity()
             except Exception as exc:
-                logger.warning("raw tick retention purge failed: %s", exc)
+                logger.warning("market-data retention purge failed: %s", exc)
             await asyncio.sleep(60 * 60)
 
     async def _market_source_loop(self) -> None:
@@ -376,3 +388,15 @@ class AppRuntime:
         )
         if removed:
             logger.info("purged %s expired raw tick shards", len(removed))
+
+    async def _purge_expired_liquidity(self) -> None:
+        cutoff = int(datetime.now(timezone.utc).timestamp() * 1000) - (
+            self._settings.liquidity_retention_hours * 60 * 60 * 1000
+        )
+        events, lines = await asyncio.to_thread(
+            self._liquidity_store.purge_before, cutoff
+        )
+        if events or lines:
+            logger.info(
+                "purged liquidity rows events=%s lines=%s", events, lines
+            )

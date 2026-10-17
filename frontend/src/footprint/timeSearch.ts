@@ -1,7 +1,25 @@
 const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+const UTC_PLUS_7_OFFSET_MS = 7 * HOUR_MS;
+const FOOTPRINT_SESSION_START_HOUR = 5;
 
 export function floorToMinuteMs(timeMs: number): number {
   return Math.floor(timeMs / MINUTE_MS) * MINUTE_MS;
+}
+
+/** Start of the current footprint session: 05:00 in the fixed UTC+7 zone. */
+export function footprintSessionStartMs(now: Date = new Date()): number {
+  const shifted = new Date(now.getTime() + UTC_PLUS_7_OFFSET_MS);
+  let start =
+    Date.UTC(
+      shifted.getUTCFullYear(),
+      shifted.getUTCMonth(),
+      shifted.getUTCDate(),
+      FOOTPRINT_SESSION_START_HOUR,
+    ) - UTC_PLUS_7_OFFSET_MS;
+  if (now.getTime() < start) start -= DAY_MS;
+  return start;
 }
 
 export function parseFootprintSearchTime(

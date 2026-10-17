@@ -37,6 +37,7 @@ from app.models.timestamp import now_ms
 from app.pipeline import Pipeline
 from app.registry.registry import ChartClient, OutboundEvent, WebSocketRegistry
 from app.storage.cache_store import CacheStore
+from app.storage.liquidity_store import LiquidityStore
 from app.storage.records import BarRecord, VolumeDeltaRecord
 from app.storage.tick_store import TickStore
 
@@ -115,6 +116,61 @@ def _native_fvg_bar(
         close=close_price,
         rows=rows,
     )
+
+
+@pytest.mark.integration
+def test_bookmap_liquidity_is_normalized_persisted_and_streamed(tmp_path):
+    cache = CacheStore(tmp_path / "app.sqlite")
+    tick_store = TickStore(tmp_path / "ticks")
+    liquidity_store = LiquidityStore(tmp_path / "liquidity.sqlite")
+    resolver = ContractResolver(_CANDIDATES)
+    resolver.set_manual_override(_ACTIVE)
+    registry = WebSocketRegistry()
+    captured: list[OutboundEvent] = []
+    registry.enqueue = captured.append  # type: ignore[assignment]
+    pipeline = Pipeline(
+        registry=registry,
+        cache=cache,
+        tick_store=tick_store,
+        liquidity_store=liquidity_store,
+        resolver=resolver,
+        symbol=_SYMBOL,
+    )
+    payload = {
+        "contract": _ACTIVE,
+        "sourceContract": "GCQ6.COMEX@RITHMIC",
+        "sequence": 17,
+        "time": _BASE + 123,
+        "eventKind": "relative",
+        "action": "removed",
+        "side": "ask",
+        "price": 2347.2,
+        "size": 200,
+        "previousSize": 650,
+        "change": 450,
+        "threshold": 300,
+        "domDistance": 24,
+        "strength": 1.5,
+    }
+    try:
+        asyncio.run(pipeline.on_bookmap_liquidity(payload))
+        events, lines = liquidity_store.read(
+            _SYMBOL,
+            _SYMBOL,
+            _BASE,
+            _BASE + _MINUTE_MS,
+        )
+        assert lines == []
+        assert [(event["action"], event["side"], event["change"]) for event in events] == [
+            ("removed", "ask", 450)
+        ]
+        assert captured[-1].payload["type"] == "liquidity_update"
+        assert captured[-1].payload["contract"] == _SYMBOL
+        assert captured[-1].payload["sourceContract"] == "GCQ6.COMEX@RITHMIC"
+    finally:
+        liquidity_store.close()
+        tick_store.close()
+        cache.close()
 
 
 def _bookmap_fvg_payload(

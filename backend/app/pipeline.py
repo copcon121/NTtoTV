@@ -67,6 +67,7 @@ from .models.messages import (
     ChartStatusEvent,
     FootprintUpdate,
     FvgSignalUpdate,
+    LiquidityUpdate,
     MarketDataStatus,
     NTStatusEvent,
     OHLCVBar,
@@ -77,6 +78,7 @@ from .models.messages import (
 from .registry.registry import OutboundEvent, WebSocketRegistry
 from .rest.notifications import send_telegram_alert_from_event, send_web_push_alert_from_event
 from .storage.cache_store import CacheStore
+from .storage.liquidity_store import LiquidityStore
 from .storage.records import (
     BarRecord,
     BigTradeRecord,
@@ -220,6 +222,7 @@ class Pipeline:
         registry: WebSocketRegistry,
         cache: CacheStore,
         tick_store: TickStore,
+        liquidity_store: LiquidityStore | None = None,
         resolver: ContractResolver,
         settings: Settings | None = None,
         symbol: str = "GC",
@@ -245,6 +248,7 @@ class Pipeline:
         self._registry = registry
         self._cache = cache
         self._tick_store = tick_store
+        self._liquidity_store = liquidity_store
         self._resolver = resolver
         self._symbol = symbol
         self._auto_trade_closed_bar_sink = auto_trade_closed_bar_sink
@@ -756,6 +760,7 @@ class Pipeline:
             )
         self._remember_source_updates("bookmap", updates)
         await self._evaluate_source_selection(received)
+
         # Evaluate first: this snapshot may be the event that promotes Bookmap
         # after a reconnect/source switch. Once Bookmap owns the keys, the
         # authoritative snapshot must be persisted immediately.
@@ -792,6 +797,57 @@ class Pipeline:
                     volume_delta_update=bookmap_vd,
                     footprint_update=bookmap_fp,
                 )
+
+    async def on_bookmap_liquidity(
+        self, payload: dict, *, connection_id: str | None = None
+    ) -> None:
+        """Persist and stream a compact depth-derived liquidity signal."""
+
+        if not self._accept_bookmap_connection(connection_id):
+            return
+        contract = str(payload["contract"])
+        if contract != self._active_contract():
+            return
+        event_kind = str(payload["eventKind"])
+        action = str(payload["action"])
+        side = str(payload["side"])
+        if event_kind not in {"relative", "absolute", "long_term"}:
+            raise ValueError(f"invalid liquidity eventKind {event_kind!r}")
+        if side not in {"bid", "ask"}:
+            raise ValueError(f"invalid liquidity side {side!r}")
+        if action not in {
+            "added", "removed", "crossed", "start", "update", "end", "snapshot"
+        }:
+            raise ValueError(f"invalid liquidity action {action!r}")
+
+        update = LiquidityUpdate(
+            symbol=self._symbol,
+            contract=self._chart_contract(),
+            sequence=int(payload["sequence"]),
+            time=int(payload["time"]),
+            event_kind=event_kind,
+            action=action,
+            side=side,
+            price=float(payload["price"]),
+            size=max(0, int(payload.get("size") or 0)),
+            previous_size=max(0, int(payload.get("previousSize") or 0)),
+            change=max(0, int(payload.get("change") or 0)),
+            threshold=max(0, int(payload.get("threshold") or 0)),
+            dom_distance=(None if payload.get("domDistance") is None else int(payload["domDistance"])),
+            strength=max(0.0, float(payload.get("strength") or 0.0)),
+            source_contract=str(payload.get("sourceContract") or contract),
+            line_id=(None if payload.get("lineId") is None else str(payload["lineId"])),
+            line_start_time=(
+                None if payload.get("lineStartTime") is None else int(payload["lineStartTime"])
+            ),
+            snapshot=bool(payload.get("snapshot", False)),
+        )
+        if update.event_kind == "long_term" and not update.line_id:
+            raise ValueError("long_term liquidity event requires lineId")
+        wire = update.to_dict()
+        if self._liquidity_store is not None:
+            await asyncio.to_thread(self._liquidity_store.record, wire)
+        await self._enqueue(OutboundEvent.from_message(update))
 
     def _reconcile_bookmap_orderflow(
         self, payload: dict, bar_update: BarUpdate

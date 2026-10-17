@@ -6,7 +6,7 @@ import {
 } from "./zoomVisibility";
 
 describe("dense overlay zoom visibility", () => {
-  it("hides TDU and mGann overlays below the normal one-bar spacing", () => {
+  it("hides dense TDU, mGann, Sweep Reversal, and BigTrade overlays below the normal one-bar spacing", () => {
     expect(
       shouldRenderDenseOverlay(MIN_DENSE_OVERLAY_BAR_SPACING - 0.01),
     ).toBe(false);

@@ -11,6 +11,7 @@ from app.models import Side
 class _Pipeline:
     def __init__(self) -> None:
         self.trades = []
+        self.liquidity = []
 
     async def on_bookmap_trade(self, trade, *, connection_id=None):
         self.trades.append((trade, connection_id))
@@ -20,6 +21,9 @@ class _Pipeline:
 
     async def on_bookmap_bar(self, payload, *, connection_id=None):
         raise AssertionError("unexpected bar")
+
+    async def on_bookmap_liquidity(self, payload, *, connection_id=None):
+        self.liquidity.append((payload, connection_id))
 
 
 @pytest.mark.unit
@@ -74,3 +78,26 @@ def test_trade_decoder_preserves_bookmap_execution_metadata():
     assert trade.execution_start is True
     assert trade.execution_end is False
     assert trade.otc is True
+
+
+@pytest.mark.unit
+def test_liquidity_frame_is_dispatched_without_raw_depth():
+    pipeline = _Pipeline()
+    payload = {
+        "type": "liquidity",
+        "symbol": "GC",
+        "contract": "GC 12-26",
+        "eventKind": "relative",
+        "action": "removed",
+        "side": "ask",
+        "time": 1_753_200_000_123,
+        "price": 3351.2,
+        "size": 200,
+        "previousSize": 600,
+        "change": 400,
+        "sequence": 3,
+    }
+
+    asyncio.run(_dispatch(pipeline, payload, connection_id="connection-2"))
+
+    assert pipeline.liquidity == [(payload, "connection-2")]

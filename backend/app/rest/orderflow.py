@@ -4,7 +4,7 @@ Implements the read surface for the persisted order-flow summaries and big
 trades:
 
 * ``GET /api/orderflow/volume-delta`` — per-bar volume-delta summaries (Req 18.5)
-* ``GET /api/orderflow/footprint``    — last ``count`` M1 footprint bars + ladders (Req 18.6)
+* ``GET /api/orderflow/footprint``    — latest/ranged M1 footprint bars + ladders (Req 18.6)
 * ``GET /api/orderflow/delta-profile`` — fixed-range profile from M1 footprint ladders
   or NT-style minute bars
 * ``GET /api/big-trades``             — merged big trades over a range (Req 18.7)
@@ -69,7 +69,7 @@ _SUPPORTED_TFS = frozenset(_SUPPORTED_TFS_LIST)
 DEFAULT_FOOTPRINT_COUNT = 5
 MAX_FOOTPRINT_COUNT = 500
 DEFAULT_FOOTPRINT_CONTEXT = 3
-MAX_FOOTPRINT_CONTEXT = 20
+MAX_FOOTPRINT_CONTEXT = 500
 # Read cap shared with the history cache cap, bounding range scans.
 MAX_ROWS = 5000
 DELTA_PROFILE_SOURCE_FOOTPRINT = "footprint_cache"
@@ -868,6 +868,12 @@ async def get_footprint(
         le=MAX_FOOTPRINT_COUNT,
         description="Number of most-recent M1 footprint bars to return",
     ),
+    frm: int | None = Query(
+        None,
+        alias="from",
+        ge=0,
+        description="Inclusive start Canonical_Timestamp (ms) for session history",
+    ),
     at: int | None = Query(
         None,
         description="M1 bar open Canonical_Timestamp (ms) to center history on",
@@ -881,15 +887,16 @@ async def get_footprint(
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
-    """Return latest or centered M1 footprint bars with ladders. (Req 18.6)"""
+    """Return latest, ranged, or centered M1 footprint bars with ladders. (Req 18.6)"""
     if not state.is_known_symbol(symbol):
         raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
     resolved = _resolve_contract(state, symbol, contract)
 
     target_found: bool | None = None
     if at is None:
+        read_limit = MAX_ROWS if frm is not None else count
         bars = cache.read_footprint_bars(
-            symbol, resolved, FOOTPRINT_TIMEFRAME, None, None, count
+            symbol, resolved, FOOTPRINT_TIMEFRAME, frm, None, read_limit
         )
     else:
         before = cache.read_footprint_bars_before(

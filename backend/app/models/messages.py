@@ -70,6 +70,7 @@ __all__ = [
     "FootprintUpdate",
     "FvgSignalUpdate",
     "TduSignalUpdate",
+    "LiquidityUpdate",
     "BigTrade",
     "MarketDataStatus",
     "AlertEvent",
@@ -126,6 +127,7 @@ class EventType(str, Enum):
     FOOTPRINT_UPDATE = "footprint_update"
     FVG_SIGNAL_UPDATE = "fvg_signal_update"
     TDU_SIGNAL_UPDATE = "tdu_signal_update"
+    LIQUIDITY_UPDATE = "liquidity_update"
     BIG_TRADE = "big_trade"
     MARKET_DATA_STATUS = "market_data_status"
     ALERT_EVENT = "alert_event"
@@ -867,6 +869,59 @@ class TduSignalUpdate:
             momentum_level=int(data["momentumLevel"]),
             delta_divergence=int(data["deltaDivergence"]),
         )
+
+
+@dataclass(slots=True)
+class LiquidityUpdate:
+    """Reduced Bookmap depth signal streamed to the standalone LQ chart."""
+
+    type: ClassVar[str] = "liquidity_update"
+
+    symbol: str
+    contract: str
+    sequence: int
+    time: CanonicalTimestamp
+    event_kind: str
+    action: str
+    side: str
+    price: float
+    size: int
+    previous_size: int
+    change: int
+    threshold: int
+    dom_distance: int | None
+    strength: float
+    source_contract: str | None = None
+    line_id: str | None = None
+    line_start_time: CanonicalTimestamp | None = None
+    snapshot: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "type": self.type,
+            "symbol": self.symbol,
+            "contract": self.contract,
+            "sequence": self.sequence,
+            "time": self.time,
+            "eventKind": self.event_kind,
+            "action": self.action,
+            "side": self.side,
+            "price": self.price,
+            "size": self.size,
+            "previousSize": self.previous_size,
+            "change": self.change,
+            "threshold": self.threshold,
+            "domDistance": self.dom_distance,
+            "strength": self.strength,
+            "snapshot": self.snapshot,
+        }
+        if self.source_contract is not None:
+            out["sourceContract"] = self.source_contract
+        if self.line_id is not None:
+            out["lineId"] = self.line_id
+        if self.line_start_time is not None:
+            out["lineStartTime"] = self.line_start_time
+        return out
 
 
 @dataclass(slots=True)

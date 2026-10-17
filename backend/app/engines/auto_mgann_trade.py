@@ -1,4 +1,4 @@
-"""Server-side mGann automatic execution and EMA21 trailing management.
+"""Server-side mGann automatic execution and fixed-risk trade management.
 
 The engine deliberately consumes live, closed M1 bars only.  Historical cache
 rows are used solely to warm the detector after a restart and can never submit
@@ -30,8 +30,27 @@ from ..mt5.manager import Mt5Manager
 from ..registry.registry import OutboundEvent, WebSocketRegistry
 from ..storage.cache_store import CacheStore
 from .basis_engine import BasisEngine
+from .chart_limit_take_profit import find_position, half_close_volume, positive_number
 from .gc_push_momentum import GcPushMomentumPoint, GcPushMomentumState
-from .mgann_big_trade_sweep import MgannBigTradeSweepBar, MgannBigTradeSweepState
+from .mgann_big_trade_sweep import (
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_FILTER_LIQUIDITY,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
+    MgannBigTradeSweepBar,
+    MgannBigTradeSweepState,
+)
 from .symbol_map import SymbolMap
 
 __all__ = ["AutoMgannTradeEngine"]
@@ -39,14 +58,11 @@ __all__ = ["AutoMgannTradeEngine"]
 logger = logging.getLogger(__name__)
 
 _GC_TICK_SIZE = 0.1
-_SL_BUFFER_TICKS = 2
 _TP_R_MULTIPLE = 3.0
 _LIMIT_BODY_MIN_GC = 4.0
 _LIMIT_BODY_FRACTION = 0.70
 _MAX_BODY_MULTIPLE = 8.0
-_EMA_PERIOD = 21
-_EMA_SMOOTHING = 2.0 / (_EMA_PERIOD + 1)
-_EMA_TRAILING_STARTED_EVENT = "auto_mgann_ema21_trailing_started"
+_PARTIAL_TAKE_PROFIT_EVENT = "auto_mgann_partial_take_profit_1r"
 
 
 class AutoMgannTradeEngine:
@@ -66,27 +82,33 @@ class AutoMgannTradeEngine:
         self._basis = basis_engine
         self._registry = registry
         self._settings = settings or default_settings
-        # Base strategy: M1 internal BOS/CHoCH, body from 2x through 8x the
-        # prior 20 bodies, direction-aligned volume delta >= 2x the prior 20
-        # absolute deltas, without a BigTrade/liquidity gate. Long is narrowed
-        # below to BOS plus aligned prior-P90 GC Push Momentum; Short retains
-        # the existing behavior.
+        # Use the same optimized mGann Break L/S detector defaults as the chart
+        # and alerts. Long is narrowed below to BOS plus aligned prior-P90 GC
+        # Push Momentum; Short retains the existing behavior.
         self._signals = MgannBigTradeSweepState(
             timeframe="1m",
             require_big_trade=False,
-            volume_delta_lookback=20,
-            volume_delta_multiplier=2.0,
-            spread_lookback=20,
-            spread_multiplier=2.0,
-            swing_size=5,
-            confirmation_bars=2,
-            break_ticks=0,
+            volume_delta_lookback=MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
+            volume_delta_multiplier=MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
+            min_spread_ticks=MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
+            spread_lookback=MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+            spread_multiplier=MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+            swing_size=MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+            pivot_lookback_bars=MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+            min_pivot_cuts=MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+            pivot_tolerance_ticks=MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
+            min_pivot_wick_ticks=MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
+            filter_liquidity=MGANN_BIG_TRADE_SWEEP_DEFAULT_FILTER_LIQUIDITY,
+            liquidity_atr_margin=MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+            liquidity_sweep_lookback_bars=(
+                MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS
+            ),
+            confirmation_bars=MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+            break_ticks=MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
             tick_size=_GC_TICK_SIZE,
         )
         self._push_momentum = GcPushMomentumState()
         self._last_open_order_scan_at = 0
-        self._ema21: float | None = None
-        self._ema_last_bar_time: int | None = None
 
     def seed(self, *, symbol: str = "GC", contract: str = "GC", count: int = 500) -> None:
         """Warm the detector from recent closed bars without submitting orders."""
@@ -108,13 +130,9 @@ class AutoMgannTradeEngine:
             self._signals.on_closed_bar(
                 _to_signal_bar(bar, volume_delta=deltas_by_time.get(bar.time))
             )
-            self._advance_ema21(bar)
 
     def on_closed_bar(self, bar: OHLCVBar, volume_delta: int | None = None) -> int:
         """Process one live closed M1 bar and return submitted/rejected order count."""
-        ema21 = self._advance_ema21(bar)
-        if ema21 is not None:
-            self._manage_ema21_trailing_on_closed_bar(bar, ema21)
         push_momentum = self._push_momentum.on_closed_bar(bar)
         triggers = self._signals.on_closed_bar(
             _to_signal_bar(bar, volume_delta=volume_delta)
@@ -159,19 +177,18 @@ class AutoMgannTradeEngine:
                 )
         return attempts
 
-    def activate_ema21_trailing_at_1r(self, gc_price: float) -> int:
-        """Durably start EMA21 trailing once a filled auto order reaches 1R."""
-        if not math.isfinite(gc_price) or self._ema21 is None:
+    def take_profit_half_at_1r(self, gc_price: float) -> int:
+        """Close half at +1R while preserving the original SL and +3R TP."""
+        if not math.isfinite(gc_price):
             return 0
         changed = 0
-        for config in self._cache.auto_trade.read_enabled():
-            account = self._cache.users.read_mt5_account(config.user_id)
-            if account is None:
-                continue
-            active_ids = {
+        for account in self._cache.users.read_mt5_accounts():
+            already_taken = {
                 order.id
                 for order in self._cache.orders.list_open_for_account_with_event(
-                    account.user_id, account.id, _EMA_TRAILING_STARTED_EVENT
+                    account.user_id,
+                    account.id,
+                    _PARTIAL_TAKE_PROFIT_EVENT,
                 )
             }
             candidates = [
@@ -181,26 +198,49 @@ class AutoMgannTradeEngine:
                 )
                 if order.source is OrderSource.AUTO_MGANN
                 and order.status is OrderStatus.FILLED
-                and order.id not in active_ids
+                and order.broker_position_ticket is not None
+                and order.id not in already_taken
                 and _has_reached_one_r(order, gc_price)
             ]
             if not candidates:
                 continue
             try:
                 with self._mt5.account_session(self._cache, account) as backend:
-                    symbol = SymbolMap.from_info(
-                        backend.symbol_info(
-                            account.user_id, account.id, account.symbol_broker
-                        )
+                    symbol = backend.symbol_info(
+                        account.user_id,
+                        account.id,
+                        account.symbol_broker,
                     )
+                    positions = backend.positions(account.user_id, account.id)
                     for order in candidates:
-                        if self._start_ema21_trailing(
-                            order, backend, symbol, self._ema21, gc_price
+                        position = find_position(
+                            positions,
+                            order.broker_position_ticket,
+                            account.symbol_broker,
+                        )
+                        if position is None:
+                            continue
+                        broker_volume = positive_number(position.get("volumeLots"))
+                        if broker_volume is None:
+                            continue
+                        managed_volume = min(order.volume_lots, broker_volume)
+                        close_volume = half_close_volume(
+                            managed_volume,
+                            min_lot=symbol.min_lot,
+                            lot_step=symbol.lot_step,
+                        )
+                        if close_volume is None:
+                            continue
+                        if self._close_half_at_1r(
+                            order,
+                            backend,
+                            gc_price=gc_price,
+                            close_volume=close_volume,
                         ):
                             changed += 1
             except Exception as exc:
                 logger.warning(
-                    "auto mGann EMA21 trailing activation skipped for account %s: %s",
+                    "auto mGann 1R partial take profit skipped for account %s: %s",
                     account.id,
                     exc,
                 )
@@ -211,10 +251,7 @@ class AutoMgannTradeEngine:
         if not math.isfinite(gc_price):
             return 0
         changed = 0
-        for config in self._cache.auto_trade.read_enabled():
-            account = self._cache.users.read_mt5_account(config.user_id)
-            if account is None:
-                continue
+        for account in self._cache.users.read_mt5_accounts():
             candidates = [
                 order
                 for order in self._cache.orders.list_open_for_account(
@@ -471,152 +508,55 @@ class AutoMgannTradeEngine:
         self._emit_order(cancelled)
         return True
 
-    def _advance_ema21(self, bar: OHLCVBar) -> float | None:
-        if self._ema_last_bar_time is not None and bar.time <= self._ema_last_bar_time:
-            return None
-        close = float(bar.close)
-        if not math.isfinite(close):
-            return None
-        self._ema21 = close if self._ema21 is None else (
-            close * _EMA_SMOOTHING + self._ema21 * (1.0 - _EMA_SMOOTHING)
-        )
-        self._ema_last_bar_time = bar.time
-        return self._ema21
-
-    def _manage_ema21_trailing_on_closed_bar(
-        self, bar: OHLCVBar, ema21: float
-    ) -> int:
-        """Ratchet active stops and close a trailing order on its EMA21 cross."""
-        changed = 0
-        for config in self._cache.auto_trade.read_enabled():
-            account = self._cache.users.read_mt5_account(config.user_id)
-            if account is None:
-                continue
-            candidates = [
-                order
-                for order in self._cache.orders.list_open_for_account_with_event(
-                    account.user_id, account.id, _EMA_TRAILING_STARTED_EVENT
-                )
-                if order.source is OrderSource.AUTO_MGANN
-                and order.status is OrderStatus.FILLED
-            ]
-            if not candidates:
-                continue
-            try:
-                with self._mt5.account_session(self._cache, account) as backend:
-                    symbol = SymbolMap.from_info(
-                        backend.symbol_info(
-                            account.user_id, account.id, account.symbol_broker
-                        )
-                    )
-                    for order in candidates:
-                        if _should_close_trailing_on_ema_cross(order, bar.close, ema21):
-                            if self._close_ema21_trailing_order(order, backend, bar, ema21):
-                                changed += 1
-                        elif self._ratchet_stop_to_ema21(order, backend, symbol, ema21) is not None:
-                            changed += 1
-            except Exception as exc:
-                logger.warning(
-                    "auto mGann EMA21 trailing management skipped for account %s: %s",
-                    account.id,
-                    exc,
-                )
-        return changed
-
-    def _start_ema21_trailing(
+    def _close_half_at_1r(
         self,
         order: OrderRecord,
         backend,
-        symbol: SymbolMap,
-        ema21: float,
+        *,
         gc_price: float,
+        close_volume: float,
     ) -> bool:
-        candidate = self._ratchet_stop_to_ema21(order, backend, symbol, ema21)
-        if candidate is None:
+        close_request = replace(order, volume_lots=close_volume)
+        try:
+            result = backend.close_position(close_request)
+        except Exception as exc:
+            self._audit(
+                order,
+                "auto_mgann_partial_take_profit_1r_exception",
+                {"errorMessage": str(exc)},
+            )
             return False
+        if not result.accepted:
+            self._audit(
+                order,
+                "auto_mgann_partial_take_profit_1r_rejected",
+                {"errorCode": result.error_code, "errorMessage": result.error_message},
+            )
+            return False
+
+        original_volume = order.volume_lots
+        updated = replace(order)
+        updated.volume_lots = round(max(0.0, original_volume - close_volume), 10)
+        updated.broker_deal_ticket = result.broker_deal_ticket or updated.broker_deal_ticket
+        updated.last_broker_error_code = None
+        updated.last_broker_error_message = None
+        updated.updated_at = now_ms()
+        self._cache.orders.update(updated)
         self._audit(
-            candidate,
-            _EMA_TRAILING_STARTED_EVENT,
+            updated,
+            _PARTIAL_TAKE_PROFIT_EVENT,
             {
                 "gcPrice": gc_price,
-                "oneRPrice": _one_r_price(candidate),
-                "ema21": ema21,
-                "slGc": candidate.sl_gc,
+                "oneRPrice": _one_r_price(updated),
+                "entryGc": updated.entry_gc,
+                "slGc": updated.sl_gc,
+                "tpGc": updated.tp_gc,
+                "originalVolumeLots": original_volume,
+                "closedVolumeLots": close_volume,
+                "remainingVolumeLots": updated.volume_lots,
             },
         )
-        return True
-
-    def _ratchet_stop_to_ema21(
-        self, order: OrderRecord, backend, symbol: SymbolMap, ema21: float
-    ) -> OrderRecord | None:
-        target_gc = _next_ema21_stop(order, ema21)
-        if target_gc is None:
-            return order
-        target = self._basis.to_broker(target_gc, symbol)
-        if target.stale:
-            return None
-        candidate = replace(order)
-        candidate.sl_gc = target_gc
-        candidate.sl_broker = target.price
-        candidate.basis_at_last_sync = target.basis
-        candidate.last_sync_at = now_ms()
-        candidate.updated_at = candidate.last_sync_at
-        try:
-            result = backend.modify_order(candidate)
-        except Exception as exc:
-            self._audit(
-                order,
-                "auto_mgann_ema21_stop_exception",
-                {"errorMessage": str(exc)},
-            )
-            return None
-        if not result.accepted:
-            self._audit(
-                order,
-                "auto_mgann_ema21_stop_rejected",
-                {"errorCode": result.error_code, "errorMessage": result.error_message},
-            )
-            return None
-        self._cache.orders.update(candidate)
-        self._audit(
-            candidate,
-            "auto_mgann_ema21_stop_updated",
-            {"ema21": ema21, "slGc": candidate.sl_gc, "slBroker": candidate.sl_broker},
-        )
-        self._emit_order(candidate)
-        return candidate
-
-    def _close_ema21_trailing_order(
-        self, order: OrderRecord, backend, bar: OHLCVBar, ema21: float
-    ) -> bool:
-        try:
-            result = backend.close_position(order)
-        except Exception as exc:
-            self._audit(
-                order,
-                "auto_mgann_ema21_exit_exception",
-                {"errorMessage": str(exc)},
-            )
-            return False
-        if not result.accepted:
-            self._audit(
-                order,
-                "auto_mgann_ema21_exit_rejected",
-                {"errorCode": result.error_code, "errorMessage": result.error_message},
-            )
-            return False
-        closed = replace(order)
-        closed.status = OrderStatus.CLOSED
-        closed.broker_deal_ticket = result.broker_deal_ticket or closed.broker_deal_ticket
-        closed.closed_at = now_ms()
-        closed.updated_at = closed.closed_at
-        self._cache.orders.update(closed)
-        self._audit(
-            closed,
-            "auto_mgann_ema21_exit",
-            {"barTime": bar.time, "barClose": bar.close, "ema21": ema21},
-        )
-        self._emit_order(closed)
+        self._emit_order(updated)
         return True
 
     def _audit(self, order: OrderRecord, event_type: str, payload: dict) -> None:
@@ -706,11 +646,7 @@ def _signal_body_limit_price(bar: OHLCVBar) -> float:
 
 
 def _signal_stop(side: OrderSide, bar: OHLCVBar) -> float:
-    raw = (
-        float(bar.low) - _SL_BUFFER_TICKS * _GC_TICK_SIZE
-        if side is OrderSide.BUY
-        else float(bar.high) + _SL_BUFFER_TICKS * _GC_TICK_SIZE
-    )
+    raw = float(bar.low) if side is OrderSide.BUY else float(bar.high)
     return _round_gc(raw)
 
 
@@ -782,21 +718,3 @@ def _has_reached_one_r(order: OrderRecord, gc_price: float) -> bool:
     if one_r is None:
         return False
     return gc_price >= one_r if order.side is OrderSide.BUY else gc_price <= one_r
-
-
-def _next_ema21_stop(order: OrderRecord, ema21: float) -> float | None:
-    if not math.isfinite(ema21):
-        return None
-    target = _round_gc(ema21)
-    current = order.sl_gc
-    if order.side is OrderSide.BUY:
-        return target if current is None or target > current else None
-    return target if current is None or target < current else None
-
-
-def _should_close_trailing_on_ema_cross(
-    order: OrderRecord, close: float, ema21: float
-) -> bool:
-    if not math.isfinite(close) or not math.isfinite(ema21):
-        return False
-    return close < ema21 if order.side is OrderSide.BUY else close > ema21

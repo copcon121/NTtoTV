@@ -2,10 +2,29 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response
 
+from ..engines.mgann_big_trade_sweep import (
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_FILTER_LIQUIDITY,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
+)
 from ..models.auth import AuthenticatedUser
 from ..models.timestamp import now_ms
 from ..storage.cache_store import CacheStore
@@ -16,6 +35,58 @@ from .errors import bad_request, not_found, validation_error
 
 router = APIRouter(prefix="/api", tags=["profiles"])
 DEFAULT_PROFILE_ID = "default"
+MGANN_BREAK_SETTINGS_VERSION = 1
+
+
+def _default_mgann_break_settings() -> dict[str, Any]:
+    return {
+        "requireBigTrade": False,
+        "bigTradeThreshold": MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
+        "volumeDeltaLookback": MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_LOOKBACK,
+        "volumeDeltaMultiplier": MGANN_BIG_TRADE_SWEEP_DEFAULT_VOLUME_DELTA_MULTIPLIER,
+        "minSpreadTicks": MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
+        "spreadLookback": MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_LOOKBACK,
+        "spreadMultiplier": MGANN_BIG_TRADE_SWEEP_DEFAULT_SPREAD_MULTIPLIER,
+        "swingSize": MGANN_BIG_TRADE_SWEEP_DEFAULT_SWING_SIZE,
+        "pivotLookbackBars": MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_LOOKBACK_BARS,
+        "minPivotCuts": MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
+        "pivotToleranceTicks": MGANN_BIG_TRADE_SWEEP_DEFAULT_PIVOT_TOLERANCE_TICKS,
+        "minPivotWickTicks": MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
+        "filterLiquidity": MGANN_BIG_TRADE_SWEEP_DEFAULT_FILTER_LIQUIDITY,
+        "liquidityAtrMargin": MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_ATR_MARGIN,
+        "liquiditySweepLookbackBars": (
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_LIQUIDITY_SWEEP_LOOKBACK_BARS
+        ),
+        "confirmationBars": MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+        "breakTicks": MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
+    }
+
+
+def _migrate_mgann_break_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("mgannBreakSettingsVersion") == MGANN_BREAK_SETTINGS_VERSION:
+        return payload
+    migrated = dict(payload)
+    migrated["mgannBreak"] = _default_mgann_break_settings()
+    migrated["mgannBreakSettingsVersion"] = MGANN_BREAK_SETTINGS_VERSION
+    return migrated
+
+
+def _migrate_profile_record(cache: CacheStore, rec: ProfileRecord) -> ProfileRecord:
+    payload = _migrate_mgann_break_payload(rec.payload)
+    if payload is rec.payload:
+        return rec
+
+    # Empty profiles are synthetic and need not be persisted until the browser
+    # saves a complete chart payload. Existing rows are migrated immediately so
+    # an older browser tab cannot make its stale values authoritative again.
+    migrated = replace(
+        rec,
+        payload=payload,
+        updated_at=now_ms() if rec.created_at > 0 else rec.updated_at,
+    )
+    if rec.created_at > 0:
+        cache.upsert_profile(migrated)
+    return migrated
 
 
 def _normalize_profile_id(profile_id: str) -> str:
@@ -81,7 +152,8 @@ async def get_my_profile(
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
     """Return the authenticated user's default chart workspace."""
-    return {"profile": _profile_to_dict(_read_or_seed_user_profile(cache, user))}
+    rec = _migrate_profile_record(cache, _read_or_seed_user_profile(cache, user))
+    return {"profile": _profile_to_dict(rec)}
 
 
 @router.put("/me/profile")
@@ -98,9 +170,10 @@ async def save_my_profile(
     if not isinstance(body, dict):
         raise bad_request("Request body must be a JSON object")
 
-    payload = body.get("payload")
-    if not isinstance(payload, dict):
+    raw_payload = body.get("payload")
+    if not isinstance(raw_payload, dict):
         raise validation_error("'payload' must be an object", field="payload")
+    payload = _migrate_mgann_break_payload(raw_payload)
     raw_name = body.get("name", user.username)
     if raw_name is not None and not isinstance(raw_name, str):
         raise validation_error("'name' must be a string", field="name")
@@ -141,6 +214,7 @@ async def get_profile(
     rec = cache.read_profile(profile_id)
     if rec is None:
         raise not_found(f"Unknown profile id {profile_id!r}", field="profileId")
+    rec = _migrate_profile_record(cache, rec)
     return {"profile": _profile_to_dict(rec)}
 
 
@@ -159,9 +233,10 @@ async def save_profile(
     if not isinstance(body, dict):
         raise bad_request("Request body must be a JSON object")
 
-    payload = body.get("payload")
-    if not isinstance(payload, dict):
+    raw_payload = body.get("payload")
+    if not isinstance(raw_payload, dict):
         raise validation_error("'payload' must be an object", field="payload")
+    payload = _migrate_mgann_break_payload(raw_payload)
     raw_name = body.get("name", profile_id)
     if raw_name is not None and not isinstance(raw_name, str):
         raise validation_error("'name' must be a string", field="name")

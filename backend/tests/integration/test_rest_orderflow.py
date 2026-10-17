@@ -401,6 +401,24 @@ def test_footprint_count_allows_page_max_500(env):
 
 
 @pytest.mark.integration
+def test_footprint_from_returns_session_range_without_older_bars(env):
+    client, cache = env
+    for i in range(8):
+        _seed_footprint_bar(cache, _BASE_MS + i * _MINUTE_MS)
+
+    session_start = _BASE_MS + 3 * _MINUTE_MS
+    resp = client.get(
+        "/api/orderflow/footprint",
+        params={"symbol": "GC", "from": session_start},
+    )
+
+    assert resp.status_code == 200
+    assert [bar["time"] for bar in resp.json()["bars"]] == [
+        _BASE_MS + i * _MINUTE_MS for i in range(3, 8)
+    ]
+
+
+@pytest.mark.integration
 def test_footprint_at_context_returns_centered_history(env):
     client, cache = env
     for i in range(10):
@@ -420,6 +438,28 @@ def test_footprint_at_context_returns_centered_history(env):
     assert [bar["time"] for bar in body["bars"]] == [
         _BASE_MS + i * _MINUTE_MS for i in range(2, 9)
     ]
+
+
+@pytest.mark.integration
+def test_footprint_context_accepts_500_and_rejects_larger_values(env):
+    client, cache = env
+    for i in range(10):
+        _seed_footprint_bar(cache, _BASE_MS + i * _MINUTE_MS)
+    at = _BASE_MS + 5 * _MINUTE_MS
+
+    response = client.get(
+        "/api/orderflow/footprint",
+        params={"symbol": "GC", "at": at, "context": 500},
+    )
+    assert response.status_code == 200
+    assert response.json()["context"] == 500
+    assert len(response.json()["bars"]) == 10
+
+    too_large = client.get(
+        "/api/orderflow/footprint",
+        params={"symbol": "GC", "at": at, "context": 501},
+    )
+    assert too_large.status_code == 400
 
 
 @pytest.mark.integration

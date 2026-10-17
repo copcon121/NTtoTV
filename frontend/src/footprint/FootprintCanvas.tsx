@@ -46,6 +46,10 @@ export interface FootprintCanvasProps {
   displayCount?: number;
   /** Standalone page price-row height in CSS pixels. */
   rowHeightPx?: number;
+  /** Visible bitmap height inside a taller standalone virtual scroller. */
+  renderHeightPx?: number;
+  /** Current vertical offset inside the standalone virtual scroller. */
+  scrollTopPx?: number;
   /** Compact chart overlay or full standalone page canvas. */
   layout?: "overlay" | "standalone";
   /** Show MBoxWave XKontrol signal dots on the footprint columns. */
@@ -58,6 +62,26 @@ export interface FootprintCanvasProps {
 
 export interface FootprintXKontrolOverlay {
   signals: readonly XKontrolSignal[];
+}
+
+export type OrderflowGapSide = "buy" | "sell";
+
+export interface OrderflowGapSignal {
+  time: number;
+  side: OrderflowGapSide;
+  zoneLow: number;
+  zoneHigh: number;
+  markerPrice: number;
+}
+
+export interface FootprintOrderflowGapsOverlay {
+  signals: readonly OrderflowGapSignal[];
+}
+
+export interface OrderflowGapOptions {
+  vaPercent?: number;
+  useSwingFilter?: boolean;
+  lookbackPeriod?: number;
 }
 
 const MIN_THROTTLE_MS = 100;
@@ -75,6 +99,10 @@ const MZ_THEME = {
   deltaPos: "#008000",
   deltaNeg: "#ff0000",
   unfinishedAuction: "#ffd700",
+  orderflowGapBuyZone: "rgba(0, 0, 255, 0.20)",
+  orderflowGapBuyBorder: "rgba(0, 0, 255, 0.85)",
+  orderflowGapSellZone: "rgba(255, 20, 147, 0.20)",
+  orderflowGapSellBorder: "rgba(255, 20, 147, 0.85)",
   xKontrolOffers: "#008080",
   xKontrolBids: "#ff1493",
   candleUp: "#00aa20",
@@ -98,6 +126,7 @@ export function drawFootprint(
   inputs: FootprintRenderInputs,
   settings?: FootprintSettings,
   xKontrol?: FootprintXKontrolOverlay,
+  orderflowGaps?: FootprintOrderflowGapsOverlay,
 ): void {
   const showVA = settings?.showVA ?? false;
   const showImbalance = settings?.showImbalance ?? true;
@@ -123,10 +152,12 @@ export function drawFootprint(
     Math.round(inputs.displayCount ?? FOOTPRINT_DISPLAY_COUNT),
   );
   const standalone = inputs.layout === "standalone";
-  ctx.clearRect(0, 0, viewport.width, viewport.height);
+  const renderHeight = Math.max(1, inputs.renderHeightPx ?? viewport.height);
+  const scrollTop = standalone ? Math.max(0, inputs.scrollTopPx ?? 0) : 0;
+  ctx.clearRect(0, 0, viewport.width, renderHeight);
   if (standalone) {
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, viewport.width, viewport.height);
+    ctx.fillRect(0, 0, viewport.width, renderHeight);
   }
   if (bars.length === 0) return;
 
@@ -157,7 +188,7 @@ export function drawFootprint(
     : Math.min(400, Math.max(40, viewport.width - 20));
   const panelH = Math.max(40, viewport.height - 40);
   const panelX = standalone ? 10 : Math.max(10, viewport.width - panelW - 10);
-  const panelY = 20;
+  const panelY = 20 - scrollTop;
   const panelBottom = panelY + panelH;
   const contentTop = panelY + 25;
   const contentBottom = panelBottom - bottomAxisH;
@@ -199,7 +230,9 @@ export function drawFootprint(
   const plotRight = panelX + panelW - rightAxisW - 10;
   const plotW = Math.max(20, plotRight - plotLeft);
   const barW = plotW / displayCount;
-  const cellW = Math.max(24, barW - 20);
+  // Keep standalone columns visually distinct when absorption zones and
+  // XKontrol markers extend toward neighboring bars.
+  const cellW = Math.max(24, barW - (standalone ? 24 : 20));
   const sideW = Math.max(5, (cellW - 4) / 2);
   const fontSize = Math.max(7, Math.min(10, rowH * 0.7));
   const cellFontSize = standalone
@@ -208,6 +241,9 @@ export function drawFootprint(
   const textColor = viewport.textColor ?? MZ_THEME.text;
   const xKontrolByTime = new Map(
     (xKontrol?.signals ?? []).map((signal) => [signal.time, signal]),
+  );
+  const orderflowGapByTime = new Map(
+    (orderflowGaps?.signals ?? []).map((signal) => [signal.time, signal]),
   );
 
   ctx.save();
@@ -236,6 +272,18 @@ export function drawFootprint(
     const askRight = askLeft + sideW;
     const fullW = askRight - bidLeft;
     drawPanelCandle(ctx, profile, xCenter, barW, yForPrice);
+
+    const orderflowGap = orderflowGapByTime.get(bar.time);
+    if (orderflowGap) {
+      drawOrderflowGapZone(
+        ctx,
+        orderflowGap,
+        bidLeft,
+        fullW,
+        rowH,
+        yForPrice,
+      );
+    }
 
     if (showVA && isFiniteNumber(profile.vah) && isFiniteNumber(profile.val)) {
       const yVah = yForPrice(profile.vah);
@@ -368,6 +416,105 @@ export function calculateFootprintXKontrolSignals(
   );
 }
 
+/**
+ * Detect Orderflows Trader-style Value Area gaps between adjacent M1 bars.
+ * The optional swing filter mirrors the original offset=1 filter: the prior
+ * bar must make a fresh swing high before a sell gap, or a fresh swing low
+ * before a buy gap, against up to lookback+1 older bars.
+ */
+export function calculateOrderflowGapSignals(
+  bars: ReadonlyMap<number, FootprintBar>,
+  options: OrderflowGapOptions = {},
+): OrderflowGapSignal[] {
+  const sortedBars = [...bars.values()].sort((left, right) => left.time - right.time);
+  if (sortedBars.length < 2) return [];
+
+  const vaPercent = clampPercent(options.vaPercent ?? 70);
+  const useSwingFilter = options.useSwingFilter ?? false;
+  const lookbackPeriod = Math.max(1, Math.round(options.lookbackPeriod ?? 5));
+  const priceStep = inferPriceStep(sortedBars);
+  const profiles = sortedBars.map((bar) => profileForBar(bar, vaPercent, priceStep));
+  const signals: OrderflowGapSignal[] = [];
+
+  for (let index = 1; index < sortedBars.length; index += 1) {
+    const bar = sortedBars[index];
+    const current = profiles[index];
+    const previous = profiles[index - 1];
+    const isDownBar = current.close < current.open;
+    const isUpBar = current.close > current.open;
+
+    if (
+      isDownBar &&
+      current.vah < previous.val &&
+      ticksBetween(current.vah, previous.val, priceStep) > 1 &&
+      passesOrderflowGapSwingFilter(
+        sortedBars,
+        index,
+        "sell",
+        useSwingFilter,
+        lookbackPeriod,
+      )
+    ) {
+      signals.push({
+        time: bar.time,
+        side: "sell",
+        zoneLow: roundPrice(current.vah + priceStep),
+        zoneHigh: roundPrice(previous.val - priceStep),
+        markerPrice: current.high,
+      });
+    }
+
+    if (
+      isUpBar &&
+      current.val > previous.vah &&
+      ticksBetween(previous.vah, current.val, priceStep) > 1 &&
+      passesOrderflowGapSwingFilter(
+        sortedBars,
+        index,
+        "buy",
+        useSwingFilter,
+        lookbackPeriod,
+      )
+    ) {
+      signals.push({
+        time: bar.time,
+        side: "buy",
+        zoneLow: roundPrice(previous.vah + priceStep),
+        zoneHigh: roundPrice(current.val - priceStep),
+        markerPrice: current.low,
+      });
+    }
+  }
+
+  return signals;
+}
+
+function ticksBetween(lower: number, upper: number, priceStep: number): number {
+  if (!Number.isFinite(priceStep) || priceStep <= 0) return 0;
+  return (upper - lower) / priceStep;
+}
+
+function passesOrderflowGapSwingFilter(
+  bars: readonly FootprintBar[],
+  currentIndex: number,
+  side: OrderflowGapSide,
+  enabled: boolean,
+  lookbackPeriod: number,
+): boolean {
+  if (!enabled) return true;
+  const previous = bars[currentIndex - 1];
+  const olderBars = bars.slice(
+    Math.max(0, currentIndex - lookbackPeriod - 2),
+    currentIndex - 1,
+  );
+  if (!previous || olderBars.length === 0) return false;
+
+  if (side === "sell") {
+    return previous.high > Math.max(...olderBars.map((bar) => bar.high));
+  }
+  return previous.low < Math.min(...olderBars.map((bar) => bar.low));
+}
+
 function drawXKontrolDot(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -381,6 +528,31 @@ function drawXKontrolDot(
   ctx.fillStyle = code > 0 ? MZ_THEME.xKontrolOffers : MZ_THEME.xKontrolBids;
   ctx.fill();
   ctx.restore();
+}
+
+function drawOrderflowGapZone(
+  ctx: CanvasRenderingContext2D,
+  signal: OrderflowGapSignal,
+  x: number,
+  width: number,
+  rowHeight: number,
+  yForPrice: (price: number) => number,
+): void {
+  const zoneTop = yForPrice(signal.zoneHigh) - rowHeight / 2;
+  const zoneBottom = yForPrice(signal.zoneLow) + rowHeight / 2;
+  const color =
+    signal.side === "buy"
+      ? MZ_THEME.orderflowGapBuyZone
+      : MZ_THEME.orderflowGapSellZone;
+  const border =
+    signal.side === "buy"
+      ? MZ_THEME.orderflowGapBuyBorder
+      : MZ_THEME.orderflowGapSellBorder;
+  ctx.fillStyle = color;
+  ctx.fillRect(x, zoneTop, width, Math.max(1, zoneBottom - zoneTop));
+  ctx.strokeStyle = border;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, zoneTop, width, Math.max(1, zoneBottom - zoneTop));
 }
 
 function drawStandaloneFrame(
@@ -664,10 +836,13 @@ function drawDashedRect(
 function footprintSettingsKey(
   settings?: FootprintSettings,
   xKontrol?: FootprintXKontrolOverlay,
+  orderflowGaps?: FootprintOrderflowGapsOverlay,
 ): string {
   return [
     settings?.showVA ?? false,
     settings?.vaPercent ?? 70,
+    settings?.showOrderflowsGaps ?? false,
+    settings?.orderflowsGapsUseSwingFilter ?? false,
     settings?.imbalanceMinVolume ?? 10,
     settings?.showImbalance ?? true,
     settings?.showAbsorption ?? true,
@@ -676,6 +851,10 @@ function footprintSettingsKey(
     settings?.absorptionFilter ?? 3,
     settings?.showUnfinishedAuction ?? true,
     ...(xKontrol?.signals.map((signal) => `${signal.time}:${signal.code}`) ?? []),
+    ...(orderflowGaps?.signals.map(
+      (signal) =>
+        `${signal.time}:${signal.side}:${signal.zoneLow}:${signal.zoneHigh}`,
+    ) ?? []),
   ].join("|");
 }
 
@@ -720,6 +899,8 @@ export function FootprintCanvas({
   settings,
   displayCount = FOOTPRINT_DISPLAY_COUNT,
   rowHeightPx,
+  renderHeightPx,
+  scrollTopPx,
   layout = "overlay",
   showXKontrol = false,
   xKontrolSettings = DEFAULT_XKONTROL_DISPLAY_SETTINGS,
@@ -734,6 +915,7 @@ export function FootprintCanvas({
     inputs: FootprintRenderInputs;
     settings?: FootprintSettings;
     xKontrol?: FootprintXKontrolOverlay;
+    orderflowGaps?: FootprintOrderflowGapsOverlay;
   } | null>(null);
 
   const interval = clampThrottle(throttleMs);
@@ -753,14 +935,27 @@ export function FootprintCanvas({
           ),
         }
       : undefined;
+    // The compact five-bar preview always shows OF gaps. The standalone page
+    // retains its explicit toolbar toggle.
+const orderflowGaps = (layout === "overlay" || settings?.showOrderflowsGaps)
+  ? {
+      signals: calculateOrderflowGapSignals(bars, {
+        vaPercent: settings?.vaPercent ?? 70,
+        useSwingFilter: settings?.orderflowsGapsUseSwingFilter ?? false,
+        lookbackPeriod: 5,
+      }),
+    }
+      : undefined;
 
     const next: FootprintRenderInputs = {
       bars: selectDisplayBars(bars, effectiveDisplayCount),
       viewport,
       displayCount: effectiveDisplayCount,
       rowHeightPx,
+      renderHeightPx,
+      scrollTopPx,
       layout,
-      settingsKey: footprintSettingsKey(settings, xKontrol),
+      settingsKey: footprintSettingsKey(settings, xKontrol, orderflowGaps),
     };
 
     if (!shouldRedraw(prevInputsRef.current, next)) {
@@ -770,7 +965,13 @@ export function FootprintCanvas({
       return; // retain current rendering (Req 14.6, 14.7)
     }
 
-    pendingRenderRef.current = { ctx, inputs: next, settings, xKontrol };
+    pendingRenderRef.current = {
+      ctx,
+      inputs: next,
+      settings,
+      xKontrol,
+      orderflowGaps,
+    };
     const renderLatest = () => {
       const pending = pendingRenderRef.current;
       pendingRenderRef.current = null;
@@ -781,6 +982,7 @@ export function FootprintCanvas({
         pending.inputs,
         pending.settings,
         pending.xKontrol,
+        pending.orderflowGaps,
       );
       prevInputsRef.current = pending.inputs;
       lastDrawAtRef.current = now();
@@ -801,6 +1003,8 @@ export function FootprintCanvas({
     settings,
     effectiveDisplayCount,
     rowHeightPx,
+    renderHeightPx,
+    scrollTopPx,
     layout,
     showXKontrol,
     xKontrolSettings,
@@ -825,8 +1029,8 @@ export function FootprintCanvas({
         layout === "standalone" ? " footprint-canvas-standalone" : ""
       }`}
       width={viewport.width}
-      height={viewport.height}
-      style={{ width: viewport.width, height: viewport.height }}
+      height={renderHeightPx ?? viewport.height}
+      style={{ width: viewport.width, height: renderHeightPx ?? viewport.height }}
       aria-label="Footprint"
     />
   );

@@ -12,6 +12,10 @@ final class BookmapWebSocketSender implements AutoCloseable {
         void onConnected();
     }
 
+    interface MessageListener {
+        void onMessage(String message);
+    }
+
     private static final int MAX_QUEUE = 20_000;
     private static final long MAX_FRAME_AGE_MS = 2_000L;
 
@@ -31,6 +35,7 @@ final class BookmapWebSocketSender implements AutoCloseable {
     private final ArrayDeque<Frame> queue = new ArrayDeque<Frame>();
     private final URI uri;
     private final ConnectedListener connectedListener;
+    private final MessageListener messageListener;
     private final Thread worker;
     private volatile boolean running = true;
     private volatile WebSocket socket;
@@ -40,8 +45,17 @@ final class BookmapWebSocketSender implements AutoCloseable {
     private long droppedStale;
 
     BookmapWebSocketSender(String url, ConnectedListener connectedListener) {
+        this(url, connectedListener, null);
+    }
+
+    BookmapWebSocketSender(
+        String url,
+        ConnectedListener connectedListener,
+        MessageListener messageListener
+    ) {
         uri = URI.create(url);
         this.connectedListener = connectedListener;
+        this.messageListener = messageListener;
         worker = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -180,6 +194,8 @@ final class BookmapWebSocketSender implements AutoCloseable {
     }
 
     private final class Listener implements WebSocket.Listener {
+        private final StringBuilder incoming = new StringBuilder();
+
         @Override
         public void onOpen(WebSocket webSocket) {
             open = true;
@@ -192,6 +208,17 @@ final class BookmapWebSocketSender implements AutoCloseable {
             CharSequence data,
             boolean last
         ) {
+            incoming.append(data);
+            if (last) {
+                String message = incoming.toString();
+                incoming.setLength(0);
+                if (messageListener != null) {
+                    try {
+                        messageListener.onMessage(message);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
             webSocket.request(1L);
             return null;
         }

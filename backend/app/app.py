@@ -27,6 +27,7 @@ from .rest.alerts import router as alerts_router
 from .rest.auto_trade import router as auto_trade_router
 from .rest.auth import router as auth_router
 from .rest.market_data import router as market_data_router
+from .rest.liquidity import router as liquidity_router
 from .rest.mt5 import router as mt5_router
 from .rest.errors import install_error_handlers
 from .rest.notifications import router as notifications_router
@@ -60,6 +61,7 @@ async def _lifespan(app: FastAPI):
         # Share the runtime's stores with the REST surface so reads see writes.
         app.state.contract_state = runtime.contract_state
         app.state.tick_store = runtime.tick_store
+        app.state.liquidity_store = runtime.liquidity_store
     if runtime is not None:
         await runtime.start()
     try:
@@ -93,6 +95,7 @@ def create_app(*, lifespan: bool = True) -> FastAPI:
     app.include_router(supertrend_trailing_router)
     app.include_router(notifications_router)
     app.include_router(market_data_router)
+    app.include_router(liquidity_router)
     app.include_router(mt5_router)
     app.include_router(orders_router)
     app.include_router(profiles_router)

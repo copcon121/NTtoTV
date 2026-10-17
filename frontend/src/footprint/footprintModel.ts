@@ -92,6 +92,10 @@ export interface FootprintRenderInputs {
   displayCount?: number;
   /** Optional standalone page price-row height in CSS pixels. */
   rowHeightPx?: number;
+  /** Visible bitmap height when the standalone layout uses a taller virtual scroller. */
+  renderHeightPx?: number;
+  /** Vertical offset into the standalone virtual scroller. */
+  scrollTopPx?: number;
   /** Overlay mode draws the compact chart panel; standalone fills its shell. */
   layout?: "overlay" | "standalone";
   /** Stable key for display settings that affect drawing. */
@@ -126,6 +130,8 @@ export function shouldRedraw(
   if (
     prev.displayCount !== next.displayCount ||
     prev.rowHeightPx !== next.rowHeightPx ||
+    prev.renderHeightPx !== next.renderHeightPx ||
+    prev.scrollTopPx !== next.scrollTopPx ||
     prev.layout !== next.layout
   ) {
     return true;

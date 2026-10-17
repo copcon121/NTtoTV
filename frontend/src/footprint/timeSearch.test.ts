@@ -1,6 +1,30 @@
 import { describe, expect, it } from "vitest";
 
-import { floorToMinuteMs, parseFootprintSearchTime } from "./timeSearch";
+import {
+  floorToMinuteMs,
+  footprintSessionStartMs,
+  parseFootprintSearchTime,
+} from "./timeSearch";
+
+describe("footprintSessionStartMs", () => {
+  it("uses 05:00 UTC+7 for the current session", () => {
+    expect(footprintSessionStartMs(new Date("2026-07-01T00:00:00.000Z"))).toBe(
+      Date.parse("2026-06-30T22:00:00.000Z"),
+    );
+  });
+
+  it("uses the previous day before the UTC+7 session boundary", () => {
+    expect(footprintSessionStartMs(new Date("2026-06-30T21:59:00.000Z"))).toBe(
+      Date.parse("2026-06-29T22:00:00.000Z"),
+    );
+  });
+
+  it("switches sessions exactly at 05:00 UTC+7", () => {
+    expect(footprintSessionStartMs(new Date("2026-06-30T22:00:00.000Z"))).toBe(
+      Date.parse("2026-06-30T22:00:00.000Z"),
+    );
+  });
+});
 
 describe("parseFootprintSearchTime", () => {
   const now = new Date(2026, 6, 1, 12, 0, 0, 0);

@@ -30,7 +30,12 @@ from ..registry.registry import OutboundEvent, WebSocketRegistry
 from ..storage.cache_store import CacheStore
 from .manual_supertrend_trailing import prime_supertrend_trailing
 
-__all__ = ["ChartLimitTakeProfitEngine"]
+__all__ = [
+    "ChartLimitTakeProfitEngine",
+    "find_position",
+    "half_close_volume",
+    "positive_number",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -107,18 +112,18 @@ class ChartLimitTakeProfitEngine:
                     )
                     positions = backend.positions(account.user_id, account.id)
                     for order in candidates:
-                        position = _find_position(
+                        position = find_position(
                             positions,
                             order.broker_position_ticket,
                             account.symbol_broker,
                         )
                         if position is None:
                             continue
-                        broker_volume = _positive_number(position.get("volumeLots"))
+                        broker_volume = positive_number(position.get("volumeLots"))
                         if broker_volume is None:
                             continue
                         managed_volume = min(order.volume_lots, broker_volume)
-                        close_volume = _half_close_volume(
+                        close_volume = half_close_volume(
                             managed_volume,
                             min_lot=symbol.min_lot,
                             lot_step=symbol.lot_step,
@@ -301,7 +306,7 @@ def _has_reached_one_r(order: OrderRecord, gc_price: float) -> bool:
     return gc_price >= one_r if order.side is OrderSide.BUY else gc_price <= one_r
 
 
-def _half_close_volume(
+def half_close_volume(
     volume: float,
     *,
     min_lot: float,
@@ -340,7 +345,7 @@ def _is_step_aligned(volume: float, step: float) -> bool:
     return abs(volume / step - round(volume / step)) <= 1e-7
 
 
-def _find_position(
+def find_position(
     rows: list[dict], ticket: int, symbol_broker: str
 ) -> dict | None:
     for row in rows:
@@ -352,8 +357,15 @@ def _find_position(
     return None
 
 
-def _positive_number(value) -> float | None:
+def positive_number(value) -> float | None:
     if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
         return None
     number = float(value)
     return number if number > 0 else None
+
+
+# Backwards-compatible aliases for existing callers/tests that predate the
+# shared Auto mGann position-management path.
+_half_close_volume = half_close_volume
+_find_position = find_position
+_positive_number = positive_number

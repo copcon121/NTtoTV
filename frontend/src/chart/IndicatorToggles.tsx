@@ -98,6 +98,8 @@ export function normalizeEmaSettings(input?: Partial<EmaSettings> | null): EmaSe
 export interface FootprintSettings {
   showVA: boolean;
   vaPercent: number;
+  showOrderflowsGaps: boolean;
+  orderflowsGapsUseSwingFilter: boolean;
   imbalanceMinVolume: number;
   showImbalance: boolean;
   showAbsorption: boolean;
@@ -120,6 +122,8 @@ export const MAX_BIG_TRADE_VISIBLE = 500;
 export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
   showVA: false,
   vaPercent: 70,
+  showOrderflowsGaps: true,
+  orderflowsGapsUseSwingFilter: false,
   imbalanceMinVolume: 10,
   showImbalance: true,
   showAbsorption: true,
@@ -205,6 +209,7 @@ export interface IndicatorTogglesProps {
   bigTradeSettings?: BigTradeSettings;
   mgannSwingDisabled?: boolean;
   gcPushMomentumDisabled?: boolean;
+  tduSignalsDisabled?: boolean;
   footprintDisabled?: boolean;
   fvgGraderDisabled?: boolean;
   bigTradeDisabled?: boolean;
@@ -319,6 +324,7 @@ export function IndicatorToggles({
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
   mgannSwingDisabled = false,
   gcPushMomentumDisabled = false,
+  tduSignalsDisabled = false,
   footprintDisabled = false,
   fvgGraderDisabled = false,
   bigTradeDisabled = false,
@@ -663,7 +669,7 @@ export function IndicatorToggles({
     (volumeDelta ? 1 : 0) +
     (xKontrol ? 1 : 0) +
     (gcPushMomentum && !gcPushMomentumDisabled ? 1 : 0) +
-    (tduSignals ? 1 : 0) +
+    (tduSignals && !tduSignalsDisabled ? 1 : 0) +
     (dailyVolumeProfile ? 1 : 0) +
     (mgannSwing && !mgannSwingDisabled ? 1 : 0) +
     (combinedIndicatorActive ? 1 : 0) +
@@ -1269,7 +1275,12 @@ export function IndicatorToggles({
           <IndicatorRow
             label="TDU Buy/Sell Momentum"
             checked={tduSignals}
-            title="TDU 10-second volume momentum triangles and candle/delta divergence"
+            disabled={tduSignalsDisabled}
+            title={
+              tduSignalsDisabled
+                ? "TDU Buy/Sell Momentum is available on the 1-minute and 5-minute charts"
+                : "TDU 10-second volume momentum triangles and candle/delta divergence"
+            }
             onChange={onTduSignalsChange}
           />
           <IndicatorRow
@@ -2617,6 +2628,22 @@ export function IndicatorToggles({
                     }
                   }}
                 />
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
+                    aria-label="Orderflows Gaps swing filter"
+                    checked={footprintSettings.orderflowsGapsUseSwingFilter}
+                    onChange={(e) =>
+                      onFootprintSettingsChange({
+                        ...footprintSettings,
+                        orderflowsGapsUseSwingFilter: e.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>OFG Swing filter (5)</span>
+                </label>
               </div>
               <div className="ema-setting-line">
                 <label className="fp-toggle-label">

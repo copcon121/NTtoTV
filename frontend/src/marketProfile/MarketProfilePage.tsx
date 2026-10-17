@@ -275,6 +275,9 @@ export function MarketProfilePage() {
         <a className="market-profile-link" href="/fp">
           FP
         </a>
+        <a className="market-profile-link" href="/lq">
+          LQ
+        </a>
         <div className="market-profile-title">
           <span>GC Market Profile</span>
           <span>Daily</span>

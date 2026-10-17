@@ -1,7 +1,8 @@
 # Bookmap Market Data Live Bridge
 
-The bridge streams Bookmap trades, one-second heartbeats, and one-minute bar
-snapshots to the loopback-only `/ws/bookmap` backend endpoint. The backend
+The bridge streams Bookmap trades, one-second heartbeats, one-minute bar
+snapshots, and compact liquidity signals to the loopback-only `/ws/bookmap`
+backend endpoint. The backend
 production runtime selects Bookmap as the primary source for OHLCV, BigTrade,
 Volume Delta, and Footprint. NinjaTrader remains connected and warm as the
 automatic fallback.
@@ -80,6 +81,30 @@ Optional Bookmap JVM environment/system properties:
 The reconnect snapshot retains the current bar and the most recently closed
 bar. An outage spanning more history than that is intentionally repaired by the
 NT import workflow.
+
+## Liquidity timing chart
+
+The bridge listens to Bookmap full-depth updates, but reduces them inside the
+Bookmap process. Raw depth frames are never sent over the websocket or written
+to disk. The backend retains only threshold markers and long-term line
+lifecycles for 24 hours; view them at `https://gcflowpy.xyz/lq` on M1 or M5.
+
+Default signal settings mirror the installed TTW LiquidityTracker setup:
+
+- Relative added/removed: size change `>= 300`, DOM levels 20 through 80.
+- Absolute liquidity: upward crossing `>= 500`, DOM levels 1 through 10, with
+  a 90% re-arm threshold.
+- Long-term line: size `>= 500`, DOM levels 1 through 80, continuously present
+  for at least 30 seconds. Active lines are snapshotted every 30 seconds.
+
+Each default is configurable as a Bookmap JVM environment/system property:
+`NTTOTV_LIQ_RELATIVE_TRIGGER`, `NTTOTV_LIQ_RELATIVE_DOM_FROM`,
+`NTTOTV_LIQ_RELATIVE_DOM_TO`, `NTTOTV_LIQ_ABSOLUTE_TRIGGER`,
+`NTTOTV_LIQ_ABSOLUTE_DOM_FROM`, `NTTOTV_LIQ_ABSOLUTE_DOM_TO`,
+`NTTOTV_LIQ_LONG_TERM_TRIGGER`, `NTTOTV_LIQ_LONG_TERM_DOM_FROM`,
+`NTTOTV_LIQ_LONG_TERM_DOM_TO`, `NTTOTV_LIQ_LONG_TERM_MIN_AGE_MS`,
+`NTTOTV_LIQ_LONG_TERM_UPDATE_SIZE`, and
+`NTTOTV_LIQ_LONG_TERM_UPDATE_INTERVAL_MS`.
 
 ## Compare with NT native
 

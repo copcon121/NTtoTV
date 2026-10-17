@@ -9,7 +9,6 @@ from app.engines.auto_mgann_trade import (
     AutoMgannTradeEngine,
     _is_auto_body_size_allowed,
     _signal_body_limit_price,
-    _should_close_trailing_on_ema_cross,
 )
 from app.engines.basis_engine import BasisEngine
 from app.engines.gc_push_momentum import GcPushMomentumPoint
@@ -106,8 +105,8 @@ def test_auto_mgann_submits_one_idempotent_long_bos_market_bracket(tmp_path):
         assert order.side is OrderSide.BUY
         assert order.kind is OrderKind.MARKET
         assert order.volume_lots == 0.1
-        assert order.sl_gc == 98.6  # signal low minus two GC ticks
-        assert order.tp_gc == 104.2  # 3R from the market-entry estimate
+        assert order.sl_gc == 98.8  # exact signal-candle low
+        assert order.tp_gc == 103.6  # 3R from the market-entry estimate
         assert order.status is OrderStatus.FILLED
     finally:
         cache.close()
@@ -225,8 +224,8 @@ def test_auto_mgann_validates_bracket_in_broker_price_scale(tmp_path):
         assert len(orders) == 1
         assert orders[0].status is OrderStatus.FILLED
         assert orders[0].entry_broker == 100.1
-        assert orders[0].sl_broker == 98.65
-        assert orders[0].tp_broker == 104.25
+        assert orders[0].sl_broker == 98.85
+        assert orders[0].tp_broker == 103.65
     finally:
         cache.close()
 
@@ -271,13 +270,13 @@ def test_auto_mgann_uses_body_70_percent_limit_and_cancels_it_at_1r(tmp_path):
         assert order.kind is OrderKind.LIMIT
         assert order.status is OrderStatus.WORKING
         assert order.entry_gc == 101.2
-        assert order.sl_gc == 98.6
-        assert order.tp_gc == 109.0
+        assert order.sl_gc == 98.8
+        assert order.tp_gc == 108.4
         assert order.entry_broker == 101.25
         assert len(fake.orders(user.id, account.id)) == 1
 
-        assert engine.cancel_unfilled_limits_at_1r(103.7) == 0
-        assert engine.cancel_unfilled_limits_at_1r(103.8) == 1
+        assert engine.cancel_unfilled_limits_at_1r(103.5) == 0
+        assert engine.cancel_unfilled_limits_at_1r(103.6) == 1
         saved = cache.orders.read(order.id, user.id)
         assert saved is not None
         assert saved.status is OrderStatus.CANCELLED
@@ -337,17 +336,9 @@ def test_auto_mgann_skips_body_strictly_larger_than_eight_times_average(tmp_path
 
 
 @pytest.mark.unit
-def test_auto_mgann_starts_ema21_trailing_at_1r_and_exits_on_close_below_ema(tmp_path):
+def test_auto_mgann_closes_half_at_1r_and_keeps_original_sl_and_3r_tp(tmp_path):
     cache, fake, _, user, account, engine = _setup(tmp_path)
     try:
-        cache.auto_trade.upsert(
-            AutoTradeSettingsRecord(
-                user_id=user.id,
-                long_enabled=True,
-                volume_lots=0.1,
-                updated_at=now_ms(),
-            )
-        )
         order = OrderRecord(
             id="ord_auto",
             user_id=user.id,
@@ -376,52 +367,47 @@ def test_auto_mgann_starts_ema21_trailing_at_1r_and_exits_on_close_below_ema(tmp
         order.broker_position_ticket = result.broker_position_ticket
         order.broker_deal_ticket = result.broker_deal_ticket
         cache.orders.create(order)
-        engine._ema21 = 101.0  # type: ignore[attr-defined]
-        engine._ema_last_bar_time = 900_000  # type: ignore[attr-defined]
 
-        assert engine.activate_ema21_trailing_at_1r(101.9) == 0
-        assert engine.activate_ema21_trailing_at_1r(102.0) == 1
-        assert engine.activate_ema21_trailing_at_1r(102.1) == 0
+        assert engine.take_profit_half_at_1r(101.9) == 0
+        assert engine.take_profit_half_at_1r(102.0) == 1
+        assert engine.take_profit_half_at_1r(102.1) == 0
         saved = cache.orders.read(order.id, user.id)
         assert saved is not None
-        assert saved.sl_gc == 101.0
-        position = fake.positions(user.id, account.id)[0]
-        assert position["slBroker"] == 101.05
+        assert saved.volume_lots == 0.05
+        assert saved.sl_gc == 98.0
+        assert saved.sl_broker == 98.05
+        assert saved.tp_gc == 106.0
+        assert saved.tp_broker == 106.05
         assert saved.status is OrderStatus.FILLED
-        trailing = cache.orders.list_open_for_account_with_event(
-            user.id, account.id, "auto_mgann_ema21_trailing_started"
+        position = fake.positions(user.id, account.id)[0]
+        assert position["volumeLots"] == 0.05
+        assert position["slBroker"] == 98.05
+        assert position["tpBroker"] == 106.05
+        partial = cache.orders.list_open_for_account_with_event(
+            user.id, account.id, "auto_mgann_partial_take_profit_1r"
         )
-        assert [item.id for item in trailing] == [order.id]
-
-        assert engine.on_closed_bar(
-            OHLCVBar(
-                time=1_000_000,
-                open=101.2,
-                high=101.3,
-                low=99.9,
-                close=100.0,
-                volume=500,
-            )
-        ) == 0
-        closed = cache.orders.read(order.id, user.id)
-        assert closed is not None
-        assert closed.status is OrderStatus.CLOSED
-        assert fake.positions(user.id, account.id) == []
+        assert [item.id for item in partial] == [order.id]
     finally:
         cache.close()
 
 
 @pytest.mark.unit
-def test_auto_mgann_ema21_exit_direction_is_opposite_for_short():
-    assert _should_close_trailing_on_ema_cross(
-        SimpleNamespace(side=OrderSide.BUY), 99.9, 100.0
-    )
-    assert not _should_close_trailing_on_ema_cross(
-        SimpleNamespace(side=OrderSide.BUY), 100.1, 100.0
-    )
-    assert _should_close_trailing_on_ema_cross(
-        SimpleNamespace(side=OrderSide.SELL), 100.1, 100.0
-    )
-    assert not _should_close_trailing_on_ema_cross(
-        SimpleNamespace(side=OrderSide.SELL), 99.9, 100.0
-    )
+def test_auto_mgann_uses_optimized_chart_detector_defaults(tmp_path):
+    cache, _, _, _, _, engine = _setup(tmp_path)
+    try:
+        state = engine._signals  # type: ignore[attr-defined]
+        assert state._volume_delta_lookback == 20
+        assert state._volume_delta_multiplier == 2.5
+        assert state._min_spread == 1.0
+        assert state._spread_lookback == 30
+        assert state._spread_multiplier == 3.5
+        assert state._swing_size == 5
+        assert state._pivot_lookback_bars == 120
+        assert state._min_pivot_cuts == 3
+        assert state._filter_liquidity is True
+        assert state._liquidity_atr_margin == 4.0
+        assert state._liquidity_sweep_lookback_bars == 10
+        assert state._confirmation_bars == 0
+        assert state._break_distance == pytest.approx(0.3)
+    finally:
+        cache.close()

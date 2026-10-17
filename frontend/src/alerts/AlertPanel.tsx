@@ -74,25 +74,28 @@ const MGANN_BIG_TRADE_SWEEP_TYPE: AlertType = "mgann_big_trade_sweep";
 const SMC_EXTERNAL_BIG_TRADE_DEFAULT = "50";
 const LIQUIDITY_POOL_BREAK_DEFAULT_TIMEFRAME = "1m";
 const MGANN_SWEEP_BIG_TRADE_DEFAULT = "70";
-const MGANN_SWEEP_VOLUME_DELTA_MULTIPLIER_DEFAULT = "2";
-const MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT = "2";
+const MGANN_SWEEP_VOLUME_DELTA_MULTIPLIER_DEFAULT = "2.5";
+const MGANN_SWEEP_SPREAD_MULTIPLIER_DEFAULT = "3.5";
 const SMC_SWING_LENGTH = 50;
 const SMC_LOOKAHEAD_BARS = 5;
 const SMC_MAX_BARS = 20;
 const SMC_PAUSE_ON_INSIDE_BARS = true;
 const SMC_RETEST_TOLERANCE_TICKS = 50;
 const MGANN_SWEEP_VOLUME_DELTA_LOOKBACK = 20;
-const MGANN_SWEEP_SPREAD_LOOKBACK = 20;
+const MGANN_SWEEP_MIN_SPREAD_TICKS = 10;
+const MGANN_SWEEP_SPREAD_LOOKBACK = 30;
 const MGANN_SWEEP_SWING_SIZE = 5;
 const MGANN_SWEEP_PIVOT_LOOKBACK_BARS = 120;
-const MGANN_SWEEP_MIN_PIVOT_CUTS = 2;
+const MGANN_SWEEP_MIN_PIVOT_CUTS = 3;
+const MIN_PIVOT_CUTS = 2;
 const MGANN_SWEEP_MAX_PIVOT_CUTS = 20;
-const MGANN_SWEEP_CONFIRMATION_BARS = 2;
-const MGANN_SWEEP_BREAK_TICKS = 0;
+const MGANN_SWEEP_CONFIRMATION_BARS = 0;
+const MGANN_SWEEP_BREAK_TICKS = 3;
 const MGANN_SWEEP_LIQUIDITY_ATR_MARGIN = 4;
-const MGANN_SWEEP_LIQUIDITY_LOOKBACK_BARS = 5;
+const MGANN_SWEEP_LIQUIDITY_LOOKBACK_BARS = 10;
 const LIQUIDITY_POOL_BREAK_SWING_SIZE = 5;
 const LIQUIDITY_POOL_BREAK_LOOKBACK_BARS = 120;
+const LIQUIDITY_POOL_BREAK_MIN_SWINGS = 2;
 const LIQUIDITY_POOL_BREAK_ATR_MARGIN = 4;
 
 function defaultPlaySound(): void {
@@ -255,7 +258,7 @@ export function AlertPanel({
     LIQUIDITY_POOL_BREAK_DEFAULT_TIMEFRAME,
   );
   const [newLiquidityBreakMinSwings, setNewLiquidityBreakMinSwings] = useState(
-    String(MGANN_SWEEP_MIN_PIVOT_CUTS),
+    String(LIQUIDITY_POOL_BREAK_MIN_SWINGS),
   );
   const [newMgannSweepVolumeDeltaMultiplier, setNewMgannSweepVolumeDeltaMultiplier] =
     useState(MGANN_SWEEP_VOLUME_DELTA_MULTIPLIER_DEFAULT);
@@ -316,7 +319,7 @@ export function AlertPanel({
       setNewValue("");
       setNewLiquidityBreakSide("both");
       setNewLiquidityBreakTimeframe(LIQUIDITY_POOL_BREAK_DEFAULT_TIMEFRAME);
-      setNewLiquidityBreakMinSwings(String(MGANN_SWEEP_MIN_PIVOT_CUTS));
+      setNewLiquidityBreakMinSwings(String(LIQUIDITY_POOL_BREAK_MIN_SWINGS));
       setNewRepeat(true);
     } else if (isMgannBreakType(type)) {
       setNewMgannRequireBigTrade(type === MGANN_BIG_TRADE_SWEEP_TYPE);
@@ -338,7 +341,7 @@ export function AlertPanel({
       if (!Number.isFinite(rawMinSwings)) return;
       const minPivotCuts = Math.min(
         MGANN_SWEEP_MAX_PIVOT_CUTS,
-        Math.max(MGANN_SWEEP_MIN_PIVOT_CUTS, Math.round(rawMinSwings)),
+        Math.max(MIN_PIVOT_CUTS, Math.round(rawMinSwings)),
       );
       onCreate?.({
         type: LIQUIDITY_POOL_BREAK_TYPE,
@@ -373,7 +376,7 @@ export function AlertPanel({
       }
       const liquidityMinSwings = Math.min(
         MGANN_SWEEP_MAX_PIVOT_CUTS,
-        Math.max(MGANN_SWEEP_MIN_PIVOT_CUTS, Math.round(rawLiquidityMinSwings)),
+        Math.max(MIN_PIVOT_CUTS, Math.round(rawLiquidityMinSwings)),
       );
       onCreate?.({
         type: MGANN_BREAK_LS_TYPE,
@@ -384,7 +387,7 @@ export function AlertPanel({
           timeframe: "1m",
           volumeDeltaLookback: MGANN_SWEEP_VOLUME_DELTA_LOOKBACK,
           volumeDeltaMultiplier,
-          minSpreadTicks: 0,
+          minSpreadTicks: MGANN_SWEEP_MIN_SPREAD_TICKS,
           spreadLookback: MGANN_SWEEP_SPREAD_LOOKBACK,
           spreadMultiplier,
           swingSize: MGANN_SWEEP_SWING_SIZE,
@@ -519,7 +522,7 @@ export function AlertPanel({
               <span>Liquidity pool</span>
               <input
                 type="number"
-                min={MGANN_SWEEP_MIN_PIVOT_CUTS}
+                min={MIN_PIVOT_CUTS}
                 max={MGANN_SWEEP_MAX_PIVOT_CUTS}
                 step={1}
                 aria-label="Liquidity break minimum swings"
@@ -554,7 +557,7 @@ export function AlertPanel({
                 <span>Liquidity pool</span>
                 <input
                   type="number"
-                  min={MGANN_SWEEP_MIN_PIVOT_CUTS}
+                  min={MIN_PIVOT_CUTS}
                   max={MGANN_SWEEP_MAX_PIVOT_CUTS}
                   step={1}
                   aria-label="Liquidity pool minimum swings"

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { AutoTradeSettings, Mt5Account } from "../api/client";
 
@@ -81,6 +81,7 @@ export function MarketOrderBar({
   onOrderRowClose50Percent,
   onOrderRowCancel,
 }: MarketOrderBarProps) {
+  const orderRowIdsRef = useRef<readonly string[]>([]);
   const connected = account !== undefined;
   const balance = money(account?.balance);
   const drawer = variant === "drawer";
@@ -92,6 +93,20 @@ export function MarketOrderBar({
       : 100;
   const update = (patch: Partial<MarketOrderSettings>) =>
     onSettingsChange({ ...settings, ...patch });
+  const rowsById = new Map(orderRows.map((row) => [row.id, row]));
+  const visibleRowIds = new Set(rowsById.keys());
+  const stableRowIds = orderRowIdsRef.current.filter((id) => visibleRowIds.has(id));
+  const knownRowIds = new Set(stableRowIds);
+  for (const row of orderRows) {
+    if (knownRowIds.has(row.id)) continue;
+    stableRowIds.push(row.id);
+    knownRowIds.add(row.id);
+  }
+  orderRowIdsRef.current = stableRowIds;
+  const stableOrderRows = stableRowIds.flatMap((id) => {
+    const row = rowsById.get(id);
+    return row === undefined ? [] : [row];
+  });
   return (
     <section
       className={`market-order-bar${
@@ -208,7 +223,10 @@ export function MarketOrderBar({
               </label>
               {connected && autoTradeSettings && onAutoTradeSettingsChange && (
                 <span className="auto-trade-controls" aria-label="Automatic mGann trading">
-                  <label className={autoTradeSettings.longEnabled ? "auto-trade-toggle active long" : "auto-trade-toggle long"}>
+                  <label
+                    className={autoTradeSettings.longEnabled ? "auto-trade-toggle active long" : "auto-trade-toggle long"}
+                    title="Auto mGann Long: optimized detector; close 50% at +1R, keep the original SL, and take the remaining 50% at +3R"
+                  >
                     <input
                       type="checkbox"
                       checked={autoTradeSettings.longEnabled}
@@ -223,7 +241,10 @@ export function MarketOrderBar({
                     />
                     <span>Auto L</span>
                   </label>
-                  <label className={autoTradeSettings.shortEnabled ? "auto-trade-toggle active short" : "auto-trade-toggle short"}>
+                  <label
+                    className={autoTradeSettings.shortEnabled ? "auto-trade-toggle active short" : "auto-trade-toggle short"}
+                    title="Auto mGann Short: optimized detector; close 50% at +1R, keep the original SL, and take the remaining 50% at +3R"
+                  >
                     <input
                       type="checkbox"
                       checked={autoTradeSettings.shortEnabled}
@@ -263,89 +284,89 @@ export function MarketOrderBar({
                 </>
               ) : null}
             </div>
-          </div>
-          {orderRows.length > 0 && (
-            <div className="market-order-rows" aria-label="Open order controls">
-              {orderRows.map((row) => (
-                <div key={row.id} className={`market-order-row ${row.side}`}>
-                  <span className="market-order-row-title">{row.title}</span>
-                  <span className="market-order-row-detail">{row.detail}</span>
-                  {row.pnlText && (
-                    <span
-                      className={`market-order-row-pnl${
-                        (row.pnlValue ?? 0) < 0 ? " losing" : " winning"
-                      }`}
-                    >
-                      {row.pnlText}
-                    </span>
-                  )}
-                  <span className="market-order-row-actions">
-                    {row.canBreakEven && (
-                      <button
-                        type="button"
-                        className="market-order-row-break-even"
-                        disabled={
-                          row.pending ||
-                          row.breakEvenPending ||
-                          row.supertrendTrailingPending
-                        }
-                        onClick={() => onOrderRowBreakEven?.(row.id)}
-                      >
-                        {row.breakEvenPending ? "..." : "BE"}
-                      </button>
-                    )}
-                    {row.canSupertrendTrail && (
-                      <button
-                        type="button"
-                        className={`market-order-row-trailing${
-                          row.supertrendTrailing ? " active" : ""
+            {stableOrderRows.length > 0 && (
+              <div className="market-order-rows" aria-label="Open order controls">
+                {stableOrderRows.map((row) => (
+                  <div key={row.id} className={`market-order-row ${row.side}`}>
+                    <span className="market-order-row-title">{row.title}</span>
+                    <span className="market-order-row-detail">{row.detail}</span>
+                    {row.pnlText && (
+                      <span
+                        className={`market-order-row-pnl${
+                          (row.pnlValue ?? 0) < 0 ? " losing" : " winning"
                         }`}
-                        disabled={
-                          row.pending ||
-                          row.breakEvenPending ||
-                          row.supertrendTrailingPending
-                        }
-                        aria-pressed={row.supertrendTrailing === true}
-                        title={
-                          row.supertrendTrailing
-                            ? `SuperTrend trailing active (${row.supertrendTrailingTimeframe ?? "chart"}); click to disable`
-                            : "Follow the current SuperTrend and close only after the bar crosses it"
-                        }
-                        onClick={() => onOrderRowSupertrendTrailing?.(row.id)}
                       >
-                        {row.supertrendTrailingPending ? "..." : "Trailing"}
-                      </button>
+                        {row.pnlText}
+                      </span>
                     )}
-                    {row.action === "close" && row.volumeLots !== undefined && row.volumeLots >= 0.02 && (
+                    <span className="market-order-row-actions">
+                      {row.canBreakEven && (
+                        <button
+                          type="button"
+                          className="market-order-row-break-even"
+                          disabled={
+                            row.pending ||
+                            row.breakEvenPending ||
+                            row.supertrendTrailingPending
+                          }
+                          onClick={() => onOrderRowBreakEven?.(row.id)}
+                        >
+                          {row.breakEvenPending ? "..." : "BE"}
+                        </button>
+                      )}
+                      {row.canSupertrendTrail && (
+                        <button
+                          type="button"
+                          className={`market-order-row-trailing${
+                            row.supertrendTrailing ? " active" : ""
+                          }`}
+                          disabled={
+                            row.pending ||
+                            row.breakEvenPending ||
+                            row.supertrendTrailingPending
+                          }
+                          aria-pressed={row.supertrendTrailing === true}
+                          title={
+                            row.supertrendTrailing
+                              ? `SuperTrend trailing active (${row.supertrendTrailingTimeframe ?? "chart"}); click to disable`
+                              : "Follow the current SuperTrend and close only after the bar crosses it"
+                          }
+                          onClick={() => onOrderRowSupertrendTrailing?.(row.id)}
+                        >
+                          {row.supertrendTrailingPending ? "..." : "Trailing"}
+                        </button>
+                      )}
+                      {row.action === "close" && row.volumeLots !== undefined && row.volumeLots >= 0.02 && (
+                        <button
+                          type="button"
+                          className="market-order-row-close-50"
+                          disabled={
+                            row.pending ||
+                            row.breakEvenPending ||
+                            row.supertrendTrailingPending
+                          }
+                          onClick={() => onOrderRowClose50Percent?.(row.id, row.volumeLots!)}
+                        >
+                          50%
+                        </button>
+                      )}
                       <button
                         type="button"
-                        className="market-order-row-close-50"
-                        disabled={
-                          row.pending ||
-                          row.breakEvenPending ||
-                          row.supertrendTrailingPending
+                        disabled={row.pending || row.supertrendTrailingPending}
+                        onClick={() =>
+                          row.action === "close"
+                            ? onOrderRowClose?.(row.id)
+                            : onOrderRowCancel?.(row.id)
                         }
-                        onClick={() => onOrderRowClose50Percent?.(row.id, row.volumeLots!)}
                       >
-                        50%
+                        {row.pending ? "..." : row.action === "close" ? "Close" : "Cancel"}
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      disabled={row.pending || row.supertrendTrailingPending}
-                      onClick={() =>
-                        row.action === "close"
-                          ? onOrderRowClose?.(row.id)
-                          : onOrderRowCancel?.(row.id)
-                      }
-                    >
-                      {row.pending ? "..." : row.action === "close" ? "Close" : "Cancel"}
-                    </button>
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </>
       )}
     </section>

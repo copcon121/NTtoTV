@@ -38,6 +38,7 @@ from ..engines.alert_engine import (
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BIG_TRADE_THRESHOLD,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_BREAK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_CONFIRMATION_BARS,
+    MGANN_BIG_TRADE_SWEEP_DEFAULT_FILTER_LIQUIDITY,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_CUTS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_PIVOT_WICK_TICKS,
     MGANN_BIG_TRADE_SWEEP_DEFAULT_MIN_SPREAD_TICKS,
@@ -413,7 +414,10 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 "'requireBigTrade' must be a boolean",
                 field="requireBigTrade",
             )
-        filter_liquidity = params.get("filterLiquidity", False)
+        filter_liquidity = params.get(
+            "filterLiquidity",
+            MGANN_BIG_TRADE_SWEEP_DEFAULT_FILTER_LIQUIDITY,
+        )
         if not isinstance(filter_liquidity, bool):
             raise validation_error(
                 "'filterLiquidity' must be a boolean",
@@ -455,8 +459,7 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
                 field="timeframe",
             )
         params["requireBigTrade"] = require_big_trade
-        if liquidity_configured:
-            params["filterLiquidity"] = filter_liquidity
+        params["filterLiquidity"] = filter_liquidity
         params["bigTradeThreshold"] = threshold
         for key in (
             "volumeDeltaLookback",
