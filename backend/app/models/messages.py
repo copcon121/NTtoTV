@@ -71,6 +71,7 @@ __all__ = [
     "FvgSignalUpdate",
     "TduSignalUpdate",
     "LiquidityUpdate",
+    "MarketExplorerUpdate",
     "BigTrade",
     "MarketDataStatus",
     "AlertEvent",
@@ -128,6 +129,7 @@ class EventType(str, Enum):
     FVG_SIGNAL_UPDATE = "fvg_signal_update"
     TDU_SIGNAL_UPDATE = "tdu_signal_update"
     LIQUIDITY_UPDATE = "liquidity_update"
+    MARKET_EXPLORER_UPDATE = "market_explorer_update"
     BIG_TRADE = "big_trade"
     MARKET_DATA_STATUS = "market_data_status"
     ALERT_EVENT = "alert_event"
@@ -921,6 +923,39 @@ class LiquidityUpdate:
             out["lineId"] = self.line_id
         if self.line_start_time is not None:
             out["lineStartTime"] = self.line_start_time
+        return out
+
+
+@dataclass(slots=True)
+class MarketExplorerUpdate:
+    """One 300 ms MV Stop sample plus completed Market Explorer signals."""
+
+    type: ClassVar[str] = "market_explorer_update"
+
+    symbol: str
+    contract: str
+    time: CanonicalTimestamp
+    value: float
+    buy_volume: float
+    sell_volume: float
+    price: float
+    signals: list[dict[str, Any]]
+    source_contract: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "type": self.type,
+            "symbol": self.symbol,
+            "contract": self.contract,
+            "time": self.time,
+            "value": self.value,
+            "buyVolume": self.buy_volume,
+            "sellVolume": self.sell_volume,
+            "price": self.price,
+            "signals": self.signals,
+        }
+        if self.source_contract is not None:
+            out["sourceContract"] = self.source_contract
         return out
 
 

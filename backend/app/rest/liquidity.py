@@ -19,6 +19,28 @@ from .errors import bad_request
 
 router = APIRouter(prefix="/api", tags=["liquidity"])
 
+_HISTORY_SETTING_FIELDS: dict[str, tuple[str, ...]] = {
+    "relative": (
+        "relativeEnabled",
+        "relativeTrigger",
+        "relativeDomFrom",
+        "relativeDomTo",
+    ),
+    "absolute": (
+        "absoluteEnabled",
+        "absoluteTrigger",
+        "absoluteDomFrom",
+        "absoluteDomTo",
+    ),
+    "long_term": (
+        "longTermEnabled",
+        "longTermTrigger",
+        "longTermDomFrom",
+        "longTermDomTo",
+        "longTermMinAgeSeconds",
+    ),
+}
+
 
 def get_liquidity_store(request: Request) -> LiquidityStore:
     runtime = getattr(request.app.state, "runtime", None)
@@ -45,6 +67,44 @@ def get_cache(request: Request) -> CacheStore:
     return cache
 
 
+def _changed_history_kinds(
+    current: dict[str, bool | int],
+    updated: dict[str, bool | int],
+) -> list[str]:
+    return [
+        kind
+        for kind, fields in _HISTORY_SETTING_FIELDS.items()
+        if any(current[field] != updated[field] for field in fields)
+    ]
+
+
+def _event_matches_settings(
+    event: dict,
+    settings: dict[str, bool | int],
+) -> bool:
+    kind = str(event.get("eventKind"))
+    prefix = "relative" if kind == "relative" else "absolute" if kind == "absolute" else None
+    if prefix is None or not bool(settings[f"{prefix}Enabled"]):
+        return False
+    if int(event.get("threshold") or 0) != int(settings[f"{prefix}Trigger"]):
+        return False
+    distance = event.get("domDistance")
+    if distance is None:
+        return False
+    return int(settings[f"{prefix}DomFrom"]) <= int(distance) <= int(
+        settings[f"{prefix}DomTo"]
+    )
+
+
+def _line_matches_settings(
+    line: dict,
+    settings: dict[str, bool | int],
+) -> bool:
+    return bool(settings["longTermEnabled"]) and int(
+        line.get("threshold") or 0
+    ) == int(settings["longTermTrigger"])
+
+
 @router.get("/liquidity/settings")
 async def liquidity_settings(request: Request) -> dict:
     return {"settings": load_liquidity_settings(get_cache(request))}
@@ -64,9 +124,21 @@ async def update_liquidity_settings(request: Request) -> dict:
         updated = validate_liquidity_settings(body, current=current)
     except LiquiditySettingsError as exc:
         raise bad_request(str(exc), field=exc.field)
+    changed_kinds = _changed_history_kinds(current, updated)
     save_liquidity_settings(cache, updated)
-    applied = await get_bookmap_control(request.app).send_liquidity_settings(updated)
-    return {"settings": updated, "appliedToBookmap": applied}
+    sent = await get_bookmap_control(request.app).send_liquidity_settings(updated)
+    store = get_liquidity_store(request)
+    deleted_events, deleted_lines = store.clear_history(changed_kinds)
+    pruned_events, pruned_lines = store.prune_to_settings(updated)
+    return {
+        "settings": updated,
+        "sentToBookmap": sent,
+        "historyCleared": changed_kinds,
+        "historyDeleted": {
+            "events": deleted_events + pruned_events,
+            "lines": deleted_lines + pruned_lines,
+        },
+    }
 
 
 @router.get("/liquidity")
@@ -88,6 +160,9 @@ async def liquidity_history(
         raise bad_request("from must be less than or equal to to", field="from")
     store = get_liquidity_store(request)
     events, lines = store.read(symbol, contract, start, end, limit=limit)
+    settings = load_liquidity_settings(get_cache(request))
+    events = [event for event in events if _event_matches_settings(event, settings)]
+    lines = [line for line in lines if _line_matches_settings(line, settings)]
     bucket_ms = 60_000 if tf == "1m" else 300_000
     for event in events:
         event["bucketTime"] = event["time"] - event["time"] % bucket_ms

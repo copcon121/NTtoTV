@@ -51,6 +51,7 @@ from .engines.breakout_box_engine import BreakoutBoxEngine, BreakoutBoxEvent
 from .engines.contract_resolver import ContractResolver
 from .engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
 from .engines.fvg_signal_engine import FvgSignalEngine
+from .engines.market_volume_stop import MarketVolumeStopEngine
 from .engines.tdu_signal_engine import TduSignalEngine
 from .engines.session_calendar import TF_MS, is_gc_session_open, timeframe_bucket_start
 from .engines.volume_delta_engine import VolumeDeltaEngine, VolumeDeltaMode
@@ -68,6 +69,7 @@ from .models.messages import (
     FootprintUpdate,
     FvgSignalUpdate,
     LiquidityUpdate,
+    MarketExplorerUpdate,
     MarketDataStatus,
     NTStatusEvent,
     OHLCVBar,
@@ -89,6 +91,7 @@ from .storage.records import (
     VolumeDeltaRecord,
 )
 from .models.timestamp import now_ms
+from .market_explorer_settings import load_market_explorer_settings
 from .storage.tick_store import TickStore
 
 logger = logging.getLogger(__name__)
@@ -302,6 +305,10 @@ class Pipeline:
         }
         self._breakout = breakout_box or BreakoutBoxEngine()
         self._alerts = alert_engine or AlertEngine(cache)
+        self._market_explorer = MarketVolumeStopEngine(
+            load_market_explorer_settings(cache),
+            tick_size=0.1,
+        )
         self._basis = basis_engine
         self._send_alert_text = (
             send_alert_text
@@ -392,6 +399,13 @@ class Pipeline:
     def alert_engine(self) -> AlertEngine:
         """The live alert engine used by REST alert CRUD to update runtime state."""
         return self._alerts
+
+    @property
+    def market_explorer(self) -> MarketVolumeStopEngine:
+        return self._market_explorer
+
+    def configure_market_explorer(self, settings: dict) -> None:
+        self._market_explorer.configure(settings)
 
     def set_control_plane(self, control_plane: ControlPlaneCoordinator | None) -> None:
         """Bind (or clear) the control-plane coordinator.
@@ -554,6 +568,7 @@ class Pipeline:
         engine = self._source_big_trades["bookmap"]
         if isinstance(engine, BookmapBigTradeEngine):
             engine.reset_pending()
+        self._market_explorer.reset()
 
     def is_current_bookmap_connection(self, connection_id: str) -> bool:
         return self._bookmap_connection_id == connection_id
@@ -592,6 +607,9 @@ class Pipeline:
         state.contract = trade.contract
         if trade.contract != self._active_contract():
             return
+        # Market Explorer is a Bookmap-native calculation in TTW. Feed it the
+        # accepted aggressor trade before normalizing the chart contract.
+        self._market_explorer.on_trade(trade)
         await self._evaluate_source_selection(received)
         chart_trade = _trade_for_contract(trade, self._chart_contract())
         if self._basis is not None and self._active_feed == "bookmap":
@@ -1891,6 +1909,20 @@ class Pipeline:
             nt.healthy_since = None
 
         await self._evaluate_source_selection(now)
+
+        for sample, signals in self._market_explorer.advance(now):
+            update = MarketExplorerUpdate(
+                symbol=self._symbol,
+                contract=self._chart_contract(),
+                source_contract=self._market_explorer.source_contract,
+                time=sample.time,
+                value=sample.value,
+                buy_volume=sample.buy_volume,
+                sell_volume=sample.sell_volume,
+                price=sample.price,
+                signals=[signal.to_dict() for signal in signals],
+            )
+            await self._enqueue(OutboundEvent.from_message(update))
 
         engine = self._source_big_trades["bookmap"]
         if isinstance(engine, BookmapBigTradeEngine):

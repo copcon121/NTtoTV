@@ -453,9 +453,9 @@ public class BookmapMarketDataBridge implements
     private static BookmapLiquidityTracker.Config liquidityConfig() {
         return new BookmapLiquidityTracker.Config(
             envBool("NTTOTV_LIQ_RELATIVE_ENABLED", true),
-            envInt("NTTOTV_LIQ_RELATIVE_TRIGGER", 300),
+            envInt("NTTOTV_LIQ_RELATIVE_TRIGGER", 50),
             envInt("NTTOTV_LIQ_RELATIVE_DOM_FROM", 20),
-            envInt("NTTOTV_LIQ_RELATIVE_DOM_TO", 80),
+            envInt("NTTOTV_LIQ_RELATIVE_DOM_TO", 100),
             envBool("NTTOTV_LIQ_ABSOLUTE_ENABLED", true),
             envInt("NTTOTV_LIQ_ABSOLUTE_TRIGGER", 500),
             envInt("NTTOTV_LIQ_ABSOLUTE_DOM_FROM", 1),

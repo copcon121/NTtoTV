@@ -12,9 +12,9 @@ LIQUIDITY_SETTINGS_META_KEY = "bookmap.liquidity.settings.v1"
 
 DEFAULT_LIQUIDITY_SETTINGS: dict[str, bool | int] = {
     "relativeEnabled": True,
-    "relativeTrigger": 300,
+    "relativeTrigger": 50,
     "relativeDomFrom": 20,
-    "relativeDomTo": 80,
+    "relativeDomTo": 100,
     "absoluteEnabled": True,
     "absoluteTrigger": 500,
     "absoluteDomFrom": 1,

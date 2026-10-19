@@ -10,7 +10,7 @@ policy without increasing the raw tick shards or the main chart cache.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Mapping
 
 from .connection import SingleWriter, connect, connect_reader
 
@@ -256,6 +256,78 @@ class LiquidityStore:
                 (int(cutoff_ms),),
             ).rowcount
             return int(events), int(lines)
+
+        return self._writer.write(write)
+
+    def clear_history(self, event_kinds: Iterable[str]) -> tuple[int, int]:
+        """Delete history produced by detector groups whose settings changed."""
+
+        kinds = set(event_kinds)
+        unknown = kinds.difference({"relative", "absolute", "long_term"})
+        if unknown:
+            raise ValueError(f"Unknown liquidity event kinds: {sorted(unknown)!r}")
+        marker_kinds = sorted(kinds.intersection({"relative", "absolute"}))
+        clear_lines = "long_term" in kinds
+        if not marker_kinds and not clear_lines:
+            return 0, 0
+
+        def write(conn) -> tuple[int, int]:
+            deleted_events = 0
+            if marker_kinds:
+                placeholders = ",".join("?" for _ in marker_kinds)
+                deleted_events = conn.execute(
+                    f"DELETE FROM liquidity_events WHERE event_kind IN ({placeholders})",
+                    marker_kinds,
+                ).rowcount
+            deleted_lines = 0
+            if clear_lines:
+                deleted_lines = conn.execute("DELETE FROM liquidity_lines").rowcount
+            return int(deleted_events), int(deleted_lines)
+
+        return self._writer.write(write)
+
+    def prune_to_settings(
+        self,
+        settings: Mapping[str, bool | int],
+    ) -> tuple[int, int]:
+        """Remove legacy rows that could not have been emitted by current settings."""
+
+        def write(conn) -> tuple[int, int]:
+            deleted_events = 0
+            for kind, prefix in (("relative", "relative"), ("absolute", "absolute")):
+                if not bool(settings[f"{prefix}Enabled"]):
+                    deleted_events += conn.execute(
+                        "DELETE FROM liquidity_events WHERE event_kind=?",
+                        (kind,),
+                    ).rowcount
+                    continue
+                deleted_events += conn.execute(
+                    """
+                    DELETE FROM liquidity_events
+                    WHERE event_kind=?
+                      AND (
+                        threshold<>?
+                        OR dom_distance IS NULL
+                        OR dom_distance<?
+                        OR dom_distance>?
+                      )
+                    """,
+                    (
+                        kind,
+                        int(settings[f"{prefix}Trigger"]),
+                        int(settings[f"{prefix}DomFrom"]),
+                        int(settings[f"{prefix}DomTo"]),
+                    ),
+                ).rowcount
+
+            if bool(settings["longTermEnabled"]):
+                deleted_lines = conn.execute(
+                    "DELETE FROM liquidity_lines WHERE threshold<>?",
+                    (int(settings["longTermTrigger"]),),
+                ).rowcount
+            else:
+                deleted_lines = conn.execute("DELETE FROM liquidity_lines").rowcount
+            return int(deleted_events), int(deleted_lines)
 
         return self._writer.write(write)
 

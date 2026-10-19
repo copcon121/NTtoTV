@@ -11,6 +11,7 @@ from app.storage.liquidity_store import LiquidityStore
 @pytest.mark.integration
 def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
     store = LiquidityStore(tmp_path / "liquidity.sqlite")
+    cache = CacheStore(tmp_path / "app.sqlite")
     store.record(
         {
             "symbol": "GC",
@@ -25,9 +26,28 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
             "size": 700,
             "previousSize": 200,
             "change": 500,
-            "threshold": 300,
+            "threshold": 50,
             "domDistance": 20,
             "strength": 1.66,
+        }
+    )
+    store.record(
+        {
+            "symbol": "GC",
+            "contract": "GC",
+            "sourceContract": "GCZ6.COMEX@RITHMIC",
+            "sequence": 3,
+            "time": 320_123,
+            "eventKind": "relative",
+            "action": "removed",
+            "side": "ask",
+            "price": 4200.2,
+            "size": 10,
+            "previousSize": 20,
+            "change": 10,
+            "threshold": 10,
+            "domDistance": 20,
+            "strength": 1.0,
         }
     )
     store.record(
@@ -53,6 +73,7 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
     )
     app = create_app(lifespan=False)
     app.state.liquidity_store = store
+    app.state.cache = cache
     try:
         with TestClient(app) as client:
             response = client.get(
@@ -68,10 +89,13 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
             bad = client.get("/api/liquidity", params={"tf": "15m"})
     finally:
         store.close()
+        cache.close()
 
     assert response.status_code == 200
     body = response.json()
+    assert len(body["events"]) == 1
     assert body["events"][0]["bucketTime"] == 300_000
+    assert body["events"][0]["threshold"] == 50
     assert body["lines"][0]["lineId"] == "ask:42050:300000"
     assert body["lines"][0]["active"] is True
     assert bad.status_code == 400
@@ -81,8 +105,50 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
 @pytest.mark.integration
 def test_liquidity_settings_are_validated_and_persisted(tmp_path):
     cache = CacheStore(tmp_path / "app.sqlite")
+    store = LiquidityStore(tmp_path / "liquidity.sqlite")
+    store.record(
+        {
+            "symbol": "GC",
+            "contract": "GC",
+            "sourceContract": "GCZ6.COMEX@RITHMIC",
+            "sequence": 1,
+            "time": 310_123,
+            "eventKind": "relative",
+            "action": "added",
+            "side": "bid",
+            "price": 4200.1,
+            "size": 100,
+            "previousSize": 50,
+            "change": 50,
+            "threshold": 50,
+            "domDistance": 20,
+            "strength": 1.0,
+        }
+    )
+    store.record(
+        {
+            "symbol": "GC",
+            "contract": "GC",
+            "sourceContract": "GCZ6.COMEX@RITHMIC",
+            "sequence": 2,
+            "time": 320_000,
+            "eventKind": "long_term",
+            "action": "start",
+            "side": "ask",
+            "price": 4205.0,
+            "size": 650,
+            "previousSize": 650,
+            "change": 0,
+            "threshold": 500,
+            "domDistance": 12,
+            "strength": 1.3,
+            "lineId": "ask:42050:300000",
+            "lineStartTime": 300_000,
+        }
+    )
     app = create_app(lifespan=False)
     app.state.cache = cache
+    app.state.liquidity_store = store
     try:
         with TestClient(app) as client:
             defaults = client.get("/api/liquidity/settings")
@@ -103,15 +169,20 @@ def test_liquidity_settings_are_validated_and_persisted(tmp_path):
             )
     finally:
         cache.close()
+        store.close()
 
     assert defaults.status_code == 200
-    assert defaults.json()["settings"]["relativeTrigger"] == 300
+    assert defaults.json()["settings"]["relativeTrigger"] == 50
+    assert defaults.json()["settings"]["relativeDomFrom"] == 20
+    assert defaults.json()["settings"]["relativeDomTo"] == 100
     assert updated.status_code == 200
     assert updated.json()["settings"]["relativeEnabled"] is False
     assert updated.json()["settings"]["relativeTrigger"] == 425
     assert updated.json()["settings"]["absoluteTrigger"] == 500
     assert updated.json()["settings"]["longTermMinAgeSeconds"] == 45
-    assert updated.json()["appliedToBookmap"] is False
+    assert updated.json()["sentToBookmap"] is False
+    assert updated.json()["historyCleared"] == ["relative", "long_term"]
+    assert updated.json()["historyDeleted"] == {"events": 1, "lines": 1}
     assert persisted.json()["settings"] == updated.json()["settings"]
     assert invalid.status_code == 400
     assert invalid.json()["error"]["field"] == "absoluteDomTo"

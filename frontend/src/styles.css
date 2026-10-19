@@ -16,7 +16,6 @@
   --standalone-safe-right: env(safe-area-inset-right, 0px);
   --standalone-safe-left: env(safe-area-inset-left, 0px);
 }
-
 * {
   box-sizing: border-box;
 }
@@ -2478,7 +2477,7 @@ body {
 
 .liquidity-settings-dialog {
   display: flex;
-  width: min(880px, calc(100vw - 36px));
+  width: min(1100px, calc(100vw - 36px));
   max-height: min(760px, calc(100dvh - 36px));
   flex-direction: column;
   overflow: hidden;
@@ -2570,11 +2569,24 @@ body {
   font-weight: 700;
 }
 
+.liquidity-settings-label-with-help {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.liquidity-settings-enable-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
 .liquidity-settings-enable {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  margin-bottom: 12px;
   cursor: pointer;
 }
 
@@ -2588,8 +2600,7 @@ body {
 }
 
 .liquidity-settings-fields.is-disabled {
-  pointer-events: none;
-  opacity: 0.42;
+  opacity: 0.58;
 }
 
 .liquidity-settings-field {
@@ -2610,6 +2621,110 @@ body {
   background: #0d141b;
   border: 1px solid #405466;
   border-radius: 3px;
+}
+
+.liquidity-settings-field input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.market-explorer-settings-group {
+  border-color: #526a74;
+  background: #172730;
+}
+
+.market-explorer-settings-group legend {
+  color: #ffffff;
+}
+
+.market-explorer-select-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 7px;
+  color: #eef6fd;
+  font: inherit;
+  background: #0d141b;
+  border: 1px solid #405466;
+  border-radius: 3px;
+}
+
+.market-explorer-color-field input[type="color"] {
+  height: 31px;
+  padding: 2px 4px;
+}
+
+.market-explorer-check-field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  justify-self: end;
+  padding: 0;
+  accent-color: #00d68f;
+}
+
+.market-explorer-select-field select:disabled,
+.market-explorer-color-field input:disabled,
+.market-explorer-check-field input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.liquidity-setting-help {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 1;
+}
+
+.liquidity-settings-dialog button.liquidity-setting-help-button {
+  width: 18px;
+  min-height: 18px;
+  padding: 0;
+  color: #9fc8ee;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 16px;
+  background: #23384a;
+  border-color: #52728e;
+  border-radius: 50%;
+}
+
+.liquidity-settings-dialog button.liquidity-setting-help-button:hover,
+.liquidity-settings-dialog button.liquidity-setting-help-button:focus-visible {
+  color: #07121b;
+  background: #8fc9f5;
+  border-color: #8fc9f5;
+  outline: none;
+}
+
+.liquidity-setting-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: -4px;
+  z-index: 120;
+  width: min(280px, 72vw);
+  padding: 9px 10px;
+  color: #e6f1fa;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+  visibility: hidden;
+  background: #071019;
+  border: 1px solid #46637d;
+  border-radius: 5px;
+  box-shadow: 0 8px 26px rgb(0 0 0 / 55%);
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity 100ms ease, transform 100ms ease, visibility 100ms ease;
+}
+
+.liquidity-setting-help:hover .liquidity-setting-tooltip,
+.liquidity-setting-help:focus-within .liquidity-setting-tooltip {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .liquidity-settings-dialog > footer {
@@ -2699,18 +2814,17 @@ body {
   background: #ff5267;
 }
 
-.liquidity-legend .is-added {
+.liquidity-legend .is-relative-bid,
+.liquidity-legend .is-relative-ask {
   width: 7px;
   height: 7px;
   border-radius: 50%;
+  background: #c8ffc8;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
 }
 
-.liquidity-legend .is-removed {
-  width: 8px;
-  height: 8px;
-  background:
-    linear-gradient(45deg, transparent 42%, #ff5267 43% 57%, transparent 58%),
-    linear-gradient(-45deg, transparent 42%, #ff5267 43% 57%, transparent 58%);
+.liquidity-legend .is-relative-ask {
+  background: #ff9696;
 }
 
 .liquidity-legend .is-absolute {
@@ -2718,6 +2832,21 @@ body {
   height: 8px;
   background: #ffd166;
   transform: rotate(45deg);
+}
+
+.liquidity-market-explorer-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 48px;
+  z-index: 90;
+  max-width: min(430px, calc(100vw - 36px));
+  padding: 11px 15px;
+  color: #f6fbff;
+  background: #29434e;
+  border: 1px solid #57727d;
+  border-left: 4px solid #8cbc2d;
+  border-radius: 4px;
+  box-shadow: 0 8px 30px rgb(0 0 0 / 48%);
 }
 
 @media (max-width: 760px) {
@@ -2814,6 +2943,13 @@ body {
   .liquidity-actions {
     grid-column: 2;
     grid-row: 3;
+    gap: 3px;
+    overflow-x: auto;
+  }
+
+  .liquidity-actions button {
+    padding-right: 6px;
+    padding-left: 6px;
   }
 
   .liquidity-connection {

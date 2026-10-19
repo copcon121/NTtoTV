@@ -1,4 +1,8 @@
-export type RootRoute = "live" | "footprint" | "marketProfile" | "liquidity";
+export type RootRoute =
+  | "live"
+  | "footprint"
+  | "marketProfile"
+  | "liquidity";
 
 export function routeForPathname(pathname: string): RootRoute {
   const normalized = pathname.replace(/\/+$/, "") || "/";

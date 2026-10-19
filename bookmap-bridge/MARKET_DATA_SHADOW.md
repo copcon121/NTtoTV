@@ -91,7 +91,7 @@ lifecycles for 24 hours; view them at `https://gcflowpy.xyz/lq` on M1 or M5.
 
 Default signal settings mirror the installed TTW LiquidityTracker setup:
 
-- Relative added/removed: size change `>= 300`, DOM levels 20 through 80.
+- Relative added/removed: TTW-compatible size change `>= 50`, DOM levels 20 through 100.
 - Absolute liquidity: upward crossing `>= 500`, DOM levels 1 through 10, with
   a 90% re-arm threshold.
 - Long-term line: size `>= 500`, DOM levels 1 through 80, continuously present

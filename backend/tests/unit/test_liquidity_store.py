@@ -96,3 +96,59 @@ def test_retention_removes_markers_and_only_completed_old_lines(tmp_path):
         assert [(item["side"], item["active"]) for item in lines] == [("ask", True)]
     finally:
         store.close()
+
+
+@pytest.mark.unit
+def test_clear_history_removes_only_changed_detector_groups(tmp_path):
+    store = LiquidityStore(tmp_path / "liquidity.sqlite")
+    try:
+        store.record(marker(sequence=1, time=1_000))
+        store.record(
+            {
+                **marker(sequence=2, time=2_000),
+                "eventKind": "absolute",
+            }
+        )
+        store.record(line(sequence=3, time=3_000, action="start", size=600))
+
+        assert store.clear_history(["relative", "long_term"]) == (1, 1)
+        events, lines = store.read("GC", "GC", 0, 10_000)
+        assert [event["eventKind"] for event in events] == ["absolute"]
+        assert lines == []
+    finally:
+        store.close()
+
+
+@pytest.mark.unit
+def test_prune_to_settings_removes_legacy_threshold_history(tmp_path):
+    store = LiquidityStore(tmp_path / "liquidity.sqlite")
+    try:
+        store.record(marker(sequence=1, time=1_000))
+        store.record(
+            {
+                **marker(sequence=2, time=2_000),
+                "threshold": 50,
+                "change": 50,
+                "domDistance": 20,
+            }
+        )
+        settings = {
+            "relativeEnabled": True,
+            "relativeTrigger": 50,
+            "relativeDomFrom": 20,
+            "relativeDomTo": 100,
+            "absoluteEnabled": True,
+            "absoluteTrigger": 500,
+            "absoluteDomFrom": 1,
+            "absoluteDomTo": 10,
+            "longTermEnabled": True,
+            "longTermTrigger": 500,
+        }
+
+        assert store.prune_to_settings(settings) == (1, 0)
+        events, _ = store.read("GC", "GC", 0, 10_000)
+        assert [(event["threshold"], event["change"]) for event in events] == [
+            (50, 50)
+        ]
+    finally:
+        store.close()

@@ -27,6 +27,7 @@ from .rest.alerts import router as alerts_router
 from .rest.auto_trade import router as auto_trade_router
 from .rest.auth import router as auth_router
 from .rest.market_data import router as market_data_router
+from .rest.market_explorer import router as market_explorer_router
 from .rest.liquidity import router as liquidity_router
 from .rest.mt5 import router as mt5_router
 from .rest.errors import install_error_handlers
@@ -95,6 +96,7 @@ def create_app(*, lifespan: bool = True) -> FastAPI:
     app.include_router(supertrend_trailing_router)
     app.include_router(notifications_router)
     app.include_router(market_data_router)
+    app.include_router(market_explorer_router)
     app.include_router(liquidity_router)
     app.include_router(mt5_router)
     app.include_router(orders_router)

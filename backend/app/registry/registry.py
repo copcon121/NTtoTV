@@ -53,6 +53,7 @@ from ..models.messages import (
     FootprintUpdate,
     FvgSignalUpdate,
     LiquidityUpdate,
+    MarketExplorerUpdate,
     Ping,
     QuoteUpdate,
     TduSignalUpdate,
@@ -113,6 +114,7 @@ OutboundMessage = (
     | FootprintUpdate
     | FvgSignalUpdate
     | LiquidityUpdate
+    | MarketExplorerUpdate
     | TduSignalUpdate
     | BigTrade
     | MarketDataStatus
@@ -190,6 +192,15 @@ def coalescing_subkey(payload: Mapping[str, Any]) -> Hashable:
         if payload.get("eventKind") == "long_term":
             return ("liquidity_update", "long_term", payload.get("lineId"))
         return ("liquidity_update", payload.get("sequence"), payload.get("time"))
+    if t == "market_explorer_update":
+        signals = payload.get("signals") or []
+        if signals:
+            return (
+                "market_explorer_update",
+                "signals",
+                tuple(signal.get("signalId") for signal in signals),
+            )
+        return ("market_explorer_update", "line")
     if t == "market_data_status":
         return ("market_data_status",)
     if t == "alert_event":

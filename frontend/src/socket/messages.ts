@@ -33,6 +33,7 @@ export type ChartEventType =
   | "fvg_signal_update"
   | "tdu_signal_update"
   | "liquidity_update"
+  | "market_explorer_update"
   | "big_trade"
   | "market_data_status"
   | "alert_event"
@@ -235,6 +236,35 @@ export interface LiquidityUpdateMessage {
   lineId?: string;
   lineStartTime?: number;
   snapshot: boolean;
+}
+
+export interface MarketExplorerSignal {
+  signalId: string;
+  kind: "market_volume_stop" | "volume_spike" | "absorption";
+  signalIndex: number;
+  detectionTime: number;
+  time: number;
+  side: Side;
+  threshold: number;
+  value: number;
+  ratio: number;
+  price: number;
+  priceRangeTicks?: number;
+  oppositeVolume?: number;
+}
+
+/** One TTW-compatible 300 ms sample plus completed Market Explorer signals. */
+export interface MarketExplorerUpdateMessage {
+  type: "market_explorer_update";
+  symbol: string;
+  contract: string;
+  sourceContract?: string;
+  time: number;
+  value: number;
+  buyVolume: number;
+  sellVolume: number;
+  price: number;
+  signals: MarketExplorerSignal[];
 }
 
 /** Big trade marker (Req 5.2, 15.4, 15.5). */
@@ -442,6 +472,7 @@ export type InboundMessage =
   | FvgSignalUpdateMessage
   | TduSignalUpdateMessage
   | LiquidityUpdateMessage
+  | MarketExplorerUpdateMessage
   | BigTradeMessage
   | MarketDataStatusMessage
   | AlertEventMessage

@@ -1,8 +1,10 @@
 import {
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type WheelEvent as ReactWheelEvent,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -17,6 +19,8 @@ import type {
   LiquidityAction,
   LiquidityEventKind,
   LiquidityUpdateMessage,
+  MarketExplorerSignal,
+  MarketExplorerUpdateMessage,
   Timeframe,
 } from "../socket/messages";
 
@@ -26,11 +30,17 @@ const RETENTION_MS = 24 * 60 * 60 * 1_000;
 const ACTIVE_LINE_STALE_MS = 90_000;
 const MIN_VISIBLE_BARS = 30;
 const MAX_EVENTS = 20_000;
+const MAX_MARKET_VOLUME_SAMPLES = 20_000;
+const MAX_MARKET_VOLUME_SIGNALS = 2_000;
 const PRICE_AXIS_WIDTH = 78;
 const TIME_AXIS_HEIGHT = 28;
 const MIN_PRICE_SCALE = 0.25;
 const MAX_PRICE_SCALE = 12;
 const MAX_FUTURE_SPACE_RATIO = 0.75;
+const TTW_RELATIVE_BID_COLOR = "#c8ffc8";
+const TTW_RELATIVE_ASK_COLOR = "#ff9696";
+const TTW_RELATIVE_LABEL_FONT = "600 12px Segoe UI, sans-serif";
+const TTW_VSPIKE_TICK_SIZE = 0.1;
 
 type LiquidityTimeframe = Extract<Timeframe, "1m" | "5m">;
 
@@ -99,13 +109,95 @@ export interface LiquidityTrackerSettings {
 interface LiquiditySettingsResponse {
   settings: LiquidityTrackerSettings;
   sentToBookmap?: boolean;
+  historyCleared?: LiquidityEventKind[];
+  historyDeleted?: {
+    events: number;
+    lines: number;
+  };
+}
+
+type MarketExplorerDisplayMode = "standard" | "immediately";
+type MarketExplorerMarkerShape = "arrow" | "triangle" | "circle" | "flag";
+type MarketExplorerToggleMode = "disabled" | "enabled";
+
+export interface MarketExplorerSignalSettings {
+  enabled: boolean;
+  askLevel: number;
+  bidLevel: number;
+  displayMode: MarketExplorerDisplayMode;
+  pullbackDurationMinutes: number;
+  pullbackPriceChangeTicks: number;
+  buyColor: string;
+  sellColor: string;
+  markerShape: MarketExplorerMarkerShape;
+  markerSize: number;
+  variableSize: boolean;
+  alertSound: boolean;
+  bookmapAlertMessage: MarketExplorerToggleMode;
+}
+
+export interface VolumeSpikeSettings {
+  enabled: boolean;
+  triggerVolume: number;
+  maximumDurationSeconds: number;
+  priceRangeTicks: number;
+  ratioGreaterEqual: number;
+  buyColor: string;
+  sellColor: string;
+  markerShape: MarketExplorerMarkerShape;
+  markerSize: number;
+  variableSize: boolean;
+  alertSound: boolean;
+  bookmapAlertMessage: MarketExplorerToggleMode;
+}
+
+export interface AbsorptionSettings {
+  enabled: boolean;
+  triggerVolume: number;
+  maximumDurationSeconds: number;
+  buyColor: string;
+  sellColor: string;
+  markerShape: MarketExplorerMarkerShape;
+  markerSize: number;
+  variableSize: boolean;
+  alertSound: boolean;
+  bookmapAlertMessage: MarketExplorerToggleMode;
+}
+
+export interface MarketExplorerSettings {
+  lineEnabled: boolean;
+  halftimeSeconds: number;
+  buyLineColor: string;
+  sellLineColor: string;
+  signal: MarketExplorerSignalSettings;
+  volumeSpike: VolumeSpikeSettings;
+  absorption: AbsorptionSettings;
+}
+
+interface MarketVolumeSample {
+  time: number;
+  value: number;
+  buyVolume: number;
+  sellVolume: number;
+  price: number;
+}
+
+interface MarketExplorerHistoryResponse {
+  symbol: string;
+  contract: string;
+  samples: MarketVolumeSample[];
+  signals: MarketExplorerSignal[];
+}
+
+interface MarketExplorerSettingsResponse {
+  settings: MarketExplorerSettings;
 }
 
 const DEFAULT_TRACKER_SETTINGS: LiquidityTrackerSettings = {
   relativeEnabled: true,
-  relativeTrigger: 300,
+  relativeTrigger: 50,
   relativeDomFrom: 20,
-  relativeDomTo: 80,
+  relativeDomTo: 100,
   absoluteEnabled: true,
   absoluteTrigger: 500,
   absoluteDomFrom: 1,
@@ -116,6 +208,71 @@ const DEFAULT_TRACKER_SETTINGS: LiquidityTrackerSettings = {
   longTermDomTo: 80,
   longTermMinAgeSeconds: 30,
 };
+
+const DEFAULT_MARKET_EXPLORER_SIGNAL: MarketExplorerSignalSettings = {
+  enabled: true,
+  askLevel: 500,
+  bidLevel: 500,
+  displayMode: "standard",
+  pullbackDurationMinutes: 0,
+  pullbackPriceChangeTicks: 0,
+  buyColor: "#ef4048",
+  sellColor: "#edf2f4",
+  markerShape: "triangle",
+  markerSize: 2,
+  variableSize: false,
+  alertSound: false,
+  bookmapAlertMessage: "disabled",
+};
+
+const DEFAULT_VOLUME_SPIKE: VolumeSpikeSettings = {
+  enabled: true,
+  triggerVolume: 800,
+  maximumDurationSeconds: 1,
+  priceRangeTicks: 8,
+  ratioGreaterEqual: 10,
+  buyColor: "#20bea6",
+  sellColor: "#ef4050",
+  markerShape: "triangle",
+  markerSize: 2,
+  variableSize: false,
+  alertSound: false,
+  bookmapAlertMessage: "disabled",
+};
+
+const DEFAULT_ABSORPTION: AbsorptionSettings = {
+  enabled: true,
+  triggerVolume: 1000,
+  maximumDurationSeconds: 1,
+  buyColor: "#ef4050",
+  sellColor: "#51bea2",
+  markerShape: "flag",
+  markerSize: 2,
+  variableSize: false,
+  alertSound: false,
+  bookmapAlertMessage: "disabled",
+};
+
+const DEFAULT_MARKET_EXPLORER_SETTINGS: MarketExplorerSettings = {
+  lineEnabled: true,
+  halftimeSeconds: 60,
+  buyLineColor: "#20bea6",
+  sellLineColor: "#ef4050",
+  signal: { ...DEFAULT_MARKET_EXPLORER_SIGNAL },
+  volumeSpike: { ...DEFAULT_VOLUME_SPIKE },
+  absorption: { ...DEFAULT_ABSORPTION },
+};
+
+function cloneMarketExplorerSettings(
+  source = DEFAULT_MARKET_EXPLORER_SETTINGS,
+): MarketExplorerSettings {
+  return {
+    ...source,
+    signal: { ...source.signal },
+    volumeSpike: { ...source.volumeSpike },
+    absorption: { ...source.absorption },
+  };
+}
 
 type NumericTrackerSetting = {
   [Key in keyof LiquidityTrackerSettings]: LiquidityTrackerSettings[Key] extends number
@@ -133,7 +290,9 @@ type DragState =
       mode: "pan";
       pointerId: number;
       startX: number;
+      startY: number;
       startOffset: number;
+      startPricePanPx: number;
     }
   | {
       mode: "scale-time";
@@ -163,6 +322,8 @@ export function LiquidityPage() {
   const [bars, setBars] = useState<Bar[]>([]);
   const [events, setEvents] = useState<LiquidityEvent[]>([]);
   const [lines, setLines] = useState<Map<string, LiquidityLine>>(new Map());
+  const [marketVolumeSamples, setMarketVolumeSamples] = useState<MarketVolumeSample[]>([]);
+  const [marketVolumeSignals, setMarketVolumeSignals] = useState<MarketExplorerSignal[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] = useState<"connected" | "disconnected">(
@@ -183,10 +344,26 @@ export function LiquidityPage() {
   const [settingsDraft, setSettingsDraft] = useState<LiquidityTrackerSettings>(
     DEFAULT_TRACKER_SETTINGS,
   );
+  const [marketExplorerSettings, setMarketExplorerSettings] =
+    useState<MarketExplorerSettings>(() => cloneMarketExplorerSettings());
+  const [marketExplorerDraft, setMarketExplorerDraft] =
+    useState<MarketExplorerSettings>(() => cloneMarketExplorerSettings());
+  const marketExplorerSettingsRef = useRef(marketExplorerSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  const [marketExplorerToast, setMarketExplorerToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    marketExplorerSettingsRef.current = marketExplorerSettings;
+  }, [marketExplorerSettings]);
+
+  useEffect(() => {
+    if (marketExplorerToast === null) return;
+    const timer = window.setTimeout(() => setMarketExplorerToast(null), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [marketExplorerToast]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 15_000);
@@ -209,6 +386,7 @@ export function LiquidityPage() {
   useEffect(() => {
     socket.subscribe(SYMBOL, ["bar_update"], tf);
     socket.subscribe(SYMBOL, ["liquidity_update"]);
+    socket.subscribe(SYMBOL, ["market_explorer_update"]);
     const offBar = socket.on("bar_update", (message) => {
       if (message.symbol !== SYMBOL || message.contract !== CONTRACT || message.tf !== tf) {
         return;
@@ -224,11 +402,30 @@ export function LiquidityPage() {
         setEvents((current) => mergeEvents(current, [next], Date.now() - RETENTION_MS));
       }
     });
+    const offMarketExplorer = socket.on("market_explorer_update", (message) => {
+      if (message.symbol !== SYMBOL || message.contract !== CONTRACT) return;
+      const cutoff = Date.now() - RETENTION_MS;
+      setMarketVolumeSamples((current) =>
+        mergeMarketVolumeSamples(current, [marketVolumeSampleFromUpdate(message)], cutoff),
+      );
+      if (message.signals.length > 0) {
+        setMarketVolumeSignals((current) =>
+          mergeMarketVolumeSignals(current, message.signals, cutoff),
+        );
+        notifyMarketVolumeSignals(
+          message.signals,
+          marketExplorerSettingsRef.current,
+          setMarketExplorerToast,
+        );
+      }
+    });
     return () => {
       offBar();
       offLiquidity();
+      offMarketExplorer();
       socket.unsubscribe(SYMBOL, ["bar_update"], tf);
       socket.unsubscribe(SYMBOL, ["liquidity_update"]);
+      socket.unsubscribe(SYMBOL, ["market_explorer_update"]);
     };
   }, [socket, tf]);
 
@@ -251,18 +448,34 @@ export function LiquidityPage() {
       to: String(to),
       limit: String(MAX_EVENTS),
     });
+    const marketExplorerParams = new URLSearchParams({
+      symbol: SYMBOL,
+      contract: CONTRACT,
+      from: String(from),
+      to: String(to),
+      limit: String(MAX_MARKET_VOLUME_SAMPLES),
+    });
 
     Promise.all([
       fetch(historyUrl, { signal: controller.signal }).then(readJson<HistoryResponse>),
       fetch(`${endpoints.api}/liquidity?${liquidityParams}`, {
         signal: controller.signal,
       }).then(readJson<LiquidityHistoryResponse>),
+      fetch(`${endpoints.api}/market-explorer?${marketExplorerParams}`, {
+        signal: controller.signal,
+      }).then(readJson<MarketExplorerHistoryResponse>),
     ])
-      .then(([history, liquidity]) => {
+      .then(([history, liquidity, marketExplorer]) => {
         if (sequence !== requestSequence.current) return;
         setBars((current) => mergeBars(history.bars, current, from));
         setEvents((current) => mergeEvents(liquidity.events, current, from));
         setLines((current) => mergeHistoryLines(liquidity.lines, current));
+        setMarketVolumeSamples((current) =>
+          mergeMarketVolumeSamples(marketExplorer.samples, current, from),
+        );
+        setMarketVolumeSignals((current) =>
+          mergeMarketVolumeSignals(marketExplorer.signals, current, from),
+        );
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted || sequence !== requestSequence.current) return;
@@ -277,11 +490,19 @@ export function LiquidityPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`${endpoints.api}/liquidity/settings`, { signal: controller.signal })
-      .then(readJson<LiquiditySettingsResponse>)
-      .then((payload) => {
-        setTrackerSettings(payload.settings);
-        setSettingsDraft(payload.settings);
+    Promise.all([
+      fetch(`${endpoints.api}/liquidity/settings`, { signal: controller.signal }).then(
+        readJson<LiquiditySettingsResponse>,
+      ),
+      fetch(`${endpoints.api}/market-explorer/settings`, {
+        signal: controller.signal,
+      }).then(readJson<MarketExplorerSettingsResponse>),
+    ])
+      .then(([liquidity, marketExplorer]) => {
+        setTrackerSettings(liquidity.settings);
+        setSettingsDraft(liquidity.settings);
+        setMarketExplorerSettings(marketExplorer.settings);
+        setMarketExplorerDraft(cloneMarketExplorerSettings(marketExplorer.settings));
       })
       .catch((cause: unknown) => {
         if (!controller.signal.aborted) {
@@ -299,15 +520,34 @@ export function LiquidityPage() {
     setOffsetBars(0);
   };
 
-  const activeLines = [...lines.values()].filter(
+  const configuredEvents = events.filter((event) =>
+    liquidityEventMatchesSettings(event, trackerSettings)
+  );
+  const configuredLines = [...lines.values()].filter((line) =>
+    liquidityLineMatchesSettings(line, trackerSettings)
+  );
+  const activeLines = configuredLines.filter(
     (line) => line.active && clock - line.lastAt <= ACTIVE_LINE_STALE_MS,
   );
   const bidLines = activeLines.filter((line) => line.side === "bid").length;
   const askLines = activeLines.length - bidLines;
   const recentCutoff = clock - 60 * 60 * 1_000;
-  const recentEvents = events.filter((event) => event.time >= recentCutoff);
+  const recentEvents = configuredEvents.filter((event) => event.time >= recentCutoff);
   const added = recentEvents.filter((event) => event.action === "added").length;
   const removed = recentEvents.filter((event) => event.action === "removed").length;
+  const latestMarketVolume = marketVolumeSamples[marketVolumeSamples.length - 1]?.value ?? 0;
+  const recentMarketSignals = marketVolumeSignals.filter(
+    (signal) => signal.detectionTime >= recentCutoff,
+  );
+  const recentMvStops = recentMarketSignals.filter(
+    (signal) => signal.kind === "market_volume_stop",
+  ).length;
+  const recentSpikes = recentMarketSignals.filter(
+    (signal) => signal.kind === "volume_spike",
+  ).length;
+  const recentAbsorptions = recentMarketSignals.filter(
+    (signal) => signal.kind === "absorption",
+  ).length;
   const maxVisible = tf === "1m" ? 1_440 : 288;
   const zoom = useCallback(
     (factor: number) => {
@@ -320,6 +560,7 @@ export function LiquidityPage() {
 
   const openSettings = () => {
     setSettingsDraft({ ...trackerSettings });
+    setMarketExplorerDraft(cloneMarketExplorerSettings(marketExplorerSettings));
     setSettingsError(null);
     setSettingsNotice(null);
     setSettingsOpen(true);
@@ -328,8 +569,16 @@ export function LiquidityPage() {
     if (!Number.isFinite(value)) return;
     setSettingsDraft((current) => ({ ...current, [field]: Math.round(value) }));
   };
+  const updateMarketExplorerSignal = (patch: Partial<MarketExplorerSignalSettings>) => {
+    setMarketExplorerDraft((current) => ({
+      ...current,
+      signal: { ...current.signal, ...patch },
+    }));
+  };
   const saveSettings = async () => {
-    const validationError = validateLiquidityTrackerSettings(settingsDraft);
+    const validationError =
+      validateLiquidityTrackerSettings(settingsDraft) ??
+      validateMarketExplorerSettings(marketExplorerDraft);
     if (validationError) {
       setSettingsError(validationError);
       return;
@@ -337,17 +586,36 @@ export function LiquidityPage() {
     setSettingsSaving(true);
     setSettingsError(null);
     try {
-      const payload = await fetch(`${endpoints.api}/liquidity/settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settingsDraft),
-      }).then(readJson<LiquiditySettingsResponse>);
-      setTrackerSettings(payload.settings);
-      setSettingsDraft(payload.settings);
+      const [liquidityPayload, marketExplorerPayload] = await Promise.all([
+        fetch(`${endpoints.api}/liquidity/settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(settingsDraft),
+        }).then(readJson<LiquiditySettingsResponse>),
+        fetch(`${endpoints.api}/market-explorer/settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(marketExplorerDraft),
+        }).then(readJson<MarketExplorerSettingsResponse>),
+      ]);
+      const clearedKinds = new Set(
+        liquidityPayload.historyCleared ??
+          liquidityHistoryKindsChanged(trackerSettings, liquidityPayload.settings),
+      );
+      if (clearedKinds.has("relative") || clearedKinds.has("absolute")) {
+        setEvents((current) =>
+          current.filter((event) => !clearedKinds.has(event.eventKind))
+        );
+      }
+      if (clearedKinds.has("long_term")) setLines(new Map());
+      setTrackerSettings(liquidityPayload.settings);
+      setSettingsDraft(liquidityPayload.settings);
+      setMarketExplorerSettings(marketExplorerPayload.settings);
+      setMarketExplorerDraft(cloneMarketExplorerSettings(marketExplorerPayload.settings));
       setSettingsNotice(
-        payload.sentToBookmap
+        liquidityPayload.sentToBookmap
           ? "Saved and sent to Bookmap"
-          : "Saved; it will apply when Bookmap reconnects",
+          : "Saved; Market Explorer is live and liquidity will apply on Bookmap reconnect",
       );
     } catch (cause) {
       setSettingsError(cause instanceof Error ? cause.message : "Save failed");
@@ -365,8 +633,8 @@ export function LiquidityPage() {
           <a href="/mp">MP</a>
         </nav>
         <div className="liquidity-title">
-          <span>GC Liquidity</span>
-          <span>24h compact depth signals</span>
+          <span>GC Liquidity + Market Explorer</span>
+          <span>TTW-style MV Stop, Volume Spike and Absorption</span>
         </div>
         <div className="liquidity-segmented" aria-label="Timeframe">
           {(["1m", "5m"] as const).map((value) => (
@@ -415,10 +683,18 @@ export function LiquidityPage() {
       <section className="liquidity-summary" aria-label="Liquidity summary">
         <Summary label="Active bid lines" value={bidLines} tone="bid" />
         <Summary label="Active ask lines" value={askLines} tone="ask" />
+        <Summary
+          label="MV Stop"
+          value={Math.round(latestMarketVolume)}
+          tone={latestMarketVolume >= 0 ? "bid" : "ask"}
+        />
+        <Summary label="MV Stop / 1h" value={recentMvStops} tone="bid" />
+        <Summary label="Spike / 1h" value={recentSpikes} tone="bid" />
+        <Summary label="Absorption / 1h" value={recentAbsorptions} tone="ask" />
         <Summary label="Added · 1h" value={added} tone="bid" />
         <Summary label="Removed · 1h" value={removed} tone="ask" />
         <div className="liquidity-summary-note">
-          Drag chart to pan/add right space · long-term ≥{trackerSettings.longTermTrigger}
+          Drag chart in any direction/add right space · long-term ≥{trackerSettings.longTermTrigger}
           {" "}for {trackerSettings.longTermMinAgeSeconds}s
         </div>
       </section>
@@ -439,8 +715,8 @@ export function LiquidityPage() {
           >
             <header>
               <div>
-                <strong>Liquidity Tracker Settings</strong>
-                <span>Applied to Bookmap full-depth detection</span>
+                <strong>Liquidity + Market Explorer Settings</strong>
+                <span>Applied to Bookmap depth and aggressor trades</span>
               </div>
               <button type="button" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
                 ×
@@ -450,6 +726,8 @@ export function LiquidityPage() {
             <div className="liquidity-settings-groups">
               <LiquiditySettingsGroup
                 title="Relative Liquidity Change"
+                help="So sánh size hiện tại với lần cập nhật trước tại cùng mức giá để đánh dấu thanh khoản được thêm hoặc rút."
+                enableHelp="Tắt mục này sẽ ngừng tạo marker Relative mới. Marker cũ trong lịch sử 24 giờ vẫn được giữ lại."
                 enabled={settingsDraft.relativeEnabled}
                 onEnabledChange={(relativeEnabled) =>
                   setSettingsDraft((current) => ({ ...current, relativeEnabled }))
@@ -457,29 +735,37 @@ export function LiquidityPage() {
               >
                 <SettingNumber
                   label="Trigger liquidity"
+                  help="Độ thay đổi tối thiểu của size tại một mức giá. TTW GC gốc dùng 50 contracts; marker hiển thị chênh lệch có dấu, ví dụ +50 hoặc -50. Giảm ngưỡng sẽ nhạy hơn nhưng nhiều nhiễu hơn."
                   value={settingsDraft.relativeTrigger}
                   min={1}
                   max={1_000_000}
+                  disabled={!settingsDraft.relativeEnabled}
                   onChange={(value) => updateSettingNumber("relativeTrigger", value)}
                 />
                 <SettingNumber
                   label="DOM level from"
+                  help="Khoảng cách gần nhất tính từ best bid hoặc best ask. Mức 0 là giá mua/bán tốt nhất; mức 20 bắt đầu theo dõi từ vị trí cách thị trường 20 ticks."
                   value={settingsDraft.relativeDomFrom}
                   min={0}
                   max={5_000}
+                  disabled={!settingsDraft.relativeEnabled}
                   onChange={(value) => updateSettingNumber("relativeDomFrom", value)}
                 />
                 <SettingNumber
                   label="DOM level to"
+                  help="Khoảng cách xa nhất được theo dõi. Chỉ các mức DOM từ From đến To mới tạo tín hiệu. Tăng giá trị sẽ quét sâu hơn nhưng có thể thu thêm thanh khoản ít liên quan đến timing hiện tại."
                   value={settingsDraft.relativeDomTo}
                   min={0}
                   max={5_000}
+                  disabled={!settingsDraft.relativeEnabled}
                   onChange={(value) => updateSettingNumber("relativeDomTo", value)}
                 />
               </LiquiditySettingsGroup>
 
               <LiquiditySettingsGroup
                 title="Absolute Liquidity Change"
+                help="Theo dõi tổng size đang nằm tại mỗi mức giá và báo khi size vượt qua một ngưỡng tuyệt đối, không phụ thuộc mức thay đổi của lần cập nhật."
+                enableHelp="Tắt mục này sẽ ngừng tạo marker Absolute mới. Dữ liệu đã ghi trong lịch sử 24 giờ không bị xóa."
                 enabled={settingsDraft.absoluteEnabled}
                 onEnabledChange={(absoluteEnabled) =>
                   setSettingsDraft((current) => ({ ...current, absoluteEnabled }))
@@ -487,29 +773,37 @@ export function LiquidityPage() {
               >
                 <SettingNumber
                   label="Trigger liquidity"
+                  help="Tổng size tối thiểu tại một mức giá để tạo tín hiệu Absolute. Ví dụ 500 nghĩa là tín hiệu xuất hiện khi size đi từ dưới 500 lên 500 contracts hoặc cao hơn. Tín hiệu được tái kích hoạt sau khi size giảm xuống dưới khoảng 90% ngưỡng."
                   value={settingsDraft.absoluteTrigger}
                   min={1}
                   max={1_000_000}
+                  disabled={!settingsDraft.absoluteEnabled}
                   onChange={(value) => updateSettingNumber("absoluteTrigger", value)}
                 />
                 <SettingNumber
                   label="DOM level from"
+                  help="Mức DOM gần nhất được kiểm tra, tính từ best bid/best ask. Mức 0 là giá tốt nhất; đặt 1 sẽ bỏ qua chính best bid và best ask."
                   value={settingsDraft.absoluteDomFrom}
                   min={0}
                   max={5_000}
+                  disabled={!settingsDraft.absoluteEnabled}
                   onChange={(value) => updateSettingNumber("absoluteDomFrom", value)}
                 />
                 <SettingNumber
                   label="DOM level to"
+                  help="Mức DOM xa nhất được kiểm tra. Khoảng nhỏ tập trung gần giá hiện tại; khoảng lớn nhìn sâu hơn vào order book nhưng thường có nhiều lệnh xa giá."
                   value={settingsDraft.absoluteDomTo}
                   min={0}
                   max={5_000}
+                  disabled={!settingsDraft.absoluteEnabled}
                   onChange={(value) => updateSettingNumber("absoluteDomTo", value)}
                 />
               </LiquiditySettingsGroup>
 
               <LiquiditySettingsGroup
                 title="Long-term Liquidity Lines"
+                help="Tạo đường ngang cho thanh khoản lớn tồn tại đủ lâu trong sổ lệnh. Đường tiếp tục được cập nhật cho đến khi thanh khoản bị rút hoặc giảm mạnh."
+                enableHelp="Tắt mục này sẽ ngừng theo dõi và tạo đường Long-term mới. Các đường đang hoạt động sẽ được kết thúc khi cấu hình được áp dụng."
                 enabled={settingsDraft.longTermEnabled}
                 onEnabledChange={(longTermEnabled) =>
                   setSettingsDraft((current) => ({ ...current, longTermEnabled }))
@@ -517,33 +811,60 @@ export function LiquidityPage() {
               >
                 <SettingNumber
                   label="Trigger liquidity"
+                  help="Size tối thiểu để một mức giá bắt đầu trở thành ứng viên Long-term. Ngưỡng cao lọc được các cụm lớn hơn nhưng có thể bỏ qua mức thanh khoản vừa."
                   value={settingsDraft.longTermTrigger}
                   min={1}
                   max={1_000_000}
+                  disabled={!settingsDraft.longTermEnabled}
                   onChange={(value) => updateSettingNumber("longTermTrigger", value)}
                 />
                 <SettingNumber
                   label="DOM level from"
+                  help="Khoảng cách gần nhất từ best bid/best ask mà Long-term tracker bắt đầu quan sát. Mức 0 bao gồm giá tốt nhất hiện tại."
                   value={settingsDraft.longTermDomFrom}
                   min={0}
                   max={5_000}
+                  disabled={!settingsDraft.longTermEnabled}
                   onChange={(value) => updateSettingNumber("longTermDomFrom", value)}
                 />
                 <SettingNumber
                   label="DOM level to"
+                  help="Khoảng cách xa nhất từ best bid/best ask mà Long-term tracker quan sát. Chỉ các mức nằm trong khoảng From–To mới có thể tạo đường."
                   value={settingsDraft.longTermDomTo}
                   min={0}
                   max={5_000}
+                  disabled={!settingsDraft.longTermEnabled}
                   onChange={(value) => updateSettingNumber("longTermDomTo", value)}
                 />
                 <SettingNumber
                   label="Minimum age (seconds)"
+                  help="Số giây thanh khoản phải tồn tại liên tục trước khi đường được công bố. Ví dụ 30 nghĩa là level phải giữ trong 30 giây; nếu size giảm dưới khoảng 90% ngưỡng thì quá trình chờ sẽ reset hoặc đường sẽ kết thúc."
                   value={settingsDraft.longTermMinAgeSeconds}
                   min={1}
                   max={3_600}
+                  disabled={!settingsDraft.longTermEnabled}
                   onChange={(value) => updateSettingNumber("longTermMinAgeSeconds", value)}
                 />
               </LiquiditySettingsGroup>
+              <MarketExplorerSettingsEditor
+                settings={marketExplorerDraft}
+                onLineChange={(patch) =>
+                  setMarketExplorerDraft((current) => ({ ...current, ...patch }))
+                }
+                onSignalChange={updateMarketExplorerSignal}
+                onVolumeSpikeChange={(patch) =>
+                  setMarketExplorerDraft((current) => ({
+                    ...current,
+                    volumeSpike: { ...current.volumeSpike, ...patch },
+                  }))
+                }
+                onAbsorptionChange={(patch) =>
+                  setMarketExplorerDraft((current) => ({
+                    ...current,
+                    absorption: { ...current.absorption, ...patch },
+                  }))
+                }
+              />
             </div>
 
             <footer>
@@ -554,6 +875,7 @@ export function LiquidityPage() {
                 type="button"
                 onClick={() => {
                   setSettingsDraft({ ...DEFAULT_TRACKER_SETTINGS });
+                  setMarketExplorerDraft(cloneMarketExplorerSettings());
                   setSettingsError(null);
                   setSettingsNotice(null);
                 }}
@@ -571,8 +893,11 @@ export function LiquidityPage() {
 
       <LiquidityCanvas
         bars={bars}
-        events={events}
-        lines={[...lines.values()]}
+        events={configuredEvents}
+        lines={configuredLines}
+        marketVolumeSamples={marketVolumeSamples}
+        marketVolumeSignals={marketVolumeSignals}
+        marketExplorerSettings={marketExplorerSettings}
         tf={tf}
         filters={filters}
         visibleBars={visibleBars}
@@ -588,11 +913,18 @@ export function LiquidityPage() {
       <footer className="liquidity-legend">
         <span><i className="is-bid-line" /> long-term bid</span>
         <span><i className="is-ask-line" /> long-term ask</span>
-        <span><i className="is-added" /> relative added</span>
-        <span><i className="is-removed" /> relative removed</span>
+        <span><i className="is-relative-bid" /> relative bid ±volume</span>
+        <span><i className="is-relative-ask" /> relative ask ±volume</span>
         <span><i className="is-absolute" /> absolute threshold</span>
+        <span><i style={{ background: marketExplorerSettings.buyLineColor }} /> MV Stop buy</span>
+        <span><i style={{ background: marketExplorerSettings.sellLineColor }} /> MV Stop sell</span>
+        <span><i style={{ background: marketExplorerSettings.volumeSpike.buyColor }} /> Volume Spike</span>
+        <span><i style={{ background: marketExplorerSettings.absorption.sellColor }} /> Absorption</span>
         <span>No raw full-depth data is stored</span>
       </footer>
+      {marketExplorerToast ? (
+        <div className="liquidity-market-explorer-toast">{marketExplorerToast}</div>
+      ) : null}
     </div>
   );
 }
@@ -601,6 +933,9 @@ function LiquidityCanvas({
   bars,
   events,
   lines,
+  marketVolumeSamples,
+  marketVolumeSignals,
+  marketExplorerSettings,
   tf,
   filters,
   visibleBars,
@@ -613,6 +948,9 @@ function LiquidityCanvas({
   bars: Bar[];
   events: LiquidityEvent[];
   lines: LiquidityLine[];
+  marketVolumeSamples: MarketVolumeSample[];
+  marketVolumeSignals: MarketExplorerSignal[];
+  marketExplorerSettings: MarketExplorerSettings;
   tf: LiquidityTimeframe;
   filters: Filters;
   visibleBars: number;
@@ -629,6 +967,7 @@ function LiquidityCanvas({
   const [interaction, setInteraction] = useState<InteractionMode>("idle");
   const [hover, setHover] = useState<HoverPoint | null>(null);
   const [priceScale, setPriceScale] = useState(1);
+  const [pricePanPx, setPricePanPx] = useState(0);
 
   useLayoutEffect(() => {
     const host = hostRef.current;
@@ -645,6 +984,7 @@ function LiquidityCanvas({
 
   useEffect(() => {
     setPriceScale(1);
+    setPricePanPx(0);
   }, [tf]);
 
   const maxOffset = Math.max(0, bars.length - MIN_VISIBLE_BARS);
@@ -661,11 +1001,15 @@ function LiquidityCanvas({
       bars,
       events,
       lines,
+      marketVolumeSamples,
+      marketVolumeSignals,
+      marketExplorerSettings,
       tf,
       filters,
       visibleBars,
       offsetBars: safeOffset,
       priceScale,
+      pricePanPx,
       now,
       hover,
     });
@@ -675,7 +1019,11 @@ function LiquidityCanvas({
     filters,
     hover,
     lines,
+    marketExplorerSettings,
+    marketVolumeSamples,
+    marketVolumeSignals,
     now,
+    pricePanPx,
     priceScale,
     safeOffset,
     size,
@@ -708,7 +1056,9 @@ function LiquidityCanvas({
         mode: "pan",
         pointerId: event.pointerId,
         startX: event.clientX,
+        startY: event.clientY,
         startOffset: safeOffset,
+        startPricePanPx: pricePanPx,
       };
       setInteraction("pan");
     }
@@ -731,7 +1081,15 @@ function LiquidityCanvas({
       return;
     }
     const plotWidth = Math.max(1, size.width - 14 - PRICE_AXIS_WIDTH);
+    const plotHeight = Math.max(1, size.height - 18 - TIME_AXIS_HEIGHT);
     const pixelsPerBar = plotWidth / Math.max(1, visibleBars);
+    setPricePanPx(
+      pricePanFromChartDrag(
+        drag.startPricePanPx,
+        event.clientY - drag.startY,
+        plotHeight,
+      ),
+    );
     onOffsetChange(
       panOffsetFromDrag(
         drag.startOffset,
@@ -756,6 +1114,7 @@ function LiquidityCanvas({
     const y = event.clientY - rect.top;
     if (x >= size.width - PRICE_AXIS_WIDTH) {
       setPriceScale(1);
+      setPricePanPx(0);
     } else if (y >= size.height - TIME_AXIS_HEIGHT) {
       onVisibleBarsChange(tf === "1m" ? 240 : 144);
       onOffsetChange(0);
@@ -791,6 +1150,130 @@ function LiquidityCanvas({
   );
 }
 
+function marketExplorerSignalStyle(
+  settings: MarketExplorerSettings,
+  signal: MarketExplorerSignal,
+): MarketExplorerSignalSettings | VolumeSpikeSettings | AbsorptionSettings {
+  if (signal.kind === "volume_spike") return settings.volumeSpike;
+  if (signal.kind === "absorption") return settings.absorption;
+  return settings.signal;
+}
+
+function marketExplorerSignalLabel(signal: MarketExplorerSignal): string {
+  if (signal.kind === "volume_spike") return "VS";
+  if (signal.kind === "absorption") return "ABS";
+  return "MV1";
+}
+
+export interface TtwVolumeSpikeLabel {
+  title: string;
+  priceChange: string;
+  ratio: string;
+  sellVolume: string;
+  buyVolume: string;
+}
+
+/** Payload and number formats used by TTW's Buy/Sell V-Spike callout. */
+export function ttwVolumeSpikeLabel(
+  signal: Pick<
+    MarketExplorerSignal,
+    "side" | "price" | "priceRangeTicks" | "ratio" | "value" | "oppositeVolume"
+  >,
+): TtwVolumeSpikeLabel {
+  const oppositeVolume = Math.max(0, signal.oppositeVolume ?? 0);
+  const priceChange =
+    (signal.side === "buy" ? 1 : -1) *
+    Math.abs(signal.priceRangeTicks ?? 0) *
+    TTW_VSPIKE_TICK_SIZE;
+  const ratio = oppositeVolume <= 0 || !Number.isFinite(signal.ratio) || signal.ratio >= 1e9
+    ? "∞"
+    : Math.abs(signal.ratio).toFixed(1).replace(/\.0$/, "");
+  return {
+    title: `${signal.side === "buy" ? "Buy" : "Sell"} V-Spike at ${signal.price.toFixed(1)}`,
+    priceChange: priceChange.toFixed(1),
+    ratio,
+    sellVolume: formatCompactVolume(signal.side === "sell" ? signal.value : oppositeVolume),
+    buyVolume: formatCompactVolume(signal.side === "buy" ? signal.value : oppositeVolume),
+  };
+}
+
+function drawTtwVolumeSpikeSignal(
+  context: CanvasRenderingContext2D,
+  signal: MarketExplorerSignal,
+  style: VolumeSpikeSettings,
+  x: number,
+  y: number,
+  plotLeft: number,
+  plotRight: number,
+  plotTop: number,
+  plotBottom: number,
+) {
+  const label = ttwVolumeSpikeLabel(signal);
+  const isBuy = signal.side === "buy";
+  const sideColor = isBuy ? style.buyColor : style.sellColor;
+  const ratioColor = style.buyColor;
+  const labelWidth = 142;
+  const labelHeight = 43;
+  const labelCenterX = clamp(
+    x,
+    plotLeft + labelWidth / 2,
+    plotRight - labelWidth / 2,
+  );
+  const preferredTop = isBuy ? y - 62 - labelHeight : y + 62;
+  const labelTop = clamp(preferredTop, plotTop + 3, plotBottom - labelHeight - 3);
+  const labelBelow = labelTop > y;
+  const stemEndY = labelBelow ? labelTop - 4 : labelTop + labelHeight + 4;
+
+  context.save();
+  context.setLineDash([]);
+  context.strokeStyle = sideColor;
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(x, y + (labelBelow ? 4 : -4));
+  context.lineTo(x, stemEndY);
+  context.stroke();
+  context.fillStyle = sideColor;
+  context.beginPath();
+  context.arc(x, y, 3.5, 0, Math.PI * 2);
+  context.fill();
+
+  const labelLeft = labelCenterX - labelWidth / 2;
+  context.textAlign = "left";
+  context.textBaseline = "middle";
+  context.font = "600 11px Segoe UI, sans-serif";
+  const titlePrefix = isBuy ? "Buy V-Spike" : "Sell V-Spike";
+  const titleY = labelTop + 7;
+  context.fillStyle = sideColor;
+  context.fillText(titlePrefix, labelLeft, titleY);
+  context.fillStyle = "#d9e0e6";
+  context.fillText(
+    ` at ${signal.price.toFixed(1)}`,
+    labelLeft + context.measureText(titlePrefix).width,
+    titleY,
+  );
+
+  context.font = "600 10px Segoe UI, sans-serif";
+  context.fillStyle = sideColor;
+  context.fillText(`P: ${label.priceChange}`, labelLeft, labelTop + 22);
+  context.fillStyle = ratioColor;
+  context.fillText(`R: ${label.ratio}`, labelLeft, labelTop + 36);
+
+  context.textAlign = "right";
+  context.fillStyle = style.buyColor;
+  context.fillText(label.buyVolume, labelLeft + labelWidth, labelTop + 36);
+  const buyWidth = context.measureText(label.buyVolume).width;
+  context.fillStyle = "#d9e0e6";
+  context.fillText(" / ", labelLeft + labelWidth - buyWidth, labelTop + 36);
+  const slashWidth = context.measureText(" / ").width;
+  context.fillStyle = style.sellColor;
+  context.fillText(
+    label.sellVolume,
+    labelLeft + labelWidth - buyWidth - slashWidth,
+    labelTop + 36,
+  );
+  context.restore();
+}
+
 function drawLiquidityChart(
   canvas: HTMLCanvasElement,
   size: CanvasSize,
@@ -798,11 +1281,15 @@ function drawLiquidityChart(
     bars: Bar[];
     events: LiquidityEvent[];
     lines: LiquidityLine[];
+    marketVolumeSamples: MarketVolumeSample[];
+    marketVolumeSignals: MarketExplorerSignal[];
+    marketExplorerSettings: MarketExplorerSettings;
     tf: LiquidityTimeframe;
     filters: Filters;
     visibleBars: number;
     offsetBars: number;
     priceScale: number;
+    pricePanPx: number;
     now: number;
     hover: HoverPoint | null;
   },
@@ -822,6 +1309,12 @@ function drawLiquidityChart(
   const bottom = TIME_AXIS_HEIGHT;
   const plotWidth = Math.max(1, size.width - left - right);
   const plotHeight = Math.max(1, size.height - top - bottom);
+  const stopPaneHeight = data.marketExplorerSettings.lineEnabled
+    ? clamp(plotHeight * 0.24, 88, 170)
+    : 0;
+  const paneGap = stopPaneHeight > 0 ? 10 : 0;
+  const pricePlotHeight = Math.max(1, plotHeight - stopPaneHeight - paneGap);
+  const stopPaneTop = top + pricePlotHeight + paneGap;
   const tfMs = data.tf === "1m" ? 60_000 : 300_000;
   const pastOffset = Math.max(0, Math.floor(data.offsetBars));
   const futureSlots = Math.max(0, -Math.floor(data.offsetBars));
@@ -840,28 +1333,49 @@ function drawLiquidityChart(
     const effectiveEnd = fresh ? timeTo : (line.endedAt ?? line.lastAt);
     return line.startedAt <= timeTo && effectiveEnd >= timeFrom;
   });
+  const rawMarketVolumeSamples = data.marketVolumeSamples.filter(
+    (sample) => sample.time >= timeFrom && sample.time <= timeTo,
+  );
+  const marketVolumeStride = Math.max(
+    1,
+    Math.ceil(rawMarketVolumeSamples.length / Math.max(1, plotWidth * 2)),
+  );
+  const marketVolumeSamples = rawMarketVolumeSamples.filter(
+    (_sample, index) =>
+      index % marketVolumeStride === 0 || index === rawMarketVolumeSamples.length - 1,
+  );
+  const marketVolumeSignals = data.marketVolumeSignals.filter(
+    (signal) => signal.time >= timeFrom && signal.time <= timeTo,
+  );
   const prices = visible.flatMap((bar) => [bar.low, bar.high]);
   if (data.filters.relative || data.filters.absolute) {
     prices.push(...markerEvents.map((event) => event.price));
   }
   if (data.filters.longTerm) prices.push(...lineItems.map((line) => line.price));
+  prices.push(...marketVolumeSignals.map((signal) => signal.price));
   const dataMin = Math.min(...prices);
   const dataMax = Math.max(...prices);
-  const centerPrice = (dataMin + dataMax) / 2;
+  const dataCenterPrice = (dataMin + dataMax) / 2;
   const baseSpan = Math.max(0.5, dataMax - dataMin) * 1.16;
   const scaledSpan =
     baseSpan /
     clamp(data.priceScale, MIN_PRICE_SCALE, MAX_PRICE_SCALE);
+  const centerPrice =
+    dataCenterPrice +
+    (clamp(data.pricePanPx, -pricePlotHeight * 3, pricePlotHeight * 3) /
+      pricePlotHeight) *
+    scaledSpan;
   const priceMin = centerPrice - scaledSpan / 2;
   const priceMax = centerPrice + scaledSpan / 2;
   const priceSpan = priceMax - priceMin;
   const xAt = (time: number) => left + ((time - timeFrom) / (timeTo - timeFrom)) * plotWidth;
-  const yAt = (price: number) => top + ((priceMax - price) / priceSpan) * plotHeight;
+  const yAt = (price: number) =>
+    top + ((priceMax - price) / priceSpan) * pricePlotHeight;
 
   context.font = "11px Segoe UI, sans-serif";
   context.textBaseline = "middle";
   for (let index = 0; index <= 5; index += 1) {
-    const y = top + (plotHeight * index) / 5;
+    const y = top + (pricePlotHeight * index) / 5;
     const price = priceMax - (priceSpan * index) / 5;
     context.strokeStyle = "#1d2732";
     context.lineWidth = 1;
@@ -886,7 +1400,7 @@ function drawLiquidityChart(
   }
   context.save();
   context.beginPath();
-  context.rect(left, top, plotWidth, plotHeight);
+  context.rect(left, top, plotWidth, pricePlotHeight);
   context.clip();
 
   if (data.filters.longTerm) {
@@ -938,14 +1452,102 @@ function drawLiquidityChart(
     );
   }
 
+  for (const signal of marketVolumeSignals) {
+    const style = marketExplorerSignalStyle(data.marketExplorerSettings, signal);
+    if (!style?.enabled) continue;
+    const x = xAt(signal.time);
+    const y = yAt(signal.price);
+    if (signal.kind === "volume_spike") {
+      drawTtwVolumeSpikeSignal(
+        context,
+        signal,
+        data.marketExplorerSettings.volumeSpike,
+        x,
+        y,
+        left,
+        left + plotWidth,
+        top,
+        top + pricePlotHeight,
+      );
+      continue;
+    }
+    const isBuy = signal.side === "buy";
+    const pointsUp = signal.kind === "absorption" ? !isBuy : isBuy;
+    const size = clamp(
+      style.variableSize ? style.markerSize * signal.ratio * 2.2 : style.markerSize * 3,
+      4,
+      17,
+    );
+    context.fillStyle = isBuy ? style.buyColor : style.sellColor;
+    context.strokeStyle = "rgba(9, 14, 18, 0.82)";
+    context.lineWidth = 1;
+    context.beginPath();
+    if (style.markerShape === "circle") {
+      context.arc(x, y, size, 0, Math.PI * 2);
+    } else if (style.markerShape === "flag") {
+      context.rect(x - size, y - size * 0.72, size * 1.45, size * 1.45);
+    } else if (pointsUp) {
+      context.moveTo(x, y - size);
+      context.lineTo(x + size, y + size);
+      context.lineTo(x - size, y + size);
+      context.closePath();
+    } else {
+      context.moveTo(x, y + size);
+      context.lineTo(x + size, y - size);
+      context.lineTo(x - size, y - size);
+      context.closePath();
+    }
+    context.fill();
+    context.stroke();
+    if (style.markerShape === "flag") {
+      context.fillStyle = "rgba(238, 244, 248, 0.9)";
+      const square = Math.max(1.5, size * 0.32);
+      context.fillRect(x - size * 0.78, y - square, square, square);
+      context.fillRect(x - size * 0.78 + square, y, square, square);
+      context.fillStyle = isBuy ? style.buyColor : style.sellColor;
+      context.beginPath();
+      const tipX = x + size * 1.45;
+      if (pointsUp) {
+        context.moveTo(tipX, y - size * 0.9);
+        context.lineTo(x + size * 0.55, y + size * 0.55);
+        context.lineTo(x + size * 1.2, y + size * 0.55);
+      } else {
+        context.moveTo(tipX, y + size * 0.9);
+        context.lineTo(x + size * 0.55, y - size * 0.55);
+        context.lineTo(x + size * 1.2, y - size * 0.55);
+      }
+      context.closePath();
+      context.fill();
+    }
+    context.fillStyle = isBuy ? style.buyColor : style.sellColor;
+    context.font = "bold 10px Segoe UI, sans-serif";
+    context.textAlign = "center";
+    context.fillText(
+      marketExplorerSignalLabel(signal),
+      x,
+      y + (pointsUp ? size + 9 : -size - 9),
+    );
+  }
+
   for (const event of markerEvents) {
     if (event.eventKind === "relative" && !data.filters.relative) continue;
     if (event.eventKind === "absolute" && !data.filters.absolute) continue;
     const x = xAt(event.time);
     const y = yAt(event.price);
-    const color = event.side === "bid" ? "#00d68f" : "#ff5267";
     const radius = clamp(3 + Math.min(4, event.strength), 3, 7);
-    if (event.eventKind === "absolute") {
+    if (event.eventKind === "relative") {
+      drawTtwRelativeLiquidityMarker(
+        context,
+        event,
+        x,
+        y,
+        left,
+        left + plotWidth,
+        top,
+        top + pricePlotHeight,
+      );
+    } else if (event.eventKind === "absolute") {
+      const color = event.side === "bid" ? "#00d68f" : "#ff5267";
       context.fillStyle = color;
       context.strokeStyle = "#ffd166";
       context.lineWidth = 1.5;
@@ -957,20 +1559,6 @@ function drawLiquidityChart(
       context.closePath();
       context.fill();
       context.stroke();
-    } else if (event.action === "removed") {
-      context.strokeStyle = color;
-      context.lineWidth = 2;
-      context.beginPath();
-      context.moveTo(x - radius, y - radius);
-      context.lineTo(x + radius, y + radius);
-      context.moveTo(x + radius, y - radius);
-      context.lineTo(x - radius, y + radius);
-      context.stroke();
-    } else {
-      context.fillStyle = color;
-      context.beginPath();
-      context.arc(x, y, radius, 0, Math.PI * 2);
-      context.fill();
     }
   }
 
@@ -979,7 +1567,7 @@ function drawLiquidityChart(
     data.hover.x >= left &&
     data.hover.x <= left + plotWidth &&
     data.hover.y >= top &&
-    data.hover.y <= top + plotHeight
+    data.hover.y <= top + pricePlotHeight
   ) {
     const hoverTime = timeFrom + ((data.hover.x - left) / plotWidth) * (timeTo - timeFrom);
     const hoverPrice = priceMax - ((data.hover.y - top) / plotHeight) * priceSpan;
@@ -988,7 +1576,7 @@ function drawLiquidityChart(
     context.setLineDash([3, 3]);
     context.beginPath();
     context.moveTo(data.hover.x, top);
-    context.lineTo(data.hover.x, top + plotHeight);
+    context.lineTo(data.hover.x, top + pricePlotHeight);
     context.moveTo(left, data.hover.y);
     context.lineTo(left + plotWidth, data.hover.y);
     context.stroke();
@@ -1000,6 +1588,195 @@ function drawLiquidityChart(
     context.fillText(formatDateTime(hoverTime), data.hover.x, top + 9);
   }
   context.restore();
+
+  if (stopPaneHeight > 0) {
+    context.fillStyle = "#0a1118";
+    context.fillRect(left, stopPaneTop, plotWidth, stopPaneHeight);
+    context.strokeStyle = "#40505f";
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(left, stopPaneTop - paneGap / 2 + 0.5);
+    context.lineTo(left + plotWidth, stopPaneTop - paneGap / 2 + 0.5);
+    context.stroke();
+
+    const configuredThreshold = Math.max(
+      1,
+      data.marketExplorerSettings.signal.askLevel,
+      data.marketExplorerSettings.signal.bidLevel,
+    );
+    const observed = Math.max(
+      configuredThreshold,
+      ...rawMarketVolumeSamples.map((sample) => Math.abs(sample.value)),
+    );
+    const volumeExtent = observed * 1.12;
+    const stopY = (value: number) =>
+      stopPaneTop + ((volumeExtent - value) / (volumeExtent * 2)) * stopPaneHeight;
+    const zeroY = stopY(0);
+    context.strokeStyle = "#52616d";
+    context.setLineDash([4, 4]);
+    context.beginPath();
+    context.moveTo(left, zeroY + 0.5);
+    context.lineTo(left + plotWidth, zeroY + 0.5);
+    context.stroke();
+    context.setLineDash([]);
+
+    context.save();
+    context.beginPath();
+    context.rect(left, stopPaneTop, plotWidth, stopPaneHeight);
+    context.clip();
+    context.lineWidth = 2;
+    for (let index = 1; index < marketVolumeSamples.length; index += 1) {
+      const previous = marketVolumeSamples[index - 1];
+      const current = marketVolumeSamples[index];
+      context.strokeStyle =
+        current.value >= 0
+          ? data.marketExplorerSettings.buyLineColor
+          : data.marketExplorerSettings.sellLineColor;
+      context.beginPath();
+      context.moveTo(xAt(previous.time), stopY(previous.value));
+      context.lineTo(xAt(current.time), stopY(current.value));
+      context.stroke();
+    }
+    context.restore();
+
+    context.font = "bold 11px Segoe UI, sans-serif";
+    context.textAlign = "left";
+    context.fillStyle = "#c7d2dc";
+    context.fillText(
+      `MV Stop (${data.marketExplorerSettings.halftimeSeconds}s)`,
+      left + 7,
+      stopPaneTop + 11,
+    );
+    context.font = "10px Segoe UI, sans-serif";
+    context.textAlign = "left";
+    context.fillStyle = "#7f8e9c";
+    context.fillText(formatCompactVolume(volumeExtent), left + plotWidth + 6, stopPaneTop + 6);
+    context.fillText("0", left + plotWidth + 6, zeroY);
+    context.fillText(
+      formatCompactVolume(-volumeExtent),
+      left + plotWidth + 6,
+      stopPaneTop + stopPaneHeight - 6,
+    );
+
+    if (
+      data.hover &&
+      data.hover.x >= left &&
+      data.hover.x <= left + plotWidth &&
+      data.hover.y >= stopPaneTop &&
+      data.hover.y <= stopPaneTop + stopPaneHeight
+    ) {
+      const hoverVolume =
+        volumeExtent - ((data.hover.y - stopPaneTop) / stopPaneHeight) * volumeExtent * 2;
+      context.strokeStyle = "rgba(190, 205, 220, 0.55)";
+      context.setLineDash([3, 3]);
+      context.beginPath();
+      context.moveTo(data.hover.x, stopPaneTop);
+      context.lineTo(data.hover.x, stopPaneTop + stopPaneHeight);
+      context.moveTo(left, data.hover.y);
+      context.lineTo(left + plotWidth, data.hover.y);
+      context.stroke();
+      context.setLineDash([]);
+      context.fillStyle = "#dbe7f3";
+      context.textAlign = "right";
+      context.fillText(
+        formatCompactVolume(hoverVolume),
+        left + plotWidth - 5,
+        data.hover.y - 8,
+      );
+    }
+  }
+}
+
+/**
+ * TTW's Relative Liquidity Change callback emits a signed formatted depth
+ * delta. Added and removed signals both use a Dot marker; the sign in the
+ * volume label carries the action.
+ */
+export function relativeLiquidityVolumeLabel(
+  event: Pick<LiquidityEvent, "action" | "change">,
+): string {
+  const prefix = event.action === "removed" ? "-" : "+";
+  return `${prefix}${formatCompactVolume(Math.abs(event.change))}`;
+}
+
+function drawTtwRelativeLiquidityMarker(
+  context: CanvasRenderingContext2D,
+  event: LiquidityEvent,
+  x: number,
+  y: number,
+  plotLeft: number,
+  plotRight: number,
+  plotTop: number,
+  plotBottom: number,
+) {
+  const color = event.side === "bid"
+    ? TTW_RELATIVE_BID_COLOR
+    : TTW_RELATIVE_ASK_COLOR;
+  const radius = clamp(
+    4.5 + Math.min(4.5, Math.sqrt(Math.max(1, event.strength))),
+    5.5,
+    9,
+  );
+
+  context.save();
+  context.fillStyle = color;
+  context.strokeStyle = "rgba(8, 12, 16, 0.82)";
+  context.lineWidth = 1.25;
+  context.beginPath();
+  context.arc(x, y, radius, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+
+  const label = relativeLiquidityVolumeLabel(event);
+  context.font = TTW_RELATIVE_LABEL_FONT;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  const labelHeight = 18;
+  const labelWidth = Math.ceil(context.measureText(label).width) + 8;
+  const labelCenterX = clamp(
+    x,
+    plotLeft + labelWidth / 2,
+    plotRight - labelWidth / 2,
+  );
+  const aboveY = y - radius - 4 - labelHeight / 2;
+  const belowY = y + radius + 4 + labelHeight / 2;
+  const labelCenterY = aboveY - labelHeight / 2 >= plotTop
+    ? aboveY
+    : Math.min(belowY, plotBottom - labelHeight / 2);
+  const labelLeft = labelCenterX - labelWidth / 2;
+  const labelTop = labelCenterY - labelHeight / 2;
+
+  context.fillStyle = "rgba(16, 18, 21, 0.92)";
+  roundedRectPath(context, labelLeft, labelTop, labelWidth, labelHeight, 3);
+  context.fill();
+  context.strokeStyle = "rgba(255, 255, 255, 0.16)";
+  context.lineWidth = 1;
+  context.stroke();
+  context.fillStyle = "#f7f8fa";
+  context.fillText(label, labelCenterX, labelCenterY + 0.5);
+  context.restore();
+}
+
+function roundedRectPath(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const r = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + r, y);
+  context.lineTo(x + width - r, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + r);
+  context.lineTo(x + width, y + height - r);
+  context.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  context.lineTo(x + r, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - r);
+  context.lineTo(x, y + r);
+  context.quadraticCurveTo(x, y, x + r, y);
+  context.closePath();
 }
 
 function FilterToggle({
@@ -1023,28 +1800,348 @@ function FilterToggle({
   );
 }
 
+function MarketExplorerSettingsEditor({
+  settings,
+  onLineChange,
+  onSignalChange,
+  onVolumeSpikeChange,
+  onAbsorptionChange,
+}: {
+  settings: MarketExplorerSettings;
+  onLineChange: (patch: Partial<MarketExplorerSettings>) => void;
+  onSignalChange: (patch: Partial<MarketExplorerSignalSettings>) => void;
+  onVolumeSpikeChange: (patch: Partial<VolumeSpikeSettings>) => void;
+  onAbsorptionChange: (patch: Partial<AbsorptionSettings>) => void;
+}) {
+  const signal = settings.signal;
+  const spike = settings.volumeSpike;
+  const absorption = settings.absorption;
+  return (
+    <>
+      <fieldset className="liquidity-settings-group market-explorer-settings-group">
+        <legend>Market Volume Stop Line</legend>
+        <div className="liquidity-settings-enable-row">
+          <label className="liquidity-settings-enable">
+            <input
+              type="checkbox"
+              checked={settings.lineEnabled}
+              onChange={(event) => onLineChange({ lineEnabled: event.currentTarget.checked })}
+            />
+            Enable
+          </label>
+          <SettingHelp
+            label="Market Volume Stop Line"
+            text="Buy aggressor volume minus sell aggressor volume, exponentially decayed with the selected half-life."
+          />
+        </div>
+        <div className={settings.lineEnabled ? "liquidity-settings-fields" : "liquidity-settings-fields is-disabled"}>
+          <SettingNumber
+            label="Halftime (seconds)"
+            help="TTW half-life. After this many seconds, an old trade contributes half of its original volume."
+            value={settings.halftimeSeconds}
+            min={1}
+            max={3_600}
+            disabled={!settings.lineEnabled}
+            onChange={(halftimeSeconds) => onLineChange({ halftimeSeconds })}
+          />
+          <MarketExplorerColorField
+            label="Ask / buy line"
+            value={settings.buyLineColor}
+            disabled={!settings.lineEnabled}
+            onChange={(buyLineColor) => onLineChange({ buyLineColor })}
+          />
+          <MarketExplorerColorField
+            label="Bid / sell line"
+            value={settings.sellLineColor}
+            disabled={!settings.lineEnabled}
+            onChange={(sellLineColor) => onLineChange({ sellLineColor })}
+          />
+        </div>
+      </fieldset>
+
+      <fieldset className="liquidity-settings-group market-explorer-settings-group">
+        <legend>Market Volume Stop Signal 1</legend>
+        <MarketExplorerEnableRow
+          checked={signal.enabled}
+          label="Market Volume Stop Signal 1"
+          help="Standard marks the running extreme after a 10% fallback. Immediately marks the threshold crossing."
+          onChange={(enabled) => onSignalChange({ enabled })}
+        />
+        <div className={signal.enabled ? "liquidity-settings-fields" : "liquidity-settings-fields is-disabled"}>
+          <SettingNumber
+            label="Signal Level Ask"
+            help="Positive buy-aggressor imbalance threshold."
+            value={signal.askLevel}
+            min={1}
+            max={10_000_000}
+            disabled={!signal.enabled}
+            onChange={(askLevel) => onSignalChange({ askLevel })}
+          />
+          <SettingNumber
+            label="Signal Level Bid"
+            help="Absolute negative sell-aggressor imbalance threshold."
+            value={signal.bidLevel}
+            min={1}
+            max={10_000_000}
+            disabled={!signal.enabled}
+            onChange={(bidLevel) => onSignalChange({ bidLevel })}
+          />
+          <MarketExplorerSelectField
+            label="Display mode"
+            value={signal.displayMode}
+            disabled={!signal.enabled}
+            options={[["standard", "Standard"], ["immediately", "Immediately"]]}
+            onChange={(displayMode) =>
+              onSignalChange({ displayMode: displayMode as MarketExplorerDisplayMode })
+            }
+          />
+          <SettingNumber
+            label="Pullback Duration [mins]"
+            help="Suppress repeated signals inside this time window."
+            value={signal.pullbackDurationMinutes}
+            min={0}
+            max={1_440}
+            disabled={!signal.enabled}
+            onChange={(pullbackDurationMinutes) => onSignalChange({ pullbackDurationMinutes })}
+          />
+          <SettingNumber
+            label="Pullback Price Change [ticks/cents]"
+            help="Adverse price change required to release duplicate suppression."
+            value={signal.pullbackPriceChangeTicks}
+            min={0}
+            max={100_000}
+            disabled={!signal.enabled}
+            onChange={(pullbackPriceChangeTicks) => onSignalChange({ pullbackPriceChangeTicks })}
+          />
+          <MarketExplorerAppearanceFields
+            buyLabel="Buy Market Volume Stop 1"
+            sellLabel="Sell Market Volume Stop 1"
+            settings={signal}
+            disabled={!signal.enabled}
+            onChange={onSignalChange}
+          />
+        </div>
+      </fieldset>
+
+      <fieldset className="liquidity-settings-group market-explorer-settings-group">
+        <legend>Volume Spike Signal</legend>
+        <MarketExplorerEnableRow
+          checked={spike.enabled}
+          label="Volume Spike Signal"
+          help="TTW burst: same-side volume must cover the price range and ratio, then the marker is fixed at the burst extreme after fallback."
+          onChange={(enabled) => onVolumeSpikeChange({ enabled })}
+        />
+        <div className={spike.enabled ? "liquidity-settings-fields" : "liquidity-settings-fields is-disabled"}>
+          <MarketExplorerColorField label="Buy Volume Spike Signal" value={spike.buyColor} disabled={!spike.enabled} onChange={(buyColor) => onVolumeSpikeChange({ buyColor })} />
+          <MarketExplorerColorField label="Sell Volume Spike Signal" value={spike.sellColor} disabled={!spike.enabled} onChange={(sellColor) => onVolumeSpikeChange({ sellColor })} />
+          <SettingNumber label="Trigger Volume" help="Minimum same-side aggressor volume in the rolling burst." value={spike.triggerVolume} min={1} max={10_000_000} disabled={!spike.enabled} onChange={(triggerVolume) => onVolumeSpikeChange({ triggerVolume })} />
+          <SettingNumber label="Maximum Duration [s]" help="Rolling TTW burst window, evaluated every 100 ms." value={spike.maximumDurationSeconds} min={0.1} max={60} disabled={!spike.enabled} onChange={(maximumDurationSeconds) => onVolumeSpikeChange({ maximumDurationSeconds })} />
+          <SettingNumber label="Price Range [ticks/cents]" help="Required directional price travel inside the burst." value={spike.priceRangeTicks} min={1} max={100_000} disabled={!spike.enabled} onChange={(priceRangeTicks) => onVolumeSpikeChange({ priceRangeTicks })} />
+          <SettingNumber label="Ratio greater / equal" help="Same-side peak volume divided by opposite-side volume." value={spike.ratioGreaterEqual} min={1} max={1_000_000} disabled={!spike.enabled} onChange={(ratioGreaterEqual) => onVolumeSpikeChange({ ratioGreaterEqual })} />
+          <MarketExplorerAppearanceFields buyLabel="Buy Volume Spike Signal" sellLabel="Sell Volume Spike Signal" settings={spike} disabled={!spike.enabled} hideColors onChange={onVolumeSpikeChange} />
+        </div>
+      </fieldset>
+
+      <fieldset className="liquidity-settings-group market-explorer-settings-group">
+        <legend>Absorption Signal</legend>
+        <MarketExplorerEnableRow
+          checked={absorption.enabled}
+          label="Absorption Signal"
+          help="TTW absorption: large one-sided aggression remains inside fewer than two ticks, then marks the peak when the cluster breaks or fades."
+          onChange={(enabled) => onAbsorptionChange({ enabled })}
+        />
+        <div className={absorption.enabled ? "liquidity-settings-fields" : "liquidity-settings-fields is-disabled"}>
+          <MarketExplorerColorField label="Buy Absorption Signal" value={absorption.buyColor} disabled={!absorption.enabled} onChange={(buyColor) => onAbsorptionChange({ buyColor })} />
+          <MarketExplorerColorField label="Sell Absorption Signal" value={absorption.sellColor} disabled={!absorption.enabled} onChange={(sellColor) => onAbsorptionChange({ sellColor })} />
+          <SettingNumber label="Trigger Volume" help="Minimum same-side aggressor volume held inside the two-tick absorption range." value={absorption.triggerVolume} min={1} max={10_000_000} disabled={!absorption.enabled} onChange={(triggerVolume) => onAbsorptionChange({ triggerVolume })} />
+          <SettingNumber label="Maximum Duration [s]" help="Rolling TTW absorption window, evaluated every 100 ms." value={absorption.maximumDurationSeconds} min={0.1} max={60} disabled={!absorption.enabled} onChange={(maximumDurationSeconds) => onAbsorptionChange({ maximumDurationSeconds })} />
+          <MarketExplorerAppearanceFields buyLabel="Buy Absorption Signal" sellLabel="Sell Absorption Signal" settings={absorption} disabled={!absorption.enabled} hideColors onChange={onAbsorptionChange} />
+        </div>
+      </fieldset>
+    </>
+  );
+}
+
+type MarketExplorerAppearance = Pick<
+  VolumeSpikeSettings,
+  "buyColor" | "sellColor" | "markerShape" | "markerSize" | "variableSize" | "alertSound" | "bookmapAlertMessage"
+>;
+
+function MarketExplorerEnableRow({
+  checked,
+  label,
+  help,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  help: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="liquidity-settings-enable-row">
+      <label className="liquidity-settings-enable">
+        <input type="checkbox" checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} />
+        Enable
+      </label>
+      <SettingHelp label={label} text={help} />
+    </div>
+  );
+}
+
+function MarketExplorerAppearanceFields({
+  buyLabel,
+  sellLabel,
+  settings,
+  disabled,
+  hideColors = false,
+  onChange,
+}: {
+  buyLabel: string;
+  sellLabel: string;
+  settings: MarketExplorerAppearance;
+  disabled: boolean;
+  hideColors?: boolean;
+  onChange: (patch: Partial<MarketExplorerAppearance>) => void;
+}) {
+  return (
+    <>
+      {!hideColors ? (
+        <>
+          <MarketExplorerColorField label={buyLabel} value={settings.buyColor} disabled={disabled} onChange={(buyColor) => onChange({ buyColor })} />
+          <MarketExplorerColorField label={sellLabel} value={settings.sellColor} disabled={disabled} onChange={(sellColor) => onChange({ sellColor })} />
+        </>
+      ) : null}
+      <MarketExplorerSelectField
+        label="Marker shape"
+        value={settings.markerShape}
+        disabled={disabled}
+        options={[["triangle", "Triangle"], ["arrow", "Arrow"], ["circle", "Circle"], ["flag", "Flag"]]}
+        onChange={(markerShape) => onChange({ markerShape: markerShape as MarketExplorerMarkerShape })}
+      />
+      <SettingNumber label="Marker size" help="Base marker size from 1 to 5." value={settings.markerSize} min={1} max={5} disabled={disabled} onChange={(markerSize) => onChange({ markerSize })} />
+      <MarketExplorerCheckField label="Variable marker size" checked={settings.variableSize} disabled={disabled} onChange={(variableSize) => onChange({ variableSize })} />
+      <MarketExplorerCheckField label="Alert Sound" checked={settings.alertSound} disabled={disabled} onChange={(alertSound) => onChange({ alertSound })} />
+      <MarketExplorerSelectField
+        label="Bookmap Alert Message"
+        value={settings.bookmapAlertMessage}
+        disabled={disabled}
+        options={[["disabled", "Disabled"], ["enabled", "Enabled"]]}
+        onChange={(bookmapAlertMessage) => onChange({ bookmapAlertMessage: bookmapAlertMessage as MarketExplorerToggleMode })}
+      />
+    </>
+  );
+}
+
+function MarketExplorerColorField({
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="liquidity-settings-field market-explorer-color-field">
+      <span>{label}</span>
+      <input
+        type="color"
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+    </label>
+  );
+}
+
+function MarketExplorerSelectField({
+  label,
+  value,
+  disabled,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  disabled: boolean;
+  options: [string, string][];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="liquidity-settings-field market-explorer-select-field">
+      <span>{label}</span>
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      >
+        {options.map(([option, text]) => <option value={option} key={option}>{text}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function MarketExplorerCheckField({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="liquidity-settings-field market-explorer-check-field">
+      <span>{label}</span>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.currentTarget.checked)}
+      />
+    </label>
+  );
+}
+
 function LiquiditySettingsGroup({
   title,
+  help,
+  enableHelp,
   enabled,
   onEnabledChange,
   children,
 }: {
   title: string;
+  help: string;
+  enableHelp: string;
   enabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <fieldset className="liquidity-settings-group">
-      <legend>{title}</legend>
-      <label className="liquidity-settings-enable">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => onEnabledChange(event.currentTarget.checked)}
-        />
-        Enable
-      </label>
+      <legend>
+        <span className="liquidity-settings-label-with-help">
+          <span>{title}</span>
+          <SettingHelp label={title} text={help} />
+        </span>
+      </legend>
+      <div className="liquidity-settings-enable-row">
+        <label className="liquidity-settings-enable">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => onEnabledChange(event.currentTarget.checked)}
+          />
+          Enable
+        </label>
+        <SettingHelp label={`${title} Enable`} text={enableHelp} />
+      </div>
       <div className={enabled ? "liquidity-settings-fields" : "liquidity-settings-fields is-disabled"}>
         {children}
       </div>
@@ -1054,30 +2151,59 @@ function LiquiditySettingsGroup({
 
 function SettingNumber({
   label,
+  help,
   value,
   min,
   max,
+  disabled,
   onChange,
 }: {
   label: string;
+  help: string;
   value: number;
   min: number;
   max: number;
+  disabled: boolean;
   onChange: (value: number) => void;
 }) {
+  const inputId = useId();
   return (
-    <label className="liquidity-settings-field">
-      <span>{label}</span>
+    <div className="liquidity-settings-field">
+      <div className="liquidity-settings-label-with-help">
+        <label htmlFor={inputId}>{label}</label>
+        <SettingHelp label={label} text={help} />
+      </div>
       <input
+        id={inputId}
         type="number"
         inputMode="numeric"
         value={value}
         min={min}
         max={max}
         step={1}
+        disabled={disabled}
         onChange={(event) => onChange(event.currentTarget.valueAsNumber)}
       />
-    </label>
+    </div>
+  );
+}
+
+function SettingHelp({ label, text }: { label: string; text: string }) {
+  const tooltipId = useId();
+  return (
+    <span className="liquidity-setting-help">
+      <button
+        type="button"
+        className="liquidity-setting-help-button"
+        aria-label={`Giải thích ${label}`}
+        aria-describedby={tooltipId}
+      >
+        ?
+      </button>
+      <span id={tooltipId} className="liquidity-setting-tooltip" role="tooltip">
+        {text}
+      </span>
+    </span>
   );
 }
 
@@ -1109,6 +2235,86 @@ function mergeBars(first: Bar[], second: Bar[], cutoff: number): Bar[] {
     if (bar.time >= cutoff) merged.set(bar.time, bar);
   }
   return [...merged.values()].sort((a, b) => a.time - b.time);
+}
+
+function marketVolumeSampleFromUpdate(
+  message: MarketExplorerUpdateMessage,
+): MarketVolumeSample {
+  return {
+    time: message.time,
+    value: message.value,
+    buyVolume: message.buyVolume,
+    sellVolume: message.sellVolume,
+    price: message.price,
+  };
+}
+
+function mergeMarketVolumeSamples(
+  first: MarketVolumeSample[],
+  second: MarketVolumeSample[],
+  cutoff: number,
+): MarketVolumeSample[] {
+  const merged = new Map<number, MarketVolumeSample>();
+  for (const sample of [...first, ...second]) {
+    if (sample.time >= cutoff) merged.set(sample.time, sample);
+  }
+  return [...merged.values()]
+    .sort((left, right) => left.time - right.time)
+    .slice(-MAX_MARKET_VOLUME_SAMPLES);
+}
+
+function mergeMarketVolumeSignals(
+  first: MarketExplorerSignal[],
+  second: MarketExplorerSignal[],
+  cutoff: number,
+): MarketExplorerSignal[] {
+  const merged = new Map<string, MarketExplorerSignal>();
+  for (const signal of [...first, ...second]) {
+    if (signal.detectionTime >= cutoff) merged.set(signal.signalId, signal);
+  }
+  return [...merged.values()]
+    .sort((left, right) => left.detectionTime - right.detectionTime)
+    .slice(-MAX_MARKET_VOLUME_SIGNALS);
+}
+
+function notifyMarketVolumeSignals(
+  signals: MarketExplorerSignal[],
+  settings: MarketExplorerSettings,
+  showToast: (message: string) => void,
+) {
+  for (const signal of signals) {
+    const config = marketExplorerSignalStyle(settings, signal);
+    if (!config.enabled) continue;
+    const bullish = signal.kind === "absorption"
+      ? signal.side === "sell"
+      : signal.side === "buy";
+    if (config.alertSound) playMarketExplorerTone(bullish);
+    if (config.bookmapAlertMessage === "enabled") {
+      const label = signal.kind === "volume_spike"
+        ? "Volume Spike"
+        : signal.kind === "absorption"
+          ? "Absorption"
+          : "Market Volume Stop";
+      showToast(
+        `${label} ${signal.side.toUpperCase()} / ${formatCompactVolume(signal.value)} @ ${signal.price.toFixed(1)}`,
+      );
+    }
+  }
+}
+
+function playMarketExplorerTone(isBuy: boolean) {
+  if (typeof window === "undefined" || !window.AudioContext) return;
+  const context = new window.AudioContext();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.frequency.value = isBuy ? 880 : 440;
+  gain.gain.setValueAtTime(0.08, context.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.18);
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start();
+  oscillator.stop(context.currentTime + 0.18);
+  oscillator.addEventListener("ended", () => void context.close());
 }
 
 function eventKey(event: LiquidityEvent): string {
@@ -1206,6 +2412,13 @@ function formatDateTime(time: number): string {
   return dateTimeFormatter.format(new Date(time));
 }
 
+function formatCompactVolume(value: number): string {
+  const absolute = Math.abs(value);
+  if (absolute >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+  if (absolute >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return value.toFixed(0);
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -1246,6 +2459,62 @@ export function panOffsetFromDrag(
   );
 }
 
+const LIQUIDITY_HISTORY_SETTING_FIELDS: Array<[
+  LiquidityEventKind,
+  Array<keyof LiquidityTrackerSettings>,
+]> = [
+  [
+    "relative",
+    ["relativeEnabled", "relativeTrigger", "relativeDomFrom", "relativeDomTo"],
+  ],
+  [
+    "absolute",
+    ["absoluteEnabled", "absoluteTrigger", "absoluteDomFrom", "absoluteDomTo"],
+  ],
+  [
+    "long_term",
+    [
+      "longTermEnabled",
+      "longTermTrigger",
+      "longTermDomFrom",
+      "longTermDomTo",
+      "longTermMinAgeSeconds",
+    ],
+  ],
+];
+
+export function liquidityHistoryKindsChanged(
+  previous: LiquidityTrackerSettings,
+  next: LiquidityTrackerSettings,
+): LiquidityEventKind[] {
+  return LIQUIDITY_HISTORY_SETTING_FIELDS
+    .filter(([, fields]) => fields.some((field) => previous[field] !== next[field]))
+    .map(([kind]) => kind);
+}
+
+function liquidityEventMatchesSettings(
+  event: LiquidityEvent,
+  settings: LiquidityTrackerSettings,
+): boolean {
+  const relative = event.eventKind === "relative";
+  const enabled = relative ? settings.relativeEnabled : settings.absoluteEnabled;
+  const trigger = relative ? settings.relativeTrigger : settings.absoluteTrigger;
+  const domFrom = relative ? settings.relativeDomFrom : settings.absoluteDomFrom;
+  const domTo = relative ? settings.relativeDomTo : settings.absoluteDomTo;
+  return enabled &&
+    event.threshold === trigger &&
+    event.domDistance !== null &&
+    event.domDistance >= domFrom &&
+    event.domDistance <= domTo;
+}
+
+function liquidityLineMatchesSettings(
+  line: LiquidityLine,
+  settings: LiquidityTrackerSettings,
+): boolean {
+  return settings.longTermEnabled && line.threshold === settings.longTermTrigger;
+}
+
 export function validateLiquidityTrackerSettings(
   settings: LiquidityTrackerSettings,
 ): string | null {
@@ -1277,4 +2546,74 @@ export function validateLiquidityTrackerSettings(
     return "Long-term DOM level to must be greater than or equal to level from";
   }
   return null;
+}
+
+export function validateMarketExplorerSettings(
+  settings: MarketExplorerSettings,
+): string | null {
+  if (
+    !Number.isInteger(settings.halftimeSeconds) ||
+    settings.halftimeSeconds < 1 ||
+    settings.halftimeSeconds > 3_600
+  ) {
+    return "Market Explorer halftime must be an integer from 1 to 3600";
+  }
+  const colorPattern = /^#[0-9a-f]{6}$/i;
+  if (!colorPattern.test(settings.buyLineColor) || !colorPattern.test(settings.sellLineColor)) {
+    return "Market Explorer line colors must use #RRGGBB";
+  }
+  const signal = settings.signal;
+  if (!Number.isFinite(signal.askLevel) || signal.askLevel < 0.01) {
+    return "Market Volume Stop Signal 1 Ask level must be positive";
+  }
+  if (!Number.isFinite(signal.bidLevel) || signal.bidLevel < 0.01) {
+    return "Market Volume Stop Signal 1 Bid level must be positive";
+  }
+  if (!Number.isInteger(signal.pullbackDurationMinutes) || signal.pullbackDurationMinutes < 0 || signal.pullbackDurationMinutes > 1_440) {
+    return "Market Volume Stop Signal 1 pullback duration must be from 0 to 1440";
+  }
+  if (!Number.isInteger(signal.pullbackPriceChangeTicks) || signal.pullbackPriceChangeTicks < 0 || signal.pullbackPriceChangeTicks > 100_000) {
+    return "Market Volume Stop Signal 1 pullback price must be from 0 to 100000";
+  }
+  if (!Number.isFinite(settings.volumeSpike.triggerVolume) || settings.volumeSpike.triggerVolume < 0.01) {
+    return "Volume Spike trigger volume must be positive";
+  }
+  if (!Number.isFinite(settings.volumeSpike.maximumDurationSeconds) || settings.volumeSpike.maximumDurationSeconds < 0.1 || settings.volumeSpike.maximumDurationSeconds > 60) {
+    return "Volume Spike maximum duration must be from 0.1 to 60 seconds";
+  }
+  if (!Number.isInteger(settings.volumeSpike.priceRangeTicks) || settings.volumeSpike.priceRangeTicks < 1) {
+    return "Volume Spike price range must be a positive integer";
+  }
+  if (!Number.isFinite(settings.volumeSpike.ratioGreaterEqual) || settings.volumeSpike.ratioGreaterEqual < 1) {
+    return "Volume Spike ratio must be at least 1";
+  }
+  if (!Number.isFinite(settings.absorption.triggerVolume) || settings.absorption.triggerVolume < 0.01) {
+    return "Absorption trigger volume must be positive";
+  }
+  if (!Number.isFinite(settings.absorption.maximumDurationSeconds) || settings.absorption.maximumDurationSeconds < 0.1 || settings.absorption.maximumDurationSeconds > 60) {
+    return "Absorption maximum duration must be from 0.1 to 60 seconds";
+  }
+  const appearances: Array<[string, MarketExplorerAppearance]> = [
+    ["Market Volume Stop Signal 1", signal],
+    ["Volume Spike", settings.volumeSpike],
+    ["Absorption", settings.absorption],
+  ];
+  for (const [label, appearance] of appearances) {
+    if (!Number.isInteger(appearance.markerSize) || appearance.markerSize < 1 || appearance.markerSize > 5) {
+      return `${label} marker size must be from 1 to 5`;
+    }
+    if (!colorPattern.test(appearance.buyColor) || !colorPattern.test(appearance.sellColor)) {
+      return `${label} colors must use #RRGGBB`;
+    }
+  }
+  return null;
+}
+
+export function pricePanFromChartDrag(
+  startPanPx: number,
+  verticalDragPx: number,
+  plotHeight: number,
+): number {
+  const limit = Math.max(1, plotHeight) * 3;
+  return clamp(startPanPx + verticalDragPx, -limit, limit);
 }

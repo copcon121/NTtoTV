@@ -51,6 +51,7 @@ const Y_SCALE_SENSITIVITY = 0.003;
 
 type MarketProfileTimeframe = Extract<Timeframe, "5m" | "15m">;
 type ProfileMode = "volume" | "delta" | "tpo";
+type PriceDisplayMode = "bar" | "line";
 type MarketProfileDrawingTool = "rectangle";
 
 interface TpoRow {
@@ -175,6 +176,7 @@ export function MarketProfilePage() {
   const api = useMemo(() => new ApiClient({ basePath: endpoints.api }), [endpoints.api]);
   const [tf, setTf] = useState<MarketProfileTimeframe>("15m");
   const [profileMode, setProfileMode] = useState<ProfileMode>("volume");
+  const [priceDisplayMode, setPriceDisplayMode] = useState<PriceDisplayMode>("line");
   const [dayCount, setDayCount] = useState(DEFAULT_DAYS);
   const [dayInput, setDayInput] = useState(String(DEFAULT_DAYS));
   const [reloadKey, setReloadKey] = useState(0);
@@ -307,6 +309,18 @@ export function MarketProfilePage() {
             </button>
           ))}
         </div>
+        <div className="market-profile-segmented" aria-label="Price display">
+          {(["bar", "line"] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={priceDisplayMode === value}
+              onClick={() => setPriceDisplayMode(value)}
+            >
+              {value === "bar" ? "Bar" : "Line"}
+            </button>
+          ))}
+        </div>
         <div className="market-profile-segmented" aria-label="Profile mode">
           {(["volume", "delta", "tpo"] as const).map((value) => (
             <button
@@ -383,6 +397,7 @@ export function MarketProfilePage() {
         <MarketProfileCanvas
           data={state}
           profileMode={profileMode}
+          priceDisplayMode={priceDisplayMode}
           activeTool={activeDrawingTool}
           clearDrawingsSignal={clearDrawingsSignal}
           onToolDeselect={() => setActiveDrawingTool(null)}
@@ -395,12 +410,14 @@ export function MarketProfilePage() {
 function MarketProfileCanvas({
   data,
   profileMode,
+  priceDisplayMode,
   activeTool,
   clearDrawingsSignal,
   onToolDeselect,
 }: {
   data: MarketProfileState | null;
   profileMode: ProfileMode;
+  priceDisplayMode: PriceDisplayMode;
   activeTool: MarketProfileDrawingTool | null;
   clearDrawingsSignal: number;
   onToolDeselect: () => void;
@@ -425,6 +442,7 @@ function MarketProfileCanvas({
       ctx,
       data,
       profileMode,
+      priceDisplayMode,
       size.width,
       size.height,
       view,
@@ -438,6 +456,7 @@ function MarketProfileCanvas({
     drawingPreview,
     drawings,
     profileMode,
+    priceDisplayMode,
     size.height,
     size.width,
     view,
@@ -748,6 +767,7 @@ function drawMarketProfile(
   ctx: CanvasRenderingContext2D,
   data: MarketProfileState | null,
   profileMode: ProfileMode,
+  priceDisplayMode: PriceDisplayMode,
   width: number,
   height: number,
   view: MarketProfileView,
@@ -799,7 +819,11 @@ function drawMarketProfile(
   ctx.clip();
   drawSessionProfiles(ctx, data.days, profileMode, xForTime, yForPrice, plot);
   if (!tpoStyle) {
-    drawLine(ctx, data.bars, xForTime, yForPrice, plot);
+    if (priceDisplayMode === "bar") {
+      drawOhlcBars(ctx, data.bars, xForTime, yForPrice, plot);
+    } else {
+      drawLine(ctx, data.bars, xForTime, yForPrice, plot);
+    }
   }
   drawOpenMarkers(ctx, data.days, xForTime, yForPrice, tpoStyle);
   drawMarketProfileDrawings(
@@ -892,6 +916,60 @@ function drawLine(
     lastX = x;
   });
   ctx.stroke();
+  ctx.restore();
+}
+
+function drawOhlcBars(
+  ctx: CanvasRenderingContext2D,
+  bars: readonly Bar[],
+  xForTime: (time: number) => number,
+  yForPrice: (price: number) => number,
+  plot: { left: number; right: number },
+): void {
+  const visibleBars = bars.filter(
+    (bar) =>
+      isFiniteNumber(bar.open) &&
+      isFiniteNumber(bar.high) &&
+      isFiniteNumber(bar.low) &&
+      isFiniteNumber(bar.close),
+  );
+  if (visibleBars.length === 0) return;
+
+  const xValues = visibleBars.map((bar) => xForTime(bar.time));
+  let minimumGap = Infinity;
+  for (let index = 1; index < xValues.length; index++) {
+    const gap = xValues[index] - xValues[index - 1];
+    if (gap > 0.1 && gap < minimumGap) minimumGap = gap;
+  }
+  const tickWidth = clampNumber(
+    Number.isFinite(minimumGap) ? minimumGap * 0.38 : 3,
+    1,
+    5,
+  );
+
+  ctx.save();
+  ctx.lineWidth = minimumGap >= 5 ? 1.5 : 1;
+  ctx.lineCap = "square";
+  for (let index = 0; index < visibleBars.length; index++) {
+    const bar = visibleBars[index];
+    const x = xValues[index];
+    if (x < plot.left - tickWidth || x > plot.right + tickWidth) continue;
+
+    const highY = yForPrice(Math.max(bar.high, bar.low));
+    const lowY = yForPrice(Math.min(bar.high, bar.low));
+    const openY = yForPrice(bar.open);
+    const closeY = yForPrice(bar.close);
+    ctx.strokeStyle =
+      bar.close > bar.open ? "#059669" : bar.close < bar.open ? "#dc2626" : "#64748b";
+    ctx.beginPath();
+    ctx.moveTo(x, highY);
+    ctx.lineTo(x, lowY);
+    ctx.moveTo(x - tickWidth, openY);
+    ctx.lineTo(x, openY);
+    ctx.moveTo(x, closeY);
+    ctx.lineTo(x + tickWidth, closeY);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 

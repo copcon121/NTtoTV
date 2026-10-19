@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from app.ingest.bookmap_endpoint import _SequenceTracker, _dispatch
+from app.ingest.bookmap_endpoint import BookmapControl, _SequenceTracker, _dispatch
 from app.models import Side
 
 
@@ -24,6 +24,14 @@ class _Pipeline:
 
     async def on_bookmap_liquidity(self, payload, *, connection_id=None):
         self.liquidity.append((payload, connection_id))
+
+
+class _ControlSocket:
+    def __init__(self) -> None:
+        self.frames = []
+
+    async def send_json(self, payload):
+        self.frames.append(payload)
 
 
 @pytest.mark.unit
@@ -101,3 +109,36 @@ def test_liquidity_frame_is_dispatched_without_raw_depth():
     asyncio.run(_dispatch(pipeline, payload, connection_id="connection-2"))
 
     assert pipeline.liquidity == [(payload, "connection-2")]
+
+
+@pytest.mark.unit
+def test_bookmap_control_sends_complete_liquidity_configuration():
+    async def scenario():
+        control = BookmapControl()
+        socket = _ControlSocket()
+        await control.bind(socket, "connection-3")
+        sent = await control.send_liquidity_settings(
+            {
+                "relativeEnabled": True,
+                "relativeTrigger": 350,
+                "relativeDomFrom": 10,
+                "relativeDomTo": 70,
+                "absoluteEnabled": False,
+                "absoluteTrigger": 600,
+                "absoluteDomFrom": 1,
+                "absoluteDomTo": 12,
+                "longTermEnabled": True,
+                "longTermTrigger": 700,
+                "longTermDomFrom": 2,
+                "longTermDomTo": 90,
+                "longTermMinAgeSeconds": 45,
+            }
+        )
+        return sent, socket.frames
+
+    sent, frames = asyncio.run(scenario())
+    assert sent is True
+    assert frames[0]["type"] == "liquidity_config"
+    assert frames[0]["relativeTrigger"] == 350
+    assert frames[0]["absoluteEnabled"] is False
+    assert frames[0]["longTermMinAgeMs"] == 45_000
