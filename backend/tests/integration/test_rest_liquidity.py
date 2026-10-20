@@ -68,7 +68,28 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
             "domDistance": 12,
             "strength": 1.3,
             "lineId": "ask:42050:300000",
-            "lineStartTime": 300_000,
+            "lineStartTime": -14_100_000,
+        }
+    )
+    store.record(
+        {
+            "symbol": "GC",
+            "contract": "GC",
+            "sourceContract": "GCZ6.COMEX@RITHMIC",
+            "sequence": -1,
+            "time": 340_000,
+            "eventKind": "long_term_touch",
+            "action": "touch",
+            "side": "ask",
+            "price": 4205.0,
+            "size": 5,
+            "previousSize": 650,
+            "change": 5,
+            "threshold": 500,
+            "domDistance": 12,
+            "strength": 5.0,
+            "lineId": "ask:42050:300000",
+            "lineStartTime": -14_100_000,
         }
     )
     app = create_app(lifespan=False)
@@ -93,9 +114,12 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
 
     assert response.status_code == 200
     body = response.json()
-    assert len(body["events"]) == 1
+    assert len(body["events"]) == 2
     assert body["events"][0]["bucketTime"] == 300_000
     assert body["events"][0]["threshold"] == 50
+    assert body["events"][1]["eventKind"] == "long_term_touch"
+    assert body["events"][1]["size"] == 5
+    assert body["events"][1]["lineStartTime"] == -14_100_000
     assert body["lines"][0]["lineId"] == "ask:42050:300000"
     assert body["lines"][0]["active"] is True
     assert bad.status_code == 400
@@ -167,6 +191,7 @@ def test_liquidity_settings_are_validated_and_persisted(tmp_path):
                 "/api/liquidity/settings",
                 json={"absoluteDomFrom": 20, "absoluteDomTo": 10},
             )
+            raw_events, raw_lines = store.read("GC", "GC", 0, 400_000)
     finally:
         cache.close()
         store.close()
@@ -175,14 +200,18 @@ def test_liquidity_settings_are_validated_and_persisted(tmp_path):
     assert defaults.json()["settings"]["relativeTrigger"] == 50
     assert defaults.json()["settings"]["relativeDomFrom"] == 20
     assert defaults.json()["settings"]["relativeDomTo"] == 100
+    assert defaults.json()["settings"]["longTermMinAgeSeconds"] == 4 * 60 * 60
     assert updated.status_code == 200
     assert updated.json()["settings"]["relativeEnabled"] is False
     assert updated.json()["settings"]["relativeTrigger"] == 425
     assert updated.json()["settings"]["absoluteTrigger"] == 500
     assert updated.json()["settings"]["longTermMinAgeSeconds"] == 45
     assert updated.json()["sentToBookmap"] is False
-    assert updated.json()["historyCleared"] == ["relative", "long_term"]
-    assert updated.json()["historyDeleted"] == {"events": 1, "lines": 1}
+    assert updated.json()["historyCleared"] == []
+    assert updated.json()["historyRefiltered"] == ["relative", "long_term"]
+    assert updated.json()["historyDeleted"] == {"events": 0, "lines": 0}
+    assert [event["eventKind"] for event in raw_events] == ["relative"]
+    assert [line["lineId"] for line in raw_lines] == ["ask:42050:300000"]
     assert persisted.json()["settings"] == updated.json()["settings"]
     assert invalid.status_code == 400
     assert invalid.json()["error"]["field"] == "absoluteDomTo"

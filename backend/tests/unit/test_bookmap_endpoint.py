@@ -141,4 +141,4 @@ def test_bookmap_control_sends_complete_liquidity_configuration():
     assert frames[0]["type"] == "liquidity_config"
     assert frames[0]["relativeTrigger"] == 350
     assert frames[0]["absoluteEnabled"] is False
-    assert frames[0]["longTermMinAgeMs"] == 45_000
+    assert frames[0]["longTermMinAgeMs"] == 0

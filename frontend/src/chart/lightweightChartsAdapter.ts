@@ -318,6 +318,9 @@ const MGANN_SWING_LIVE_SELL_COLOR = "rgba(192, 0, 0, 0.62)";
 const MGANN_SWING_DELTA_UP_COLOR = "#004080";
 const MGANN_SWING_DELTA_DOWN_COLOR = "#800000";
 const MGANN_SWING_DELTA_ZERO_COLOR = "#6d6d6d";
+const MGANN_SWING_LIVE_DELTA_UP_COLOR = "rgba(0, 64, 128, 0.68)";
+const MGANN_SWING_LIVE_DELTA_DOWN_COLOR = "rgba(128, 0, 0, 0.68)";
+const MGANN_SWING_LIVE_DELTA_ZERO_COLOR = "rgba(109, 109, 109, 0.68)";
 const MGANN_IMPULSE_BULL_COLOR = "#00a6a6";
 const MGANN_IMPULSE_BEAR_COLOR = "#ff8c00";
 
@@ -2968,26 +2971,40 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         : [],
     );
 
-    const waveDeltaMarkers: SeriesMarker<Time>[] = showWaveDeltaNumbers
-      ? resolvedOverlay.waveDeltaLabels.map((label) => {
-          const isBuy = label.kind === "low";
-          const rounded = Math.round(label.value);
-          return {
-            time: toUtcTimestamp(label.time, this.displayTimeOffsetMs),
-            position: isBuy ? "belowBar" : "aboveBar",
-            shape: "circle",
-            color:
-              rounded > 0
-                ? MGANN_SWING_DELTA_UP_COLOR
-                : rounded < 0
-                  ? MGANN_SWING_DELTA_DOWN_COLOR
-                  : MGANN_SWING_DELTA_ZERO_COLOR,
-            id: label.id,
-            text: String(rounded),
-            size: 0,
-          } satisfies SeriesMarker<Time>;
-        })
-      : [];
+    const waveDeltaLabels =
+      showWaveDeltaNumbers && resolvedOverlay.liveWaveDeltaLabel !== undefined
+        ? [
+            ...resolvedOverlay.waveDeltaLabels,
+            resolvedOverlay.liveWaveDeltaLabel,
+          ]
+        : showWaveDeltaNumbers
+          ? resolvedOverlay.waveDeltaLabels
+          : [];
+    const waveDeltaMarkers: SeriesMarker<Time>[] = waveDeltaLabels.map(
+      (label) => {
+        const isBuy = label.kind === "low";
+        const rounded = Math.round(label.value);
+        return {
+          time: toUtcTimestamp(label.time, this.displayTimeOffsetMs),
+          position: isBuy ? "belowBar" : "aboveBar",
+          shape: "circle",
+          color: label.confirmed
+            ? rounded > 0
+              ? MGANN_SWING_DELTA_UP_COLOR
+              : rounded < 0
+                ? MGANN_SWING_DELTA_DOWN_COLOR
+                : MGANN_SWING_DELTA_ZERO_COLOR
+            : rounded > 0
+              ? MGANN_SWING_LIVE_DELTA_UP_COLOR
+              : rounded < 0
+                ? MGANN_SWING_LIVE_DELTA_DOWN_COLOR
+                : MGANN_SWING_LIVE_DELTA_ZERO_COLOR,
+          id: label.id,
+          text: String(rounded),
+          size: 0,
+        } satisfies SeriesMarker<Time>;
+      },
+    );
     const signalMarkers: SeriesMarker<Time>[] = showSignals
       ? resolvedOverlay.signals.map((signal) => {
             const isBuy = signal.kind === "low";

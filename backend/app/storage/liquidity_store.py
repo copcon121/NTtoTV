@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS liquidity_events (
     threshold INTEGER NOT NULL,
     dom_distance INTEGER,
     strength REAL NOT NULL,
+    line_id TEXT,
+    line_start_time INTEGER,
     snapshot INTEGER NOT NULL DEFAULT 0,
     UNIQUE(source_contract, source_sequence, event_time)
 );
@@ -72,6 +74,23 @@ class LiquidityStore:
         self.path = Path(path)
         self._writer = SingleWriter(connect(self.path, check_same_thread=False))
         self._writer.executescript(_SCHEMA)
+        self._migrate_event_line_fields()
+
+    def _migrate_event_line_fields(self) -> None:
+        """Keep long-term touch lineage in databases created before v2."""
+
+        rows = self._writer.connection.execute(
+            "PRAGMA table_info(liquidity_events)"
+        ).fetchall()
+        existing = {str(row["name"]) for row in rows}
+        for name, ddl in {
+            "line_id": "TEXT",
+            "line_start_time": "INTEGER",
+        }.items():
+            if name not in existing:
+                self._writer.execute(
+                    f"ALTER TABLE liquidity_events ADD COLUMN {name} {ddl}"
+                )
 
     def record(self, payload: dict[str, Any]) -> None:
         """Persist one validated bridge event, idempotently by source sequence."""
@@ -98,6 +117,14 @@ class LiquidityStore:
                 else int(payload["domDistance"])
             ),
             "strength": float(payload.get("strength") or 0.0),
+            "line_id": (
+                None if payload.get("lineId") is None else str(payload["lineId"])
+            ),
+            "line_start_time": (
+                None
+                if payload.get("lineStartTime") is None
+                else int(payload["lineStartTime"])
+            ),
             "snapshot": 1 if bool(payload.get("snapshot", False)) else 0,
         }
 
@@ -109,12 +136,12 @@ class LiquidityStore:
                         symbol, contract, source_contract, source_sequence,
                         event_time, event_kind, action, side, price, size,
                         previous_size, change_size, threshold, dom_distance,
-                        strength, snapshot
+                        strength, line_id, line_start_time, snapshot
                     ) VALUES(
                         :symbol, :contract, :source_contract, :source_sequence,
                         :event_time, :event_kind, :action, :side, :price, :size,
                         :previous_size, :change_size, :threshold, :dom_distance,
-                        :strength, :snapshot
+                        :strength, :line_id, :line_start_time, :snapshot
                     )
                     """,
                     values,
@@ -218,6 +245,12 @@ class LiquidityStore:
                     None if row["dom_distance"] is None else int(row["dom_distance"])
                 ),
                 "strength": float(row["strength"]),
+                "lineId": None if row["line_id"] is None else str(row["line_id"]),
+                "lineStartTime": (
+                    None
+                    if row["line_start_time"] is None
+                    else int(row["line_start_time"])
+                ),
             }
             for row in event_rows
         ]
@@ -268,6 +301,8 @@ class LiquidityStore:
             raise ValueError(f"Unknown liquidity event kinds: {sorted(unknown)!r}")
         marker_kinds = sorted(kinds.intersection({"relative", "absolute"}))
         clear_lines = "long_term" in kinds
+        if clear_lines:
+            marker_kinds.append("long_term_touch")
         if not marker_kinds and not clear_lines:
             return 0, 0
 
@@ -321,11 +356,21 @@ class LiquidityStore:
                 ).rowcount
 
             if bool(settings["longTermEnabled"]):
+                deleted_events += conn.execute(
+                    """
+                    DELETE FROM liquidity_events
+                    WHERE event_kind='long_term_touch' AND threshold<>?
+                    """,
+                    (int(settings["longTermTrigger"]),),
+                ).rowcount
                 deleted_lines = conn.execute(
                     "DELETE FROM liquidity_lines WHERE threshold<>?",
                     (int(settings["longTermTrigger"]),),
                 ).rowcount
             else:
+                deleted_events += conn.execute(
+                    "DELETE FROM liquidity_events WHERE event_kind='long_term_touch'"
+                ).rowcount
                 deleted_lines = conn.execute("DELETE FROM liquidity_lines").rowcount
             return int(deleted_events), int(deleted_lines)
 

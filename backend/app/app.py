@@ -40,6 +40,7 @@ from .rest.routes import router as rest_router
 from .rest.signals import router as signals_router
 from .rest.smc_ai import router as smc_ai_router
 from .rest.supertrend_trailing import router as supertrend_trailing_router
+from .rest.trend_analyzer import router as trend_analyzer_router
 from .runtime import AppRuntime
 
 
@@ -97,6 +98,7 @@ def create_app(*, lifespan: bool = True) -> FastAPI:
     app.include_router(notifications_router)
     app.include_router(market_data_router)
     app.include_router(market_explorer_router)
+    app.include_router(trend_analyzer_router)
     app.include_router(liquidity_router)
     app.include_router(mt5_router)
     app.include_router(orders_router)

@@ -2422,48 +2422,6 @@ body {
   box-shadow: 0 0 8px rgb(0 214 143 / 55%);
 }
 
-.liquidity-summary {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 6px 12px;
-  background: #0e141b;
-  border-bottom: 1px solid #202c38;
-}
-
-.liquidity-summary-item {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  min-width: 118px;
-  padding: 5px 8px;
-  color: #8d9aaa;
-  background: #121b24;
-  border: 1px solid #253340;
-  border-radius: 4px;
-}
-
-.liquidity-summary-item strong {
-  color: #dbe7f3;
-  font-size: 15px;
-}
-
-.liquidity-summary-item.is-bid {
-  border-left: 3px solid #00d68f;
-}
-
-.liquidity-summary-item.is-ask {
-  border-left: 3px solid #ff5267;
-}
-
-.liquidity-summary-note {
-  margin-left: auto;
-  color: #66778a;
-  white-space: nowrap;
-}
-
 .liquidity-settings-backdrop {
   position: fixed;
   z-index: 80;
@@ -2953,18 +2911,6 @@ body {
   }
 
   .liquidity-connection {
-    display: none;
-  }
-
-  .liquidity-summary {
-    overflow-x: auto;
-  }
-
-  .liquidity-summary-item {
-    min-width: 112px;
-  }
-
-  .liquidity-summary-note {
     display: none;
   }
 

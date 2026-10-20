@@ -37,7 +37,13 @@ def _bookmap_orderflow(volume: int, price: float) -> dict:
     }
 
 
-def _pipeline(tmp_path, *, preferred="bookmap"):
+def _pipeline(
+    tmp_path,
+    *,
+    preferred="bookmap",
+    rithmic_shadow=True,
+    rithmic_qualify_ms=65_000,
+):
     settings = Settings(
         data_dir=tmp_path,
         supported_symbols=(_SYMBOL,),
@@ -48,6 +54,8 @@ def _pipeline(tmp_path, *, preferred="bookmap"):
         bookmap_recover_ms=10_000,
         market_data_min_hold_ms=30_000,
         nt_feed_stale_ms=10_000,
+        rithmic_shadow_mode=rithmic_shadow,
+        rithmic_qualify_ms=rithmic_qualify_ms,
     )
     cache = CacheStore(tmp_path / "app.sqlite")
     ticks = TickStore(tmp_path / "ticks")
@@ -65,6 +73,221 @@ def _pipeline(tmp_path, *, preferred="bookmap"):
         symbol=_SYMBOL,
     )
     return pipeline, cache, ticks, captured
+
+
+@pytest.mark.unit
+def test_rithmic_shadow_records_and_warms_without_replacing_bookmap(tmp_path):
+    pipeline, cache, ticks, captured = _pipeline(tmp_path)
+    try:
+        pipeline._active_feed = "bookmap"
+
+        async def scenario() -> None:
+            await pipeline.on_rithmic_connect(
+                {
+                    "contract": _SOURCE,
+                    "subscriptions": {"l1": True, "l2": True, "mbo": True},
+                }
+            )
+            await pipeline.on_rithmic_trade(
+                NormalizedTrade(
+                    symbol=_SYMBOL,
+                    contract=_SOURCE,
+                    time=_BASE,
+                    price=2400.1,
+                    volume=5,
+                    bid=2400.0,
+                    ask=2400.1,
+                    best_bid=2400.0,
+                    best_ask=2400.1,
+                    sequence=1,
+                    source="rithmic",
+                    side=Side.BUY,
+                )
+            )
+
+        asyncio.run(scenario())
+
+        assert pipeline._active_feed == "bookmap"
+        assert len(list(ticks.read_range(_SOURCE, _BASE, _BASE, source="rithmic"))) == 1
+        assert pipeline._source_bars["rithmic"].current_bar("GC", "1m") is not None
+        assert cache.read_bars(_SYMBOL, "GC", "1m", _BASE - 60_000, _BASE) == []
+        assert captured == []
+        status = pipeline.market_data_status_dict()["sources"]["rithmic"]
+        assert status["shadow"] is True
+        assert status["selectable"] is False
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
+def test_rithmic_promotion_requires_l1_and_continuous_qualification(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(
+        tmp_path,
+        rithmic_shadow=False,
+        rithmic_qualify_ms=65_000,
+    )
+    try:
+        now = _BASE
+        pipeline._active_feed = "nt"
+        pipeline._source_switched_at = now - 60_000
+        state = pipeline._feed_states["rithmic"]
+        state.connected = True
+        state.last_heartbeat_at = now
+        state.healthy_since = now - 65_000
+        state.contract = _SOURCE
+
+        state.bar_ready = False
+        asyncio.run(pipeline._evaluate_source_selection(now))
+        assert pipeline._active_feed == "nt"
+
+        state.bar_ready = True
+        state.healthy_since = now - 64_999
+        asyncio.run(pipeline._evaluate_source_selection(now))
+        assert pipeline._active_feed == "nt"
+
+        state.healthy_since = now - 65_000
+        asyncio.run(pipeline._evaluate_source_selection(now))
+        assert pipeline._active_feed == "rithmic"
+        assert pipeline._source_switch_reason == "rithmic_promoted_from_nt"
+
+        asyncio.run(
+            pipeline.on_rithmic_depth(
+                {"shadow": True, "selectable": False, "mboSynchronized": True}
+            )
+        )
+        status = pipeline.market_data_status_dict()["sources"]["rithmic"]
+        assert status["shadow"] is False
+        assert status["selectable"] is True
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
+def test_rithmic_shadow_remains_unselectable_after_qualification(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(tmp_path, rithmic_shadow=True)
+    try:
+        now = _BASE
+        pipeline._active_feed = "nt"
+        pipeline._source_switched_at = now - 60_000
+        state = pipeline._feed_states["rithmic"]
+        state.connected = True
+        state.last_heartbeat_at = now
+        state.healthy_since = now - 120_000
+        state.contract = _SOURCE
+        state.bar_ready = True
+
+        asyncio.run(pipeline._evaluate_source_selection(now))
+
+        assert pipeline._active_feed == "nt"
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
+def test_bookmap_fails_over_to_rithmic_then_nt_and_recovers(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(
+        tmp_path,
+        rithmic_shadow=False,
+        rithmic_qualify_ms=0,
+    )
+    try:
+        now = _BASE
+        pipeline._active_feed = "bookmap"
+        pipeline._source_switched_at = now - 60_000
+
+        bookmap = pipeline._feed_states["bookmap"]
+        bookmap.connected = True
+        bookmap.last_heartbeat_at = now - 5_001
+        bookmap.healthy_since = now - 60_000
+        bookmap.contract = _SOURCE
+        bookmap.bar_ready = True
+
+        rithmic = pipeline._feed_states["rithmic"]
+        rithmic.connected = True
+        rithmic.last_heartbeat_at = now
+        rithmic.healthy_since = now - 60_000
+        rithmic.contract = _SOURCE
+        rithmic.bar_ready = True
+
+        nt = pipeline._feed_states["nt"]
+        nt.connected = True
+        nt.last_heartbeat_at = now
+        nt.healthy_since = now - 60_000
+        nt.contract = _SOURCE
+
+        asyncio.run(pipeline._evaluate_source_selection(now))
+        assert pipeline._active_feed == "rithmic"
+        assert pipeline._source_switch_reason == "bookmap_stale"
+
+        pipeline._source_switched_at = now - 60_000
+        rithmic.last_heartbeat_at = now - 10_001
+        asyncio.run(pipeline._evaluate_source_selection(now))
+        assert pipeline._active_feed == "nt"
+        assert pipeline._source_switch_reason == "rithmic_stale"
+
+        pipeline._source_switched_at = now - 60_000
+        bookmap.last_heartbeat_at = now
+        bookmap.healthy_since = now - 10_000
+        asyncio.run(pipeline._evaluate_source_selection(now))
+        assert pipeline._active_feed == "bookmap"
+        assert pipeline._source_switch_reason == "bookmap_recovered"
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
+def test_active_rithmic_flushes_idle_big_trade_with_rithmic_source(tmp_path):
+    pipeline, cache, ticks, captured = _pipeline(
+        tmp_path,
+        rithmic_shadow=False,
+        rithmic_qualify_ms=0,
+    )
+    try:
+        pipeline._active_feed = "rithmic"
+        current = now_ms()
+        state = pipeline._feed_states["rithmic"]
+        state.connected = True
+        state.last_heartbeat_at = current
+        state.healthy_since = current - 1_000
+        state.contract = _SOURCE
+        state.bar_ready = True
+        engine = pipeline._source_big_trades["rithmic"]
+        emitted = engine.on_trade(
+            NormalizedTrade(
+                symbol=_SYMBOL,
+                contract=_SYMBOL,
+                time=_BASE,
+                price=2400.1,
+                volume=30,
+                bid=2400.0,
+                ask=2400.1,
+                best_bid=2400.0,
+                best_ask=2400.1,
+                sequence=1,
+                source="rithmic",
+                side=Side.BUY,
+                aggressor_order_id="rithmic-order",
+                received_at=current - 1_000,
+            )
+        )
+        assert emitted == []
+
+        asyncio.run(pipeline.maintenance_tick())
+
+        big_trade_events = [
+            event.payload
+            for event in captured
+            if event.event_type is EventType.BIG_TRADE
+        ]
+        assert len(big_trade_events) == 1
+        assert big_trade_events[0]["source"] == "rithmic"
+    finally:
+        ticks.close()
+        cache.close()
 
 
 @pytest.mark.unit

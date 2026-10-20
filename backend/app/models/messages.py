@@ -72,6 +72,7 @@ __all__ = [
     "TduSignalUpdate",
     "LiquidityUpdate",
     "MarketExplorerUpdate",
+    "TrendAnalyzerUpdate",
     "BigTrade",
     "MarketDataStatus",
     "AlertEvent",
@@ -130,6 +131,7 @@ class EventType(str, Enum):
     TDU_SIGNAL_UPDATE = "tdu_signal_update"
     LIQUIDITY_UPDATE = "liquidity_update"
     MARKET_EXPLORER_UPDATE = "market_explorer_update"
+    TREND_ANALYZER_UPDATE = "trend_analyzer_update"
     BIG_TRADE = "big_trade"
     MARKET_DATA_STATUS = "market_data_status"
     ALERT_EVENT = "alert_event"
@@ -953,6 +955,33 @@ class MarketExplorerUpdate:
             "sellVolume": self.sell_volume,
             "price": self.price,
             "signals": self.signals,
+        }
+        if self.source_contract is not None:
+            out["sourceContract"] = self.source_contract
+        return out
+
+
+@dataclass(slots=True)
+class TrendAnalyzerUpdate:
+    """Changed TTW TrendAnalyzer line points and markers for one pulse."""
+
+    type: ClassVar[str] = "trend_analyzer_update"
+
+    symbol: str
+    contract: str
+    time: CanonicalTimestamp
+    points: list[dict[str, Any]]
+    markers: list[dict[str, Any]]
+    source_contract: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "type": self.type,
+            "symbol": self.symbol,
+            "contract": self.contract,
+            "time": self.time,
+            "points": self.points,
+            "markers": self.markers,
         }
         if self.source_contract is not None:
             out["sourceContract"] = self.source_contract

@@ -34,6 +34,7 @@ export type ChartEventType =
   | "tdu_signal_update"
   | "liquidity_update"
   | "market_explorer_update"
+  | "trend_analyzer_update"
   | "big_trade"
   | "market_data_status"
   | "alert_event"
@@ -205,7 +206,11 @@ export interface TduSignalUpdateMessage {
   deltaDivergence: number;
 }
 
-export type LiquidityEventKind = "relative" | "absolute" | "long_term";
+export type LiquidityEventKind =
+  | "relative"
+  | "absolute"
+  | "long_term"
+  | "long_term_touch";
 export type LiquidityAction =
   | "added"
   | "removed"
@@ -213,7 +218,8 @@ export type LiquidityAction =
   | "start"
   | "update"
   | "end"
-  | "snapshot";
+  | "snapshot"
+  | "touch";
 
 /** Compact signal derived inside Bookmap from full-depth updates. */
 export interface LiquidityUpdateMessage {
@@ -265,6 +271,33 @@ export interface MarketExplorerUpdateMessage {
   sellVolume: number;
   price: number;
   signals: MarketExplorerSignal[];
+}
+
+export interface TrendAnalyzerPoint {
+  instance: 1 | 2;
+  time: number;
+  side: Side;
+  price: number | null;
+}
+
+export interface TrendAnalyzerMarker {
+  instance: 1 | 2;
+  time: number;
+  kind: "new_candle" | "trend_change";
+  side: Side;
+  linePrice: number;
+  marketPrice: number;
+}
+
+/** Changed line points and markers from the TTW-compatible price state machine. */
+export interface TrendAnalyzerUpdateMessage {
+  type: "trend_analyzer_update";
+  symbol: string;
+  contract: string;
+  sourceContract?: string;
+  time: number;
+  points: TrendAnalyzerPoint[];
+  markers: TrendAnalyzerMarker[];
 }
 
 /** Big trade marker (Req 5.2, 15.4, 15.5). */
@@ -473,6 +506,7 @@ export type InboundMessage =
   | TduSignalUpdateMessage
   | LiquidityUpdateMessage
   | MarketExplorerUpdateMessage
+  | TrendAnalyzerUpdateMessage
   | BigTradeMessage
   | MarketDataStatusMessage
   | AlertEventMessage

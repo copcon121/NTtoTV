@@ -186,6 +186,59 @@ def test_record_and_read_range_preserves_nt_time_ticks(store: TickStore):
 
 
 @pytest.mark.unit
+def test_quotes_are_isolated_by_source(store: TickStore) -> None:
+    contract = "GC 12-26"
+    timestamp = _ms(2026, 8, 1, 12)
+    nt_quote = _quote(contract, timestamp, 1)
+    rithmic_quote = _quote(contract, timestamp, 1)
+    rithmic_quote.source = "rithmic"
+
+    store.record_quote(nt_quote)
+    store.record_quote(rithmic_quote)
+
+    assert [q.source for q in store.read_quotes(contract, timestamp, timestamp)] == [
+        "nt"
+    ]
+    assert [
+        q.source
+        for q in store.read_quotes(
+            contract, timestamp, timestamp, source="rithmic"
+        )
+    ] == ["rithmic"]
+    assert sorted(
+        q.source
+        for q in store.read_quotes(contract, timestamp, timestamp, source=None)
+    ) == ["nt", "rithmic"]
+
+@pytest.mark.unit
+def test_read_second_ohlc_preserves_tick_order_and_filters_source(store: TickStore):
+    start = _ms(2026, 8, 1, 12)
+    prices = [100.0, 101.0, 99.0, 100.5]
+    for sequence, price in enumerate(prices, start=1):
+        trade = _trade(
+            "GC 12-26",
+            start + sequence * 10,
+            sequence=sequence,
+            price=price,
+        )
+        trade.source = "bookmap"
+        store.record_trade(trade)
+    ignored = _trade("GC 12-26", start + 50, sequence=9, price=500.0)
+    ignored.source = "nt"
+    store.record_trade(ignored)
+
+    rows = list(
+        store.read_second_ohlc(
+            "GC 12-26",
+            start,
+            start + 999,
+            source="bookmap",
+        )
+    )
+    assert rows == [(start, 100.0, 101.0, 99.0, 100.5)]
+
+
+@pytest.mark.unit
 def test_read_range_accepts_legacy_shard_without_nt_time_ticks(tmp_path: Path):
     store = TickStore(ticks_dir=tmp_path / "ticks")
     contract = "GC 08-26"

@@ -38,6 +38,20 @@ def line(*, sequence: int, time: int, action: str, size: int) -> dict:
     }
 
 
+def touch(*, sequence: int, time: int, volume: int = 5) -> dict:
+    return {
+        **marker(sequence=sequence, time=time, action="touch"),
+        "eventKind": "long_term_touch",
+        "size": volume,
+        "change": volume,
+        "previousSize": 600,
+        "threshold": 500,
+        "domDistance": 2,
+        "lineId": "bid:42001:1000",
+        "lineStartTime": 1_000,
+    }
+
+
 @pytest.mark.unit
 def test_records_markers_and_allows_sequence_reset(tmp_path):
     store = LiquidityStore(tmp_path / "liquidity.sqlite")
@@ -110,8 +124,14 @@ def test_clear_history_removes_only_changed_detector_groups(tmp_path):
             }
         )
         store.record(line(sequence=3, time=3_000, action="start", size=600))
+        store.record(touch(sequence=-1, time=3_100))
 
-        assert store.clear_history(["relative", "long_term"]) == (1, 1)
+        events, _ = store.read("GC", "GC", 0, 10_000)
+        saved_touch = next(event for event in events if event["eventKind"] == "long_term_touch")
+        assert saved_touch["lineId"] == "bid:42001:1000"
+        assert saved_touch["lineStartTime"] == 1_000
+
+        assert store.clear_history(["relative", "long_term"]) == (2, 1)
         events, lines = store.read("GC", "GC", 0, 10_000)
         assert [event["eventKind"] for event in events] == ["absolute"]
         assert lines == []

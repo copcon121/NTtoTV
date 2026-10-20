@@ -322,6 +322,11 @@ function Start-BackendRuntime {
                     NTTOTV_LIVE_TRADING_ENABLED = "1"
                     NTTOTV_INVITE_CODE = "join-9999"
                     NTTOTV_MARKET_DATA_PREFERRED_SOURCE = "bookmap"
+                    NTTOTV_RITHMIC_ENABLED = "1"
+                    NTTOTV_RITHMIC_SHADOW_MODE = "0"
+                    NTTOTV_RITHMIC_SYSTEM = "Rithmic Paper Trading"
+                    NTTOTV_RITHMIC_SYMBOL = "GCZ6"
+                    NTTOTV_RITHMIC_QUALIFY_MS = "65000"
                 }
             } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $paths.State
             Write-Host ("Backend health OK on port {0}: status={1}, version={2}, listenerPid={3}" -f $Port, $health.status, $health.version, $listenerPid)

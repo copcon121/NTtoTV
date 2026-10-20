@@ -36,6 +36,7 @@ from .engines.manual_supertrend_trailing import ManualSupertrendTrailingEngine
 from .engines.reconciliation import ReconciliationEngine
 from .ingest.control_plane import ControlPlaneCoordinator
 from .pipeline import Pipeline
+from .rithmic.service import RithmicMarketDataService
 from .registry.registry import OutboundEvent, WebSocketRegistry
 from .rest.contract_state import ContractStateStore
 from .storage.cache_store import CacheStore
@@ -147,6 +148,15 @@ class AppRuntime:
             manual_trailing_closed_bar_sink=self._on_manual_supertrend_closed_bar,
             enable_tick_fvg_signal=False,
         )
+        self._rithmic_service: RithmicMarketDataService | None = None
+        if s.rithmic_enabled:
+            if not s.rithmic_shadow_mode:
+                logger.info(
+                    "Rithmic arbitration promotion enabled; Bookmap remains preferred"
+                )
+            self._rithmic_service = RithmicMarketDataService.from_settings(
+                s, self._pipeline
+            )
         self._flush_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._retention_task: asyncio.Task[None] | None = None
@@ -173,6 +183,10 @@ class AppRuntime:
     @property
     def pipeline(self) -> Pipeline:
         return self._pipeline
+
+    @property
+    def rithmic_service(self) -> RithmicMarketDataService | None:
+        return self._rithmic_service
 
     @property
     def native_fvg(self) -> FvgSignalEngine:
@@ -273,6 +287,7 @@ class AppRuntime:
     async def start(self) -> None:
         """Start the registry's flush + heartbeat background loops."""
         await asyncio.to_thread(self._auto_mgann_trade.seed, symbol=self._symbol)
+        await asyncio.to_thread(self._seed_trend_analyzer)
         if self._flush_task is None:
             self._flush_task = asyncio.create_task(self._registry.flush_loop())
         if self._heartbeat_task is None:
@@ -287,9 +302,13 @@ class AppRuntime:
             self._reconciliation_task = asyncio.create_task(self._reconciliation_loop())
         if self._poi_scanner is not None:
             self._poi_scanner.start()
+        if self._rithmic_service is not None:
+            await self._rithmic_service.start()
 
     async def stop(self) -> None:
         """Cancel the background loops and close the stores."""
+        if self._rithmic_service is not None:
+            await self._rithmic_service.stop()
         for task in (
             self._flush_task,
             self._heartbeat_task,
@@ -332,6 +351,38 @@ class AppRuntime:
             except Exception as exc:
                 logger.warning("anchored sync failed: %s", exc)
             await asyncio.sleep(2.0)
+
+    def _seed_trend_analyzer(self) -> None:
+        """Warm the TTW state machine and its 24-hour chart history from raw ticks."""
+
+        end = int(datetime.now(timezone.utc).timestamp() * 1_000)
+        # The visible history is 24h.  Add the reference 15 x 5m smoothing
+        # warm-up plus a small bucket-alignment margin before that window.
+        start = end - (24 * 60 + 90) * 60 * 1_000
+        contract = self._contract_state.active_contract(self._symbol)
+        engine = self._pipeline.trend_analyzer
+        try:
+            engine.seed_seconds(
+                self._tick_store.read_second_ohlc(
+                    contract,
+                    start,
+                    end,
+                    source="bookmap",
+                ),
+                through_time=end,
+                source_contract=contract,
+            )
+            history = engine.history(end - 24 * 60 * 60 * 1_000, end)
+            logger.info(
+                "seeded TrendAnalyzer contract=%s points=%s markers=%s",
+                contract,
+                len(history["points"]),
+                len(history["markers"]),
+            )
+        except Exception as exc:
+            # Live Bookmap trades can still warm the engine if a raw shard is
+            # absent or an older SQLite build cannot execute the seed query.
+            logger.warning("TrendAnalyzer seed failed for %s: %s", contract, exc)
 
     async def _on_auto_mgann_closed_bar(self, bar, volume_delta: int | None) -> None:
         await asyncio.to_thread(

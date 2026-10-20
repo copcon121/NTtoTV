@@ -57,6 +57,7 @@ from ..models.messages import (
     Ping,
     QuoteUpdate,
     TduSignalUpdate,
+    TrendAnalyzerUpdate,
     VolumeDeltaUpdate,
 )
 from ..models.timestamp import now_ms
@@ -116,6 +117,7 @@ OutboundMessage = (
     | LiquidityUpdate
     | MarketExplorerUpdate
     | TduSignalUpdate
+    | TrendAnalyzerUpdate
     | BigTrade
     | MarketDataStatus
     | AlertEvent
@@ -201,6 +203,8 @@ def coalescing_subkey(payload: Mapping[str, Any]) -> Hashable:
                 tuple(signal.get("signalId") for signal in signals),
             )
         return ("market_explorer_update", "line")
+    if t == "trend_analyzer_update":
+        return ("trend_analyzer_update", payload.get("time"))
     if t == "market_data_status":
         return ("market_data_status",)
     if t == "alert_event":

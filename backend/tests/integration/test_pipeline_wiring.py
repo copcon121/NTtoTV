@@ -173,6 +173,84 @@ def test_bookmap_liquidity_is_normalized_persisted_and_streamed(tmp_path):
         cache.close()
 
 
+@pytest.mark.integration
+def test_bookmap_trade_at_long_term_line_emits_persisted_touch_bubble(tmp_path):
+    cache = CacheStore(tmp_path / "app.sqlite")
+    tick_store = TickStore(tmp_path / "ticks")
+    liquidity_store = LiquidityStore(tmp_path / "liquidity.sqlite")
+    resolver = ContractResolver(_CANDIDATES)
+    resolver.set_manual_override(_ACTIVE)
+    registry = WebSocketRegistry()
+    captured: list[OutboundEvent] = []
+    registry.enqueue = captured.append  # type: ignore[assignment]
+    pipeline = Pipeline(
+        registry=registry,
+        cache=cache,
+        tick_store=tick_store,
+        liquidity_store=liquidity_store,
+        resolver=resolver,
+        symbol=_SYMBOL,
+    )
+    try:
+        async def run() -> None:
+            await pipeline.on_bookmap_liquidity(
+                {
+                    "contract": _ACTIVE,
+                    "sourceContract": "GCQ6.COMEX@RITHMIC",
+                    "sequence": 17,
+                    "time": _BASE,
+                    "eventKind": "long_term",
+                    "action": "start",
+                    "side": "bid",
+                    "price": 2347.2,
+                    "size": 600,
+                    "previousSize": 600,
+                    "change": 0,
+                    "threshold": 500,
+                    "domDistance": 2,
+                    "strength": 1.2,
+                    "lineId": "bid:23472:1730419200000",
+                    "lineStartTime": _BASE - 4 * 60 * 60 * 1_000,
+                }
+            )
+            touch_trade = _classified_trade(
+                _BASE + 100,
+                2347.2,
+                5,
+                1,
+                Side.SELL,
+            )
+            touch_trade.side = Side.SELL
+            touch_trade.aggressor_order_id = "sell-order-1"
+            touch_trade.execution_start = True
+            touch_trade.execution_end = True
+            await pipeline.on_bookmap_trade(touch_trade)
+
+        asyncio.run(run())
+
+        touches = [
+            event.payload
+            for event in captured
+            if event.payload.get("eventKind") == "long_term_touch"
+        ]
+        assert len(touches) == 1
+        assert touches[0]["action"] == "touch"
+        assert touches[0]["side"] == "bid"
+        assert touches[0]["price"] == 2347.2
+        assert touches[0]["size"] == 5
+        events, _ = liquidity_store.read(
+            _SYMBOL,
+            _SYMBOL,
+            _BASE,
+            _BASE + _MINUTE_MS,
+        )
+        assert [event["eventKind"] for event in events] == ["long_term_touch"]
+    finally:
+        liquidity_store.close()
+        tick_store.close()
+        cache.close()
+
+
 def _bookmap_fvg_payload(
     minute: int,
     open_price: float,

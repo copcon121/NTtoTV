@@ -279,6 +279,48 @@ describe("MGannSwing model", () => {
     ).toMatchObject({ labels: ["#"], confirmed: true });
   });
 
+  it("updates the wave delta number on the repainting swing tail", () => {
+    const bars = internalFiveSwingBars([10, 16, 12, 15, 13, 14], 11);
+    const liveDelta = delta([
+      [30, 10],
+      [31, 20],
+      [32, 30],
+      [33, 40],
+      [34, 50],
+      [35, 60],
+    ]);
+    const calculation = {
+      includeDeveloping: true,
+      closedBarTimes: new Set(bars.slice(0, -1).map((source) => source.time)),
+    };
+
+    const first = buildMgannSwingOverlay(
+      bars,
+      liveDelta,
+      { smartFilter: false },
+      calculation,
+    );
+    expect(first.liveWaveDeltaLabel).toMatchObject({
+      time: 35,
+      kind: "high",
+      value: 210,
+      confirmed: false,
+    });
+
+    liveDelta.set(35, { time: 35, delta: 750, closeDelta: 75 });
+    const updated = buildMgannSwingOverlay(
+      bars,
+      liveDelta,
+      { smartFilter: false },
+      calculation,
+    );
+    expect(updated.liveWaveDeltaLabel).toMatchObject({
+      time: 35,
+      value: 225,
+      confirmed: false,
+    });
+  });
+
   it("keeps SP live when its label is anchored to the prior confirmed pivot", () => {
     const bars = internalFiveSwingBars([10, 16, 12, 15, 11, 14], 12, true);
     const developing = buildMgannSwingOverlay(

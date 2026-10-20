@@ -308,6 +308,14 @@ Operational notes:
   `NTTOTV_LIVE_TRADING_ENABLED=1`, `NTTOTV_INVITE_CODE=join-9999`,
   `NTTOTV_MARKET_DATA_PREFERRED_SOURCE=bookmap`.
   `scripts\Run-BackendProcess.ps1` sets these values before launching uvicorn.
+- The direct Rithmic Paper connector is enabled and may participate in fallback
+  arbitration after 65 seconds of continuous L1 qualification. Source priority
+  remains `Bookmap > Rithmic > NT`; Rithmic is not preferred while Bookmap is
+  healthy. Its credential is stored outside the repo as the current Windows
+  user with DPAPI at
+  `%LOCALAPPDATA%\NTtoTV\rithmic.credential.xml`. Rotate it interactively with
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Set-RithmicCredential.ps1`,
+  then restart the backend.
 - If the machine feels heavy, first run `scripts\Show-RuntimeLoad.ps1`. If port
   `5173` is listening and public `https://gcflowpy.xyz/` is in use, run
   `scripts\Stop-FrontendDev.ps1` to stop Vite/node/esbuild. Do not kill
@@ -554,6 +562,10 @@ After the latest fixes:
 - Realtime OHLCV, BigTrade, volume delta, and footprint prefer Bookmap; NT stays
   warm and owns those shared keys only while selected as the automatic fallback.
   FVG grading remains driven by finalized NT native footprint rows.
+- Direct Rithmic Paper L1/L2/MBO is enabled as the first fallback below Bookmap.
+  It becomes selectable only after a 65-second continuous warm-up, and falls
+  back to NT on disconnect/staleness. Credentials are DPAPI-encrypted outside
+  the repository; do not put them in source, logs, or runtime-state JSON.
 - Bookmap active source is GCZ6 (`GC 12-26`); NT active source is `GC 12-26`;
   chart cache key is `GC`.
 - Last-only file `export data\GC 12-26-5-6.Last.txt` was imported into chart

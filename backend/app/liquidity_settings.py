@@ -23,7 +23,7 @@ DEFAULT_LIQUIDITY_SETTINGS: dict[str, bool | int] = {
     "longTermTrigger": 500,
     "longTermDomFrom": 1,
     "longTermDomTo": 80,
-    "longTermMinAgeSeconds": 30,
+    "longTermMinAgeSeconds": 4 * 60 * 60,
 }
 
 _BOOLEAN_FIELDS = {
@@ -41,7 +41,7 @@ _INTEGER_LIMITS: dict[str, tuple[int, int]] = {
     "longTermTrigger": (1, 1_000_000),
     "longTermDomFrom": (0, 5_000),
     "longTermDomTo": (0, 5_000),
-    "longTermMinAgeSeconds": (1, 3_600),
+    "longTermMinAgeSeconds": (1, 24 * 60 * 60),
 }
 
 
@@ -121,7 +121,12 @@ def liquidity_control_frame(settings: dict[str, bool | int]) -> dict[str, Any]:
     return {
         "type": "liquidity_config",
         **settings,
-        "longTermMinAgeMs": int(settings["longTermMinAgeSeconds"]) * 1_000,
+        # Publish every qualifying line from its birth. The configured age is
+        # now a classification boundary: the chart shows a new line as
+        # short-term and promotes it to long-term only after it survives for
+        # longTermMinAgeSeconds. The backend touch engine applies that same
+        # boundary before emitting a long-term touch alert.
+        "longTermMinAgeMs": 0,
         "longTermUpdateSize": 50,
         "longTermUpdateIntervalMs": 500,
     }

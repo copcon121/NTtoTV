@@ -83,26 +83,64 @@ def _event_matches_settings(
     settings: dict[str, bool | int],
 ) -> bool:
     kind = str(event.get("eventKind"))
-    prefix = "relative" if kind == "relative" else "absolute" if kind == "absolute" else None
+    if kind == "long_term_touch":
+        if not bool(settings["longTermEnabled"]) or int(
+            event.get("threshold") or 0
+        ) != int(settings["longTermTrigger"]):
+            return False
+        distance = event.get("domDistance")
+        line_start_time = event.get("lineStartTime")
+        return (
+            distance is not None
+            and int(settings["longTermDomFrom"]) <= int(distance)
+            <= int(settings["longTermDomTo"])
+            and line_start_time is not None
+            and int(event.get("time") or 0) - int(line_start_time)
+            >= int(settings["longTermMinAgeSeconds"]) * 1_000
+        )
+    prefix = (
+        "relative"
+        if kind == "relative"
+        else "absolute" if kind == "absolute" else None
+    )
     if prefix is None or not bool(settings[f"{prefix}Enabled"]):
-        return False
-    if int(event.get("threshold") or 0) != int(settings[f"{prefix}Trigger"]):
         return False
     distance = event.get("domDistance")
     if distance is None:
         return False
-    return int(settings[f"{prefix}DomFrom"]) <= int(distance) <= int(
-        settings[f"{prefix}DomTo"]
+    if not (
+        int(settings[f"{prefix}DomFrom"])
+        <= int(distance)
+        <= int(settings[f"{prefix}DomTo"])
+    ):
+        return False
+    trigger = int(settings[f"{prefix}Trigger"])
+    if kind == "relative":
+        return int(event.get("change") or 0) >= trigger
+    return int(event.get("size") or 0) >= trigger > int(
+        event.get("previousSize") or 0
     )
 
 
 def _line_matches_settings(
     line: dict,
     settings: dict[str, bool | int],
+    _evaluation_time: int,
 ) -> bool:
-    return bool(settings["longTermEnabled"]) and int(
+    if not bool(settings["longTermEnabled"]) or int(
         line.get("threshold") or 0
-    ) == int(settings["longTermTrigger"])
+    ) != int(settings["longTermTrigger"]):
+        return False
+    distance = line.get("domDistance")
+    if distance is None or not (
+        int(settings["longTermDomFrom"])
+        <= int(distance)
+        <= int(settings["longTermDomTo"])
+    ):
+        return False
+    # Return candidates of every age. The client renders them as short-term
+    # until they cross the configurable long-term age boundary.
+    return True
 
 
 @router.get("/liquidity/settings")
@@ -126,17 +164,18 @@ async def update_liquidity_settings(request: Request) -> dict:
         raise bad_request(str(exc), field=exc.field)
     changed_kinds = _changed_history_kinds(current, updated)
     save_liquidity_settings(cache, updated)
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is not None:
+        runtime.pipeline.configure_liquidity(updated)
     sent = await get_bookmap_control(request.app).send_liquidity_settings(updated)
-    store = get_liquidity_store(request)
-    deleted_events, deleted_lines = store.clear_history(changed_kinds)
-    pruned_events, pruned_lines = store.prune_to_settings(updated)
     return {
         "settings": updated,
         "sentToBookmap": sent,
-        "historyCleared": changed_kinds,
+        "historyCleared": [],
+        "historyRefiltered": changed_kinds,
         "historyDeleted": {
-            "events": deleted_events + pruned_events,
-            "lines": deleted_lines + pruned_lines,
+            "events": 0,
+            "lines": 0,
         },
     }
 
@@ -162,7 +201,9 @@ async def liquidity_history(
     events, lines = store.read(symbol, contract, start, end, limit=limit)
     settings = load_liquidity_settings(get_cache(request))
     events = [event for event in events if _event_matches_settings(event, settings)]
-    lines = [line for line in lines if _line_matches_settings(line, settings)]
+    lines = [
+        line for line in lines if _line_matches_settings(line, settings, end)
+    ]
     bucket_ms = 60_000 if tf == "1m" else 300_000
     for event in events:
         event["bucketTime"] = event["time"] - event["time"] % bucket_ms

@@ -51,8 +51,13 @@ from .engines.breakout_box_engine import BreakoutBoxEngine, BreakoutBoxEvent
 from .engines.contract_resolver import ContractResolver
 from .engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
 from .engines.fvg_signal_engine import FvgSignalEngine
+from .engines.long_term_liquidity_touch import (
+    LongTermLiquidityTouch,
+    LongTermLiquidityTouchEngine,
+)
 from .engines.market_volume_stop import MarketVolumeStopEngine
 from .engines.tdu_signal_engine import TduSignalEngine
+from .engines.trend_analyzer import TrendAnalyzerBatch, TrendAnalyzerEngine
 from .engines.session_calendar import TF_MS, is_gc_session_open, timeframe_bucket_start
 from .engines.volume_delta_engine import VolumeDeltaEngine, VolumeDeltaMode
 from .engines.alert_engine import AlertEngine, MarketContext
@@ -75,6 +80,7 @@ from .models.messages import (
     OHLCVBar,
     QuoteUpdate,
     TduSignalUpdate,
+    TrendAnalyzerUpdate,
     VolumeDeltaUpdate,
 )
 from .registry.registry import OutboundEvent, WebSocketRegistry
@@ -92,6 +98,7 @@ from .storage.records import (
 )
 from .models.timestamp import now_ms
 from .market_explorer_settings import load_market_explorer_settings
+from .liquidity_settings import load_liquidity_settings
 from .storage.tick_store import TickStore
 
 logger = logging.getLogger(__name__)
@@ -125,6 +132,7 @@ class _FeedState:
     event_lags: deque[int] = field(default_factory=lambda: deque(maxlen=10_000))
     transport_lags: deque[int] = field(default_factory=lambda: deque(maxlen=10_000))
     bar_close_lags: deque[int] = field(default_factory=lambda: deque(maxlen=120))
+    details: dict = field(default_factory=dict)
 
 
 def _percentile(values: deque[int], percentile: float) -> int | None:
@@ -246,6 +254,7 @@ class Pipeline:
         control_plane: ControlPlaneCoordinator | None = None,
         validator: SequenceValidator | None = None,
         enable_tick_fvg_signal: bool = True,
+        trend_analyzer: TrendAnalyzerEngine | None = None,
     ) -> None:
         self._settings = settings or default_settings
         self._registry = registry
@@ -261,6 +270,7 @@ class Pipeline:
         self._source_bars: dict[str, BarAggregator] = {
             "nt": self._bars,
             "bookmap": BarAggregator(),
+            "rithmic": BarAggregator(),
         }
         # One VolumeDelta engine per supported timeframe so the lower
         # delta-candle series follows the charted timeframe (Req 13). The
@@ -272,6 +282,7 @@ class Pipeline:
         self._source_vds: dict[str, dict[str, VolumeDeltaEngine]] = {
             "nt": {},
             "bookmap": {},
+            "rithmic": {},
         }
         for source, engines in self._source_vds.items():
             for tf in SUPPORTED_TFS:
@@ -282,15 +293,19 @@ class Pipeline:
                         timeframe=tf,
                         mode=seed.mode if seed is not None else VolumeDeltaMode.DELTA,
                         min_trade_size=seed.min_trade_size if seed is not None else 0,
-                        zero_baseline=source == "bookmap",
+                        zero_baseline=source != "nt",
                     )
         # Compatibility alias for focused tests and replay code that injects the
         # historical NT engine.  Live routing uses the source-scoped map above.
         self._vds = self._source_vds["nt"]
-        self._source_footprints = {"bookmap": FootprintEngine()}
+        self._source_footprints = {
+            "bookmap": FootprintEngine(),
+            "rithmic": FootprintEngine(),
+        }
         self._source_tdu = {
             "nt": TduSignalEngine(),
             "bookmap": TduSignalEngine(),
+            "rithmic": TduSignalEngine(),
         }
         self._fvg = fvg_signal or FvgSignalEngine()
         self._native_fvg_signal = native_fvg_signal
@@ -302,12 +317,19 @@ class Pipeline:
         self._source_big_trades: dict[str, BigTradeEngine | BookmapBigTradeEngine] = {
             "nt": self._bt,
             "bookmap": BookmapBigTradeEngine(),
+            "rithmic": BookmapBigTradeEngine(),
         }
         self._breakout = breakout_box or BreakoutBoxEngine()
         self._alerts = alert_engine or AlertEngine(cache)
         self._market_explorer = MarketVolumeStopEngine(
             load_market_explorer_settings(cache),
             tick_size=0.1,
+        )
+        self._trend_analyzer = trend_analyzer or TrendAnalyzerEngine(tick_size=0.1)
+        liquidity_settings = load_liquidity_settings(cache)
+        self._long_term_liquidity_touch = LongTermLiquidityTouchEngine(
+            tick_size=0.1,
+            min_age_ms=int(liquidity_settings["longTermMinAgeSeconds"]) * 1_000,
         )
         self._basis = basis_engine
         self._send_alert_text = (
@@ -325,6 +347,11 @@ class Pipeline:
             emit_degraded=self._emit_status,
         )
         self._bookmap_coordinator = IngestionCoordinator(
+            tick_store,
+            SequenceValidator(),
+            emit_degraded=self._emit_status,
+        )
+        self._rithmic_coordinator = IngestionCoordinator(
             tick_store,
             SequenceValidator(),
             emit_degraded=self._emit_status,
@@ -355,10 +382,17 @@ class Pipeline:
         self._active_feed: str | None = "nt" if self._preferred_source == "nt" else None
         self._source_switched_at: int | None = started if self._active_feed else None
         self._source_switch_reason: str | None = "startup"
-        self._feed_states = {"nt": _FeedState(), "bookmap": _FeedState()}
+        self._feed_states = {
+            "nt": _FeedState(),
+            "bookmap": _FeedState(),
+            "rithmic": _FeedState(
+                details={"shadow": True, "selectable": False}
+            ),
+        }
         self._source_snapshots: dict[str, dict[str, list[BarUpdate]]] = {
             "nt": {},
             "bookmap": {},
+            "rithmic": {},
         }
         self._bookmap_minute_bars: dict[int, BarUpdate] = {}
         self._bookmap_minute_deltas: dict[int, VolumeDeltaUpdate] = {}
@@ -404,8 +438,17 @@ class Pipeline:
     def market_explorer(self) -> MarketVolumeStopEngine:
         return self._market_explorer
 
+    @property
+    def trend_analyzer(self) -> TrendAnalyzerEngine:
+        return self._trend_analyzer
+
     def configure_market_explorer(self, settings: dict) -> None:
         self._market_explorer.configure(settings)
+
+    def configure_liquidity(self, settings: dict) -> None:
+        self._long_term_liquidity_touch.set_min_age_ms(
+            int(settings["longTermMinAgeSeconds"]) * 1_000
+        )
 
     def set_control_plane(self, control_plane: ControlPlaneCoordinator | None) -> None:
         """Bind (or clear) the control-plane coordinator.
@@ -547,6 +590,103 @@ class Pipeline:
         )
         self._note_feed_heartbeat("nt", now)
 
+    async def on_rithmic_connect(self, details: dict) -> None:
+        """Start a fresh direct-feed generation without changing ownership."""
+
+        state = self._feed_states["rithmic"]
+        state.last_heartbeat_at = None
+        state.last_event_at = None
+        state.healthy_since = None
+        state.connected = True
+        state.bar_ready = False
+        state.orderflow_gap_pending = False
+        state.details = {
+            **details,
+            "shadow": self._settings.rithmic_shadow_mode,
+            "selectable": not self._settings.rithmic_shadow_mode,
+        }
+        state.contract = str(details.get("contract") or "") or None
+        self._rithmic_coordinator = IngestionCoordinator(
+            self._tick_store,
+            SequenceValidator(),
+            emit_degraded=self._emit_status,
+        )
+        self._note_feed_heartbeat("rithmic", now_ms())
+
+    async def on_rithmic_disconnect(self, reason: str | None = None) -> None:
+        state = self._feed_states["rithmic"]
+        state.connected = False
+        state.healthy_since = None
+        state.bar_ready = False
+        if reason:
+            state.details["lastError"] = reason
+
+    async def on_rithmic_health(self, details: dict) -> None:
+        state = self._feed_states["rithmic"]
+        state.details.update(details)
+        _shadow = self._settings.rithmic_shadow_mode
+        state.details["shadow"] = _shadow
+        state.details["selectable"] = not _shadow
+        state.contract = str(details.get("contract") or state.contract or "") or None
+        subscriptions = details.get("subscriptions") or {}
+        state.bar_ready = bool(subscriptions.get("l1", False))
+        if bool(details.get("mboSynchronized", False)):
+            state.orderflow_gap_pending = False
+        self._note_feed_heartbeat("rithmic", now_ms())
+
+    async def on_rithmic_depth(
+        self, details: dict, *, sequence_gap: bool = False
+    ) -> None:
+        state = self._feed_states["rithmic"]
+        state.details.update(details)
+        # Service diagnostics are transport-level and deliberately default to
+        # shadow. Arbitration policy belongs to runtime settings, so never let
+        # a depth/status refresh overwrite the configured promotion state.
+        state.details["shadow"] = self._settings.rithmic_shadow_mode
+        state.details["selectable"] = not self._settings.rithmic_shadow_mode
+        self._note_feed_heartbeat("rithmic", now_ms())
+        if sequence_gap:
+            state.sequence_gaps += 1
+            state.orderflow_gap_pending = True
+        elif bool(details.get("mboSynchronized", False)):
+            state.orderflow_gap_pending = False
+
+    async def on_rithmic_trade(self, trade: NormalizedTrade) -> None:
+        """Record and warm direct-feed engines while Bookmap remains owner."""
+
+        received = now_ms()
+        trade.source = "rithmic"
+        trade.received_at = received
+        decision = await self._rithmic_coordinator.on_trade(trade)
+        if not decision.accepted:
+            return
+        state = self._feed_states["rithmic"]
+        if decision.outcome is SeqOutcome.GAP:
+            state.sequence_gaps += 1
+            state.orderflow_gap_pending = True
+        state.contract = trade.contract
+        self._note_feed_event("rithmic", trade.time, trade.bridge_time, received)
+        if trade.contract != self._active_contract():
+            return
+        await self._run_trade_engines(
+            _trade_for_contract(trade, self._chart_contract()), source="rithmic"
+        )
+
+    async def on_rithmic_quote(self, quote: NormalizedQuote) -> None:
+        """Record source-isolated direct BBO; never broadcast while shadowed."""
+
+        received = now_ms()
+        quote.source = "rithmic"
+        quote.received_at = received
+        decision = await self._rithmic_coordinator.on_quote(quote)
+        if not decision.accepted:
+            return
+        state = self._feed_states["rithmic"]
+        if decision.outcome is SeqOutcome.GAP:
+            state.sequence_gaps += 1
+        state.contract = quote.contract
+        self._note_feed_event("rithmic", quote.time, quote.bridge_time, received)
+
     async def on_bookmap_connect(self, connection_id: str) -> None:
         """Start a fresh Bookmap connection generation and sequence scope."""
         self._bookmap_connection_id = connection_id
@@ -568,6 +708,7 @@ class Pipeline:
         engine = self._source_big_trades["bookmap"]
         if isinstance(engine, BookmapBigTradeEngine):
             engine.reset_pending()
+        self._long_term_liquidity_touch.reset()
         self._market_explorer.reset()
 
     def is_current_bookmap_connection(self, connection_id: str) -> bool:
@@ -607,9 +748,13 @@ class Pipeline:
         state.contract = trade.contract
         if trade.contract != self._active_contract():
             return
+        await self._publish_long_term_liquidity_touches(
+            self._long_term_liquidity_touch.on_trade(trade)
+        )
         # Market Explorer is a Bookmap-native calculation in TTW. Feed it the
         # accepted aggressor trade before normalizing the chart contract.
         self._market_explorer.on_trade(trade)
+        await self._publish_trend_analyzer(self._trend_analyzer.on_trade(trade))
         await self._evaluate_source_selection(received)
         chart_trade = _trade_for_contract(trade, self._chart_contract())
         if self._basis is not None and self._active_feed == "bookmap":
@@ -638,6 +783,10 @@ class Pipeline:
         )
         self._note_feed_heartbeat("bookmap", received)
         event_time = int(payload.get("time") or received)
+        if state.contract == self._active_contract():
+            await self._publish_trend_analyzer(
+                self._trend_analyzer.advance(event_time)
+            )
         bridge_time = payload.get("bridgeTime")
         self._record_latency(
             state,
@@ -862,10 +1011,53 @@ class Pipeline:
         )
         if update.event_kind == "long_term" and not update.line_id:
             raise ValueError("long_term liquidity event requires lineId")
+        self._long_term_liquidity_touch.on_liquidity(update)
         wire = update.to_dict()
         if self._liquidity_store is not None:
             await asyncio.to_thread(self._liquidity_store.record, wire)
         await self._enqueue(OutboundEvent.from_message(update))
+
+    async def _publish_trend_analyzer(
+        self, batches: list[TrendAnalyzerBatch]
+    ) -> None:
+        for batch in batches:
+            update = TrendAnalyzerUpdate(
+                symbol=self._symbol,
+                contract=self._chart_contract(),
+                source_contract=self._trend_analyzer.source_contract,
+                time=batch.time,
+                points=[point.to_dict() for point in batch.points],
+                markers=[marker.to_dict() for marker in batch.markers],
+            )
+            await self._enqueue(OutboundEvent.from_message(update))
+
+    async def _publish_long_term_liquidity_touches(
+        self, touches: list[LongTermLiquidityTouch]
+    ) -> None:
+        for touch in touches:
+            update = LiquidityUpdate(
+                symbol=self._symbol,
+                contract=self._chart_contract(),
+                source_contract=touch.source_contract,
+                sequence=touch.sequence,
+                time=touch.time,
+                event_kind="long_term_touch",
+                action="touch",
+                side=touch.side,
+                price=touch.price,
+                size=touch.volume,
+                previous_size=touch.line_size,
+                change=touch.volume,
+                threshold=touch.threshold,
+                dom_distance=touch.dom_distance,
+                strength=float(touch.volume),
+                line_id=touch.line_id,
+                line_start_time=touch.line_start_time,
+                snapshot=False,
+            )
+            if self._liquidity_store is not None:
+                await asyncio.to_thread(self._liquidity_store.record, update.to_dict())
+            await self._enqueue(OutboundEvent.from_message(update))
 
     def _reconcile_bookmap_orderflow(
         self, payload: dict, bar_update: BarUpdate
@@ -1907,6 +2099,13 @@ class Pipeline:
         ):
             nt.connected = False
             nt.healthy_since = None
+        rithmic = self._feed_states["rithmic"]
+        if (
+            rithmic.last_heartbeat_at is not None
+            and now - rithmic.last_heartbeat_at > self._settings.rithmic_stale_ms
+        ):
+            rithmic.connected = False
+            rithmic.healthy_since = None
 
         await self._evaluate_source_selection(now)
 
@@ -1924,15 +2123,25 @@ class Pipeline:
             )
             await self._enqueue(OutboundEvent.from_message(update))
 
-        engine = self._source_big_trades["bookmap"]
-        if isinstance(engine, BookmapBigTradeEngine):
+        await self._publish_long_term_liquidity_touches(
+            self._long_term_liquidity_touch.flush_idle(now)
+        )
+
+        # Direct feeds group exchange prints by aggressor order id. Flush idle
+        # groups for both feeds so a quiet final group is not stranded. Only
+        # the currently active source may publish shared chart keys.
+        for source in ("bookmap", "rithmic"):
+            engine = self._source_big_trades[source]
+            if not isinstance(engine, BookmapBigTradeEngine):
+                continue
             emitted = engine.flush_idle(now)
             published: list[BigTrade] = []
             if emitted:
                 async with self._derived_source_lock:
-                    if self._active_feed == "bookmap":
+                    if self._active_feed == source:
                         for bt in emitted:
                             bt.contract = self._chart_contract()
+                            bt.source = source
                         await asyncio.to_thread(
                             self._persist_derived_batch, [], [], [], emitted
                         )
@@ -1952,7 +2161,7 @@ class Pipeline:
                         best_bid=None,
                         best_ask=None,
                         sequence=bt.trade_id,
-                        source="bookmap",
+                        source=source,
                         side=bt.side,
                     ),
                     closed_bar=None,
@@ -1962,19 +2171,24 @@ class Pipeline:
 
         # Periodically flush the forming (in-progress) footprint bar to the
         # cache so the REST delta-profile endpoint reflects the current minute
-        # between closed-bar writes. Only the active bookmap feed owns the
-        # shared chart footprint cache keys.
+        # between closed-bar writes. Only the active direct feed owns the shared
+        # chart footprint cache keys.
+        footprint_source = (
+            self._active_feed
+            if self._active_feed in ("bookmap", "rithmic")
+            else None
+        )
         if (
-            self._active_feed == "bookmap"
+            footprint_source is not None
             and now - self._last_footprint_flush >= _FOOTPRINT_FORMING_FLUSH_MS
         ):
             self._last_footprint_flush = now
-            fp_engine = self._source_footprints.get("bookmap")
+            fp_engine = self._source_footprints.get(footprint_source)
             if fp_engine is not None:
                 forming = fp_engine.current_update(self._chart_contract())
                 if forming is not None:
                     async with self._derived_source_lock:
-                        if self._active_feed == "bookmap":
+                        if self._active_feed == footprint_source:
                             await asyncio.to_thread(
                                 self._persist_derived_batch,
                                 [],
@@ -1998,6 +2212,10 @@ class Pipeline:
         state.healthy_since = None
         state.bar_ready = False
         state.orderflow_gap_pending = True
+        await self._publish_long_term_liquidity_touches(
+            self._long_term_liquidity_touch.flush_all()
+        )
+        self._long_term_liquidity_touch.reset()
         await self._evaluate_source_selection(now_ms())
 
     def market_data_status_message(self) -> MarketDataStatus:
@@ -2113,7 +2331,7 @@ class Pipeline:
     def _feed_status_dict(self, source: str, state: _FeedState, now: int) -> dict:
         lags = list(state.event_lags)
         transport = list(state.transport_lags)
-        return {
+        result = {
             "connected": state.connected,
             "eligible": self._feed_eligible(source, now),
             "contract": state.contract,
@@ -2150,6 +2368,8 @@ class Pipeline:
             "sequenceGaps": state.sequence_gaps,
             "orderflowGapPending": state.orderflow_gap_pending,
         }
+        result.update(state.details)
+        return result
 
     def _note_feed_heartbeat(self, source: str, received_at: int) -> None:
         state = self._feed_states[source]
@@ -2190,7 +2410,11 @@ class Pipeline:
         stale_ms = (
             self._settings.bookmap_stale_ms
             if source == "bookmap"
-            else self._settings.nt_feed_stale_ms
+            else (
+                self._settings.rithmic_stale_ms
+                if source == "rithmic"
+                else self._settings.nt_feed_stale_ms
+            )
         )
         if now - state.last_heartbeat_at > stale_ms:
             return False
@@ -2203,6 +2427,15 @@ class Pipeline:
                 and state.bar_ready
                 and healthy_ms >= self._settings.bookmap_qualify_ms
             )
+        if source == "rithmic":
+            healthy_ms = (
+                0 if state.healthy_since is None else now - state.healthy_since
+            )
+            return (
+                state.contract == self._active_contract()
+                and state.bar_ready
+                and healthy_ms >= self._settings.rithmic_qualify_ms
+            )
         return state.contract in (None, self._active_contract())
 
     async def _evaluate_source_selection(self, now: int) -> None:
@@ -2213,11 +2446,21 @@ class Pipeline:
 
         bookmap_ok = self._feed_eligible("bookmap", now)
         nt_ok = self._feed_eligible("nt", now)
+        # Rithmic participates in arbitration only when shadow mode is off.
+        rithmic_ok = (
+            not self._settings.rithmic_shadow_mode
+            and self._feed_eligible("rithmic", now)
+        )
         bookmap = self._feed_states["bookmap"]
+
+        # Priority: bookmap > rithmic > nt
+        best_non_bookmap = "rithmic" if rithmic_ok else ("nt" if nt_ok else None)
 
         if self._active_feed is None:
             if bookmap_ok:
                 await self._switch_feed("bookmap", "bookmap_cold_start", now)
+            elif rithmic_ok:
+                await self._switch_feed("rithmic", "rithmic_cold_start", now)
             elif now - self._source_started_at >= self._settings.market_data_cold_start_grace_ms and nt_ok:
                 await self._switch_feed("nt", "bookmap_cold_start_timeout", now)
             return
@@ -2225,10 +2468,23 @@ class Pipeline:
         if self._active_feed == "bookmap":
             if not bookmap_ok:
                 await self._switch_feed(
-                    "nt" if nt_ok else None,
+                    best_non_bookmap,
                     "bookmap_stale",
                     now,
                 )
+            return
+
+        if self._active_feed == "rithmic":
+            held_ms = 0 if self._source_switched_at is None else now - self._source_switched_at
+            stable_ms = 0 if bookmap.healthy_since is None else now - bookmap.healthy_since
+            if (
+                bookmap_ok
+                and held_ms >= self._settings.market_data_min_hold_ms
+                and stable_ms >= self._settings.bookmap_recover_ms
+            ):
+                await self._switch_feed("bookmap", "bookmap_recovered_from_rithmic", now)
+            elif not rithmic_ok:
+                await self._switch_feed(best_non_bookmap, "rithmic_stale", now)
             return
 
         if self._active_feed == "nt":
@@ -2241,6 +2497,8 @@ class Pipeline:
             ):
                 reason = "bookmap_recovered" if nt_ok else "nt_stale"
                 await self._switch_feed("bookmap", reason, now)
+            elif rithmic_ok and held_ms >= self._settings.market_data_min_hold_ms:
+                await self._switch_feed("rithmic", "rithmic_promoted_from_nt", now)
 
     async def _switch_feed(
         self, source: str | None, reason: str, switched_at: int

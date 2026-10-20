@@ -159,6 +159,20 @@ def quote_event_key(
     return _event_key("quote", sequence, time, bid, ask, bid_size, ask_size)
 
 
+def _stored_quote_event_key(q: NormalizedQuote) -> str:
+    legacy = quote_event_key(
+        q.sequence,
+        q.time,
+        q.bid,
+        q.ask,
+        q.bid_size,
+        q.ask_size,
+    )
+    if q.source == "nt":
+        return legacy
+    return _event_key("quote-source", q.source, legacy)
+
+
 # Each day shard contains a ``ticks`` table and a ``quotes`` table. (Req 7.2)
 TICK_SHARD_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ticks (
@@ -195,6 +209,9 @@ CREATE TABLE IF NOT EXISTS quotes (
     ask        REAL,
     bid_size   INTEGER,
     ask_size   INTEGER,
+    source     TEXT    NOT NULL DEFAULT 'nt',
+    bridge_time INTEGER,
+    received_at INTEGER,
     PRIMARY KEY (event_key)
 );
 CREATE INDEX IF NOT EXISTS idx_quotes_time ON quotes(time);
@@ -222,11 +239,12 @@ _INSERT_TRADE_SQL = (
 
 _INSERT_QUOTE_SQL = (
     "INSERT INTO quotes "
-    "(event_key, sequence, time, bid, ask, bid_size, ask_size) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+    "(event_key, sequence, time, bid, ask, bid_size, ask_size, source, bridge_time, received_at) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
     "ON CONFLICT(event_key) DO UPDATE SET "
     "sequence=excluded.sequence, time=excluded.time, bid=excluded.bid, "
-    "ask=excluded.ask, bid_size=excluded.bid_size, ask_size=excluded.ask_size"
+    "ask=excluded.ask, bid_size=excluded.bid_size, ask_size=excluded.ask_size, "
+    "source=excluded.source, bridge_time=excluded.bridge_time, received_at=excluded.received_at"
 )
 
 
@@ -343,20 +361,16 @@ class TickStore:
     @staticmethod
     def _quote_params(q: NormalizedQuote) -> tuple[object, ...]:
         return (
-            quote_event_key(
-                q.sequence,
-                q.time,
-                q.bid,
-                q.ask,
-                q.bid_size,
-                q.ask_size,
-            ),
+            _stored_quote_event_key(q),
             q.sequence,
             q.time,
             q.bid,
             q.ask,
             q.bid_size,
             q.ask_size,
+            q.source,
+            q.bridge_time,
+            q.received_at,
         )
 
     # -- reads ----------------------------------------------------------------
@@ -472,8 +486,89 @@ class TickStore:
                     otc=bool(row["otc"]),
                 )
 
+    def read_second_ohlc(
+        self,
+        contract: str,
+        frm: int,
+        to: int,
+        *,
+        source: str | None = "bookmap",
+    ) -> Iterator[tuple[int, float, float, float, float]]:
+        """Yield exact one-second trade OHLC rows for fast engine warm-up.
+
+        Open/close follow the raw ``(time, sequence, event_key)`` ordering while
+        high/low cover every accepted trade in the second.  Aggregation happens
+        inside SQLite so a 24-hour replay does not materialize every tick in
+        Python memory.
+        """
+
+        if frm > to:
+            return
+
+        day = from_canonical_ms(frm).date()
+        end_day = from_canonical_ms(to).date()
+        while day <= end_day:
+            path = self.shard_path(contract, day)
+            day += timedelta(days=1)
+            if not path.exists():
+                continue
+            conn = connect_reader(path, busy_timeout_ms=self._busy_timeout_ms)
+            try:
+                columns = self._table_columns(conn, "ticks")
+                has_source = "source" in columns
+                if source is not None and not has_source and source != "nt":
+                    continue
+                source_clause = "" if source is None or not has_source else " AND source = ?"
+                params: tuple[object, ...] = (
+                    (frm, to)
+                    if source is None or not has_source
+                    else (frm, to, source)
+                )
+                rows = conn.execute(
+                    """
+                    WITH ranked AS (
+                        SELECT
+                            CAST(time / 1000 AS INTEGER) * 1000 AS bucket,
+                            price,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY CAST(time / 1000 AS INTEGER)
+                                ORDER BY time ASC, sequence ASC, event_key ASC
+                            ) AS first_rank,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY CAST(time / 1000 AS INTEGER)
+                                ORDER BY time DESC, sequence DESC, event_key DESC
+                            ) AS last_rank
+                        FROM ticks
+                        WHERE time BETWEEN ? AND ?
+                    """
+                    + source_clause
+                    + """
+                    )
+                    SELECT
+                        bucket,
+                        MAX(CASE WHEN first_rank=1 THEN price END) AS open,
+                        MAX(price) AS high,
+                        MIN(price) AS low,
+                        MAX(CASE WHEN last_rank=1 THEN price END) AS close
+                    FROM ranked
+                    GROUP BY bucket
+                    ORDER BY bucket ASC
+                    """,
+                    params,
+                ).fetchall()
+            finally:
+                conn.close()
+            for row in rows:
+                yield (
+                    int(row["bucket"]),
+                    float(row["open"]),
+                    float(row["high"]),
+                    float(row["low"]),
+                    float(row["close"]),
+                )
+
     def read_quotes(
-        self, contract: str, frm: int, to: int
+        self, contract: str, frm: int, to: int, *, source: str | None = "nt"
     ) -> Iterator[NormalizedQuote]:
         """Yield recorded quotes for ``contract`` in ``[frm, to]`` (inclusive).
 
@@ -494,11 +589,27 @@ class TickStore:
                 continue
             conn = connect_reader(path, busy_timeout_ms=self._busy_timeout_ms)
             try:
+                columns = self._table_columns(conn, "quotes")
+                has_source = "source" in columns
+                if source is not None and not has_source and source != "nt":
+                    continue
+                source_expr = "source" if has_source else "'nt' AS source"
+                bridge_expr = (
+                    "bridge_time" if "bridge_time" in columns else "NULL AS bridge_time"
+                )
+                received_expr = (
+                    "received_at" if "received_at" in columns else "NULL AS received_at"
+                )
+                source_clause = "" if source is None or not has_source else " AND source = ?"
+                params: tuple[object, ...] = (
+                    (frm, to) if source is None or not has_source else (frm, to, source)
+                )
                 rows = conn.execute(
-                    "SELECT sequence, time, bid, ask, bid_size, ask_size "
-                    "FROM quotes WHERE time BETWEEN ? AND ? "
+                    "SELECT sequence, time, bid, ask, bid_size, ask_size, "
+                    f"{source_expr}, {bridge_expr}, {received_expr} "
+                    f"FROM quotes WHERE time BETWEEN ? AND ?{source_clause} "
                     "ORDER BY time ASC, sequence ASC, event_key ASC",
-                    (frm, to),
+                    params,
                 ).fetchall()
             finally:
                 conn.close()
@@ -512,6 +623,9 @@ class TickStore:
                     bid_size=row["bid_size"] if row["bid_size"] is not None else 0,
                     ask_size=row["ask_size"] if row["ask_size"] is not None else 0,
                     sequence=row["sequence"],
+                    source=row["source"],
+                    bridge_time=row["bridge_time"],
+                    received_at=row["received_at"],
                 )
 
     # -- retention ------------------------------------------------------------
@@ -656,6 +770,7 @@ class TickStore:
             self._migrate_legacy_sequence_primary_keys(writer)
             self._migrate_tick_time_ticks(writer)
             self._migrate_tick_source_fields(writer)
+            self._migrate_quote_source_fields(writer)
             self._writers[path] = writer
             return writer
 
@@ -763,6 +878,24 @@ class TickStore:
                 if name not in existing:
                     conn.execute(f"ALTER TABLE ticks ADD COLUMN {name} {ddl}")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ticks_source_time ON ticks(source, time)")
+
+        writer.write(op)
+
+    def _migrate_quote_source_fields(self, writer: SingleWriter) -> None:
+        columns = {
+            "source": "TEXT NOT NULL DEFAULT 'nt'",
+            "bridge_time": "INTEGER",
+            "received_at": "INTEGER",
+        }
+
+        def op(conn) -> None:
+            existing = self._table_columns(conn, "quotes")
+            for name, ddl in columns.items():
+                if name not in existing:
+                    conn.execute(f"ALTER TABLE quotes ADD COLUMN {name} {ddl}")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_quotes_source_time ON quotes(source, time)"
+            )
 
         writer.write(op)
 

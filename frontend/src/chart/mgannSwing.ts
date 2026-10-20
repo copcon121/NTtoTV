@@ -72,6 +72,8 @@ export interface MgannSwingWaveDeltaLabel {
   price: number;
   kind: MgannSwingPivotKind;
   value: number;
+  /** False while the destination pivot is still part of the repainting tail. */
+  confirmed: boolean;
 }
 
 export interface MgannSwingWaveDeltaBox {
@@ -114,6 +116,8 @@ export interface MgannSwingOverlay {
   liveLine: MgannSwingLinePoint[];
   signals: MgannSwingSignal[];
   waveDeltaLabels: MgannSwingWaveDeltaLabel[];
+  /** Realtime delta at the endpoint of the dashed, still-repainting wave. */
+  liveWaveDeltaLabel?: MgannSwingWaveDeltaLabel;
   waveDeltaBoxes: MgannSwingWaveDeltaBox[];
   waveDeltaValues: number[];
   impulseWaves: MgannSwingImpulseWave[];
@@ -896,7 +900,25 @@ function buildWaveDeltaLabels(
     price: wave.end.price,
     kind: wave.end.kind,
     value: wave.delta,
+    confirmed: true,
   }));
+}
+
+function buildLiveWaveDeltaLabel(
+  waves: readonly MgannSwingWave[],
+  hasDevelopingPivot: boolean,
+): MgannSwingWaveDeltaLabel | undefined {
+  if (!hasDevelopingPivot) return undefined;
+  const wave = waves[waves.length - 1];
+  if (wave === undefined) return undefined;
+  return {
+    id: `mgann-delta-live:${wave.end.kind}:${wave.end.time}`,
+    time: wave.end.time,
+    price: wave.end.price,
+    kind: wave.end.kind,
+    value: wave.delta,
+    confirmed: false,
+  };
 }
 
 function buildWaveDeltaBoxes(
@@ -980,6 +1002,12 @@ export function buildMgannSwingOverlay(
       waves,
       impulseWaves,
       normalized.waveDeltaNumbersImpulseOnly,
+    ),
+    // Keep the current number visible even when historical labels are filtered
+    // to impulse waves. It is the live preview for the dashed swing tail.
+    liveWaveDeltaLabel: buildLiveWaveDeltaLabel(
+      calculationWaves,
+      firstDevelopingIndex >= 0,
     ),
     waveDeltaBoxes: buildWaveDeltaBoxes(waves),
     waveDeltaValues: buildWaveDeltaValues(bars, deltaByTime, pivots),
