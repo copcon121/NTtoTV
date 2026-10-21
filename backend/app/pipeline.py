@@ -39,7 +39,7 @@ import inspect
 import logging
 import math
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Awaitable, Callable
 
 from .config import Settings, settings as default_settings
@@ -49,6 +49,7 @@ from .engines.big_trade_engine import BigTradeEngine
 from .engines.bookmap_big_trade_engine import BookmapBigTradeEngine
 from .engines.breakout_box_engine import BreakoutBoxEngine, BreakoutBoxEvent
 from .engines.contract_resolver import ContractResolver
+from .engines.depth_liquidity import DepthLiquidityEvent, DepthLiquidityTracker
 from .engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
 from .engines.fvg_signal_engine import FvgSignalEngine
 from .engines.long_term_liquidity_touch import (
@@ -110,6 +111,7 @@ __all__ = ["Pipeline"]
 # alerts share a clock.
 _ALERT_BAR_TF = FOOTPRINT_TIMEFRAME
 _SOURCE_SWITCH_QUIET_MS = 15_000
+_LIQUIDITY_LINE_TOUCH_GRACE_MS = 5_000
 # How often the forming (in-progress) footprint bar is flushed to the cache so
 # the REST delta-profile endpoint (session-daily histogram) stays current
 # between minute closes without writing on every trade.
@@ -327,10 +329,33 @@ class Pipeline:
         )
         self._trend_analyzer = trend_analyzer or TrendAnalyzerEngine(tick_size=0.1)
         liquidity_settings = load_liquidity_settings(cache)
+        self._liquidity_settings = dict(liquidity_settings)
         self._long_term_liquidity_touch = LongTermLiquidityTouchEngine(
             tick_size=0.1,
             min_age_ms=int(liquidity_settings["longTermMinAgeSeconds"]) * 1_000,
         )
+        self._rithmic_liquidity = DepthLiquidityTracker(
+            liquidity_settings,
+            tick_size=0.1,
+            source_prefix="rithmic",
+        )
+        self._source_liquidity_lines: dict[str, dict[str, LiquidityUpdate]] = {
+            "bookmap": {},
+            "rithmic": {},
+        }
+        # Correlate exact-price executions with a nearby line end.  Depth only
+        # tells us that displayed size disappeared; the trade proves price
+        # actually reached the line.  Keep both callback orders because depth
+        # and trade channels can arrive a few milliseconds apart.
+        self._recent_liquidity_trade_touches: dict[
+            tuple[str, str, int], int
+        ] = {}
+        self._pending_liquidity_line_ends: dict[
+            tuple[str, str], LiquidityUpdate
+        ] = {}
+        self._recent_native_relative_removals: dict[
+            tuple[str, str, int, int, int], int
+        ] = {}
         self._basis = basis_engine
         self._send_alert_text = (
             send_alert_text
@@ -408,6 +433,7 @@ class Pipeline:
         self._derived_source_lock = asyncio.Lock()
         self._last_market_status_emit = 0
         self._last_footprint_flush = 0
+        self._last_rithmic_liquidity_snapshot = 0
         self._hydrate_engine_state_from_cache()
 
     # -- wiring seams ----------------------------------------------------------
@@ -446,9 +472,11 @@ class Pipeline:
         self._market_explorer.configure(settings)
 
     def configure_liquidity(self, settings: dict) -> None:
+        self._liquidity_settings = dict(settings)
         self._long_term_liquidity_touch.set_min_age_ms(
             int(settings["longTermMinAgeSeconds"]) * 1_000
         )
+        self._rithmic_liquidity.configure(settings, now_ms())
 
     def set_control_plane(self, control_plane: ControlPlaneCoordinator | None) -> None:
         """Bind (or clear) the control-plane coordinator.
@@ -611,6 +639,9 @@ class Pipeline:
             SequenceValidator(),
             emit_degraded=self._emit_status,
         )
+        self._rithmic_liquidity.reset()
+        self._source_liquidity_lines["rithmic"].clear()
+        self._clear_liquidity_touch_state("rithmic")
         self._note_feed_heartbeat("rithmic", now_ms())
 
     async def on_rithmic_disconnect(self, reason: str | None = None) -> None:
@@ -620,6 +651,11 @@ class Pipeline:
         state.bar_ready = False
         if reason:
             state.details["lastError"] = reason
+        if self._active_feed == "rithmic":
+            await self._publish_long_term_liquidity_touches(
+                self._long_term_liquidity_touch.flush_all()
+            )
+        await self._evaluate_source_selection(now_ms())
 
     async def on_rithmic_health(self, details: dict) -> None:
         state = self._feed_states["rithmic"]
@@ -635,7 +671,11 @@ class Pipeline:
         self._note_feed_heartbeat("rithmic", now_ms())
 
     async def on_rithmic_depth(
-        self, details: dict, *, sequence_gap: bool = False
+        self,
+        details: dict,
+        *,
+        sequence_gap: bool = False,
+        book_update: dict | None = None,
     ) -> None:
         state = self._feed_states["rithmic"]
         state.details.update(details)
@@ -650,6 +690,10 @@ class Pipeline:
             state.orderflow_gap_pending = True
         elif bool(details.get("mboSynchronized", False)):
             state.orderflow_gap_pending = False
+        if book_update is not None:
+            event_time = int(book_update.get("time") or now_ms())
+            events = self._rithmic_liquidity.on_book_delta(book_update, event_time)
+            await self._publish_rithmic_liquidity(events)
 
     async def on_rithmic_trade(self, trade: NormalizedTrade) -> None:
         """Record and warm direct-feed engines while Bookmap remains owner."""
@@ -668,6 +712,11 @@ class Pipeline:
         self._note_feed_event("rithmic", trade.time, trade.bridge_time, received)
         if trade.contract != self._active_contract():
             return
+        if self._active_feed == "rithmic":
+            await self._note_liquidity_trade_touch("rithmic", trade)
+            await self._publish_long_term_liquidity_touches(
+                self._long_term_liquidity_touch.on_trade(trade)
+            )
         await self._run_trade_engines(
             _trade_for_contract(trade, self._chart_contract()), source="rithmic"
         )
@@ -708,7 +757,10 @@ class Pipeline:
         engine = self._source_big_trades["bookmap"]
         if isinstance(engine, BookmapBigTradeEngine):
             engine.reset_pending()
-        self._long_term_liquidity_touch.reset()
+        self._source_liquidity_lines["bookmap"].clear()
+        self._clear_liquidity_touch_state("bookmap")
+        if self._active_feed in (None, "bookmap"):
+            self._long_term_liquidity_touch.reset()
         self._market_explorer.reset()
 
     def is_current_bookmap_connection(self, connection_id: str) -> bool:
@@ -748,9 +800,11 @@ class Pipeline:
         state.contract = trade.contract
         if trade.contract != self._active_contract():
             return
-        await self._publish_long_term_liquidity_touches(
-            self._long_term_liquidity_touch.on_trade(trade)
-        )
+        if connection_id is None or self._active_feed in (None, "bookmap"):
+            await self._note_liquidity_trade_touch("bookmap", trade)
+            await self._publish_long_term_liquidity_touches(
+                self._long_term_liquidity_touch.on_trade(trade)
+            )
         # Market Explorer is a Bookmap-native calculation in TTW. Feed it the
         # accepted aggressor trade before normalizing the chart contract.
         self._market_explorer.on_trade(trade)
@@ -1011,11 +1065,69 @@ class Pipeline:
         )
         if update.event_kind == "long_term" and not update.line_id:
             raise ValueError("long_term liquidity event requires lineId")
+        await self._publish_liquidity_update(
+            "bookmap",
+            update,
+            # Direct method calls are the replay/test seam. Live websocket
+            # frames always carry a connection id and obey source ownership.
+            allow_unselected=connection_id is None,
+        )
+
+    async def _publish_rithmic_liquidity(
+        self, events: list[DepthLiquidityEvent]
+    ) -> None:
+        for event in events:
+            update = LiquidityUpdate(
+                symbol=self._symbol,
+                contract=self._chart_contract(),
+                source_contract=self._active_contract(),
+                sequence=event.sequence,
+                time=event.time,
+                event_kind=event.event_kind,
+                action=event.action,
+                side=event.side,
+                price=event.price,
+                size=event.size,
+                previous_size=event.previous_size,
+                change=event.change,
+                threshold=event.threshold,
+                dom_distance=event.dom_distance,
+                strength=event.strength,
+                line_id=event.line_id,
+                line_start_time=event.line_start_time,
+                snapshot=event.snapshot,
+            )
+            await self._publish_liquidity_update("rithmic", update)
+
+    async def _publish_liquidity_update(
+        self,
+        source: str,
+        update: LiquidityUpdate,
+        *,
+        allow_unselected: bool = False,
+    ) -> None:
+        lines = self._source_liquidity_lines[source]
+        if update.event_kind == "long_term" and update.line_id:
+            if update.action == "end":
+                lines.pop(update.line_id, None)
+            else:
+                lines[update.line_id] = update
+        if self._active_feed != source and not allow_unselected:
+            return
         self._long_term_liquidity_touch.on_liquidity(update)
+        if update.event_kind == "relative" and update.action == "removed":
+            self._remember_native_relative_removal(source, update)
         wire = update.to_dict()
         if self._liquidity_store is not None:
             await asyncio.to_thread(self._liquidity_store.record, wire)
         await self._enqueue(OutboundEvent.from_message(update))
+        if (
+            update.event_kind == "long_term"
+            and update.action == "end"
+            and update.line_id
+            and update.change > 0
+        ):
+            await self._note_liquidity_line_end(source, update)
 
     async def _publish_trend_analyzer(
         self, batches: list[TrendAnalyzerBatch]
@@ -1058,6 +1170,147 @@ class Pipeline:
             if self._liquidity_store is not None:
                 await asyncio.to_thread(self._liquidity_store.record, update.to_dict())
             await self._enqueue(OutboundEvent.from_message(update))
+
+    async def _note_liquidity_trade_touch(
+        self, source: str, trade: NormalizedTrade
+    ) -> None:
+        """Remember an exact-price execution and resolve depth-first line ends."""
+
+        if trade.side is None or trade.volume <= 0:
+            return
+        resting_side = "bid" if trade.side.value == "sell" else "ask"
+        price_ticks = round(float(trade.price) / 0.1)
+        trade_time = int(trade.time)
+        self._recent_liquidity_trade_touches[
+            (source, resting_side, price_ticks)
+        ] = trade_time
+        self._prune_liquidity_touch_state(trade_time)
+
+        matches = [
+            (key, ended)
+            for key, ended in self._pending_liquidity_line_ends.items()
+            if key[0] == source
+            and ended.side == resting_side
+            and round(float(ended.price) / 0.1) == price_ticks
+            and 0 <= trade_time - int(ended.time) <= _LIQUIDITY_LINE_TOUCH_GRACE_MS
+        ]
+        for key, ended in matches:
+            self._pending_liquidity_line_ends.pop(key, None)
+            await self._publish_touched_line_removal(source, ended)
+
+    async def _note_liquidity_line_end(
+        self, source: str, update: LiquidityUpdate
+    ) -> None:
+        """Resolve trade-first line ends or retain them for late trade callbacks."""
+
+        if not update.line_id:
+            return
+        end_key = (source, update.line_id)
+        self._pending_liquidity_line_ends[end_key] = update
+        end_time = int(update.time)
+        self._prune_liquidity_touch_state(end_time)
+        price_ticks = round(float(update.price) / 0.1)
+        touched_at = self._recent_liquidity_trade_touches.get(
+            (source, update.side, price_ticks)
+        )
+        if (
+            touched_at is None
+            or not 0 <= end_time - touched_at <= _LIQUIDITY_LINE_TOUCH_GRACE_MS
+        ):
+            return
+        self._pending_liquidity_line_ends.pop(end_key, None)
+        await self._publish_touched_line_removal(source, update)
+
+    async def _publish_touched_line_removal(
+        self, source: str, ended: LiquidityUpdate
+    ) -> None:
+        """Render a touched line disappearance through the Relative marker style."""
+
+        settings = self._liquidity_settings
+        if (
+            not bool(settings["relativeEnabled"])
+            or not bool(settings["longTermEnabled"])
+            or ended.change <= 0
+            or not ended.line_id
+        ):
+            return
+        price_ticks = round(float(ended.price) / 0.1)
+        native_key = (
+            source,
+            ended.side,
+            price_ticks,
+            int(ended.time),
+            int(ended.change),
+        )
+        if native_key in self._recent_native_relative_removals:
+            return
+        relative_trigger = max(1, int(settings["relativeTrigger"]))
+        marker = replace(
+            ended,
+            event_kind="relative",
+            action="removed",
+            # A line-linked Relative marker keeps the line detector threshold
+            # so history can be refiltered when line settings change.
+            threshold=int(ended.threshold),
+            strength=float(ended.change) / relative_trigger,
+            snapshot=False,
+        )
+        if self._liquidity_store is not None:
+            await asyncio.to_thread(self._liquidity_store.record, marker.to_dict())
+        await self._enqueue(OutboundEvent.from_message(marker))
+
+    def _remember_native_relative_removal(
+        self, source: str, update: LiquidityUpdate
+    ) -> None:
+        key = (
+            source,
+            update.side,
+            round(float(update.price) / 0.1),
+            int(update.time),
+            int(update.change),
+        )
+        self._recent_native_relative_removals[key] = int(update.time)
+        self._prune_liquidity_touch_state(int(update.time))
+
+    def _prune_liquidity_touch_state(self, at: int) -> None:
+        cutoff = int(at) - _LIQUIDITY_LINE_TOUCH_GRACE_MS
+        self._recent_liquidity_trade_touches = {
+            key: touched_at
+            for key, touched_at in self._recent_liquidity_trade_touches.items()
+            if touched_at >= cutoff
+        }
+        self._pending_liquidity_line_ends = {
+            key: ended
+            for key, ended in self._pending_liquidity_line_ends.items()
+            if int(ended.time) >= cutoff
+        }
+        self._recent_native_relative_removals = {
+            key: event_at
+            for key, event_at in self._recent_native_relative_removals.items()
+            if event_at >= cutoff
+        }
+
+    def _clear_liquidity_touch_state(self, source: str | None = None) -> None:
+        if source is None:
+            self._recent_liquidity_trade_touches.clear()
+            self._pending_liquidity_line_ends.clear()
+            self._recent_native_relative_removals.clear()
+            return
+        self._recent_liquidity_trade_touches = {
+            key: touched_at
+            for key, touched_at in self._recent_liquidity_trade_touches.items()
+            if key[0] != source
+        }
+        self._pending_liquidity_line_ends = {
+            key: ended
+            for key, ended in self._pending_liquidity_line_ends.items()
+            if key[0] != source
+        }
+        self._recent_native_relative_removals = {
+            key: event_at
+            for key, event_at in self._recent_native_relative_removals.items()
+            if key[0] != source
+        }
 
     def _reconcile_bookmap_orderflow(
         self, payload: dict, bar_update: BarUpdate
@@ -2127,6 +2380,17 @@ class Pipeline:
             self._long_term_liquidity_touch.flush_idle(now)
         )
 
+        # Bookmap sends 30-second snapshots so unchanged lines stay attached to
+        # the live edge of /lq. Mirror that cadence for direct Rithmic depth.
+        if (
+            self._active_feed == "rithmic"
+            and now - self._last_rithmic_liquidity_snapshot >= 30_000
+        ):
+            self._last_rithmic_liquidity_snapshot = now
+            await self._publish_rithmic_liquidity(
+                self._rithmic_liquidity.snapshots(now)
+            )
+
         # Direct feeds group exchange prints by aggressor order id. Flush idle
         # groups for both feeds so a quiet final group is not stranded. Only
         # the currently active source may publish shared chart keys.
@@ -2212,10 +2476,11 @@ class Pipeline:
         state.healthy_since = None
         state.bar_ready = False
         state.orderflow_gap_pending = True
-        await self._publish_long_term_liquidity_touches(
-            self._long_term_liquidity_touch.flush_all()
-        )
-        self._long_term_liquidity_touch.reset()
+        if self._active_feed in (None, "bookmap"):
+            await self._publish_long_term_liquidity_touches(
+                self._long_term_liquidity_touch.flush_all()
+            )
+            self._long_term_liquidity_touch.reset()
         await self._evaluate_source_selection(now_ms())
 
     def market_data_status_message(self) -> MarketDataStatus:
@@ -2507,9 +2772,13 @@ class Pipeline:
             old = self._active_feed
             if old == source:
                 return
+            if old in self._source_liquidity_lines:
+                await self._end_liquidity_source(old, switched_at)
+            self._clear_liquidity_touch_state()
             self._active_feed = source
             self._source_switched_at = switched_at
             self._source_switch_reason = reason
+            self._long_term_liquidity_touch.reset()
             await asyncio.to_thread(
                 self._cache.record_market_source_switch,
                 self._symbol,
@@ -2574,6 +2843,41 @@ class Pipeline:
                 await self._enqueue(OutboundEvent.from_message(update))
             for update in tdu_snapshots:
                 await self._enqueue(OutboundEvent.from_message(update))
+            await self._activate_liquidity_source(source, switched_at)
+
+    async def _end_liquidity_source(self, source: str, at: int) -> None:
+        lines = list(self._source_liquidity_lines[source].values())
+        for line in lines:
+            ended = replace(
+                line,
+                time=int(at),
+                action="end",
+                previous_size=line.size,
+                change=0,
+                snapshot=False,
+            )
+            await self._publish_liquidity_update(source, ended)
+
+    async def _activate_liquidity_source(self, source: str, at: int) -> None:
+        if source == "rithmic":
+            await self._publish_rithmic_liquidity(
+                self._rithmic_liquidity.snapshots(at)
+            )
+            self._last_rithmic_liquidity_snapshot = int(at)
+            return
+        if source != "bookmap":
+            return
+        lines = list(self._source_liquidity_lines["bookmap"].values())
+        for line in lines:
+            snapshot = replace(
+                line,
+                time=int(at),
+                action="snapshot",
+                previous_size=line.size,
+                change=0,
+                snapshot=True,
+            )
+            await self._publish_liquidity_update("bookmap", snapshot)
 
     def _remember_source_updates(
         self, source: str, updates: list[BarUpdate]

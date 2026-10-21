@@ -361,6 +361,34 @@ describe("Long-term liquidity touch bubbles", () => {
 });
 
 describe("liquidity history refiltering", () => {
+  it("keeps a touched-line removal even outside the normal Relative gate", () => {
+    const touchedLineRemoval = {
+      sequence: 18,
+      time: 2_000,
+      eventKind: "relative" as const,
+      action: "removed" as const,
+      side: "bid" as const,
+      price: 4190,
+      size: 0,
+      previousSize: 12,
+      change: 12,
+      threshold: 500,
+      domDistance: 0,
+      strength: 0.24,
+      lineId: "bid:41900:1000",
+      lineStartTime: 1_000,
+    };
+
+    expect(liquidityEventMatchesSettings(
+      touchedLineRemoval,
+      longTermSettings,
+    )).toBe(true);
+    expect(liquidityEventMatchesSettings(
+      touchedLineRemoval,
+      { ...longTermSettings, relativeEnabled: false },
+    )).toBe(false);
+  });
+
   it("uses measured relative change instead of the detector's old trigger", () => {
     const historical = {
       sequence: 1,

@@ -1,4 +1,4 @@
-"""REST history for the standalone Bookmap liquidity chart."""
+"""REST history for the standalone depth-liquidity chart."""
 
 from __future__ import annotations
 
@@ -83,6 +83,20 @@ def _event_matches_settings(
     settings: dict[str, bool | int],
 ) -> bool:
     kind = str(event.get("eventKind"))
+    if kind == "relative" and event.get("lineId"):
+        # A line-linked Relative marker means price traded at a displayed
+        # short/long-term line immediately before that line disappeared.  It
+        # intentionally bypasses the normal Relative DOM/size gate: the line
+        # detector already qualified the level, and the exact-price trade is
+        # the additional trigger.
+        return (
+            bool(settings["relativeEnabled"])
+            and bool(settings["longTermEnabled"])
+            and str(event.get("action")) == "removed"
+            and int(event.get("change") or 0) > 0
+            and int(event.get("threshold") or 0)
+            == int(settings["longTermTrigger"])
+        )
     if kind == "long_term_touch":
         if not bool(settings["longTermEnabled"]) or int(
             event.get("threshold") or 0

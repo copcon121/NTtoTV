@@ -76,7 +76,7 @@ user explicitly asks.
 - `storage/`: SQLite stores.
   - `tick_store.py`: raw tick/quote day shards under `backend/data/ticks`.
   - `cache_store.py`, `keyed_store.py`: derived cache DB `backend/data/app.sqlite`.
-  - `liquidity_store.py`: compact Bookmap depth signals in
+- `liquidity_store.py`: compact active-source depth signals in
     `backend/data/liquidity.sqlite`; raw full-depth frames are never stored.
   - `profile_store.py`, `alert_store.py`: profiles/alerts in cache DB.
 - `registry/`: `/ws/chart` endpoint and throttled websocket registry.
@@ -190,8 +190,10 @@ Current NinjaScript behavior:
   Footprint. Its exchange-side trades update delta/footprint tick by tick; full
   1m ladder snapshots reconcile reconnects and transport gaps.
 - The Bookmap bridge reduces full-depth updates in-process into TTW-style
-  Relative/Absolute events and persistent long-term liquidity lines. Only those
-  compact signals cross `/ws/bookmap`; `/lq` displays them over M1/M5 candles.
+  Relative/Absolute events and persistent long-term liquidity lines. Direct
+  Rithmic L2 is reduced to the same compact contract inside the backend when
+  Rithmic owns arbitration. Raw full-depth frames are never stored; `/lq`
+  follows the active Bookmap/Rithmic source over M1/M5 candles.
 - The native chart indicator supplies finalized 1m delta/footprint only while NT
   is the selected fallback. Default behavior posts realtime closed bars, not
   historical reloads, to avoid a large startup burst.

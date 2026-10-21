@@ -31,6 +31,8 @@ class RithmicBookState:
         self.mbo_sequence_gaps = 0
         self._l2_pending_bids: dict[float, dict[str, int | float]] | None = None
         self._l2_pending_asks: dict[float, dict[str, int | float]] | None = None
+        self._l2_batch_before_bids: dict[float, dict[str, int | float]] | None = None
+        self._l2_batch_before_asks: dict[float, dict[str, int | float]] | None = None
         self._mbo_snapshot_orders: dict[str, MboOrder] | None = None
         self._mbo_snapshot_sequence: int | None = None
         self._mbo_buffer: list[dict[str, Any]] = []
@@ -45,6 +47,8 @@ class RithmicBookState:
         self.last_mbo_sequence = None
         self._l2_pending_bids = None
         self._l2_pending_asks = None
+        self._l2_batch_before_bids = None
+        self._l2_batch_before_asks = None
         self._mbo_snapshot_orders = None
         self._mbo_snapshot_sequence = None
         self._mbo_buffer.clear()
@@ -80,44 +84,126 @@ class RithmicBookState:
             else:
                 target[price] = level
 
-    def apply_l2(self, message: dict[str, Any]) -> None:
-        """Apply a complete or chunked ``ResponseMarketDataUpdate`` image."""
+    def apply_l2(self, message: dict[str, Any]) -> dict[str, Any] | None:
+        """Apply an L2 frame and return one atomic compact level delta.
+
+        Multipart BEGIN/MIDDLE/END frames do not expose their partial state.
+        The returned rows contain only prices whose displayed size changed, so
+        the downstream liquidity detector never needs a copy of the full book
+        for each high-frequency SOLO update.
+        """
 
         update_type = str(message.get("updateType") or "unknown")
         incoming_bids = self._level_map(list(message.get("bids") or []))
         incoming_asks = self._level_map(list(message.get("asks") or []))
         if update_type in {"clear", "no_book"}:
+            before_bids = dict(self.bids)
+            before_asks = dict(self.asks)
             self.bids.clear()
             self.asks.clear()
             self._l2_pending_bids = None
             self._l2_pending_asks = None
-            return
+            self._l2_batch_before_bids = None
+            self._l2_batch_before_asks = None
+            return self._book_delta(
+                before_bids,
+                before_asks,
+                self.bids,
+                self.asks,
+                message,
+            )
         if update_type == "begin":
+            self._l2_batch_before_bids = dict(self.bids)
+            self._l2_batch_before_asks = dict(self.asks)
             self._l2_pending_bids = dict(self.bids)
             self._l2_pending_asks = dict(self.asks)
             self._apply_level_patch(self._l2_pending_bids, incoming_bids)
             self._apply_level_patch(self._l2_pending_asks, incoming_asks)
-            return
+            return None
         if update_type in {"middle", "end"} and self._l2_pending_bids is not None:
             self._apply_level_patch(self._l2_pending_bids, incoming_bids)
             assert self._l2_pending_asks is not None
             self._apply_level_patch(self._l2_pending_asks, incoming_asks)
             if update_type == "end":
+                before_bids = self._l2_batch_before_bids or {}
+                before_asks = self._l2_batch_before_asks or {}
                 self.bids = self._l2_pending_bids
                 self.asks = self._l2_pending_asks
                 self._l2_pending_bids = None
                 self._l2_pending_asks = None
-            return
+                self._l2_batch_before_bids = None
+                self._l2_batch_before_asks = None
+                return self._book_delta(
+                    before_bids,
+                    before_asks,
+                    self.bids,
+                    self.asks,
+                    message,
+                )
+            return None
         if update_type == "snapshot":
+            before_bids = self.bids
+            before_asks = self.asks
             self.bids = incoming_bids
             self.asks = incoming_asks
+            delta = self._book_delta(
+                before_bids,
+                before_asks,
+                self.bids,
+                self.asks,
+                message,
+            )
         else:
             # SOLO is an atomic incremental update. BEGIN/MIDDLE/END use a copy
             # and swap so readers never observe a partial batch.
+            before_bids = {
+                price: self.bids.get(price, {}) for price in incoming_bids
+            }
+            before_asks = {
+                price: self.asks.get(price, {}) for price in incoming_asks
+            }
             self._apply_level_patch(self.bids, incoming_bids)
             self._apply_level_patch(self.asks, incoming_asks)
+            after_bids = {price: self.bids.get(price, {}) for price in incoming_bids}
+            after_asks = {price: self.asks.get(price, {}) for price in incoming_asks}
+            delta = self._book_delta(
+                before_bids,
+                before_asks,
+                after_bids,
+                after_asks,
+                message,
+            )
         self._l2_pending_bids = None
         self._l2_pending_asks = None
+        self._l2_batch_before_bids = None
+        self._l2_batch_before_asks = None
+        return delta
+
+    def _book_delta(
+        self,
+        before_bids: dict[float, dict[str, int | float]],
+        before_asks: dict[float, dict[str, int | float]],
+        after_bids: dict[float, dict[str, int | float]],
+        after_asks: dict[float, dict[str, int | float]],
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
+        def changed(
+            before: dict[float, dict[str, int | float]],
+            after: dict[float, dict[str, int | float]],
+        ) -> list[dict[str, int | float]]:
+            rows: list[dict[str, int | float]] = []
+            for price in sorted(set(before).union(after)):
+                old_size = int(before.get(price, {}).get("size", 0))
+                new_size = int(after.get(price, {}).get("size", 0))
+                if old_size != new_size:
+                    rows.append({"price": price, "size": new_size})
+            return rows
+
+        return {
+            "time": int(message.get("timeMs") or 0),
+            "bids": changed(before_bids, after_bids),
+            "asks": changed(before_asks, after_asks),
+        }
 
     def begin_mbo_snapshot(self) -> None:
         self._mbo_snapshot_orders = {}

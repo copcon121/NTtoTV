@@ -25,6 +25,8 @@ LOGIN_REQUEST = 10
 LOGIN_RESPONSE = 11
 LOGOUT_REQUEST = 12
 LOGOUT_RESPONSE = 13
+REFERENCE_DATA_REQUEST = 14
+REFERENCE_DATA_RESPONSE = 15
 SYSTEM_INFO_REQUEST = 16
 SYSTEM_INFO_RESPONSE = 17
 HEARTBEAT_REQUEST = 18
@@ -37,6 +39,11 @@ FORCED_LOGOUT = 77
 # Ticker Plant request/response templates.
 MARKET_DATA_REQUEST = 100
 MARKET_DATA_RESPONSE = 101
+GET_INSTRUMENT_BY_UNDERLYING_REQUEST = 102
+GET_INSTRUMENT_BY_UNDERLYING_RESPONSE = 103
+GET_INSTRUMENT_BY_UNDERLYING_KEYS_RESPONSE = 104
+SEARCH_SYMBOLS_REQUEST = 109
+SEARCH_SYMBOLS_RESPONSE = 110
 DBO_SNAPSHOT_REQUEST = 115
 DBO_SNAPSHOT_RESPONSE = 116
 DBO_UPDATES_REQUEST = 117
@@ -297,6 +304,60 @@ def build_dbo_snapshot_request(*, symbol: str, exchange: str) -> bytes:
     )
 
 
+def build_get_instrument_by_underlying_request(
+    *,
+    underlying_symbol: str,
+    exchange: str,
+    expiration_date: str | None = None,
+    user_message: str = "nttotv-option-probe",
+) -> bytes:
+    """Request option/reference instruments without opening another session."""
+
+    fields = [
+        field_string(132760, user_message),
+        field_string(101026, underlying_symbol),
+        field_string(110101, exchange),
+    ]
+    if expiration_date:
+        fields.append(field_string(100067, expiration_date))
+    return _request(GET_INSTRUMENT_BY_UNDERLYING_REQUEST, fields)
+
+
+def build_search_symbols_request(
+    *,
+    search_text: str,
+    exchange: str,
+    product_code: str | None = None,
+    instrument_type: int = 2,
+    user_message: str = "nttotv-option-search",
+) -> bytes:
+    """Search symbols; instrument type 2 is FUTURE_OPTION in R|Protocol."""
+
+    fields = [
+        field_string(132760, user_message),
+        field_string(120008, search_text),
+        field_string(110101, exchange),
+        field_varint(110116, instrument_type),
+        field_varint(155008, 2),  # Pattern.CONTAINS
+    ]
+    if product_code:
+        fields.append(field_string(100749, product_code))
+    return _request(SEARCH_SYMBOLS_REQUEST, fields)
+
+
+def build_reference_data_request(
+    *, symbol: str, exchange: str, user_message: str = "nttotv-reference-data"
+) -> bytes:
+    return _request(
+        REFERENCE_DATA_REQUEST,
+        (
+            field_string(132760, user_message),
+            field_string(110100, symbol),
+            field_string(110101, exchange),
+        ),
+    )
+
+
 def _side(value: int | None) -> str | None:
     return {1: "buy", 2: "sell"}.get(value)
 
@@ -416,6 +477,9 @@ def decode_message(data: bytes) -> dict[str, Any]:
     if template is None:
         raise ProtocolDecodeError("R|Protocol frame has no template_id")
     base: dict[str, Any] = {"templateId": template}
+    user_messages = _strings(fields, 132760)
+    if user_messages:
+        base["userMessages"] = user_messages
     rp_codes = _strings(fields, 132766)
     if rp_codes:
         base["rpCode"] = rp_codes
@@ -448,6 +512,49 @@ def decode_message(data: bytes) -> dict[str, Any]:
             else "mbo_subscription"
         )
         base["ok"] = rp_codes == ["0"]
+    elif template == GET_INSTRUMENT_BY_UNDERLYING_KEYS_RESPONSE:
+        base.update(
+            type="option_underlying_keys",
+            underlyingSymbols=_strings(fields, 101026),
+            exchanges=_strings(fields, 110101),
+            expirationDates=_strings(fields, 100067),
+        )
+    elif template == SEARCH_SYMBOLS_RESPONSE:
+        base.update(
+            type="symbol_search",
+            symbol=_first_string(fields, 110100),
+            exchange=_first_string(fields, 110101),
+            symbolName=_first_string(fields, 100003),
+            productCode=_first_string(fields, 100749),
+            instrumentType=_first_string(fields, 110116),
+            expirationDate=_first_string(fields, 100067),
+            requestHandlerCode=_strings(fields, 132764),
+        )
+    elif template in (
+        GET_INSTRUMENT_BY_UNDERLYING_RESPONSE,
+        REFERENCE_DATA_RESPONSE,
+    ):
+        base.update(
+            type=(
+                "option_instrument"
+                if template == GET_INSTRUMENT_BY_UNDERLYING_RESPONSE
+                else "reference_data"
+            ),
+            symbol=_first_string(fields, 110100),
+            exchange=_first_string(fields, 110101),
+            exchangeSymbol=_first_string(fields, 110114),
+            symbolName=_first_string(fields, 100003),
+            productCode=_first_string(fields, 100749),
+            instrumentType=_first_string(fields, 110116),
+            underlyingSymbol=_first_string(fields, 101026),
+            expirationDate=_first_string(fields, 100067),
+            currency=_first_string(fields, 154382),
+            putCall=_first_string(fields, 100109),
+            strikePrice=_first_double(fields, 100066),
+            minPriceChange=_first_double(fields, 154386),
+            singlePointValue=_first_double(fields, 154389),
+            requestHandlerCode=_strings(fields, 132764),
+        )
     elif template == DBO_SNAPSHOT_RESPONSE:
         base.update(
             type="mbo_snapshot",

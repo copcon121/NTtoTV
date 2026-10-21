@@ -331,7 +331,7 @@ export interface MarketDataStatusMessage {
   type: "market_data_status";
   symbol: string;
   time: number;
-  activeSource?: "bookmap" | "nt" | null;
+  activeSource?: "bookmap" | "rithmic" | "nt" | null;
   preferredSource: "bookmap" | "nt" | string;
   switchedAt?: number | null;
   reason?: string | null;

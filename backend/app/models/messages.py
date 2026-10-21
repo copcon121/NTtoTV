@@ -877,7 +877,7 @@ class TduSignalUpdate:
 
 @dataclass(slots=True)
 class LiquidityUpdate:
-    """Reduced Bookmap depth signal streamed to the standalone LQ chart."""
+    """Reduced active-source depth signal streamed to the standalone LQ chart."""
 
     type: ClassVar[str] = "liquidity_update"
 

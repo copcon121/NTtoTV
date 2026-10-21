@@ -121,6 +121,59 @@ def test_rithmic_shadow_records_and_warms_without_replacing_bookmap(tmp_path):
 
 
 @pytest.mark.unit
+def test_rithmic_promotion_publishes_warmed_liquidity_lines(tmp_path):
+    pipeline, cache, ticks, captured = _pipeline(
+        tmp_path, rithmic_shadow=False, rithmic_qualify_ms=0
+    )
+    try:
+        pipeline._active_feed = "bookmap"
+
+        async def scenario() -> None:
+            await pipeline.on_rithmic_connect(
+                {
+                    "contract": _SOURCE,
+                    "subscriptions": {"l1": True, "l2": True, "mbo": True},
+                }
+            )
+            await pipeline.on_rithmic_depth(
+                {
+                    "contract": _SOURCE,
+                    "subscriptions": {"l1": True, "l2": True, "mbo": True},
+                    "mboSynchronized": True,
+                },
+                book_update={
+                    "time": _BASE,
+                    "bids": [
+                        {"price": 2400.0, "size": 100},
+                        {"price": 2399.5, "size": 600},
+                    ],
+                    "asks": [{"price": 2400.1, "size": 100}],
+                },
+            )
+            assert not any(
+                event.payload.get("type") == "liquidity_update"
+                for event in captured
+            )
+            await pipeline._switch_feed("rithmic", "test_promotion", _BASE + 1_000)
+
+        asyncio.run(scenario())
+
+        liquidity = [
+            event.payload
+            for event in captured
+            if event.payload.get("type") == "liquidity_update"
+        ]
+        assert len(liquidity) == 1
+        assert liquidity[0]["eventKind"] == "long_term"
+        assert liquidity[0]["action"] == "snapshot"
+        assert liquidity[0]["lineId"].startswith("rithmic:bid:")
+        assert liquidity[0]["sourceContract"] == _SOURCE
+    finally:
+        ticks.close()
+        cache.close()
+
+
+@pytest.mark.unit
 def test_rithmic_promotion_requires_l1_and_continuous_qualification(tmp_path):
     pipeline, cache, ticks, _ = _pipeline(
         tmp_path,

@@ -646,8 +646,8 @@ export function LiquidityPage() {
       setMarketExplorerDraft(cloneMarketExplorerSettings(marketExplorerPayload.settings));
       setSettingsNotice(
         liquidityPayload.sentToBookmap
-          ? "Saved and sent to Bookmap"
-          : "Saved; Market Explorer is live and liquidity will apply on Bookmap reconnect",
+          ? "Saved and applied to Bookmap + Rithmic"
+          : "Saved and applied to Rithmic; Bookmap will sync on reconnect",
       );
     } catch (cause) {
       setSettingsError(cause instanceof Error ? cause.message : "Save failed");
@@ -739,7 +739,7 @@ export function LiquidityPage() {
             <header>
               <div>
                 <strong>Liquidity + Market Explorer Settings</strong>
-                <span>Applied to Bookmap depth and aggressor trades</span>
+                <span>Applied to active Bookmap/Rithmic depth and aggressor trades</span>
               </div>
               <button type="button" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
                 ×
@@ -749,7 +749,7 @@ export function LiquidityPage() {
             <div className="liquidity-settings-groups">
               <LiquiditySettingsGroup
                 title="Relative Liquidity Change"
-                help="So sánh size hiện tại với lần cập nhật trước tại cùng mức giá để đánh dấu thanh khoản được thêm hoặc rút."
+                help="So sánh size hiện tại với lần cập nhật trước tại cùng mức giá để đánh dấu thanh khoản được thêm hoặc rút. Khi giá giao dịch đúng tại một Short/Long-term line rồi line biến mất, phần size bị rút cũng hiện bằng marker Relative âm."
                 enableHelp="Tắt mục này sẽ ngừng tạo marker Relative mới. Marker cũ trong lịch sử 24 giờ vẫn được giữ lại."
                 enabled={settingsDraft.relativeEnabled}
                 onEnabledChange={(relativeEnabled) =>
@@ -2826,6 +2826,13 @@ export function liquidityEventMatchesSettings(
   event: LiquidityEvent,
   settings: LiquidityTrackerSettings,
 ): boolean {
+  if (event.eventKind === "relative" && event.lineId) {
+    return settings.relativeEnabled &&
+      settings.longTermEnabled &&
+      event.action === "removed" &&
+      event.change > 0 &&
+      event.threshold === settings.longTermTrigger;
+  }
   if (event.eventKind === "long_term_touch") {
     return longTermTouchMatchesSettings(event, settings);
   }

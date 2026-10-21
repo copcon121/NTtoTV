@@ -76,6 +76,27 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
             "symbol": "GC",
             "contract": "GC",
             "sourceContract": "GCZ6.COMEX@RITHMIC",
+            "sequence": 4,
+            "time": 350_000,
+            "eventKind": "relative",
+            "action": "removed",
+            "side": "bid",
+            "price": 4198.0,
+            "size": 0,
+            "previousSize": 12,
+            "change": 12,
+            "threshold": 500,
+            "domDistance": 0,
+            "strength": 0.24,
+            "lineId": "bid:41980:349000",
+            "lineStartTime": 349_000,
+        }
+    )
+    store.record(
+        {
+            "symbol": "GC",
+            "contract": "GC",
+            "sourceContract": "GCZ6.COMEX@RITHMIC",
             "sequence": -1,
             "time": 340_000,
             "eventKind": "long_term_touch",
@@ -114,12 +135,15 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
 
     assert response.status_code == 200
     body = response.json()
-    assert len(body["events"]) == 2
+    assert len(body["events"]) == 3
     assert body["events"][0]["bucketTime"] == 300_000
     assert body["events"][0]["threshold"] == 50
     assert body["events"][1]["eventKind"] == "long_term_touch"
     assert body["events"][1]["size"] == 5
     assert body["events"][1]["lineStartTime"] == -14_100_000
+    assert body["events"][2]["eventKind"] == "relative"
+    assert body["events"][2]["change"] == 12
+    assert body["events"][2]["lineId"] == "bid:41980:349000"
     assert body["lines"][0]["lineId"] == "ask:42050:300000"
     assert body["lines"][0]["active"] is True
     assert bad.status_code == 400
