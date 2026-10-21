@@ -35,13 +35,13 @@ doi chieu qua Oracle Console.
 
 - Sample `python-app.service` van chay tai `127.0.0.1:8000` va public IP `/health`
   van tra `200`.
-- NTtoTV release `20261021-115533` chay tai `127.0.0.1:8001`.
+- NTtoTV Rithmic-only release `20261021-141105` chay tai `127.0.0.1:8001`.
 - `NTTOTV_RITHMIC_ENABLED=0`, nen `/api/health` tra `200` va `/api/ready` tra
   `503` theo dung thiet ke staging.
-- Go/no-go probe voi app identity `NTtoTV Rithmic Connector` bi ca Ticker Plant
-  va History Plant tu choi: `rpCode 13, permission denied`.
-- Khong duoc doi app name thanh `Bookmap`, khong bat Rithmic Oracle va khong
-  cutover DNS cho toi khi broker/Rithmic cap quyen cho app identity moi.
+- Lan probe gan nhat voi app identity `NTtoTV Rithmic Connector` bi ca Ticker
+  Plant va History Plant tu choi: `rpCode 13, permission denied`. Viec phat
+  trien/deploy khong con bi chan boi probe nay; chi nut Connect/readiness va
+  cutover production cho Rithmic cho toi khi broker/Rithmic cap quyen.
 - Windows Rithmic da duoc khoi phuc va connected sau probe. Firewall rule tam
   thoi da duoc go bo.
 - `oracle.gcflowpy.xyz` chua co A record. Caddy staging dang dung HTTP theo Host
@@ -67,8 +67,11 @@ tooltip tieng Viet. GUI co 4 thao
 tac: `Save config`, `Test login`, `Save & connect`, va `Disconnect`.
 
 - `Test login` kiem tra dong thoi Ticker Plant va History Plant; can disconnect
-  session dang chay truoc khi test.
-- `Save & connect` luu cau hinh roi reconnect runtime, khong can SSH/restart.
+  session dang chay truoc khi test. GUI hien rieng ket qua thanh cong/that bai,
+  `rpCode` cua tung plant va ly do loi ngay canh cac nut thao tac.
+- `Save & connect` luu cau hinh, reconnect runtime va cho Rithmic xac nhan login;
+  GUI phan biet `CONNECTING`, `CONNECTED`, `SYNCED` va `ERROR`, khong xem viec
+  task dang chay nen la ket noi thanh cong.
 - Password khong duoc API tra ve browser. De trong password khi save se giu
   secret hien tai.
 - Config khong nhay cam nam o `/var/lib/nttotv/config/rithmic.json`; password
@@ -76,6 +79,8 @@ tac: `Save config`, `Test login`, `Save & connect`, va `Disconnect`.
 - Chi owner co quyen; tai khoan web khac nhan HTTP `403`.
 - Truc tiep bang IP chi expose trang admin va API auth/admin. Sample `/health`
   van giu nguyen.
+- L1, L2 va MBO duoc khoa bat ca ba vi `/api/ready` can du ba subscription,
+  MBO snapshot va History Plant sync.
 
 ## Mang, service va layout
 
@@ -102,3 +107,25 @@ sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 Backup online hang dem nam trong `/var/lib/nttotv/backups`; da test backup va
 restore bang SQLite backup API. Ban Caddy truoc staging nam tai
 `/etc/caddy/Caddyfile.pre-nttotv-20261021-103307`.
+
+## Khi Rithmic duyet
+
+1. Mo tunnel va vao `http://127.0.0.1:8088/admin`.
+2. Kiem tra field, bat `History Plant` va `Auto-connect after reboot`, bam
+   `Save & connect`.
+3. Cho den khi Ticker = connected, History = synced va `/api/ready` tra 200.
+4. Tao/cap nhat DNS `gcflowpy.xyz`, `www.gcflowpy.xyz` va
+   `oracle.gcflowpy.xyz` ve `129.221.134.238`.
+5. Tren SSH chay:
+
+```bash
+sudo /opt/nttotv/current/deploy/linux/preflight-production.sh
+sudo /opt/nttotv/current/deploy/linux/activate-production.sh --confirm
+```
+
+Lenh activate tu choi chay neu readiness chua dat, chi sau khi preflight qua moi
+tat sample `python-app`. Neu can rollback staging:
+
+```bash
+sudo /opt/nttotv/current/deploy/linux/rollback-staging.sh
+```
