@@ -10,7 +10,8 @@ from typing import Any
 from .models.timestamp import now_ms
 from .storage.cache_store import CacheStore
 
-MARKET_EXPLORER_SETTINGS_META_KEY = "bookmap.market_explorer.settings.v1"
+MARKET_EXPLORER_SETTINGS_META_KEY = "rithmic.market_explorer.settings.v2"
+_LEGACY_SETTINGS_META_KEY = "bookmap.market_explorer.settings.v1"
 
 _MARKER_DEFAULTS: dict[str, Any] = {
     "enabled": True,
@@ -20,7 +21,7 @@ _MARKER_DEFAULTS: dict[str, Any] = {
     "markerSize": 2,
     "variableSize": False,
     "alertSound": False,
-    "bookmapAlertMessage": "disabled",
+    "alertMessage": "disabled",
 }
 
 _DEFAULT_MARKET_VOLUME_STOP: dict[str, Any] = {
@@ -97,6 +98,8 @@ def _migrate_stored_settings(stored: dict[str, Any]) -> dict[str, Any]:
     for section in ("signal", "volumeSpike", "absorption"):
         value = migrated.get(section)
         if isinstance(value, dict):
+            if "alertMessage" not in value and "bookmapAlertMessage" in value:
+                value["alertMessage"] = value.pop("bookmapAlertMessage")
             # Telegram is intentionally not part of this port.
             value.pop("telegramNotification", None)
     return migrated
@@ -104,6 +107,8 @@ def _migrate_stored_settings(stored: dict[str, Any]) -> dict[str, Any]:
 
 def load_market_explorer_settings(cache: CacheStore) -> dict[str, Any]:
     raw = cache.get_metadata(MARKET_EXPLORER_SETTINGS_META_KEY)
+    if not raw:
+        raw = cache.get_metadata(_LEGACY_SETTINGS_META_KEY)
     if not raw:
         return default_market_explorer_settings()
     try:
@@ -161,7 +166,7 @@ def _validate_marker_fields(
             result[field] = raw
         elif field == "markerSize":
             result[field] = _number(raw, field=path, low=1, high=5, integer=True)
-        elif field == "bookmapAlertMessage":
+        elif field == "alertMessage":
             if raw not in {"disabled", "enabled"}:
                 raise MarketExplorerSettingsError(
                     path, f"{path} must be 'disabled' or 'enabled'"

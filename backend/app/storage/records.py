@@ -162,7 +162,7 @@ class BigTradeRecord:
 
     Keyed by ``(symbol, contract, time, side, trade_id)``. ``trade_id`` is the
     per-contract group ordinal assigned by the BigTrade engine, matching
-    NinjaTrader's incrementing BigTrade ``Id`` enough to distinguish multiple
+    The direct feed's exchange order identity is enough to distinguish multiple
     same-time/same-side groups. Big trades have no timeframe. (Req 8.2, 15.2)
     """
 

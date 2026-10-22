@@ -50,6 +50,7 @@ _data_backups/
 # Logs and ad-hoc run outputs
 _run_logs/
 _import_logs/
+_oracle_stage/
 mt5-terminals/
 *.log
 *_out.txt
@@ -70,3 +71,6 @@ GC *.txt
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local SSH material
+/VPS oracle/

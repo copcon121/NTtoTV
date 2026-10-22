@@ -27,8 +27,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 
 from ..config import settings as default_settings
-from ..engines.big_trade_engine import BigTradeEngine
-from ..engines.bookmap_big_trade_engine import BookmapBigTradeEngine
+from ..engines.direct_feed_big_trade_engine import DirectFeedBigTradeEngine
 from ..engines.footprint_engine import (
     DEFAULT_TICK_SIZE,
     DEFAULT_VALUE_AREA_PERCENT,
@@ -120,7 +119,7 @@ def _rebuild_volume_delta(
     to: int,
     *,
     raw_contract: str | None = None,
-    source: str = "nt",
+    source: str = "rithmic",
 ) -> list[VolumeDeltaRecord]:
     """Rebuild per-bar volume-delta summaries from raw Tick_Store ticks.
 
@@ -130,20 +129,14 @@ def _rebuild_volume_delta(
     snapshot, in ascending ``time`` order. This is why switching to a timeframe
     that has no precomputed rows still shows delta candles. (Req 13, 11.5, 8.5)
 
-    NT trade prints carry no same-print bid/ask, so the trade stream is merged
-    with the recorded quote stream by time: each trade is classified against the
-    most recent prevailing quote's bid/ask (matching MyVolumeDelta) instead of
-    falling back to the tick rule. (Req 13.2, 13.3)
+    Rithmic trade prints already carry the authoritative aggressor side used by
+    the live pipeline, so a rebuild reads only that source and never merges feeds.
     """
-    engine = VolumeDeltaEngine(timeframe=tf, zero_baseline=source == "bookmap")
+    engine = VolumeDeltaEngine(timeframe=tf, zero_baseline=True)
     final: dict[int, VolumeDeltaRecord] = {}
     order: list[int] = []
     physical_contract = raw_contract or contract
-    trades = (
-        tick_store.read_range(physical_contract, frm, to, source="bookmap")
-        if source == "bookmap"
-        else _trades_with_prevailing_quote(tick_store, physical_contract, frm, to)
-    )
+    trades = tick_store.read_range(physical_contract, frm, to, source="rithmic")
     for trade in trades:
         update = engine.on_trade(trade)
         if update is None:
@@ -167,39 +160,6 @@ def _rebuild_volume_delta(
     return [final[time] for time in order]
 
 
-def _trades_with_prevailing_quote(
-    tick_store: TickStore,
-    contract: str,
-    frm: int,
-    to: int,
-):
-    """Yield trades over ``[frm, to]`` with bid/ask backfilled from the quote
-    book prevailing at each trade's time.
-
-    Merges the ascending trade and quote streams by ``(time, sequence)``: a
-    quote at time <= the trade updates the prevailing book, which is stamped
-    onto any trade that lacks a same-print snapshot. Mirrors the live pipeline's
-    backfill so the rebuild classifies identically. (Req 13.2, 13.3)
-    """
-    trades = list(tick_store.read_range(contract, frm, to, source="nt"))
-    quotes = list(tick_store.read_quotes(contract, frm, to))
-    qi = 0
-    nq = len(quotes)
-    book: tuple[float | None, float | None] | None = None
-    for trade in trades:
-        # Advance the quote cursor through every quote at or before this trade.
-        while qi < nq and quotes[qi].time <= trade.time:
-            book = (quotes[qi].bid, quotes[qi].ask)
-            qi += 1
-        if trade.bid is None and trade.ask is None and book is not None:
-            trade.bid, trade.ask = book
-            if trade.best_bid is None:
-                trade.best_bid = book[0]
-            if trade.best_ask is None:
-                trade.best_ask = book[1]
-        yield trade
-
-
 def _rebuild_big_trades(
     tick_store: TickStore,
     symbol: str,
@@ -208,22 +168,16 @@ def _rebuild_big_trades(
     to: int,
     *,
     raw_contract: str | None = None,
-    source: str = "nt",
+    source: str = "rithmic",
 ) -> tuple[list[BigTradeRecord], bool]:
     """Rebuild BigTrade markers from exactly one raw market-data source."""
     physical_contract = raw_contract or contract
     out: list[BigTradeRecord] = []
     had_raw_trades = False
-    if source == "bookmap":
-        engine = BookmapBigTradeEngine()
-        trades = tick_store.read_range(
-            physical_contract, frm, to, source="bookmap"
-        )
-    else:
-        engine = BigTradeEngine(dedupe_repeated_timestamp_runs=True)
-        trades = _trades_with_prevailing_quote(
-            tick_store, physical_contract, frm, to
-        )
+    engine = DirectFeedBigTradeEngine()
+    trades = tick_store.read_range(
+        physical_contract, frm, to, source="rithmic"
+    )
 
     last_flush_clock = to
     for trade in trades:
@@ -242,10 +196,7 @@ def _rebuild_big_trades(
                     source=source,
                 )
             )
-    if isinstance(engine, BookmapBigTradeEngine):
-        pending = engine.flush_idle(last_flush_clock + engine.idle_ms)
-    else:
-        pending = engine.flush(physical_contract)
+    pending = engine.flush_idle(last_flush_clock + engine.idle_ms)
     for bt in pending:
         out.append(
             BigTradeRecord(
@@ -706,7 +657,7 @@ def _minute_bar_profile_to_dict(
 ) -> dict[str, Any]:
     """Approximate NT Order Flow Volume Profile with Resolution=Minute.
 
-    NinjaTrader's minute resolution is bar-based rather than trade-ladder based:
+    The minute resolution is bar-based rather than trade-ladder based:
     each 1-minute OHLCV bar contributes its volume across every tick row touched
     by that bar's low/high range. This intentionally differs from the footprint
     source, which uses actual bid/ask volume at price.
@@ -1176,9 +1127,7 @@ async def get_big_trades(
         source=rebuild_source,
     )
     if had_raw_trades:
-        replaced_sources = {rebuild_source}
-        if rebuild_source == "nt":
-            replaced_sources.add("legacy")
+        replaced_sources = {rebuild_source, "legacy"}
         preserved = [row for row in cached if row.source not in replaced_sources]
         rows = sorted(
             [*preserved, *rebuilt],

@@ -13,6 +13,7 @@ __all__ = ["AuthenticatedUser", "UserRecord", "SessionRecord"]
 class AuthenticatedUser:
     id: str
     username: str
+    must_change_password: bool = False
 
 
 @dataclass(slots=True)
@@ -21,6 +22,7 @@ class UserRecord:
     username: str
     password_hash: str
     created_at: CanonicalTimestamp
+    must_change_password: bool = False
 
 
 @dataclass(slots=True)

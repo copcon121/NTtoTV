@@ -1,0 +1,41 @@
+[Unit]
+Description=NTtoTV Rithmic-only market data service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nttotv
+Group=nttotv
+WorkingDirectory=/opt/nttotv/current/backend
+EnvironmentFile=/etc/nttotv/nttotv.env
+LoadCredential=rithmic_password:/etc/nttotv/credentials/rithmic-password
+Environment=NTTOTV_RITHMIC_PASSWORD_FILE=%d/rithmic_password
+ExecStart=/opt/nttotv/current/backend/.venv/bin/python -m uvicorn app.app:app --host 127.0.0.1 --port 8001 --workers 1
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGINT
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/nttotv
+
+[Install]
+WantedBy=multi-user.target

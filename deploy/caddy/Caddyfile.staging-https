@@ -1,0 +1,82 @@
+oracle.gcflowpy.xyz {
+    encode zstd gzip
+
+    handle /health {
+        rewrite * /api/health
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /ready {
+        rewrite * /api/ready
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /ws/chart* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /ws/* {
+        respond `{"error":{"code":"NOT_FOUND","message":"WebSocket endpoint not found"}}` 404
+    }
+
+    @assets path /assets/*
+    header @assets Cache-Control "public, max-age=31536000, immutable"
+    header /index.html Cache-Control "no-cache, no-store, must-revalidate"
+
+    handle {
+        root * /opt/nttotv/current/frontend/dist
+        try_files {path} /index.html
+        file_server
+    }
+}
+
+http://129.221.134.238, http://127.0.0.1, http://localhost {
+    encode gzip
+
+    @localAuth {
+        path /api/auth/*
+        remote_ip 127.0.0.1 ::1
+    }
+    handle @localAuth {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    @localAdmin {
+        path /api/admin/*
+        remote_ip 127.0.0.1 ::1
+    }
+    handle @localAdmin {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    @publicAdminRead {
+        path /api/admin/*
+        method GET
+    }
+    handle @publicAdminRead {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /api/auth/* {
+        respond `{"error":{"code":"FORBIDDEN","message":"Use HTTPS or the encrypted SSH admin tunnel"}}` 403
+    }
+
+    handle /api/admin/* {
+        respond `{"error":{"code":"FORBIDDEN","message":"Use HTTPS or the encrypted SSH admin tunnel"}}` 403
+    }
+
+    @adminUi path /admin /admin/* /assets/*
+    handle @adminUi {
+        root * /opt/nttotv/current/frontend/dist
+        try_files {path} /index.html
+        file_server
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:8000
+    }
+}

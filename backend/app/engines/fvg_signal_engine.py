@@ -1,8 +1,8 @@
 """FVG Signal Grader engine.
 
-This ports the timing signal from the local NinjaTrader ``FvgSignalGrader``
+This implements the finalized-footprint FVG timing signal
 into backend state. The engine is intentionally 1m-only and consumes finalized
-footprint bars from the active market-data source (Bookmap primary, NT native
+footprint bars from the authoritative Rithmic market-data source
 fallback), keeping grading independent from chart display settings.
 """
 

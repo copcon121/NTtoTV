@@ -1,8 +1,7 @@
 """Canonical data models and WebSocket message schemas.
 
 Home for `NormalizedTrade`, `NormalizedQuote`, `Side`, the Canonical_Timestamp
-helpers, and the typed serializers/deserializers for all `/ws/nt` and
-`/ws/chart` message types. (Tasks 2.1, 2.3)
+helpers, and typed serializers/deserializers for `/ws/chart` messages.
 """
 
 from __future__ import annotations
@@ -15,14 +14,11 @@ from .messages import (
     BigTrade,
     MarketDataStatus,
     ChartStatusEvent,
-    ControlAction,
-    ControlCommand,
     EventType,
     FootprintRow,
     FootprintUpdate,
     ImbalanceSide,
     LiquidityUpdate,
-    NTStatusEvent,
     OHLCVBar,
     Ping,
     Pong,
@@ -36,7 +32,6 @@ from .messages import (
     Unsubscribe,
     VolumeDeltaUpdate,
     decode_chart_client_message,
-    decode_nt_data_message,
     quote_from_dict,
     quote_to_dict,
     trade_from_dict,
@@ -80,17 +75,13 @@ __all__ = [
     "latest",
     # WebSocket message enums (Task 2.3)
     "StatusState",
-    "ControlAction",
     "ImbalanceSide",
     "EventType",
-    # /ws/nt data plane (Task 2.3)
+    # Canonical direct-feed JSON helpers
     "trade_to_dict",
     "trade_from_dict",
     "quote_to_dict",
     "quote_from_dict",
-    "NTStatusEvent",
-    # /ws/nt control plane (Task 2.3)
-    "ControlCommand",
     # /ws/chart client -> backend (Task 2.3)
     "Subscribe",
     "Unsubscribe",
@@ -113,6 +104,5 @@ __all__ = [
     "ChartStatusEvent",
     "Ping",
     # Inbound dispatchers (Task 2.3)
-    "decode_nt_data_message",
     "decode_chart_client_message",
 ]

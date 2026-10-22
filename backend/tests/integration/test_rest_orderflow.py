@@ -122,7 +122,7 @@ def test_volume_delta_chart_contract_alias_is_accepted(env):
 
 
 @pytest.mark.integration
-def test_volume_delta_cache_miss_rebuilds_active_bookmap_source_only(tmp_path):
+def test_volume_delta_cache_miss_rebuilds_active_rithmic_source_only(tmp_path):
     settings = Settings(
         data_dir=tmp_path,
         supported_symbols=(_SYMBOL,),
@@ -131,7 +131,7 @@ def test_volume_delta_cache_miss_rebuilds_active_bookmap_source_only(tmp_path):
     cache = CacheStore(tmp_path / "app.sqlite")
     state = ContractStateStore(cache, settings=settings)
     tick_store = TickStore(tmp_path / "ticks")
-    status = SimpleNamespace(active_source="bookmap", preferred_source="bookmap")
+    status = SimpleNamespace(active_source="rithmic", preferred_source="rithmic")
     pipeline = SimpleNamespace(market_data_status_message=lambda: status)
     app = create_app(lifespan=False)
     app.state.contract_state = state
@@ -168,7 +168,7 @@ def test_volume_delta_cache_miss_rebuilds_active_bookmap_source_only(tmp_path):
                     best_bid=None,
                     best_ask=None,
                     sequence=sequence,
-                    source="bookmap",
+                    source="rithmic",
                     side=side,
                 )
             )
@@ -543,6 +543,8 @@ def test_big_trades_default_load_uses_cache_when_available(env):
             best_bid=None,
             best_ask=None,
             sequence=1,
+            source="rithmic",
+            side=Side.BUY,
         )
     )
 
@@ -631,6 +633,8 @@ def test_big_trades_rebuilds_from_ticks_when_raw_ticks_exist(env):
             best_bid=None,
             best_ask=None,
             sequence=1,
+            source="rithmic",
+            side=Side.BUY,
         )
     )
     tick_store.record_trade(
@@ -645,6 +649,8 @@ def test_big_trades_rebuilds_from_ticks_when_raw_ticks_exist(env):
             best_bid=None,
             best_ask=None,
             sequence=2,
+            source="rithmic",
+            side=Side.BUY,
         )
     )
 
@@ -662,7 +668,7 @@ def test_big_trades_rebuilds_from_ticks_when_raw_ticks_exist(env):
             "price": 100.1,
             "volume": 35,
             "side": "buy",
-            "source": "nt",
+            "source": "rithmic",
         }
     ]
     refreshed = cache.read_big_trades(_SYMBOL, _ACTIVE, _BASE_MS, _BASE_MS + 2_000)

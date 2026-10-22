@@ -1,7 +1,7 @@
 """TDU Buy/Sell Momentum and candle-color delta divergence.
 
 This is a clean-room port of the observable calculation used by the original
-NinjaTrader indicator.  Momentum is measured on tick-driven ten-second volume
+Momentum is measured on tick-driven ten-second volume
 buckets.  Once fifteen buckets exist, the just-completed bucket is compared
 with 4/5/6 population standard deviations.  The signal direction is the chart
 bar's cumulative bid/ask delta *before* the boundary-triggering trade.
@@ -224,7 +224,7 @@ class TduSignalEngine:
     def _bid_ask_volume(trade: NormalizedTrade) -> tuple[int, int]:
         buy = trade.volume if trade.ask is not None and trade.price >= trade.ask else 0
         sell = trade.volume if trade.bid is not None and trade.price <= trade.bid else 0
-        # Bookmap supplies exchange aggressor side but does not attach a quote
+        # Rithmic supplies exchange aggressor side but may not attach a quote
         # snapshot to each trade.  Use that authoritative equivalent only when
         # the original BidAsk comparisons cannot be performed.
         if trade.ask is None and trade.bid is None:

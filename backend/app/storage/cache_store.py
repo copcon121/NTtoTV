@@ -259,7 +259,8 @@ CREATE TABLE IF NOT EXISTS users (
     id            TEXT PRIMARY KEY,
     username      TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    created_at    INTEGER NOT NULL
+    created_at    INTEGER NOT NULL,
+    must_change_password INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -447,11 +448,22 @@ class CacheStore:
     def _init_schema(self) -> None:
         """Create all Cache_Store tables and indexes if absent (idempotent)."""
         self._writer.executescript(CACHE_SCHEMA)
+        self._migrate_users()
         self._migrate_footprint_bars()
         self._migrate_profiles_and_alerts()
         self._migrate_big_trades()
         self._migrate_market_sources()
         self._migrate_orders()
+
+    def _migrate_users(self) -> None:
+        """Add the one-time password-change flag to existing user databases."""
+        rows = self._writer.connection.execute("PRAGMA table_info(users)").fetchall()
+        existing = {str(row["name"]) for row in rows}
+        if "must_change_password" not in existing:
+            self._writer.execute(
+                "ALTER TABLE users ADD COLUMN must_change_password "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _migrate_orders(self) -> None:
         """Add opt-in order-management fields to existing cache files."""

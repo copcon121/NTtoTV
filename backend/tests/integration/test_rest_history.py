@@ -71,7 +71,14 @@ def _bar(time_ms: int, *, close: float, volume: int) -> BarRecord:
     )
 
 
-def _trade(time_ms: int, *, price: float, volume: int, seq: int) -> NormalizedTrade:
+def _trade(
+    time_ms: int,
+    *,
+    price: float,
+    volume: int,
+    seq: int,
+    source: str = "rithmic",
+) -> NormalizedTrade:
     return NormalizedTrade(
         symbol=_SYMBOL,
         contract=_ACTIVE,
@@ -83,6 +90,7 @@ def _trade(time_ms: int, *, price: float, volume: int, seq: int) -> NormalizedTr
         best_bid=price - 0.1,
         best_ask=price + 0.1,
         sequence=seq,
+        source=source,
     )
 
 
@@ -185,7 +193,7 @@ def test_history_cache_miss_rebuilds_from_ticks(env):
     assert first["low"] == 2344.0
     assert first["close"] == 2344.0
     assert first["volume"] == 10
-    assert first["source"] == "nt"
+    assert first["source"] == "rithmic"
     # Second bucket has a single tick.
     assert bars[1] == {
         "time": bucket1,
@@ -194,7 +202,7 @@ def test_history_cache_miss_rebuilds_from_ticks(env):
         "low": 2347.0,
         "close": 2347.0,
         "volume": 4,
-        "source": "nt",
+        "source": "rithmic",
         "closed": True,
     }
 
@@ -222,7 +230,7 @@ def test_history_rebuild_marks_last_partial_bucket_open(env):
 
 
 @pytest.mark.integration
-def test_history_alias_rebuild_uses_active_bookmap_source_only(tmp_path):
+def test_history_alias_rebuild_uses_active_rithmic_source_only(tmp_path):
     settings = Settings(
         data_dir=tmp_path,
         supported_symbols=(_SYMBOL,),
@@ -231,7 +239,7 @@ def test_history_alias_rebuild_uses_active_bookmap_source_only(tmp_path):
     cache = CacheStore(tmp_path / "app.sqlite")
     state = ContractStateStore(cache, settings=settings)
     tick_store = TickStore(tmp_path / "ticks")
-    status = SimpleNamespace(active_source="bookmap", preferred_source="bookmap")
+    status = SimpleNamespace(active_source="rithmic", preferred_source="rithmic")
     pipeline = SimpleNamespace(market_data_status_message=lambda: status)
     app = create_app(lifespan=False)
     app.state.contract_state = state
@@ -239,7 +247,7 @@ def test_history_alias_rebuild_uses_active_bookmap_source_only(tmp_path):
     app.state.runtime = SimpleNamespace(pipeline=pipeline)
     try:
         tick_store.record_trade(
-            _trade(_BASE_MS + 1_000, price=2300.0, volume=99, seq=1)
+            _trade(_BASE_MS + 1_000, price=2300.0, volume=99, seq=1, source="nt")
         )
         tick_store.record_trade(
             NormalizedTrade(
@@ -253,7 +261,7 @@ def test_history_alias_rebuild_uses_active_bookmap_source_only(tmp_path):
                 best_bid=None,
                 best_ask=None,
                 sequence=1,
-                source="bookmap",
+                source="rithmic",
                 source_time_nanos=(_BASE_MS + 1_000) * 1_000_000,
                 received_at=_BASE_MS + 1_005,
             )
@@ -273,7 +281,7 @@ def test_history_alias_rebuild_uses_active_bookmap_source_only(tmp_path):
         body = response.json()
         assert body["contract"] == _SYMBOL
         assert [(bar["close"], bar["volume"], bar["source"]) for bar in body["bars"]] == [
-            (2400.0, 7, "bookmap")
+            (2400.0, 7, "rithmic")
         ]
     finally:
         tick_store.close()

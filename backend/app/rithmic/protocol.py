@@ -25,6 +25,8 @@ LOGIN_REQUEST = 10
 LOGIN_RESPONSE = 11
 LOGOUT_REQUEST = 12
 LOGOUT_RESPONSE = 13
+REFERENCE_DATA_REQUEST = 14
+REFERENCE_DATA_RESPONSE = 15
 SYSTEM_INFO_REQUEST = 16
 SYSTEM_INFO_RESPONSE = 17
 HEARTBEAT_REQUEST = 18
@@ -37,6 +39,13 @@ FORCED_LOGOUT = 77
 # Ticker Plant request/response templates.
 MARKET_DATA_REQUEST = 100
 MARKET_DATA_RESPONSE = 101
+GET_INSTRUMENT_BY_UNDERLYING_REQUEST = 102
+GET_INSTRUMENT_BY_UNDERLYING_RESPONSE = 103
+GET_INSTRUMENT_BY_UNDERLYING_KEYS_RESPONSE = 104
+SEARCH_SYMBOLS_REQUEST = 109
+SEARCH_SYMBOLS_RESPONSE = 110
+FRONT_MONTH_CONTRACT_REQUEST = 113
+FRONT_MONTH_CONTRACT_RESPONSE = 114
 DBO_SNAPSHOT_REQUEST = 115
 DBO_SNAPSHOT_RESPONSE = 116
 DBO_UPDATES_REQUEST = 117
@@ -45,6 +54,14 @@ LAST_TRADE = 150
 BEST_BID_OFFER = 151
 ORDER_BOOK = 156
 DEPTH_BY_ORDER = 160
+
+# History Plant request/response templates.
+TIME_BAR_REPLAY_REQUEST = 202
+TIME_BAR_REPLAY_RESPONSE = 203
+VOLUME_PROFILE_MINUTE_BARS_REQUEST = 208
+VOLUME_PROFILE_MINUTE_BARS_RESPONSE = 209
+RESUME_BARS_REQUEST = 210
+RESUME_BARS_RESPONSE = 211
 
 # RequestMarketDataUpdate.UpdateBits.
 UPDATE_LAST_TRADE = 1
@@ -234,27 +251,137 @@ def build_login_request(
     os_platform: str | None = None,
     aggregated_quotes: bool = False,
     template_version: str = "5.55",
+    user_message: str = "nttotv-probe",
+    infra_type: int = 1,
 ) -> bytes:
-    """Build a Ticker Plant login.  No other infra type is exposed."""
+    """Build a read-only plant login.
+
+    ``infra_type`` follows ``RequestLogin.SysInfraType``: 1 is Ticker Plant
+    and 3 is History Plant.  The connector never exposes Order Plant login.
+    """
+
+    if infra_type not in (1, 3):
+        raise ValueError("only Ticker Plant (1) and History Plant (3) are supported")
 
     fields = [
         field_string(153634, template_version),
-        field_string(132760, "nttotv-probe"),
+        field_string(132760, user_message),
         field_string(131003, user),
         field_string(130004, password),
         field_string(130002, app_name),
         field_string(131803, app_version),
         field_string(153628, system_name),
-        field_varint(153621, 1),  # RequestLogin.SysInfraType.TICKER_PLANT
+        field_varint(153621, infra_type),
     ]
     fields.extend(field_string(144108, value) for value in mac_addresses if value)
     if os_version:
         fields.append(field_string(144021, os_version))
     if os_platform:
         fields.append(field_string(144020, os_platform))
-    # Encode false as well: this mirrors Bookmap's Full (non-aggregated) mode.
+    # Encode false explicitly so the gateway supplies non-aggregated quotes.
     fields.append(field_varint(153644, int(aggregated_quotes)))
     return _request(LOGIN_REQUEST, fields)
+
+
+def build_time_bar_replay_request(
+    *,
+    symbol: str,
+    exchange: str,
+    start_seconds: int,
+    finish_seconds: int,
+    period_minutes: int = 1,
+    max_count: int = 0,
+    resume_bars: bool = False,
+    user_message: str = "nttotv-history-time-bars",
+) -> bytes:
+    """Request closed minute bars from the History Plant."""
+
+    if start_seconds < 0 or finish_seconds < start_seconds:
+        raise ValueError("invalid history range")
+    if period_minutes <= 0:
+        raise ValueError("period_minutes must be positive")
+    fields = [
+        field_string(132760, user_message),
+        field_string(110100, symbol),
+        field_string(110101, exchange),
+        field_varint(119200, 2),  # RequestTimeBarReplay.BarType.MINUTE_BAR
+        field_varint(119112, period_minutes),
+        field_varint(153002, start_seconds),
+        field_varint(153003, finish_seconds),
+        field_varint(149253, 1),  # Direction.FIRST
+        field_varint(149307, 1),  # TimeOrder.FORWARDS
+        field_varint(153642, int(resume_bars)),
+    ]
+    if max_count > 0:
+        fields.append(field_varint(154020, max_count))
+    return _request(TIME_BAR_REPLAY_REQUEST, fields)
+
+
+def build_volume_profile_minute_bars_request(
+    *,
+    symbol: str,
+    exchange: str,
+    start_seconds: int,
+    finish_seconds: int,
+    period_minutes: int = 1,
+    max_count: int = 0,
+    resume_bars: bool = False,
+    user_message: str = "nttotv-history-volume-profile",
+) -> bytes:
+    """Request minute OHLCV plus bid/ask volume-at-price ladders."""
+
+    if start_seconds < 0 or finish_seconds < start_seconds:
+        raise ValueError("invalid history range")
+    if period_minutes <= 0:
+        raise ValueError("period_minutes must be positive")
+    fields = [
+        field_string(132760, user_message),
+        field_string(110100, symbol),
+        field_string(110101, exchange),
+        field_varint(119215, period_minutes),
+        field_varint(153002, start_seconds),
+        field_varint(153003, finish_seconds),
+        field_varint(153642, int(resume_bars)),
+    ]
+    if max_count > 0:
+        fields.append(field_varint(154020, max_count))
+    return _request(VOLUME_PROFILE_MINUTE_BARS_REQUEST, fields)
+
+
+def build_resume_bars_request(
+    *,
+    request_key: str,
+    user_message: str = "nttotv-history-resume",
+) -> bytes:
+    """Resume a History Plant replay previously opened with ``resume_bars``."""
+
+    if not request_key.strip():
+        raise ValueError("request_key must not be empty")
+    return _request(
+        RESUME_BARS_REQUEST,
+        (
+            field_string(132760, user_message),
+            field_string(132758, request_key),
+        ),
+    )
+
+
+def build_front_month_contract_request(
+    *,
+    symbol: str,
+    exchange: str,
+    subscribe: bool = False,
+    user_message: str = "nttotv-front-month",
+) -> bytes:
+    return _request(
+        FRONT_MONTH_CONTRACT_REQUEST,
+        (
+            field_string(132760, user_message),
+            field_string(110100, symbol),
+            field_string(110101, exchange),
+            field_varint(154352, int(subscribe)),
+        ),
+    )
 
 
 def build_market_data_request(
@@ -291,6 +418,60 @@ def build_dbo_snapshot_request(*, symbol: str, exchange: str) -> bytes:
         DBO_SNAPSHOT_REQUEST,
         (
             field_string(132760, "nttotv-probe"),
+            field_string(110100, symbol),
+            field_string(110101, exchange),
+        ),
+    )
+
+
+def build_get_instrument_by_underlying_request(
+    *,
+    underlying_symbol: str,
+    exchange: str,
+    expiration_date: str | None = None,
+    user_message: str = "nttotv-option-probe",
+) -> bytes:
+    """Request option/reference instruments without opening another session."""
+
+    fields = [
+        field_string(132760, user_message),
+        field_string(101026, underlying_symbol),
+        field_string(110101, exchange),
+    ]
+    if expiration_date:
+        fields.append(field_string(100067, expiration_date))
+    return _request(GET_INSTRUMENT_BY_UNDERLYING_REQUEST, fields)
+
+
+def build_search_symbols_request(
+    *,
+    search_text: str,
+    exchange: str,
+    product_code: str | None = None,
+    instrument_type: int = 2,
+    user_message: str = "nttotv-option-search",
+) -> bytes:
+    """Search symbols; instrument type 2 is FUTURE_OPTION in R|Protocol."""
+
+    fields = [
+        field_string(132760, user_message),
+        field_string(120008, search_text),
+        field_string(110101, exchange),
+        field_varint(110116, instrument_type),
+        field_varint(155008, 2),  # Pattern.CONTAINS
+    ]
+    if product_code:
+        fields.append(field_string(100749, product_code))
+    return _request(SEARCH_SYMBOLS_REQUEST, fields)
+
+
+def build_reference_data_request(
+    *, symbol: str, exchange: str, user_message: str = "nttotv-reference-data"
+) -> bytes:
+    return _request(
+        REFERENCE_DATA_REQUEST,
+        (
+            field_string(132760, user_message),
             field_string(110100, symbol),
             field_string(110101, exchange),
         ),
@@ -416,6 +597,9 @@ def decode_message(data: bytes) -> dict[str, Any]:
     if template is None:
         raise ProtocolDecodeError("R|Protocol frame has no template_id")
     base: dict[str, Any] = {"templateId": template}
+    user_messages = _strings(fields, 132760)
+    if user_messages:
+        base["userMessages"] = user_messages
     rp_codes = _strings(fields, 132766)
     if rp_codes:
         base["rpCode"] = rp_codes
@@ -441,6 +625,74 @@ def decode_message(data: bytes) -> dict[str, Any]:
             fcmId=_first_string(fields, 154013),
             ibId=_first_string(fields, 154014),
         )
+    elif template == TIME_BAR_REPLAY_RESPONSE:
+        base.update(
+            type="time_bar_replay",
+            requestKey=_first_string(fields, 132758),
+            requestHandlerCode=_strings(fields, 132764),
+            symbol=_first_string(fields, 110100),
+            exchange=_first_string(fields, 110101),
+            barType=_first_varint(fields, 119200),
+            period=_first_string(fields, 119112),
+            marker=_first_varint(fields, 119100),
+            numTrades=_first_varint(fields, 119109),
+            volume=_first_varint(fields, 119110),
+            bidVolume=_first_varint(fields, 119117),
+            askVolume=_first_varint(fields, 119118),
+            open=_first_double(fields, 100019),
+            close=_first_double(fields, 100021),
+            high=_first_double(fields, 100012),
+            low=_first_double(fields, 100013),
+            settlementPrice=_first_double(fields, 100070),
+        )
+    elif template == VOLUME_PROFILE_MINUTE_BARS_RESPONSE:
+        base.update(
+            type="volume_profile_minute_bar",
+            requestKey=_first_string(fields, 132758),
+            requestHandlerCode=_strings(fields, 132764),
+            symbol=_first_string(fields, 110100),
+            exchange=_first_string(fields, 110101),
+            period=_first_string(fields, 119215),
+            marker=_first_varint(fields, 119100),
+            numTrades=_first_varint(fields, 119204),
+            volume=_first_varint(fields, 119205),
+            bidVolume=_first_varint(fields, 119213),
+            askVolume=_first_varint(fields, 119214),
+            open=_first_double(fields, 100019),
+            close=_first_double(fields, 100021),
+            high=_first_double(fields, 100012),
+            low=_first_double(fields, 100013),
+            prices=_doubles(fields, 119216),
+            noAggressorVolume=(
+                _varints(fields, 159011) or _varints(fields, 119217)
+            ),
+            bidVolumes=_varints(fields, 159012) or _varints(fields, 119218),
+            askVolumes=_varints(fields, 159013) or _varints(fields, 119219),
+            noAggressorTrades=(
+                _varints(fields, 159014) or _varints(fields, 119220)
+            ),
+            bidAggressorTrades=(
+                _varints(fields, 159015) or _varints(fields, 119221)
+            ),
+            askAggressorTrades=(
+                _varints(fields, 159016) or _varints(fields, 119222)
+            ),
+        )
+    elif template == RESUME_BARS_RESPONSE:
+        base.update(
+            type="resume_bars",
+            ok=rp_codes == ["0"],
+        )
+    elif template == FRONT_MONTH_CONTRACT_RESPONSE:
+        base.update(
+            type="front_month_contract",
+            symbol=_first_string(fields, 110100),
+            exchange=_first_string(fields, 110101),
+            isFrontMonth=bool(_first_varint(fields, 149166) or False),
+            symbolName=_first_string(fields, 100003),
+            tradingSymbol=_first_string(fields, 157095),
+            tradingExchange=_first_string(fields, 157096),
+        )
     elif template in (MARKET_DATA_RESPONSE, DBO_UPDATES_RESPONSE):
         base["type"] = (
             "market_data_subscription"
@@ -448,6 +700,49 @@ def decode_message(data: bytes) -> dict[str, Any]:
             else "mbo_subscription"
         )
         base["ok"] = rp_codes == ["0"]
+    elif template == GET_INSTRUMENT_BY_UNDERLYING_KEYS_RESPONSE:
+        base.update(
+            type="option_underlying_keys",
+            underlyingSymbols=_strings(fields, 101026),
+            exchanges=_strings(fields, 110101),
+            expirationDates=_strings(fields, 100067),
+        )
+    elif template == SEARCH_SYMBOLS_RESPONSE:
+        base.update(
+            type="symbol_search",
+            symbol=_first_string(fields, 110100),
+            exchange=_first_string(fields, 110101),
+            symbolName=_first_string(fields, 100003),
+            productCode=_first_string(fields, 100749),
+            instrumentType=_first_string(fields, 110116),
+            expirationDate=_first_string(fields, 100067),
+            requestHandlerCode=_strings(fields, 132764),
+        )
+    elif template in (
+        GET_INSTRUMENT_BY_UNDERLYING_RESPONSE,
+        REFERENCE_DATA_RESPONSE,
+    ):
+        base.update(
+            type=(
+                "option_instrument"
+                if template == GET_INSTRUMENT_BY_UNDERLYING_RESPONSE
+                else "reference_data"
+            ),
+            symbol=_first_string(fields, 110100),
+            exchange=_first_string(fields, 110101),
+            exchangeSymbol=_first_string(fields, 110114),
+            symbolName=_first_string(fields, 100003),
+            productCode=_first_string(fields, 100749),
+            instrumentType=_first_string(fields, 110116),
+            underlyingSymbol=_first_string(fields, 101026),
+            expirationDate=_first_string(fields, 100067),
+            currency=_first_string(fields, 154382),
+            putCall=_first_string(fields, 100109),
+            strikePrice=_first_double(fields, 100066),
+            minPriceChange=_first_double(fields, 154386),
+            singlePointValue=_first_double(fields, 154389),
+            requestHandlerCode=_strings(fields, 132764),
+        )
     elif template == DBO_SNAPSHOT_RESPONSE:
         base.update(
             type="mbo_snapshot",

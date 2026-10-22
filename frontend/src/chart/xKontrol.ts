@@ -129,7 +129,7 @@ export class XKontrolEngine {
     return this.process(this.processedBars, bar);
   }
 
-  /** Re-run the active bar as NinjaTrader does for Calculate.OnPriceChange. */
+  /** Re-run the active bar on each price change. */
   updateLastBar(bar: Bar): XKontrolCode {
     if (this.processedBars === 0) return this.appendBar(bar);
     return this.process(this.processedBars - 1, bar);

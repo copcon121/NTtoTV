@@ -38,15 +38,30 @@ DEFAULT_RPROTOCOL_ARCHIVE = Path(__file__).resolve().parents[2] / "RProtocolAPI.
 DEFAULT_GC_CANDIDATE_CONTRACTS = ("GC 06-26", "GC 08-26", "GC 10-26", "GC 12-26")
 
 
+def _secret_from_env_or_file(value_name: str, file_name: str) -> str | None:
+    value = os.getenv(value_name)
+    if value:
+        return value
+    path = os.getenv(file_name)
+    if not path:
+        return None
+    try:
+        return Path(path).read_text(encoding="utf-8").rstrip("\r\n")
+    except OSError:
+        return None
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable backend settings."""
 
-    host: str = "127.0.0.1"
-    port: int = 8000
+    host: str = field(default_factory=lambda: os.getenv("NTTOTV_HOST", "127.0.0.1"))
+    port: int = field(default_factory=lambda: int(os.getenv("NTTOTV_PORT", "8000")))
 
     # Storage locations (relative to the working directory by default).
-    data_dir: Path = DEFAULT_DATA_DIR
+    data_dir: Path = field(
+        default_factory=lambda: Path(os.getenv("NTTOTV_DATA_DIR", str(DEFAULT_DATA_DIR)))
+    )
     cache_db_name: str = "app.sqlite"
     ticks_subdir: str = "ticks"
     liquidity_db_name: str = "liquidity.sqlite"
@@ -58,47 +73,10 @@ class Settings:
     chart_pong_timeout_s: int = 60
     chart_send_timeout_s: float = 2.0
 
-    # NT_AddOn connection liveness (see Requirements 4.7, 4.8).
-    nt_status_timeout_s: int = 15
-
-    # Realtime market-source arbitration. Production remains NT-first until the
-    # Local/test default stays NT; production promotes Bookmap through the
-    # environment while keeping NT warm as the automatic fallback.
-    market_data_preferred_source: str = field(
-        default_factory=lambda: os.getenv(
-            "NTTOTV_MARKET_DATA_PREFERRED_SOURCE", "nt"
-        ).strip().lower()
-    )
-    market_data_cold_start_grace_ms: int = field(
-        default_factory=lambda: int(
-            os.getenv("NTTOTV_MARKET_DATA_COLD_START_GRACE_MS", "5000")
-        )
-    )
-    bookmap_stale_ms: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_BOOKMAP_STALE_MS", "5000"))
-    )
-    bookmap_qualify_ms: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_BOOKMAP_QUALIFY_MS", "2000"))
-    )
-    bookmap_recover_ms: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_BOOKMAP_RECOVER_MS", "10000"))
-    )
-    market_data_min_hold_ms: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_MARKET_DATA_MIN_HOLD_MS", "30000"))
-    )
-    nt_feed_stale_ms: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_NT_FEED_STALE_MS", "10000"))
-    )
-
-    # Direct Rithmic Ticker Plant connector.  It is deliberately disabled and
-    # shadow-only by default: enabling it warms its own source engines and
-    # records source-tagged raw L1, but cannot participate in NT/Bookmap source
-    # arbitration until a separate promotion change is made.
+    # Direct Rithmic Ticker Plant connector. It is the sole authoritative
+    # realtime source; a disconnect moves the application to degraded state.
     rithmic_enabled: bool = field(
-        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_ENABLED", "0") == "1"
-    )
-    rithmic_shadow_mode: bool = field(
-        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_SHADOW_MODE", "1") != "0"
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_ENABLED", "1") == "1"
     )
     rithmic_uri: str = field(
         default_factory=lambda: os.getenv(
@@ -109,7 +87,10 @@ class Settings:
         default_factory=lambda: os.getenv("NTTOTV_RITHMIC_USER"), repr=False
     )
     rithmic_password: str | None = field(
-        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_PASSWORD"), repr=False
+        default_factory=lambda: _secret_from_env_or_file(
+            "NTTOTV_RITHMIC_PASSWORD", "NTTOTV_RITHMIC_PASSWORD_FILE"
+        ),
+        repr=False,
     )
     rithmic_system_name: str = field(
         default_factory=lambda: os.getenv(
@@ -118,11 +99,38 @@ class Settings:
     )
     rithmic_app_name: str = field(
         default_factory=lambda: os.getenv(
-            "NTTOTV_RITHMIC_APP_NAME", "Bookmap"
+            "NTTOTV_RITHMIC_APP_NAME", "NTtoTV Rithmic Connector"
         )
     )
     rithmic_app_version: str = field(
-        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_APP_VERSION", "7.4.0.21")
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_APP_VERSION", "1.0.0")
+    )
+    rithmic_template_version: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_TEMPLATE_VERSION", "5.55")
+    )
+    rithmic_user_message: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_USER_MESSAGE", "nttotv-probe")
+    )
+    rithmic_mac_addresses: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            value.strip().upper()
+            for value in os.getenv(
+                "NTTOTV_RITHMIC_MAC_ADDRESSES", "B5:8F:D4:CC:FE:11"
+            ).split(",")
+            if value.strip()
+        )
+    )
+    rithmic_os_platform: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_OS_PLATFORM", "linux")
+    )
+    rithmic_os_version: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_OS_VERSION", "10.0.17763")
+    )
+    rithmic_aggregated_quotes: bool = field(
+        default_factory=lambda: os.getenv(
+            "NTTOTV_RITHMIC_AGGREGATED_QUOTES", "0"
+        ).strip().lower()
+        in {"1", "true", "yes", "on"}
     )
     rithmic_exchange: str = field(
         default_factory=lambda: os.getenv("NTTOTV_RITHMIC_EXCHANGE", "COMEX")
@@ -169,6 +177,39 @@ class Settings:
     )
     rithmic_reconnect_max_s: float = field(
         default_factory=lambda: float(os.getenv("NTTOTV_RITHMIC_RECONNECT_MAX_S", "30"))
+    )
+    rithmic_history_enabled: bool = field(
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_HISTORY_ENABLED", "1") == "1"
+    )
+    rithmic_history_audit_s: int = field(
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_RITHMIC_HISTORY_AUDIT_S", "300")
+        )
+    )
+    rithmic_history_initial_lookback_days: int = field(
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_RITHMIC_HISTORY_INITIAL_LOOKBACK_DAYS", "30")
+        )
+    )
+    rithmic_history_request_timeout_s: float = field(
+        default_factory=lambda: float(
+            os.getenv("NTTOTV_RITHMIC_HISTORY_REQUEST_TIMEOUT_S", "120")
+        )
+    )
+    rithmic_history_quiet_s: float = field(
+        default_factory=lambda: float(
+            os.getenv("NTTOTV_RITHMIC_HISTORY_QUIET_S", "2")
+        )
+    )
+    rithmic_history_weekly_byte_limit: int = field(
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_RITHMIC_HISTORY_WEEKLY_BYTE_LIMIT", "38000000000")
+        )
+    )
+    rithmic_front_month_poll_s: int = field(
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_RITHMIC_FRONT_MONTH_POLL_S", "21600")
+        )
     )
 
     # Raw tick retention (see Requirements 7.4, 7.5). This is a calendar-day

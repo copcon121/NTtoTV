@@ -1,10 +1,10 @@
-"""Compact persistence for Bookmap liquidity signals and line lifecycles.
+"""Compact persistence for depth-derived liquidity signals and line lifecycles.
 
-The store intentionally does not retain raw full-depth updates.  The Bookmap
-bridge reduces those updates to threshold events plus start/update/end records
-for persistent liquidity lines.  Keeping this data in a dedicated WAL database
-makes the feature removable and gives it an independent 24-hour retention
-policy without increasing the raw tick shards or the main chart cache.
+The store intentionally does not retain raw full-depth updates. The live feed reduces
+them in its bridge and direct Rithmic reduces them in the backend; only threshold
+events plus start/update/end records cross this boundary. Keeping this data in a
+dedicated WAL database gives it an independent 24-hour retention policy without
+increasing the raw tick shards or the main chart cache.
 """
 
 from __future__ import annotations
@@ -314,6 +314,13 @@ class LiquidityStore:
                     f"DELETE FROM liquidity_events WHERE event_kind IN ({placeholders})",
                     marker_kinds,
                 ).rowcount
+            if clear_lines and "relative" not in kinds:
+                deleted_events += conn.execute(
+                    """
+                    DELETE FROM liquidity_events
+                    WHERE event_kind='relative' AND line_id IS NOT NULL
+                    """
+                ).rowcount
             deleted_lines = 0
             if clear_lines:
                 deleted_lines = conn.execute("DELETE FROM liquidity_lines").rowcount
@@ -340,6 +347,7 @@ class LiquidityStore:
                     """
                     DELETE FROM liquidity_events
                     WHERE event_kind=?
+                      AND line_id IS NULL
                       AND (
                         threshold<>?
                         OR dom_distance IS NULL
@@ -363,6 +371,16 @@ class LiquidityStore:
                     """,
                     (int(settings["longTermTrigger"]),),
                 ).rowcount
+                if bool(settings["relativeEnabled"]):
+                    deleted_events += conn.execute(
+                        """
+                        DELETE FROM liquidity_events
+                        WHERE event_kind='relative'
+                          AND line_id IS NOT NULL
+                          AND threshold<>?
+                        """,
+                        (int(settings["longTermTrigger"]),),
+                    ).rowcount
                 deleted_lines = conn.execute(
                     "DELETE FROM liquidity_lines WHERE threshold<>?",
                     (int(settings["longTermTrigger"]),),
@@ -370,6 +388,12 @@ class LiquidityStore:
             else:
                 deleted_events += conn.execute(
                     "DELETE FROM liquidity_events WHERE event_kind='long_term_touch'"
+                ).rowcount
+                deleted_events += conn.execute(
+                    """
+                    DELETE FROM liquidity_events
+                    WHERE event_kind='relative' AND line_id IS NOT NULL
+                    """
                 ).rowcount
                 deleted_lines = conn.execute("DELETE FROM liquidity_lines").rowcount
             return int(deleted_events), int(deleted_lines)

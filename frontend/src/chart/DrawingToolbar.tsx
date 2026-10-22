@@ -30,6 +30,8 @@ export interface DrawingToolbarProps {
   orderLevelsVisible?: boolean;
   /** Toggles the temporary visibility of live ENTRY / SL / TP levels. */
   onOrderLevelsVisibleChange?: (visible: boolean) => void;
+  /** Hide order-on-chart controls in a market-data-only deployment. */
+  showOrderLevelsToggle?: boolean;
 }
 
 export function DrawingToolbar({
@@ -42,6 +44,7 @@ export function DrawingToolbar({
   onIndicatorsVisibleChange = () => {},
   orderLevelsVisible = true,
   onOrderLevelsVisibleChange = () => {},
+  showOrderLevelsToggle = true,
 }: DrawingToolbarProps) {
   const isMobile = className?.includes("drawing-toolbar-mobile") === true;
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -110,7 +113,7 @@ export function DrawingToolbar({
       <div className="drawing-toolbar-separator" />
 
       <div className="drawing-toolbar-bottom">
-        <button
+        {showOrderLevelsToggle && <button
           type="button"
           className={`drawing-tool-btn drawing-tool-order-levels${
             orderLevelsVisible ? "" : " is-hidden"
@@ -136,7 +139,7 @@ export function DrawingToolbar({
             <path d="M7 5v4M12 10v4M17 15v4" />
             {!orderLevelsVisible && <path d="M4 4 20 20" />}
           </svg>
-        </button>
+        </button>}
 
         <button
           type="button"

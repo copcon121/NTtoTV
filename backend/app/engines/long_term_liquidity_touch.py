@@ -1,4 +1,4 @@
-"""Correlate Bookmap executions with published long-term liquidity lines."""
+"""Correlate direct-feed executions with published long-term liquidity lines."""
 
 from __future__ import annotations
 
@@ -62,8 +62,8 @@ class LongTermLiquidityTouchEngine:
 
     A resting bid is touched only by sell aggressors; a resting ask is touched
     only by buy aggressors. Completed depth lines remain matchable briefly so
-    callback ordering between Bookmap's trade and depth channels cannot drop a
-    legitimate touch.
+    callback ordering between trade and depth channels cannot drop a legitimate
+    touch.
     """
 
     def __init__(

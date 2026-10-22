@@ -1,8 +1,7 @@
-"""FastAPI application factory.
+"""Rithmic-only FastAPI application factory.
 
-Assembles the REST router and the `/ws/nt` and `/ws/chart` WebSocket endpoints
-into a single FastAPI app, and (task 20.1) wires the full ingest -> engines ->
-registry -> frontend pipeline behind a lifespan-managed :class:`~app.runtime.AppRuntime`.
+Assembles REST and `/ws/chart`, then wires Ticker/History Plant ingestion to
+the chart pipeline behind a lifespan-managed :class:`~app.runtime.AppRuntime`.
 
 The runtime owns the shared Cache_Store, Tick_Store, Contract_Resolver,
 WebSocket_Registry, and the :class:`~app.pipeline.Pipeline`; it starts the
@@ -20,26 +19,20 @@ from fastapi import FastAPI
 
 from . import __version__
 from .analyst.routes import router as analyst_router
-from .ingest.endpoint import router as nt_router
-from .ingest.bookmap_endpoint import router as bookmap_ingest_router
 from .registry.endpoint import router as chart_router
 from .rest.alerts import router as alerts_router
-from .rest.auto_trade import router as auto_trade_router
 from .rest.auth import router as auth_router
 from .rest.market_data import router as market_data_router
 from .rest.market_explorer import router as market_explorer_router
 from .rest.liquidity import router as liquidity_router
-from .rest.mt5 import router as mt5_router
 from .rest.errors import install_error_handlers
 from .rest.notifications import router as notifications_router
-from .rest.nt_native import router as nt_native_router
-from .rest.orders import router as orders_router
 from .rest.orderflow import router as orderflow_router
 from .rest.profiles import router as profiles_router
 from .rest.routes import router as rest_router
+from .rest.rithmic_admin import router as rithmic_admin_router
 from .rest.signals import router as signals_router
 from .rest.smc_ai import router as smc_ai_router
-from .rest.supertrend_trailing import router as supertrend_trailing_router
 from .rest.trend_analyzer import router as trend_analyzer_router
 from .runtime import AppRuntime
 
@@ -92,24 +85,18 @@ def create_app(*, lifespan: bool = True) -> FastAPI:
 
     app.include_router(rest_router)
     app.include_router(auth_router)
+    app.include_router(rithmic_admin_router)
     app.include_router(alerts_router)
-    app.include_router(auto_trade_router)
-    app.include_router(supertrend_trailing_router)
     app.include_router(notifications_router)
     app.include_router(market_data_router)
     app.include_router(market_explorer_router)
     app.include_router(trend_analyzer_router)
     app.include_router(liquidity_router)
-    app.include_router(mt5_router)
-    app.include_router(orders_router)
     app.include_router(profiles_router)
     app.include_router(orderflow_router)
     app.include_router(smc_ai_router)
     app.include_router(signals_router)
     app.include_router(analyst_router)
-    app.include_router(nt_native_router)
-    app.include_router(nt_router)
-    app.include_router(bookmap_ingest_router)
     app.include_router(chart_router)
 
     return app

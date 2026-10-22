@@ -9,7 +9,7 @@ the current bar's ladder and produces a
 :class:`~app.models.messages.FootprintUpdate` snapshot. (Requirements 14.1,
 14.3, 14.4, 14.5, 14.10)
 
-An explicit canonical aggressor side (as supplied by Bookmap) is authoritative.
+An explicit canonical aggressor side supplied by Rithmic is authoritative.
 When it is absent, classification mirrors ``MzFootprintClone`` with
 ``DeltaCalculationMode=0`` (``BidAsk``): a trade is **buy** only when ``price >=
 ask`` and **sell** only when ``price <= bid``. Trades inside the spread still
@@ -215,7 +215,7 @@ class FootprintEngine:
         if bar is not None and bucket < bar.time:
             return None  # out-of-order trade for an already-closed bar
 
-        # Bookmap already resolves the aggressor side at the exchange feed.
+        # Rithmic already resolves the aggressor side at the exchange feed.
         # NT/native callers without an explicit side retain BidAsk behavior.
         side = t.side
         if side is None:
@@ -276,7 +276,7 @@ class FootprintEngine:
     ) -> None:
         """Replace the current ladder with an authoritative bar snapshot.
 
-        Bookmap sends this snapshot on reconnect and at each minute close.  It
+        History/recovery code seeds this snapshot on reconnect and minute repair. It
         lets the tick-by-tick engine resume without losing trades that occurred
         before a backend reconnect and repairs any transport gap exactly.
         """

@@ -161,6 +161,7 @@ export interface ApiClientOptions {
 export interface AuthUser {
   id: string;
   username: string;
+  mustChangePassword?: boolean;
 }
 
 export interface Mt5Account {

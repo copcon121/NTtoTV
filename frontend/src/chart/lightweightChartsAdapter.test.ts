@@ -73,7 +73,7 @@ describe("lightweightChartsAdapter time conversion", () => {
 
   it("anchors BigTrade marker time to the active bar bucket", () => {
     // 12:34:27.500 in a 1m chart belongs on the 12:35:00 displayed candle,
-    // matching NinjaTrader's BarIndex-based BigTrade placement.
+    // matching bar-index-based BigTrade placement.
     const base = Date.UTC(2026, 5, 3, 12, 34, 0);
     const tradeTime = base + 27_500;
     expect(toBarDisplayTimestamp(tradeTime, 60_000, 60_000)).toBe(

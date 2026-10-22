@@ -133,11 +133,9 @@ import {
   type SmcAiSignalMarker,
 } from "./chart/lightweightChartsAdapter";
 import {
-  MarketOrderBar,
   type MarketOrderRow,
   type MarketOrderSettings,
 } from "./orders/MarketOrderBar";
-import { Mt5AccountDialog } from "./orders/Mt5AccountDialog";
 import { ChartSocket } from "./socket/ChartSocket";
 import {
   type AccountPositionUpdate,
@@ -2208,10 +2206,10 @@ export function LiveApp() {
   const [authError, setAuthError] = useState("");
   const [mt5Account, setMt5Account] = useState<Mt5Account | undefined>(undefined);
   const [mt5Symbol, setMt5Symbol] = useState<Mt5Symbol | undefined>(undefined);
-  const [mt5DialogOpen, setMt5DialogOpen] = useState(false);
-  const [mt5Terminals, setMt5Terminals] = useState<Mt5Terminal[]>([]);
-  const [mt5Pending, setMt5Pending] = useState(false);
-  const [mt5Error, setMt5Error] = useState("");
+  const [, setMt5DialogOpen] = useState(false);
+  const [, setMt5Terminals] = useState<Mt5Terminal[]>([]);
+  const [, setMt5Pending] = useState(false);
+  const [, setMt5Error] = useState("");
   const [orders, setOrders] = useState<readonly TradingOrder[]>([]);
   const [mt5OpenTrades, setMt5OpenTrades] = useState<Mt5OpenTrades>(
     EMPTY_MT5_OPEN_TRADES,
@@ -2246,7 +2244,7 @@ export function LiveApp() {
   );
   const [autoTradePending, setAutoTradePending] = useState(false);
   const [orderPending, setOrderPending] = useState(false);
-  const [orderError, setOrderError] = useState("");
+  const [, setOrderError] = useState("");
   // TradingView-style chart context menu, anchored at the click point.
   const [chartMenu, setChartMenu] = useState<ChartMenuState | undefined>(
     undefined,
@@ -2254,7 +2252,7 @@ export function LiveApp() {
   const [activeTool, setActiveTool] = useState<DrawingToolType | null>(null);
   const fixedRangeProfileMode: FixedRangeProfileMode = "volume";
   const [chartFocusMode, setChartFocusMode] = useState(false);
-  const [marketOrderDrawerOpen, setMarketOrderDrawerOpen] = useState(false);
+  const [, setMarketOrderDrawerOpen] = useState(false);
   const [drawingCount, setDrawingCount] = useState(0);
   const [deleteAllSignal, setDeleteAllSignal] = useState(0);
   const [removeDrawingIds, setRemoveDrawingIds] = useState<readonly string[]>([]);
@@ -2715,25 +2713,10 @@ export function LiveApp() {
   );
 
   const refreshTradingState = useCallback(async () => {
-    const [ordersResult, openTradesResult, statusResult, trailingResult] = await Promise.allSettled([
-      api.orders(true),
-      api.mt5OpenTrades(),
-      api.mt5Status(),
-      api.supertrendTrailings(),
-    ]);
-    if (ordersResult.status === "fulfilled") {
-      setOrders(ordersResult.value);
-    }
-    if (openTradesResult.status === "fulfilled") {
-      setMt5OpenTrades(openTradesResult.value);
-    }
-    if (statusResult.status === "fulfilled") {
-      applyMt5Status(statusResult.value);
-    }
-    if (trailingResult.status === "fulfilled") {
-      setSupertrendTrailings(supertrendTrailingMap(trailingResult.value));
-    }
-  }, [api, applyMt5Status]);
+    setOrders([]);
+    setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
+    setSupertrendTrailings(new Map());
+  }, []);
 
   const scheduleDeltaProfileRefresh = useCallback(() => {
     if (deltaProfileRefreshTimerRef.current !== undefined) {
@@ -5156,7 +5139,9 @@ export function LiveApp() {
 
     const [profileResult, statusResult] = await Promise.allSettled([
       api.meProfile(),
-      api.mt5Status(),
+      Promise.resolve(
+        { connected: false } as Awaited<ReturnType<ApiClient["mt5Status"]>>,
+      ),
     ]);
 
     const hotSnapshot = readProfileHotSnapshot(user.id);
@@ -5211,7 +5196,7 @@ export function LiveApp() {
       setOrders([]);
       setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
       setSupertrendTrailings(new Map());
-      if (options.openMt5Setup) {
+      if (false && options.openMt5Setup) {
         setMt5Error("");
         setMt5DialogOpen(true);
         void api.mt5Terminals().then(setMt5Terminals);
@@ -5596,15 +5581,7 @@ export function LiveApp() {
     [drawings, timeframe],
   );
   const visibleDrawingsLoadKey = `${drawingsLoadKey}:${timeframe}`;
-  const chartMenuLimitDraft =
-    chartMenu === undefined
-      ? undefined
-      : buildChartLimitOrderDraft({
-          entryPrice: chartMenu.price,
-          referencePrice: chartMenu.referencePrice,
-          settings: marketOrderSettings,
-          symbol: mt5Symbol,
-        });
+  const chartMenuLimitDraft = undefined;
 
   useEffect(() => {
     if (
@@ -5669,23 +5646,39 @@ export function LiveApp() {
       ? undefined
       : marketDataStatus?.sources[activeMarketSource];
   const activeSourceLag = activeSourceStatus?.eventLagMs.last;
+  const physicalContract = activeSourceStatus?.contract;
   const sourceName =
-    activeMarketSource === "bookmap"
-      ? "BM"
-      : activeMarketSource === "nt"
-        ? marketDataStatus?.preferredSource === "bookmap"
-          ? "NT fallback"
-          : "NT"
-        : undefined;
+    activeMarketSource === "rithmic"
+      ? `Rithmic${physicalContract ? ` / ${physicalContract}` : ""}`
+      : undefined;
+  const historyState = marketDataStatus?.historySync?.state;
   const marketStatusLabel =
-    sourceName === undefined
-      ? undefined
+    historyState === "syncing" || historyState === "connecting"
+      ? "History syncing"
+      : sourceName === undefined
+      ? "Degraded"
       : activeSourceLag === null || activeSourceLag === undefined
         ? sourceName
         : `${sourceName} · ${Math.round(activeSourceLag)} ms`;
   const marketStatusReason = marketDataStatus
-    ? `${marketDataStatus.reason ?? "live"}; BM p95 ${marketDataStatus.sources.bookmap?.eventLagMs.p95 ?? "-"} ms; NT p95 ${marketDataStatus.sources.nt?.eventLagMs.p95 ?? "-"} ms`
+    ? `${marketDataStatus.reason ?? "live"}; Rithmic ${physicalContract ?? "-"}; history ${historyState ?? "unknown"}${marketDataStatus.historySync?.lastError ? `; ${marketDataStatus.historySync.lastError}` : ""}`
     : undefined;
+
+  // Trading handlers remain isolated from the chart bundle until the broader
+  // frontend split is completed; no market-data-only UI path can invoke them.
+  void onOpenMt5Account;
+  void onMarketOrder;
+  void onOrderDragBatchCommit;
+  void onOrderRowBreakEven;
+  void onOrderRowSupertrendTrailing;
+  void onOrderRowClose;
+  void onOrderRowClose50Percent;
+  void onOrderRowCancel;
+  void onAutoTradeSettingsChange;
+  void onSubmitMt5Account;
+  void orderLines;
+  void orderRows;
+  void orderControls;
 
   return (
     <div className={appShellClassName(chartFocusMode)}>
@@ -5778,9 +5771,6 @@ export function LiveApp() {
         <div className="account-toolbar" aria-label="Account controls">
           {authUser ? (
             <>
-              <button type="button" onClick={onOpenMt5Account}>
-                Account
-              </button>
               <button type="button" onClick={onLogout}>
                 Logout
               </button>
@@ -5889,6 +5879,7 @@ export function LiveApp() {
           onIndicatorsVisibleChange={setIndicatorsVisible}
           orderLevelsVisible={orderLevelsVisible}
           onOrderLevelsVisibleChange={setOrderLevelsVisible}
+          showOrderLevelsToggle={false}
         />
         <div className="chart-stack">
           <ChartContainer
@@ -5909,14 +5900,8 @@ export function LiveApp() {
             smcAiSignals={chartSmcAiSignals}
             alertSignals={chartAlertSignals}
             alertLines={replayActive ? EMPTY_ALERT_LINES : alertLines}
-            orderLines={
-              replayActive || !orderLevelsVisible ? EMPTY_ORDER_LINES : orderLines
-            }
-            orderControls={
-              replayActive || !orderLevelsVisible
-                ? EMPTY_ORDER_CONTROLS
-                : orderControls
-            }
+            orderLines={EMPTY_ORDER_LINES}
+            orderControls={EMPTY_ORDER_CONTROLS}
             ema={visibleEma}
             supertrend={visibleSupertrend}
             smc={visibleSmc}
@@ -5970,10 +5955,10 @@ export function LiveApp() {
             onRequestMoreHistory={replayActive ? undefined : requestMoreHistory}
             onAlertDragCommit={replayActive ? undefined : onAlertDragCommit}
             onAlertDelete={replayActive ? undefined : onDeleteAlert}
-            onOrderDragCommit={replayActive ? undefined : onOrderDragCommit}
-            onOrderDragBatchCommit={replayActive ? undefined : onOrderDragBatchCommit}
-            onOrderClose={replayActive ? undefined : onOrderRowClose}
-            onOrderCancel={replayActive ? undefined : onOrderRowCancel}
+            onOrderDragCommit={undefined}
+            onOrderDragBatchCommit={undefined}
+            onOrderClose={undefined}
+            onOrderCancel={undefined}
             priceSnap={roundGcPrice}
             activeTool={activeTool}
             fixedRangeProfileMode={fixedRangeProfileMode}
@@ -6054,33 +6039,9 @@ export function LiveApp() {
               onIndicatorsVisibleChange={setIndicatorsVisible}
               orderLevelsVisible={orderLevelsVisible}
               onOrderLevelsVisibleChange={setOrderLevelsVisible}
+              showOrderLevelsToggle={false}
             />
           </ChartContainer>
-          {authUser && !replayActive && (
-            <MarketOrderBar
-              account={mt5Account}
-              pending={orderPending}
-              error={orderError}
-              variant={chartFocusMode ? "drawer" : "default"}
-              drawerOpen={marketOrderDrawerOpen}
-              onDrawerOpenChange={setMarketOrderDrawerOpen}
-              openOrderCount={orderRows.length}
-              orderRows={orderRows}
-              settings={marketOrderSettings}
-              onSettingsChange={(settings) =>
-                setMarketOrderSettings(sanitizeMarketOrderSettings(settings))
-              }
-              onMarketOrder={onMarketOrder}
-              autoTradeSettings={autoTradeSettings}
-              autoTradePending={autoTradePending}
-              onAutoTradeSettingsChange={onAutoTradeSettingsChange}
-              onOrderRowBreakEven={onOrderRowBreakEven}
-              onOrderRowSupertrendTrailing={onOrderRowSupertrendTrailing}
-              onOrderRowClose={onOrderRowClose}
-              onOrderRowClose50Percent={onOrderRowClose50Percent}
-              onOrderRowCancel={onOrderRowCancel}
-            />
-          )}
         </div>
         <AuthDialog
           open={authDialogOpen}
@@ -6094,15 +6055,6 @@ export function LiveApp() {
           }}
           onSubmit={onAuthSubmit}
           onClose={() => setAuthDialogOpen(false)}
-        />
-        <Mt5AccountDialog
-          open={mt5DialogOpen}
-          account={mt5Account}
-          pending={mt5Pending}
-          error={mt5Error}
-          terminals={mt5Terminals}
-          onSubmit={onSubmitMt5Account}
-          onClose={() => setMt5DialogOpen(false)}
         />
         {chartMenu !== undefined && (
           <ChartContextMenu

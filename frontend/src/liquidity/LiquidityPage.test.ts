@@ -318,7 +318,7 @@ describe("Long-term liquidity touch bubbles", () => {
     );
   });
 
-  it("ends a liquidity line when Bookmap reports that liquidity was eaten", () => {
+  it("ends a liquidity line when the direct feed reports that liquidity was eaten", () => {
     const current = new Map([["bid:41910:1000", {
       lineId: "bid:41910:1000",
       side: "bid" as const,
@@ -361,6 +361,34 @@ describe("Long-term liquidity touch bubbles", () => {
 });
 
 describe("liquidity history refiltering", () => {
+  it("hides legacy touched-line removal markers", () => {
+    const touchedLineRemoval = {
+      sequence: 18,
+      time: 2_000,
+      eventKind: "relative" as const,
+      action: "removed" as const,
+      side: "bid" as const,
+      price: 4190,
+      size: 0,
+      previousSize: 12,
+      change: 12,
+      threshold: 500,
+      domDistance: 0,
+      strength: 0.24,
+      lineId: "bid:41900:1000",
+      lineStartTime: 1_000,
+    };
+
+    expect(liquidityEventMatchesSettings(
+      touchedLineRemoval,
+      longTermSettings,
+    )).toBe(false);
+    expect(liquidityEventMatchesSettings(
+      touchedLineRemoval,
+      { ...longTermSettings, relativeEnabled: false },
+    )).toBe(false);
+  });
+
   it("uses measured relative change instead of the detector's old trigger", () => {
     const historical = {
       sequence: 1,
@@ -437,7 +465,7 @@ describe("Market Explorer settings", () => {
     markerSize: 2,
     variableSize: false,
     alertSound: false,
-    bookmapAlertMessage: "disabled" as const,
+    alertMessage: "disabled" as const,
   };
   const volumeSpike = {
     enabled: true,
@@ -451,7 +479,7 @@ describe("Market Explorer settings", () => {
     markerSize: 2,
     variableSize: false,
     alertSound: false,
-    bookmapAlertMessage: "disabled" as const,
+    alertMessage: "disabled" as const,
   };
   const absorption = {
     enabled: true,
@@ -463,7 +491,7 @@ describe("Market Explorer settings", () => {
     markerSize: 2,
     variableSize: false,
     alertSound: false,
-    bookmapAlertMessage: "disabled" as const,
+    alertMessage: "disabled" as const,
   };
   const settings = {
     lineEnabled: true,

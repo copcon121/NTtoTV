@@ -76,6 +76,27 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
             "symbol": "GC",
             "contract": "GC",
             "sourceContract": "GCZ6.COMEX@RITHMIC",
+            "sequence": 4,
+            "time": 350_000,
+            "eventKind": "relative",
+            "action": "removed",
+            "side": "bid",
+            "price": 4198.0,
+            "size": 0,
+            "previousSize": 12,
+            "change": 12,
+            "threshold": 500,
+            "domDistance": 0,
+            "strength": 0.24,
+            "lineId": "bid:41980:349000",
+            "lineStartTime": 349_000,
+        }
+    )
+    store.record(
+        {
+            "symbol": "GC",
+            "contract": "GC",
+            "sourceContract": "GCZ6.COMEX@RITHMIC",
             "sequence": -1,
             "time": 340_000,
             "eventKind": "long_term_touch",
@@ -206,7 +227,7 @@ def test_liquidity_settings_are_validated_and_persisted(tmp_path):
     assert updated.json()["settings"]["relativeTrigger"] == 425
     assert updated.json()["settings"]["absoluteTrigger"] == 500
     assert updated.json()["settings"]["longTermMinAgeSeconds"] == 45
-    assert updated.json()["sentToBookmap"] is False
+    assert updated.json()["appliedTo"] == ["rithmic"]
     assert updated.json()["historyCleared"] == []
     assert updated.json()["historyRefiltered"] == ["relative", "long_term"]
     assert updated.json()["historyDeleted"] == {"events": 0, "lines": 0}

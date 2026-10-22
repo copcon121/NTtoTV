@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import platform
 import ssl
@@ -47,6 +48,10 @@ DEFAULT_URI = "wss://rituz00100.rithmic.com:443"
 class RithmicProbeError(RuntimeError):
     """A bounded probe failed before or during market-data subscription."""
 
+    def __init__(self, message: str, *, result: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.result = result
+
 
 @dataclass(slots=True)
 class RithmicLogin:
@@ -55,6 +60,8 @@ class RithmicLogin:
     system_name: str = "Rithmic Test"
     app_name: str = "NTtoTV Rithmic Connector"
     app_version: str = "0.1.0"
+    template_version: str = "5.55"
+    user_message: str = "nttotv-probe"
     aggregated_quotes: bool = False
     mac_addresses: tuple[str, ...] = ()
     os_version: str = field(default_factory=platform.version)
@@ -64,9 +71,16 @@ class RithmicLogin:
     def from_environment(cls) -> "RithmicLogin":
         user = os.getenv("NTTOTV_RITHMIC_USER", "")
         password = os.getenv("NTTOTV_RITHMIC_PASSWORD", "")
+        if not password and os.getenv("NTTOTV_RITHMIC_PASSWORD_FILE"):
+            try:
+                password = Path(os.environ["NTTOTV_RITHMIC_PASSWORD_FILE"]).read_text(
+                    encoding="utf-8"
+                ).rstrip("\r\n")
+            except OSError:
+                password = ""
         if not user or not password:
             raise RithmicProbeError(
-                "NTTOTV_RITHMIC_USER and NTTOTV_RITHMIC_PASSWORD are required"
+                "Rithmic user and password/password-file are required"
             )
         return cls(
             user=user,
@@ -76,8 +90,18 @@ class RithmicLogin:
                 "NTTOTV_RITHMIC_APP_NAME", "NTtoTV Rithmic Connector"
             ),
             app_version=os.getenv("NTTOTV_RITHMIC_APP_VERSION", "0.1.0"),
+            template_version=os.getenv("NTTOTV_RITHMIC_TEMPLATE_VERSION", "5.55"),
+            user_message=os.getenv("NTTOTV_RITHMIC_USER_MESSAGE", "nttotv-probe"),
             aggregated_quotes=_env_bool("NTTOTV_RITHMIC_AGGREGATED_QUOTES", False),
-            mac_addresses=(_host_mac(),),
+            mac_addresses=tuple(
+                value.strip().upper()
+                for value in os.getenv(
+                    "NTTOTV_RITHMIC_MAC_ADDRESSES", _host_mac()
+                ).split(",")
+                if value.strip()
+            ),
+            os_version=os.getenv("NTTOTV_RITHMIC_OS_VERSION", platform.version()),
+            os_platform=os.getenv("NTTOTV_RITHMIC_OS_PLATFORM", platform.system()),
         )
 
 
@@ -144,6 +168,53 @@ class RithmicDirectClient:
             await websocket.send(build_gateway_info_request(system_name))
             return await self._receive_expected(websocket, {21})
 
+    async def probe_plant_logins(self, login: RithmicLogin) -> dict[str, Any]:
+        """Verify Ticker and History Plant entitlements at the same time."""
+
+        async with self._connect() as ticker, self._connect() as history:
+            common = {
+                "user": login.user,
+                "password": login.password,
+                "app_name": login.app_name,
+                "app_version": login.app_version,
+                "template_version": login.template_version,
+                "user_message": login.user_message,
+                "system_name": login.system_name,
+                "mac_addresses": login.mac_addresses,
+                "os_version": login.os_version,
+                "os_platform": login.os_platform,
+            }
+            await ticker.send(
+                build_login_request(
+                    **common,
+                    infra_type=1,
+                    aggregated_quotes=login.aggregated_quotes,
+                )
+            )
+            await history.send(build_login_request(**common, infra_type=3))
+            ticker_response, history_response = await asyncio.gather(
+                self._receive_expected(ticker, {LOGIN_RESPONSE, REJECT, FORCED_LOGOUT}),
+                self._receive_expected(history, {LOGIN_RESPONSE, REJECT, FORCED_LOGOUT}),
+            )
+            with contextlib.suppress(Exception):
+                await ticker.send(build_logout_request())
+            with contextlib.suppress(Exception):
+                await history.send(build_logout_request())
+
+        result = {
+            "tickerPlant": self._login_probe_result(ticker_response),
+            "historyPlant": self._login_probe_result(history_response),
+            "appName": login.app_name,
+            "appVersion": login.app_version,
+            "system": login.system_name,
+        }
+        if not result["tickerPlant"]["ok"] or not result["historyPlant"]["ok"]:
+            raise RithmicProbeError(
+                "Rithmic rejected one or more plant logins",
+                result=result,
+            )
+        return result
+
     async def probe_market_data(
         self,
         *,
@@ -175,6 +246,8 @@ class RithmicDirectClient:
                     os_version=login.os_version,
                     os_platform=login.os_platform,
                     aggregated_quotes=login.aggregated_quotes,
+                    template_version=login.template_version,
+                    user_message=login.user_message,
                 )
             )
             login_response = await self._receive_expected(
@@ -309,6 +382,15 @@ class RithmicDirectClient:
             close_timeout=3,
             max_size=16 * 1024 * 1024,
         )
+
+    @staticmethod
+    def _login_probe_result(message: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "ok": bool(message.get("type") == "login" and message.get("ok")),
+            "messageType": message.get("type"),
+            "rpCode": list(message.get("rpCode") or []),
+            "heartbeatInterval": message.get("heartbeatInterval"),
+        }
 
     async def _receive_expected(self, websocket, templates: set[int]) -> dict[str, Any]:
         deadline = time.monotonic() + self.timeout_seconds

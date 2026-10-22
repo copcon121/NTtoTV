@@ -11,7 +11,7 @@
 // the two Lightweight Charts APIs called out in the design research notes.
 //
 // Time conversion: backend bars carry a Canonical_Timestamp in **milliseconds**
-// since the Unix epoch and key bars by bucket start. NinjaTrader time-based
+// since the Unix epoch and key bars by bucket start. Source time-based
 // charts display bars at their closing time, so the adapter can apply a display
 // offset before converting ms -> Lightweight Charts' second-based timestamp.
 

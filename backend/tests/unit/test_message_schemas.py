@@ -1,7 +1,7 @@
 """Unit tests for WebSocket event-type schema serialization (task 2.4).
 
-Round-trips every ``/ws/chart`` event type and the ``/ws/nt`` data/control/
-status message types against the documented JSON shapes from the design's
+Round-trips every ``/ws/chart`` event type and canonical direct-feed JSON
+helpers against the documented JSON shapes from the design's
 "WebSocket Message Schemas" section. For every message type we assert:
 
 * ``from_dict(to_dict(x)) == x`` (lossless round-trip), and the reverse
@@ -11,11 +11,10 @@ status message types against the documented JSON shapes from the design's
   ``buyPct``, ``sellPct``, ``stackedImbalance``, ``unfinishedAuction``,
   ``alertId``, ...);
 * the ``type`` discriminator is present and correct;
-* the decode dispatchers (``decode_nt_data_message`` /
-  ``decode_chart_client_message``) route by ``type``.
+* the chart decode dispatcher routes by ``type``.
 
 Covers Requirement 5.2 (event-type schema serialization for all `/ws/chart`
-event types) plus the `/ws/nt` data (1.1, 1.2), control, and status shapes.
+event types) plus canonical direct-feed trade/quote shapes.
 """
 
 from __future__ import annotations
@@ -28,15 +27,12 @@ from app.models.messages import (
     BarUpdate,
     BigTrade,
     ChartStatusEvent,
-    ControlAction,
-    ControlCommand,
     EventType,
     FootprintRow,
     FootprintUpdate,
     FvgSignalUpdate,
     ImbalanceSide,
     MarketDataStatus,
-    NTStatusEvent,
     OHLCVBar,
     Ping,
     Pong,
@@ -49,7 +45,6 @@ from app.models.messages import (
     Unsubscribe,
     VolumeDeltaUpdate,
     decode_chart_client_message,
-    decode_nt_data_message,
     quote_from_dict,
     quote_to_dict,
     trade_from_dict,
@@ -120,7 +115,7 @@ def _quote_wire() -> dict:
 
 
 # ===========================================================================
-# /ws/nt data plane: trade / quote (Req 1.1, 1.2)
+# Canonical direct-feed trade / quote JSON helpers
 # ===========================================================================
 
 
@@ -163,7 +158,7 @@ def test_trade_preserves_missing_quote_snapshot():
 
 
 @pytest.mark.unit
-def test_trade_preserves_optional_nt_time_ticks():
+def test_trade_preserves_optional_source_time_ticks():
     wire = {
         **_trade_wire(),
         "timeTicks": 638858610886080001,
@@ -191,72 +186,6 @@ def test_quote_wire_shape_matches_design_exactly():
 @pytest.mark.unit
 def test_quote_wire_round_trips_from_documented_shape():
     assert quote_to_dict(quote_from_dict(_quote_wire())) == _quote_wire()
-
-
-# ===========================================================================
-# /ws/nt status (NT_AddOn -> Backend) (Req 3.4, 20.1)
-# ===========================================================================
-
-
-@pytest.mark.unit
-def test_nt_status_event_round_trips():
-    status = NTStatusEvent(
-        source="nt_addon", state=StatusState.CONNECTED, time=1730313600200
-    )
-    assert NTStatusEvent.from_dict(status.to_dict()) == status
-
-
-@pytest.mark.unit
-def test_nt_status_event_wire_shape_matches_design():
-    status = NTStatusEvent(
-        source="nt_addon", state=StatusState.CONNECTED, time=1730313600200
-    )
-    assert status.to_dict() == {
-        "type": "status",
-        "source": "nt_addon",
-        "state": "connected",
-        "time": 1730313600200,
-    }
-
-
-@pytest.mark.unit
-def test_nt_status_event_includes_optional_contract_when_set():
-    status = NTStatusEvent(
-        source="nt_addon",
-        state=StatusState.DEGRADED,
-        time=1730313600200,
-        contract="GC 08-26",
-    )
-    wire = status.to_dict()
-    assert wire["contract"] == "GC 08-26"
-    assert NTStatusEvent.from_dict(wire) == status
-
-
-# ===========================================================================
-# /ws/nt control plane: control command (Req 1.7, 1.8, 4.6)
-# ===========================================================================
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize(
-    "action", [ControlAction.SUBSCRIBE, ControlAction.UNSUBSCRIBE]
-)
-def test_control_command_round_trips(action):
-    cmd = ControlCommand(action=action, contract="GC 10-26", time=1730313600300)
-    assert ControlCommand.from_dict(cmd.to_dict()) == cmd
-
-
-@pytest.mark.unit
-def test_control_command_wire_shape_matches_design():
-    cmd = ControlCommand(
-        action=ControlAction.SUBSCRIBE, contract="GC 10-26", time=1730313600300
-    )
-    assert cmd.to_dict() == {
-        "type": "control",
-        "action": "subscribe",
-        "contract": "GC 10-26",
-        "time": 1730313600300,
-    }
 
 
 # ===========================================================================
@@ -338,27 +267,6 @@ def test_unsubscribe_wire_shape_matches_design():
         "symbol": "GC",
         "events": ["footprint_update"],
     }
-
-
-@pytest.mark.unit
-def test_subscriptions_ignore_removed_bookmap_si_event_from_old_tabs():
-    subscribe = Subscribe.from_dict(
-        {
-            "type": "subscribe",
-            "symbol": "GC",
-            "events": ["bar_update", "bookmap_si_event", "status"],
-        }
-    )
-    unsubscribe = Unsubscribe.from_dict(
-        {
-            "type": "unsubscribe",
-            "symbol": "GC",
-            "events": ["bookmap_si_event", "footprint_update"],
-        }
-    )
-
-    assert subscribe.events == [EventType.BAR_UPDATE, EventType.STATUS]
-    assert unsubscribe.events == [EventType.FOOTPRINT_UPDATE]
 
 
 @pytest.mark.unit
@@ -906,39 +814,6 @@ def test_ping_round_trips_and_wire_shape():
 
 
 @pytest.mark.unit
-def test_decode_nt_data_message_routes_trade():
-    decoded = decode_nt_data_message(_trade_wire())
-    assert isinstance(decoded, NormalizedTrade)
-    assert decoded == _trade()
-
-
-@pytest.mark.unit
-def test_decode_nt_data_message_routes_quote():
-    decoded = decode_nt_data_message(_quote_wire())
-    assert isinstance(decoded, NormalizedQuote)
-    assert decoded == _quote()
-
-
-@pytest.mark.unit
-def test_decode_nt_data_message_routes_status():
-    wire = {
-        "type": "status",
-        "source": "nt_addon",
-        "state": "connected",
-        "time": 1730313600200,
-    }
-    decoded = decode_nt_data_message(wire)
-    assert isinstance(decoded, NTStatusEvent)
-    assert decoded.state is StatusState.CONNECTED
-
-
-@pytest.mark.unit
-def test_decode_nt_data_message_rejects_unknown_type():
-    with pytest.raises(ValueError):
-        decode_nt_data_message({"type": "bar_update"})
-
-
-@pytest.mark.unit
 def test_decode_chart_client_message_routes_subscribe():
     wire = {"type": "subscribe", "symbol": "GC", "events": ["bar_update"], "tf": "1m"}
     decoded = decode_chart_client_message(wire)
@@ -971,5 +846,3 @@ def test_from_dict_rejects_mismatched_type_discriminator():
     # Each typed message validates its `type` discriminator on decode.
     with pytest.raises(ValueError):
         BarUpdate.from_dict({"type": "quote_update"})
-    with pytest.raises(ValueError):
-        ControlCommand.from_dict({"type": "subscribe"})

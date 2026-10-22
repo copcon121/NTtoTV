@@ -1,4 +1,4 @@
-"""Persistent, validated settings for Bookmap liquidity detection."""
+"""Persistent, validated settings for Rithmic liquidity detection."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from typing import Any
 from .models.timestamp import now_ms
 from .storage.cache_store import CacheStore
 
-LIQUIDITY_SETTINGS_META_KEY = "bookmap.liquidity.settings.v1"
+LIQUIDITY_SETTINGS_META_KEY = "rithmic.liquidity.settings.v2"
+_LEGACY_SETTINGS_META_KEY = "bookmap.liquidity.settings.v1"
 
 DEFAULT_LIQUIDITY_SETTINGS: dict[str, bool | int] = {
     "relativeEnabled": True,
@@ -53,6 +54,8 @@ class LiquiditySettingsError(ValueError):
 
 def load_liquidity_settings(cache: CacheStore) -> dict[str, bool | int]:
     raw = cache.get_metadata(LIQUIDITY_SETTINGS_META_KEY)
+    if not raw:
+        raw = cache.get_metadata(_LEGACY_SETTINGS_META_KEY)
     if not raw:
         return dict(DEFAULT_LIQUIDITY_SETTINGS)
     try:

@@ -221,7 +221,7 @@ export type LiquidityAction =
   | "snapshot"
   | "touch";
 
-/** Compact signal derived inside Bookmap from full-depth updates. */
+/** Compact signal derived from Rithmic full-depth updates. */
 export interface LiquidityUpdateMessage {
   type: "liquidity_update";
   symbol: string;
@@ -331,11 +331,26 @@ export interface MarketDataStatusMessage {
   type: "market_data_status";
   symbol: string;
   time: number;
-  activeSource?: "bookmap" | "nt" | null;
-  preferredSource: "bookmap" | "nt" | string;
+  activeSource?: "rithmic" | null;
+  preferredSource: "rithmic";
   switchedAt?: number | null;
   reason?: string | null;
   sources: Record<string, MarketDataSourceStatus>;
+  historySync?: {
+    state: "stopped" | "connecting" | "syncing" | "synced" | "error";
+    connected: boolean;
+    highWatermark?: number | null;
+    pendingRanges: readonly (readonly [number, number])[];
+    lastSuccessAt?: number | null;
+    lastError?: string | null;
+  };
+  rollPending?: {
+    current: string;
+    candidate: string;
+    observations: number;
+    confirmed: boolean;
+    checkedAt?: number | null;
+  } | null;
 }
 
 /** Alert firing event (Req 5.2, 17.2). */

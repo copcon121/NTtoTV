@@ -104,6 +104,7 @@ def _row_to_user(row: sqlite3.Row) -> UserRecord:
         username=str(row["username"]),
         password_hash=str(row["password_hash"]),
         created_at=int(row["created_at"]),
+        must_change_password=bool(row["must_change_password"]),
     )
 
 
@@ -153,7 +154,8 @@ class UserStore:
         conn = self._reader()
         try:
             row = conn.execute(
-                "SELECT id, username, password_hash, created_at FROM users WHERE id = ?",
+                "SELECT id, username, password_hash, created_at, must_change_password "
+                "FROM users WHERE id = ?",
                 (user_id,),
             ).fetchone()
             return None if row is None else _row_to_user(row)
@@ -164,7 +166,7 @@ class UserStore:
         conn = self._reader()
         try:
             row = conn.execute(
-                "SELECT id, username, password_hash, created_at "
+                "SELECT id, username, password_hash, created_at, must_change_password "
                 "FROM users WHERE lower(username) = lower(?)",
                 (username.strip(),),
             ).fetchone()
@@ -176,7 +178,7 @@ class UserStore:
         conn = self._reader()
         try:
             row = conn.execute(
-                "SELECT id, username, password_hash, created_at "
+                "SELECT id, username, password_hash, created_at, must_change_password "
                 "FROM users ORDER BY created_at, id LIMIT 1"
             ).fetchone()
             return None if row is None else _row_to_user(row)
@@ -188,6 +190,49 @@ class UserStore:
         if user is None or not verify_password(password, user.password_hash):
             return None
         return user
+
+    def reset_first_user_credentials(
+        self, username: str, password: str, *, require_password_change: bool = True
+    ) -> UserRecord:
+        """Reset the owner account and invalidate every existing session."""
+        owner = self.read_first_user()
+        if owner is None:
+            owner = self.create_user(username, password)
+            if require_password_change:
+                self._writer.execute(
+                    "UPDATE users SET must_change_password = 1 WHERE id = ?",
+                    (owner.id,),
+                )
+            return self.read_user(owner.id) or owner
+        password_hash = hash_password(password)
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute("DELETE FROM sessions")
+            conn.execute(
+                "UPDATE users SET username = ?, password_hash = ?, "
+                "must_change_password = ? WHERE id = ?",
+                (username.strip(), password_hash, int(require_password_change), owner.id),
+            )
+
+        self._writer.write(op)
+        return self.read_user(owner.id) or owner
+
+    def change_password(self, user_id: str, current_password: str, new_password: str) -> bool:
+        user = self.read_user(user_id)
+        if user is None or not verify_password(current_password, user.password_hash):
+            return False
+        password_hash = hash_password(new_password)
+
+        def op(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                "UPDATE users SET password_hash = ?, must_change_password = 0 "
+                "WHERE id = ?",
+                (password_hash, user_id),
+            )
+            conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+
+        self._writer.write(op)
+        return True
 
     def create_session(self, user_id: str, ttl_ms: int = _SESSION_TTL_MS) -> str:
         token = secrets.token_urlsafe(32)
@@ -212,14 +257,18 @@ class UserStore:
         conn = self._reader()
         try:
             row = conn.execute(
-                "SELECT u.id, u.username FROM sessions s "
+                "SELECT u.id, u.username, u.must_change_password FROM sessions s "
                 "JOIN users u ON u.id = s.user_id "
                 "WHERE s.token_hash = ? AND s.expires_at > ?",
                 (token_hash, current),
             ).fetchone()
             if row is None:
                 return None
-            return AuthenticatedUser(id=str(row["id"]), username=str(row["username"]))
+            return AuthenticatedUser(
+                id=str(row["id"]),
+                username=str(row["username"]),
+                must_change_password=bool(row["must_change_password"]),
+            )
         finally:
             conn.close()
 

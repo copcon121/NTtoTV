@@ -1,11 +1,10 @@
-"""REST history for the standalone Bookmap liquidity chart."""
+"""REST history for the standalone depth-liquidity chart."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
 
 from ..config import settings as default_settings
-from ..ingest.bookmap_endpoint import get_bookmap_control
 from ..liquidity_settings import (
     LiquiditySettingsError,
     load_liquidity_settings,
@@ -83,6 +82,10 @@ def _event_matches_settings(
     settings: dict[str, bool | int],
 ) -> bool:
     kind = str(event.get("eventKind"))
+    if kind == "relative" and event.get("lineId"):
+        # Older builds synthesized a negative Relative marker when price
+        # touched a short/long-term line.  Keep those persisted markers hidden.
+        return False
     if kind == "long_term_touch":
         if not bool(settings["longTermEnabled"]) or int(
             event.get("threshold") or 0
@@ -167,10 +170,9 @@ async def update_liquidity_settings(request: Request) -> dict:
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is not None:
         runtime.pipeline.configure_liquidity(updated)
-    sent = await get_bookmap_control(request.app).send_liquidity_settings(updated)
     return {
         "settings": updated,
-        "sentToBookmap": sent,
+        "appliedTo": ["rithmic"],
         "historyCleared": [],
         "historyRefiltered": changed_kinds,
         "historyDeleted": {

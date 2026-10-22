@@ -225,19 +225,3 @@ def test_trade_and_quote_streams_are_independent(tick_store: TickStore):
     assert coord.validator.highest(StreamId("GC", "GC 08-26", QUOTE_CHANNEL)) == 1
 
 
-# --- handlers() bundle plugs into the endpoint -------------------------------
-
-
-@pytest.mark.unit
-def test_handlers_bundle_routes_trades_and_quotes(tick_store: TickStore):
-    coord = IngestionCoordinator(tick_store)
-    handlers = coord.handlers()
-
-    # Bound methods compare equal when bound to the same instance + function.
-    assert handlers.on_trade == coord.on_trade
-    assert handlers.on_quote == coord.on_quote
-    assert handlers.on_status is None
-    assert handlers.on_heartbeat is None
-
-    asyncio.run(handlers.on_trade(_trade(1)))
-    assert _recorded_trade_sequences(tick_store, "GC 08-26") == [1]

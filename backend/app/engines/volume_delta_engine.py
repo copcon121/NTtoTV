@@ -8,7 +8,7 @@ it folds the classified volume into the current (in-progress) bar and produces a
 
 Classification (the ordered rule set, Requirements 13.2-13.5)
 -------------------------------------------------------------
-An explicit canonical aggressor ``side`` (for example from Bookmap) is
+An explicit canonical aggressor ``side`` from Rithmic is
 authoritative.  When it is absent, ``classify(trade_price, bid, ask, last_side,
 prev_price)`` applies the rules in strict priority order, returning the first
 that matches:
@@ -199,7 +199,7 @@ class VolumeDeltaEngine:
             # Out-of-order trade for an already-closed bucket: ignore it.
             return None
 
-        # Bookmap supplies the exchange aggressor side on every trade.  Prefer
+        # Rithmic supplies the exchange aggressor side on every trade. Prefer
         # that canonical value over quote/tick inference; NT trades normally
         # leave it unset and continue through the established rule set.
         side = t.side

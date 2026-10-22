@@ -663,10 +663,10 @@ class KeyedStore:
                     "WHERE symbol = ? AND contract = ? AND time BETWEEN ? AND ?",
                     (symbol, contract, int(frm), int(to)),
                 )
-            elif source == "nt":
+            elif source == "rithmic":
                 conn.execute(
                     "DELETE FROM big_trades WHERE symbol = ? AND contract = ? "
-                    "AND time BETWEEN ? AND ? AND source IN ('nt', 'legacy')",
+                    "AND time BETWEEN ? AND ? AND source IN ('rithmic', 'legacy')",
                     (symbol, contract, int(frm), int(to)),
                 )
             else:

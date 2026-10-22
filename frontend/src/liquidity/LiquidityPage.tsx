@@ -121,7 +121,7 @@ export interface LiquidityTrackerSettings {
 
 interface LiquiditySettingsResponse {
   settings: LiquidityTrackerSettings;
-  sentToBookmap?: boolean;
+  appliedTo?: readonly string[];
   historyCleared?: LiquidityEventKind[];
   historyRefiltered?: LiquidityEventKind[];
   historyDeleted?: {
@@ -147,7 +147,7 @@ export interface MarketExplorerSignalSettings {
   markerSize: number;
   variableSize: boolean;
   alertSound: boolean;
-  bookmapAlertMessage: MarketExplorerToggleMode;
+  alertMessage: MarketExplorerToggleMode;
 }
 
 export interface VolumeSpikeSettings {
@@ -162,7 +162,7 @@ export interface VolumeSpikeSettings {
   markerSize: number;
   variableSize: boolean;
   alertSound: boolean;
-  bookmapAlertMessage: MarketExplorerToggleMode;
+  alertMessage: MarketExplorerToggleMode;
 }
 
 export interface AbsorptionSettings {
@@ -175,7 +175,7 @@ export interface AbsorptionSettings {
   markerSize: number;
   variableSize: boolean;
   alertSound: boolean;
-  bookmapAlertMessage: MarketExplorerToggleMode;
+  alertMessage: MarketExplorerToggleMode;
 }
 
 export interface MarketExplorerSettings {
@@ -236,7 +236,7 @@ const DEFAULT_MARKET_EXPLORER_SIGNAL: MarketExplorerSignalSettings = {
   markerSize: 2,
   variableSize: false,
   alertSound: false,
-  bookmapAlertMessage: "disabled",
+  alertMessage: "disabled",
 };
 
 const DEFAULT_VOLUME_SPIKE: VolumeSpikeSettings = {
@@ -251,7 +251,7 @@ const DEFAULT_VOLUME_SPIKE: VolumeSpikeSettings = {
   markerSize: 2,
   variableSize: false,
   alertSound: false,
-  bookmapAlertMessage: "disabled",
+  alertMessage: "disabled",
 };
 
 const DEFAULT_ABSORPTION: AbsorptionSettings = {
@@ -264,7 +264,7 @@ const DEFAULT_ABSORPTION: AbsorptionSettings = {
   markerSize: 2,
   variableSize: false,
   alertSound: false,
-  bookmapAlertMessage: "disabled",
+  alertMessage: "disabled",
 };
 
 const DEFAULT_MARKET_EXPLORER_SETTINGS: MarketExplorerSettings = {
@@ -419,6 +419,7 @@ export function LiquidityPage() {
     });
     const offLiquidity = socket.on("liquidity_update", (message) => {
       if (message.symbol !== SYMBOL || message.contract !== CONTRACT) return;
+      if (message.eventKind === "relative" && message.lineId) return;
       if (message.eventKind === "long_term") {
         setLines((current) => mergeLiveLine(current, message));
       } else {
@@ -644,11 +645,7 @@ export function LiquidityPage() {
       if (refilteredKinds.size > 0) setReloadKey((current) => current + 1);
       setMarketExplorerSettings(marketExplorerPayload.settings);
       setMarketExplorerDraft(cloneMarketExplorerSettings(marketExplorerPayload.settings));
-      setSettingsNotice(
-        liquidityPayload.sentToBookmap
-          ? "Saved and sent to Bookmap"
-          : "Saved; Market Explorer is live and liquidity will apply on Bookmap reconnect",
-      );
+      setSettingsNotice("Saved and applied to Rithmic");
     } catch (cause) {
       setSettingsError(cause instanceof Error ? cause.message : "Save failed");
     } finally {
@@ -739,7 +736,7 @@ export function LiquidityPage() {
             <header>
               <div>
                 <strong>Liquidity + Market Explorer Settings</strong>
-                <span>Applied to Bookmap depth and aggressor trades</span>
+                <span>Applied to active Rithmic depth and aggressor trades</span>
               </div>
               <button type="button" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
                 ×
@@ -749,7 +746,7 @@ export function LiquidityPage() {
             <div className="liquidity-settings-groups">
               <LiquiditySettingsGroup
                 title="Relative Liquidity Change"
-                help="So sánh size hiện tại với lần cập nhật trước tại cùng mức giá để đánh dấu thanh khoản được thêm hoặc rút."
+                help="So sánh size hiện tại với lần cập nhật trước tại cùng mức giá để đánh dấu thanh khoản được thêm hoặc rút. Khi giá giao dịch đúng tại một Short/Long-term line rồi line biến mất, phần size bị rút cũng hiện bằng marker Relative âm."
                 enableHelp="Tắt mục này sẽ ngừng tạo marker Relative mới. Marker cũ trong lịch sử 24 giờ vẫn được giữ lại."
                 enabled={settingsDraft.relativeEnabled}
                 onEnabledChange={(relativeEnabled) =>
@@ -1331,7 +1328,7 @@ function drawTrendAnalyzerLines(
   context.lineWidth = 2;
   context.lineJoin = "miter";
   context.setLineDash([]);
-  // Draw #2 first so #1 has the same top-layer precedence seen in Bookmap.
+  // Draw #2 first so #1 keeps top-layer precedence.
   for (const instance of [2, 1] as const) {
     if (instance === 1 ? !filters.trend1 : !filters.trend2) continue;
     for (const side of ["buy", "sell"] as const) {
@@ -2251,7 +2248,7 @@ function MarketExplorerSettingsEditor({
 
 type MarketExplorerAppearance = Pick<
   VolumeSpikeSettings,
-  "buyColor" | "sellColor" | "markerShape" | "markerSize" | "variableSize" | "alertSound" | "bookmapAlertMessage"
+  "buyColor" | "sellColor" | "markerShape" | "markerSize" | "variableSize" | "alertSound" | "alertMessage"
 >;
 
 function MarketExplorerEnableRow({
@@ -2310,11 +2307,11 @@ function MarketExplorerAppearanceFields({
       <MarketExplorerCheckField label="Variable marker size" checked={settings.variableSize} disabled={disabled} onChange={(variableSize) => onChange({ variableSize })} />
       <MarketExplorerCheckField label="Alert Sound" checked={settings.alertSound} disabled={disabled} onChange={(alertSound) => onChange({ alertSound })} />
       <MarketExplorerSelectField
-        label="Bookmap Alert Message"
-        value={settings.bookmapAlertMessage}
+        label="Rithmic Alert Message"
+        value={settings.alertMessage}
         disabled={disabled}
         options={[["disabled", "Disabled"], ["enabled", "Enabled"]]}
-        onChange={(bookmapAlertMessage) => onChange({ bookmapAlertMessage: bookmapAlertMessage as MarketExplorerToggleMode })}
+        onChange={(alertMessage) => onChange({ alertMessage: alertMessage as MarketExplorerToggleMode })}
       />
     </>
   );
@@ -2586,7 +2583,7 @@ function notifyMarketVolumeSignals(
       ? signal.side === "sell"
       : signal.side === "buy";
     if (config.alertSound) playMarketExplorerTone(bullish);
-    if (config.bookmapAlertMessage === "enabled") {
+    if (config.alertMessage === "enabled") {
       const label = signal.kind === "volume_spike"
         ? "Volume Spike"
         : signal.kind === "absorption"
@@ -2826,6 +2823,9 @@ export function liquidityEventMatchesSettings(
   event: LiquidityEvent,
   settings: LiquidityTrackerSettings,
 ): boolean {
+  if (event.eventKind === "relative" && event.lineId) {
+    return false;
+  }
   if (event.eventKind === "long_term_touch") {
     return longTermTouchMatchesSettings(event, settings);
   }

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from .. import __version__
 from ..config import settings as default_settings
@@ -77,14 +77,8 @@ def get_tick_store(request: Request) -> TickStore:
 
 
 def _raw_rebuild_source(request: Request) -> str:
-    """Choose one raw feed for cache-miss rebuilds without merging sources."""
-    runtime = getattr(request.app.state, "runtime", None)
-    if runtime is not None:
-        status = runtime.pipeline.market_data_status_message()
-        source = status.active_source or status.preferred_source
-    else:
-        source = default_settings.market_data_preferred_source
-    return source if source in ("nt", "bookmap") else "nt"
+    """Use the sole authoritative raw feed for cache-miss rebuilds."""
+    return "rithmic"
 
 
 def _raw_rebuild_contract(
@@ -100,6 +94,18 @@ def _raw_rebuild_contract(
 async def health() -> dict[str, str]:
     """Liveness probe used by smoke tests and the dev harness."""
     return {"status": "ok", "version": __version__}
+
+
+@router.get("/ready")
+async def ready(request: Request, response: Response) -> dict[str, Any]:
+    """Readiness requires both Rithmic plants and synchronized order flow."""
+
+    runtime = getattr(request.app.state, "runtime", None)
+    is_ready = runtime is not None and runtime.pipeline.is_ready()
+    if not is_ready:
+        response.status_code = 503
+    status = None if runtime is None else runtime.pipeline.market_data_status_dict()
+    return {"ready": is_ready, "marketData": status}
 
 
 @router.get("/symbols")
@@ -237,7 +243,7 @@ def _rebuild_bars(
     to: int,
     *,
     raw_contract: str | None = None,
-    source: str = "nt",
+    source: str = "rithmic",
 ) -> list[BarRecord]:
     """Rebuild OHLCV bars for one timeframe from raw Tick_Store ticks.
 

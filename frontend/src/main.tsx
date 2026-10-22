@@ -7,6 +7,7 @@ import { LiquidityPage } from "./liquidity/LiquidityPage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { routeForPathname } from "./routes";
 import { registerServiceWorker } from "./webPush";
+import { RithmicAdminPage } from "./admin/RithmicAdminPage";
 import "./styles.css";
 
 const rootElement = document.getElementById("root");
@@ -25,6 +26,8 @@ const app =
     <MarketProfilePage />
   ) : route === "liquidity" ? (
     <LiquidityPage />
+  ) : route === "admin" ? (
+    <RithmicAdminPage />
   ) : (
     <LiveApp />
   );

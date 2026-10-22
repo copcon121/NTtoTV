@@ -7,6 +7,7 @@ import pytest
 
 from app.models import NormalizedTrade, Side
 from app.rithmic.book import RithmicBookState
+from app.rithmic.client import RithmicDirectClient, RithmicProbeError
 from app.rithmic.service import RithmicMarketDataService, RithmicServiceConfig
 
 
@@ -17,7 +18,7 @@ class _Sink:
         self.health: list[dict] = []
         self.trades: list[NormalizedTrade] = []
         self.quotes = []
-        self.depth: list[tuple[dict, bool]] = []
+        self.depth: list[tuple[dict, bool, dict | None]] = []
 
     async def on_rithmic_connect(self, details: dict) -> None:
         self.connected.append(details)
@@ -35,9 +36,13 @@ class _Sink:
         self.quotes.append(quote)
 
     async def on_rithmic_depth(
-        self, details: dict, *, sequence_gap: bool = False
+        self,
+        details: dict,
+        *,
+        sequence_gap: bool = False,
+        book_update: dict | None = None,
     ) -> None:
-        self.depth.append((details, sequence_gap))
+        self.depth.append((details, sequence_gap, book_update))
 
 
 def _service() -> tuple[RithmicMarketDataService, _Sink]:
@@ -49,8 +54,8 @@ def _service() -> tuple[RithmicMarketDataService, _Sink]:
             user="user",
             password="password",
             system_name="Rithmic Paper Trading",
-            app_name="Bookmap",
-            app_version="7.4.0.21",
+            app_name="NTtoTV Rithmic Connector",
+            app_version="1.0.0",
             exchange="COMEX",
             wire_symbol="GCZ6",
             contract="GC 12-26",
@@ -58,6 +63,22 @@ def _service() -> tuple[RithmicMarketDataService, _Sink]:
         sink,
     )
     return service, sink
+
+
+@pytest.mark.unit
+def test_login_probe_result_keeps_plant_status_and_error_payload() -> None:
+    result = RithmicDirectClient._login_probe_result(
+        {"type": "reject", "rpCode": [13], "heartbeatInterval": None}
+    )
+    error = RithmicProbeError("login rejected", result={"tickerPlant": result})
+
+    assert result == {
+        "ok": False,
+        "messageType": "reject",
+        "rpCode": [13],
+        "heartbeatInterval": None,
+    }
+    assert error.result == {"tickerPlant": result}
 
 
 @pytest.mark.unit
@@ -220,6 +241,11 @@ def test_service_normalizes_l1_and_exposes_l2_mbo_health() -> None:
     assert sink.trades[0].aggressor_order_id == "aggressor-1"
     assert sink.depth[-1][0]["mboOrders"] == 1
     assert sink.depth[-1][0]["l2BidLevels"] == 1
+    assert sink.depth[0][2] == {
+        "time": 0,
+        "bids": [{"price": 2700.0, "size": 11}],
+        "asks": [{"price": 2700.1, "size": 9}],
+    }
     assert sink.health[-1]["subscriptions"]["l1"] is True
 
 
@@ -239,3 +265,84 @@ def test_snapshot_last_trade_is_not_forwarded() -> None:
         )
     )
     assert sink.trades == []
+
+
+@pytest.mark.unit
+def test_front_month_requires_two_consecutive_observations() -> None:
+    service, sink = _service()
+
+    async def scenario() -> None:
+        await service._dispatch(
+            {"type": "front_month_contract", "tradingSymbol": "GCG7"}
+        )
+        await service._dispatch(
+            {"type": "front_month_contract", "tradingSymbol": "GCG7"}
+        )
+
+    asyncio.run(scenario())
+
+    pending = sink.health[-1]["rollPending"]
+    assert pending["current"] == "GCZ6"
+    assert pending["candidate"] == "GCG7"
+    assert pending["observations"] == 2
+    assert pending["confirmed"] is True
+
+
+@pytest.mark.unit
+def test_option_probe_uses_live_session_and_summarizes_strikes(monkeypatch) -> None:
+    service, _sink = _service()
+    service._websocket = object()
+    requested: list[str | None] = []
+
+    async def fake_request(
+        _websocket,
+        *,
+        underlying_symbol: str,
+        exchange: str,
+        expiration_date: str | None,
+        timeout_seconds: float,
+    ) -> list[dict]:
+        assert underlying_symbol == "GCZ6"
+        assert exchange == "COMEX"
+        assert timeout_seconds == 8.0
+        requested.append(expiration_date)
+        if expiration_date is None:
+            return [
+                {
+                    "type": "option_underlying_keys",
+                    "expirationDates": ["20261223", "20261124"],
+                }
+            ]
+        strike = 4200.0 if expiration_date == "20261124" else 4250.0
+        return [
+            {
+                "type": "option_instrument",
+                "symbol": f"{expiration_date}-C",
+                "expirationDate": expiration_date,
+                "putCall": "C",
+                "strikePrice": strike,
+                "minPriceChange": 0.1,
+                "singlePointValue": 100.0,
+            },
+            {
+                "type": "option_instrument",
+                "symbol": f"{expiration_date}-P",
+                "expirationDate": expiration_date,
+                "putCall": "P",
+                "strikePrice": strike,
+                "minPriceChange": 0.1,
+                "singlePointValue": 100.0,
+            },
+        ]
+
+    monkeypatch.setattr(service, "_request_option_rows", fake_request)
+
+    result = asyncio.run(service.probe_options(max_expiries=2))
+
+    assert requested == [None, "20261223", "20261124"]
+    assert result["readOnly"] is True
+    assert result["instrumentCount"] == 4
+    assert result["availableExpiries"] == ["20261124", "20261223"]
+    assert result["chains"][0]["strikeRange"] == [4200.0, 4200.0]
+    assert result["chains"][0]["callCount"] == 1
+    assert result["chains"][0]["putCount"] == 1

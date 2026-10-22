@@ -58,6 +58,48 @@ def test_register_creates_session_and_duplicate_conflicts(app_client: TestClient
 
 
 @pytest.mark.integration
+def test_forced_owner_password_change_blocks_app_until_completed(
+    app_client: TestClient,
+):
+    assert app_client.post(
+        "/api/auth/login", json={"username": "original", "password": "old-password"}
+    ).status_code == 200
+    cache = app_client.app.state.contract_state.cache
+    reset = cache.users.reset_first_user_credentials(
+        "admin", "temporary-password", require_password_change=True
+    )
+    assert reset.username == "admin"
+    assert reset.must_change_password is True
+
+    login = app_client.post(
+        "/api/auth/login", json={"username": "admin", "password": "temporary-password"}
+    )
+    assert login.status_code == 200
+    assert login.json()["user"]["mustChangePassword"] is True
+    assert app_client.get("/api/me/profile").status_code == 403
+    assert app_client.get("/api/me/profile").json()["error"]["code"] == "PASSWORD_CHANGE_REQUIRED"
+
+    changed = app_client.post(
+        "/api/auth/password",
+        json={
+            "currentPassword": "temporary-password",
+            "newPassword": "new-secure-password",
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["user"]["mustChangePassword"] is False
+    assert app_client.get("/api/me/profile").status_code == 200
+
+    app_client.post("/api/auth/logout")
+    assert app_client.post(
+        "/api/auth/login", json={"username": "admin", "password": "temporary-password"}
+    ).status_code == 401
+    assert app_client.post(
+        "/api/auth/login", json={"username": "admin", "password": "new-secure-password"}
+    ).status_code == 200
+
+
+@pytest.mark.integration
 def test_session_cookie_uses_configured_ttl(
     app_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

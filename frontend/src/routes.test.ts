@@ -23,6 +23,11 @@ describe("routeForPathname", () => {
     expect(routeForPathname("/lq/")).toBe("liquidity");
   });
 
+  it("routes /admin to the owner administration page", () => {
+    expect(routeForPathname("/admin")).toBe("admin");
+    expect(routeForPathname("/admin/")).toBe("admin");
+  });
+
   it("routes other paths to the live chart app", () => {
     expect(routeForPathname("/")).toBe("live");
     expect(routeForPathname("/anything")).toBe("live");

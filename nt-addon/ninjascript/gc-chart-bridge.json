@@ -1,9 +1,0 @@
-{
-  "candidateContracts": ["GC 06-26", "GC 08-26", "GC 10-26", "GC 12-26"],
-  "backendHost": "127.0.0.1",
-  "backendPort": 8000,
-  "backendPath": "/ws/nt",
-  "outboundQueueCapacity": 20000,
-  "dropOnOverflow": true,
-  "manualContractOverride": "GC 12-26"
-}
