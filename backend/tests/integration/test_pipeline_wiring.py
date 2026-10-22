@@ -252,7 +252,7 @@ def test_bookmap_trade_at_long_term_line_emits_persisted_touch_bubble(tmp_path):
 
 
 @pytest.mark.integration
-def test_short_term_line_end_after_exact_price_trade_uses_relative_marker(tmp_path):
+def test_short_term_line_end_after_exact_price_trade_does_not_emit_removal_marker(tmp_path):
     cache = CacheStore(tmp_path / "app.sqlite")
     tick_store = TickStore(tmp_path / "ticks")
     liquidity_store = LiquidityStore(tmp_path / "liquidity.sqlite")
@@ -331,10 +331,7 @@ def test_short_term_line_end_after_exact_price_trade_uses_relative_marker(tmp_pa
             for event in captured
             if event.payload.get("eventKind") == "relative"
         ]
-        assert len(relative) == 1
-        assert relative[0]["action"] == "removed"
-        assert relative[0]["change"] == 600
-        assert relative[0]["lineId"] == line_id
+        assert relative == []
         assert not any(
             event.payload.get("eventKind") == "long_term_touch"
             for event in captured
@@ -345,9 +342,7 @@ def test_short_term_line_end_after_exact_price_trade_uses_relative_marker(tmp_pa
             _BASE,
             _BASE + _MINUTE_MS,
         )
-        assert [(event["eventKind"], event["action"]) for event in events] == [
-            ("relative", "removed")
-        ]
+        assert events == []
     finally:
         liquidity_store.close()
         tick_store.close()

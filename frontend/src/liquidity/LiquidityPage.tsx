@@ -419,6 +419,7 @@ export function LiquidityPage() {
     });
     const offLiquidity = socket.on("liquidity_update", (message) => {
       if (message.symbol !== SYMBOL || message.contract !== CONTRACT) return;
+      if (message.eventKind === "relative" && message.lineId) return;
       if (message.eventKind === "long_term") {
         setLines((current) => mergeLiveLine(current, message));
       } else {
@@ -2827,11 +2828,7 @@ export function liquidityEventMatchesSettings(
   settings: LiquidityTrackerSettings,
 ): boolean {
   if (event.eventKind === "relative" && event.lineId) {
-    return settings.relativeEnabled &&
-      settings.longTermEnabled &&
-      event.action === "removed" &&
-      event.change > 0 &&
-      event.threshold === settings.longTermTrigger;
+    return false;
   }
   if (event.eventKind === "long_term_touch") {
     return longTermTouchMatchesSettings(event, settings);

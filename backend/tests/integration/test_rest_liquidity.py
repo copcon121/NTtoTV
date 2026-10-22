@@ -135,15 +135,12 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
 
     assert response.status_code == 200
     body = response.json()
-    assert len(body["events"]) == 3
+    assert len(body["events"]) == 2
     assert body["events"][0]["bucketTime"] == 300_000
     assert body["events"][0]["threshold"] == 50
     assert body["events"][1]["eventKind"] == "long_term_touch"
     assert body["events"][1]["size"] == 5
     assert body["events"][1]["lineStartTime"] == -14_100_000
-    assert body["events"][2]["eventKind"] == "relative"
-    assert body["events"][2]["change"] == 12
-    assert body["events"][2]["lineId"] == "bid:41980:349000"
     assert body["lines"][0]["lineId"] == "ask:42050:300000"
     assert body["lines"][0]["active"] is True
     assert bad.status_code == 400

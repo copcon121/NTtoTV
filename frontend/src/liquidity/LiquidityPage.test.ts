@@ -361,7 +361,7 @@ describe("Long-term liquidity touch bubbles", () => {
 });
 
 describe("liquidity history refiltering", () => {
-  it("keeps a touched-line removal even outside the normal Relative gate", () => {
+  it("hides legacy touched-line removal markers", () => {
     const touchedLineRemoval = {
       sequence: 18,
       time: 2_000,
@@ -382,7 +382,7 @@ describe("liquidity history refiltering", () => {
     expect(liquidityEventMatchesSettings(
       touchedLineRemoval,
       longTermSettings,
-    )).toBe(true);
+    )).toBe(false);
     expect(liquidityEventMatchesSettings(
       touchedLineRemoval,
       { ...longTermSettings, relativeEnabled: false },

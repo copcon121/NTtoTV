@@ -575,3 +575,200 @@ After the latest fixes:
 - Backend focused tests passed: resolver, control-plane, NT export backfill,
   pipeline wiring, REST contracts.
 - Frontend `npm run build` passed.
+
+## Oracle VPS Rithmic-only: Quyen Truy Cap Va Van Hanh
+
+Phan nay co hieu luc cho moi tac vu lien quan Oracle VPS va repo
+"C:\Users\Administrator\Desktop\NTtoTV-linux-rithmic". Neu co mau thuan voi
+baseline Windows o tren, phan nay duoc uu tien chi trong pham vi Oracle.
+
+### Ranh gioi bao mat bat buoc
+
+Agent duoc phep SSH vao VPS de kiem tra service, log ky thuat, health, deploy
+release va sua ha tang khi nguoi dung yeu cau. Quyen SSH khong dong nghia voi
+quyen doc cau hinh trong Admin.
+
+Neu nguoi dung chua cho phep ro rang trong yeu cau hien tai, agent khong duoc:
+
+- Dang nhap https://oracle.gcflowpy.xyz/admin, dung session/cookie Admin, reset
+  mat khau owner, hoac goi endpoint /api/admin/* va /api/auth/login.
+- Doc, in, copy, grep, tai ve hoac suy dien noi dung
+  /var/lib/nttotv/config/rithmic.json, /var/lib/nttotv/secrets/*,
+  /etc/nttotv/credentials/* hay /etc/nttotv/nttotv.env.
+- Dump environment cua process/service (systemctl show ... Environment,
+  /proc/<pid>/environ) hoac query SQLite row/table co auth, owner, password,
+  token hay Rithmic settings.
+- Dua credential/config Admin vao command output, log, source, release archive,
+  test fixture hoac cau tra loi.
+- Thay doi Rithmic user/password, app identity, MAC, entitlement, auto-connect,
+  History Plant settings hay bat/tat connector qua API/GUI.
+
+Cho phep phai la chi dan ro rang cua nguoi dung cho tac vu hien tai. Quyen chung
+chung nhu "connect VPS", "kiem tra VPS" hay "deploy" khong phai la quyen doc
+Admin config. Neu chan doan bat buoc can gia tri trong Admin, dung lai va xin
+phep truoc. Co the sua source trang Admin va test bang fake/sanitized config ma
+khong doc runtime config that.
+
+Cac kiem tra read-only sau duoc phep ma khong can doc Admin config:
+
+    GET https://oracle.gcflowpy.xyz/health
+    GET https://oracle.gcflowpy.xyz/ready
+    GET /api/market-data/status
+    systemctl status/is-active
+    journalctl cua service (khong dump env va khong tim credential)
+    ss, df, free, readlink, caddy validate
+
+Neu log bat ngo chua secret, khong lap lai secret trong output; dung xem, bao
+nguoi dung va de nghi rotate.
+
+### Dia chi va kien truc Oracle
+
+- Host alias: oracle-a1
+- IP: 129.221.134.238
+- SSH user: ubuntu
+- Domain staging HTTPS: https://oracle.gcflowpy.xyz
+- NTtoTV: 127.0.0.1:8001, service nttotv.service
+- Sample app: 127.0.0.1:8000, service python-app.service
+- Public: chi 22/80/443; 8000/8001 phai tiep tuc bind loopback.
+- Caddy: caddy.service; active config /etc/caddy/Caddyfile.
+- Release: /opt/nttotv/releases/<release-id>.
+- Symlink active: /opt/nttotv/current.
+- Runtime data: /var/lib/nttotv (khong doc config/secret theo rule tren).
+- Source Oracle rieng: C:\Users\Administrator\Desktop\NTtoTV-linux-rithmic.
+- Windows live source: C:\Users\Administrator\Desktop\NTtoTV.
+
+Khong sua/build/restart Windows live khi tac vu chi noi ve Oracle. Khong sua
+file truc tiep trong /opt/nttotv/current hay release cu; tao immutable release
+moi. Cho toi cutover duoc nguoi dung yeu cau ro rang, giu Windows public live va
+giu sample app Oracle.
+
+### SSH an toan tu Windows
+
+Dung Windows OpenSSH va config da pin key/fingerprint:
+
+    $ssh = "$env:WINDIR\System32\OpenSSH\ssh.exe"
+    $scp = "$env:WINDIR\System32\OpenSSH\scp.exe"
+    $linuxRepo = "C:\Users\Administrator\Desktop\NTtoTV-linux-rithmic"
+    $sshConfig = Join-Path $linuxRepo "_oracle_stage\ssh_config"
+    & $ssh -F $sshConfig oracle-a1
+
+Chay mot lenh non-interactive:
+
+    & $ssh -F $sshConfig oracle-a1 "systemctl is-active nttotv caddy python-app"
+
+Upload file:
+
+    & $scp -F $sshConfig <local-file> "oracle-a1:/tmp/<safe-name>"
+
+_oracle_stage/ssh_config tro toi private key va known-hosts trong
+"C:\Users\Administrator\Desktop\NTtoTV\VPS oracle". Khong copy private key
+vao repo Linux, release, VPS hay output. Khong dung StrictHostKeyChecking=no.
+Fingerprint ky vong:
+
+    SHA256:VJw2HPTPxdFFvpqvyJOADEppTTXWC+InY49678FGgY4
+
+Neu host key thay doi, dung lai va doi chieu qua Oracle Console; khong tu dong
+chap nhan key moi.
+
+### Kiem tra VPS khong cham Admin config
+
+    & $ssh -F $sshConfig oracle-a1 "readlink -f /opt/nttotv/current"
+    & $ssh -F $sshConfig oracle-a1 "systemctl is-active nttotv caddy python-app fail2ban"
+    & $ssh -F $sshConfig oracle-a1 "curl -fsS http://127.0.0.1:8001/api/health"
+    & $ssh -F $sshConfig oracle-a1 "curl -sS -i http://127.0.0.1:8001/api/ready"
+    & $ssh -F $sshConfig oracle-a1 "ss -lnt"
+    & $ssh -F $sshConfig oracle-a1 "df -h / /var/lib/nttotv; free -h"
+    & $ssh -F $sshConfig oracle-a1 "sudo journalctl -u nttotv -u caddy -n 100 --no-pager"
+
+/api/health=200 la liveness. /api/ready=503 la binh thuong trong luc Rithmic
+chua duoc duyet/ket noi; khong sua readiness de ep thanh 200.
+
+Kiem tra public:
+
+    curl.exe -sS -o NUL -w "%{http_code}" https://oracle.gcflowpy.xyz/health
+    curl.exe -sS -o NUL -w "%{http_code}" https://oracle.gcflowpy.xyz/admin
+    curl.exe -sS -o NUL -w "%{http_code}" https://oracle.gcflowpy.xyz/ready
+    curl.exe -sS -o NUL -w "%{http_code}" https://oracle.gcflowpy.xyz/ws/nt
+
+Ky vong staging khi chua connect: 200, 200, 503, 404. Viec kiem tra HTTP status
+cua /admin khong cho phep agent dang nhap hay doc config da render.
+
+### Quy trinh sua code va deploy release
+
+1. Sua trong NTtoTV-linux-rithmic, khong sua Windows live. Dung apply_patch va
+   giu cac thay doi cua nguoi dung.
+2. Neu sua frontend, chay:
+
+       cd frontend
+       npm run typecheck
+       npm test
+       npm run build
+
+3. Neu sua backend, chay:
+
+       cd backend
+       .venv\Scripts\python.exe -m pytest
+       .venv\Scripts\python.exe -m pytest -m property
+
+4. Tao archive nho; khong dong goi database, secret, .venv, logs, node_modules
+   hay runtime data:
+
+       Set-Location "C:\Users\Administrator\Desktop\NTtoTV-linux-rithmic"
+       $releaseId = Get-Date -Format "yyyyMMdd-HHmmss"
+       $archive = "_oracle_stage\nttotv-$releaseId.tar.gz"
+       tar --exclude="__pycache__" --exclude="*.pyc" --exclude=".pytest_cache" --exclude=".hypothesis" --exclude=".venv" --exclude="backend/data" --exclude="frontend/node_modules" -czf $archive backend/app backend/scripts backend/requirements.txt backend/requirements-linux-arm64.lock backend/pyproject.toml frontend/dist deploy README-LINUX-RITHMIC.md RProtocolAPI.zip
+
+5. Upload, extract vao release moi va activate qua installer:
+
+       & $scp -F $sshConfig $archive "oracle-a1:/tmp/nttotv-$releaseId.tar.gz"
+       & $ssh -F $sshConfig oracle-a1 "sudo install -d -o root -g root -m 0750 /opt/nttotv/releases/$releaseId"
+       & $ssh -F $sshConfig oracle-a1 "sudo tar -xzf /tmp/nttotv-$releaseId.tar.gz -C /opt/nttotv/releases/$releaseId"
+       & $ssh -F $sshConfig oracle-a1 "sudo bash /opt/nttotv/releases/$releaseId/deploy/linux/install-release.sh /opt/nttotv/releases/$releaseId"
+       & $ssh -F $sshConfig oracle-a1 "rm -f /tmp/nttotv-$releaseId.tar.gz"
+
+6. Verify symlink, service, loopback bind, health, HTTPS va cac endpoint da xoa.
+   Khong xem deploy thanh cong neu nttotv crash-loop hoac public route sai.
+7. Khong disable python-app va khong doi DNS gcflowpy.xyz/www neu nguoi dung
+   chua yeu cau cutover va preflight chua qua.
+
+### Caddy, rollback va release recovery
+
+Staging HTTPS source la deploy/caddy/Caddyfile.staging-https. Truoc khi thay
+active Caddyfile, tao backup, validate truoc reload:
+
+    & $ssh -F $sshConfig oracle-a1 "sudo cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.backup-manual"
+    & $ssh -F $sshConfig oracle-a1 "sudo caddy validate --config /etc/caddy/Caddyfile"
+    & $ssh -F $sshConfig oracle-a1 "sudo systemctl reload caddy"
+
+Khong restart Caddy khi chi backend thay doi. Neu production Caddy can quay ve
+staging:
+
+    & $ssh -F $sshConfig oracle-a1 "sudo /opt/nttotv/current/deploy/linux/rollback-staging.sh"
+
+Neu release moi loi, lay <previous-release> tu /opt/nttotv/releases, xac minh
+dung path cu the, roi atomic switch:
+
+    sudo ln -sfn /opt/nttotv/releases/<previous-release> /opt/nttotv/current.new
+    sudo mv -Tf /opt/nttotv/current.new /opt/nttotv/current
+    sudo systemctl restart nttotv
+
+Khong xoa release cu trong cung task deploy. Khong copy truc tiep SQLite dang
+co WAL. Backup/restore phai dung SQLite online backup workflow co san.
+
+### Dieu kien cutover con lai
+
+Khi Rithmic duoc duyet, chinh nguoi dung se config/connect trong Admin, tru khi
+ho cho phep agent ro rang. Chi cutover sau khi:
+
+- /api/ready tra 200.
+- Ticker + History Plant, L1/L2/MBO va MBO snapshot da synchronized.
+- preflight-production.sh pass.
+- Soak/recovery test duoc chap nhan.
+
+Lenh production co guard:
+
+    sudo /opt/nttotv/current/deploy/linux/preflight-production.sh
+    sudo /opt/nttotv/current/deploy/linux/activate-production.sh --confirm
+
+Khong chay activate-production.sh, khong doi DNS production va khong dung
+Rithmic Windows neu nguoi dung chi yeu cau kiem tra/deploy staging.

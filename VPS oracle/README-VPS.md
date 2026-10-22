@@ -35,7 +35,7 @@ doi chieu qua Oracle Console.
 
 - Sample `python-app.service` van chay tai `127.0.0.1:8000` va public IP `/health`
   van tra `200`.
-- NTtoTV Rithmic-only release `20261021-141105` chay tai `127.0.0.1:8001`.
+- NTtoTV Rithmic-only release `20261021-230750` chay tai `127.0.0.1:8001`.
 - `NTTOTV_RITHMIC_ENABLED=0`, nen `/api/health` tra `200` va `/api/ready` tra
   `503` theo dung thiet ke staging.
 - Lan probe gan nhat voi app identity `NTtoTV Rithmic Connector` bi ca Ticker
@@ -44,26 +44,24 @@ doi chieu qua Oracle Console.
   cutover production cho Rithmic cho toi khi broker/Rithmic cap quyen.
 - Windows Rithmic da duoc khoi phuc va connected sau probe. Firewall rule tam
   thoi da duoc go bo.
-- `oracle.gcflowpy.xyz` chua co A record. Caddy staging dang dung HTTP theo Host
-  header; chua the cap TLS cho domain nay.
+- `oracle.gcflowpy.xyz` da tro toi `129.221.134.238`; Caddy da cap TLS hop le va
+  tu dong redirect HTTP sang HTTPS.
 
 Kiem tra staging tu Windows:
 
 ```powershell
-curl.exe -H "Host: oracle.gcflowpy.xyz" http://129.221.134.238/health
-curl.exe -H "Host: oracle.gcflowpy.xyz" http://129.221.134.238/ready
+curl.exe https://oracle.gcflowpy.xyz/health
+curl.exe -i https://oracle.gcflowpy.xyz/ready
 ```
 
 ## GUI quan tri Rithmic
 
-Mo truc tiep [http://129.221.134.238/admin](http://129.221.134.238/admin) de xem
-trang staging. Vi IP hien chi co HTTP, GUI se khong cho gui password. De cau
-hinh that, double-click `OPEN-ORACLE-ADMIN.cmd` trong folder nay, giu cua so
-den mo, roi dung URL `http://127.0.0.1:8088/admin`. Luu luong khi do di trong
-SSH tunnel ma hoa, khong can thao tac Linux. Dang nhap bang tai khoan web dau
-tien cua GC Flow (owner). Tai khoan bootstrap la `admin`; lan dang nhap dau
-tien bat buoc doi mat khau tam truoc khi vao trang cau hinh. Moi field deu co
-tooltip tieng Viet. GUI co 4 thao
+Mo truc tiep [https://oracle.gcflowpy.xyz/admin](https://oracle.gcflowpy.xyz/admin)
+de cau hinh qua HTTPS. Tunnel `OPEN-ORACLE-ADMIN.cmd` va URL
+`http://127.0.0.1:8088/admin` van duoc giu lam duong du phong. Tai khoan
+bootstrap la `admin`; lan dang nhap dau tien bat buoc doi mat khau tam
+`lktoday123` truoc khi vao trang cau hinh. Moi field deu co tooltip tieng Viet.
+GUI co 4 thao
 tac: `Save config`, `Test login`, `Save & connect`, va `Disconnect`.
 
 - `Test login` kiem tra dong thoi Ticker Plant va History Plant; can disconnect
@@ -77,8 +75,8 @@ tac: `Save config`, `Test login`, `Save & connect`, va `Disconnect`.
 - Config khong nhay cam nam o `/var/lib/nttotv/config/rithmic.json`; password
   GUI nam rieng o `/var/lib/nttotv/secrets/rithmic-password`, mode `0600`.
 - Chi owner co quyen; tai khoan web khac nhan HTTP `403`.
-- Truc tiep bang IP chi expose trang admin va API auth/admin. Sample `/health`
-  van giu nguyen.
+- Truc tiep bang IP chi expose trang admin doc va API admin gioi han. Hay dung
+  domain HTTPS khi gui credential. Sample `/health` van giu nguyen.
 - L1, L2 va MBO duoc khoa bat ca ba vi `/api/ready` can du ba subscription,
   MBO snapshot va History Plant sync.
 
@@ -86,7 +84,7 @@ tac: `Save config`, `Test login`, `Save & connect`, va `Disconnect`.
 
 - Public inbound chi co TCP `22`, `80`, `443`; backend `8001` chi bind loopback.
 - SSH key-only, password/root login tat; fail2ban va unattended upgrades da bat.
-- Caddy phuc vu sample theo catch-all va NTtoTV theo Host
+- Caddy phuc vu sample theo catch-all cua IP va NTtoTV qua HTTPS theo Host
   `oracle.gcflowpy.xyz`.
 - `/opt/nttotv/releases/<release-id>`: source, frontend `dist`, virtualenv.
 - `/opt/nttotv/current`: symlink atomic toi release hien hanh.
@@ -110,12 +108,12 @@ restore bang SQLite backup API. Ban Caddy truoc staging nam tai
 
 ## Khi Rithmic duyet
 
-1. Mo tunnel va vao `http://127.0.0.1:8088/admin`.
+1. Vao `https://oracle.gcflowpy.xyz/admin` (tunnel chi la du phong).
 2. Kiem tra field, bat `History Plant` va `Auto-connect after reboot`, bam
    `Save & connect`.
 3. Cho den khi Ticker = connected, History = synced va `/api/ready` tra 200.
-4. Tao/cap nhat DNS `gcflowpy.xyz`, `www.gcflowpy.xyz` va
-   `oracle.gcflowpy.xyz` ve `129.221.134.238`.
+4. Chi khi san sang cutover, cap nhat DNS `gcflowpy.xyz` va `www.gcflowpy.xyz`
+   ve `129.221.134.238`; `oracle.gcflowpy.xyz` da hoat dong.
 5. Tren SSH chay:
 
 ```bash

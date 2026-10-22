@@ -84,19 +84,9 @@ def _event_matches_settings(
 ) -> bool:
     kind = str(event.get("eventKind"))
     if kind == "relative" and event.get("lineId"):
-        # A line-linked Relative marker means price traded at a displayed
-        # short/long-term line immediately before that line disappeared.  It
-        # intentionally bypasses the normal Relative DOM/size gate: the line
-        # detector already qualified the level, and the exact-price trade is
-        # the additional trigger.
-        return (
-            bool(settings["relativeEnabled"])
-            and bool(settings["longTermEnabled"])
-            and str(event.get("action")) == "removed"
-            and int(event.get("change") or 0) > 0
-            and int(event.get("threshold") or 0)
-            == int(settings["longTermTrigger"])
-        )
+        # Older builds synthesized a negative Relative marker when price
+        # touched a short/long-term line.  Keep those persisted markers hidden.
+        return False
     if kind == "long_term_touch":
         if not bool(settings["longTermEnabled"]) or int(
             event.get("threshold") or 0
