@@ -8,6 +8,7 @@ from app.engines.manual_supertrend_trailing import (
     prime_supertrend_trailing,
     supertrend_trailing_activation_error,
 )
+from app.engines.supertrend import SupertrendPoint
 from app.models.messages import OHLCVBar
 from app.models.orders import OrderKind, OrderRecord, OrderSide, OrderSource, OrderStatus
 from app.models.supertrend_trailing import SupertrendTrailingRecord
@@ -108,7 +109,10 @@ def test_manual_trailing_waits_for_confirmed_cross_then_closes(tmp_path):
         cache.supertrend_trailing.upsert(rule)
         assert rule.last_bar_time == 60_000
 
-        safe = _bar(120_000, 100.0, 100.0, 94.0, 95.0)
+        # The wick trades through the confirmed line at 94, but the candle
+        # closes back above it. A wick alone must never execute the trailing
+        # exit.
+        safe = _bar(120_000, 100.0, 100.0, 90.0, 95.0)
         cache.upsert_bar(safe)
         assert engine.on_closed_bar(
             "1m",
@@ -142,6 +146,56 @@ def test_manual_trailing_waits_for_confirmed_cross_then_closes(tmp_path):
         assert saved.status is OrderStatus.CLOSED
         assert fake.positions(user.id, account.id) == []
         assert cache.supertrend_trailing.read(user.id, "order", order.id) is None
+    finally:
+        cache.close()
+
+
+@pytest.mark.unit
+def test_manual_trailing_ignores_line_moving_through_candle_without_flip(
+    tmp_path, monkeypatch
+):
+    cache, fake, user, account, order, engine = _setup(tmp_path)
+    try:
+        rule = _rule(user, account, order)
+        rule.last_bar_time = 60_000
+        rule.last_line = 95.0
+        cache.supertrend_trailing.upsert(rule)
+        bar = _bar(120_000, 100.0, 102.0, 97.0, 98.0)
+        cache.upsert_bar(bar)
+
+        # The newly calculated bullish line has moved above the close. The old
+        # implementation compared against 101 and closed the BUY even though
+        # the confirmed trend did not flip and the prior line (95) held.
+        point = SupertrendPoint(
+            time=bar.time,
+            trend=1,
+            direction=0,
+            atr=1.0,
+            lower_band=101.0,
+            upper_band=105.0,
+            value=101.0,
+            confirmed=True,
+        )
+        monkeypatch.setattr(
+            "app.engines.manual_supertrend_trailing._latest_point",
+            lambda *args, **kwargs: point,
+        )
+
+        assert engine.on_closed_bar(
+            "1m",
+            OHLCVBar(
+                time=bar.time,
+                open=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                volume=bar.volume,
+            ),
+        ) == 0
+        assert len(fake.positions(user.id, account.id)) == 1
+        saved_rule = cache.supertrend_trailing.read(user.id, "order", order.id)
+        assert saved_rule is not None
+        assert saved_rule.last_line == 101.0
     finally:
         cache.close()
 

@@ -126,7 +126,8 @@ class ManualSupertrendTrailingEngine:
                     self._cache, rule, through_time=bar.time
                 )
             point = point_cache[key]
-            line = None if point is None else point.value
+            next_line = None if point is None else point.value
+            crossed_line = rule.last_line
             # Checkpoint before broker I/O. Duplicate closed-bar snapshots can
             # never submit duplicate close requests; a broker rejection may be
             # retried on the next confirmed bar if the close remains crossed.
@@ -135,12 +136,18 @@ class ManualSupertrendTrailingEngine:
                 rule.target_type,
                 rule.target_id,
                 bar_time=bar.time,
-                line=line,
+                line=next_line,
                 updated_at=now_ms(),
             )
-            if line is None or not _closed_across(rule.side, bar.close, line):
+            if not _confirmed_closed_across(
+                rule.side,
+                bar.close,
+                crossed_line,
+                point,
+                bar.time,
+            ):
                 continue
-            if self._close_rule(rule, bar, line):
+            if self._close_rule(rule, bar, float(crossed_line)):
                 closed += 1
         return closed
 
@@ -359,6 +366,37 @@ def _closed_across(side: str, close: float, line: float) -> bool:
     if side == OrderSide.SELL.value:
         return float(close) > float(line)
     return False
+
+
+def _confirmed_closed_across(
+    side: str,
+    close: float,
+    previous_line: float | None,
+    point: SupertrendPoint | None,
+    bar_time: int,
+) -> bool:
+    """Require a confirmed adverse regime beyond the prior trailing line.
+
+    ``point.value`` is the line calculated *after* the current bar is applied.
+    It may move through the candle before SuperTrend has actually reversed, and
+    after a reversal it belongs to the new opposite regime.  The executable
+    threshold is therefore the last confirmed line that was visible before
+    this candle, while ``point.trend`` confirms that the closed candle really
+    changed (or remains in) the adverse regime.
+    """
+    if (
+        previous_line is None
+        or point is None
+        or not point.confirmed
+        or point.time != bar_time
+    ):
+        return False
+    adverse_trend = -1 if side == OrderSide.BUY.value else 1
+    if side not in {OrderSide.BUY.value, OrderSide.SELL.value}:
+        return False
+    return point.trend == adverse_trend and _closed_across(
+        side, close, previous_line
+    )
 
 
 def _find_position(rows: list[dict], ticket: int, symbol_broker: str) -> dict | None:

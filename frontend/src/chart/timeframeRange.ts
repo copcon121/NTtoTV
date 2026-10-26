@@ -4,6 +4,7 @@ import { barDurationForTimeframe } from "./barCountdown";
 
 const TIMEFRAME_DISPLAY_OFFSET_MS: Record<Timeframe, number> = {
   "15s": 0,
+  "30s": 0,
   "1m": 0,
   "3m": 0,
   "5m": 0,
@@ -19,12 +20,15 @@ export function displayOffsetForTimeframe(timeframe: Timeframe): number {
 }
 
 /**
- * The footprint data source remains M1, but the overlay can also be viewed on
- * the 15s chart so the four 15s candles under each footprint minute stay
- * visible for context.
+ * The footprint overlay can be viewed on every sub-minute/M1 chart.
  */
 export function footprintEnabledForTimeframe(timeframe: Timeframe): boolean {
-  return timeframe === "15s" || timeframe === "1m";
+  return timeframe === "15s" || timeframe === "30s" || timeframe === "1m";
+}
+
+/** FVG grading is backed by finalized footprint bars on 30s and M1. */
+export function fvgGraderEnabledForTimeframe(timeframe: Timeframe): boolean {
+  return timeframe === "30s" || timeframe === "1m";
 }
 
 /** GC Push Momentum is calibrated and fed with exact delta on M1 and M5. */

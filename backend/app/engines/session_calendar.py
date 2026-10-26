@@ -19,6 +19,7 @@ GC_SESSION_BREAK_START_HOUR_CT = 16
 
 TF_MS: dict[str, int] = {
     "15s": 15_000,
+    "30s": 30_000,
     "1m": 60_000,
     "3m": 3 * 60_000,
     "5m": 5 * 60_000,

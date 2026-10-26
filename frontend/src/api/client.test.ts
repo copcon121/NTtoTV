@@ -290,6 +290,46 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
+  it("patches only the authenticated user's liquidity chart state", async () => {
+    const liquidityChart = {
+      version: 1 as const,
+      timeframe: "5m" as const,
+      visibleBars: 96,
+      offsetBars: 8,
+      priceScale: 1.25,
+      pricePanPx: -24,
+      filters: {
+        longTerm: true,
+        relative: false,
+        absolute: true,
+        trend1: true,
+        trend2: false,
+      },
+      showVwap: true,
+      showBigTrades: true,
+      bigTradeSettings: {
+        minVolume: 40,
+        maxVisible: 250,
+        soundEnabled: true,
+        sessionMinVolumes: { asia: 40, eu: 60, us: 120 },
+      },
+    };
+    const fetchFn = vi.fn(async () => jsonResponse({ liquidityChart }));
+    const api = new ApiClient({ fetchFn });
+
+    await expect(api.saveMeLiquidityChart(liquidityChart)).resolves.toEqual(
+      liquidityChart,
+    );
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/me/profile/liquidity-chart",
+      expect.objectContaining({
+        method: "PATCH",
+        credentials: "same-origin",
+        body: JSON.stringify({ liquidityChart }),
+      }),
+    );
+  });
+
   it("loads footprint details with latest count", async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({
@@ -528,6 +568,20 @@ describe("ApiClient auth, MT5, and user profile", () => {
 
     expect(fetchFn).toHaveBeenCalledWith(
       "/api/orderflow/fvg-signals?symbol=GC&contract=GC&tf=1m&limit=500",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("requests 30s FVG Signal Grader colors", async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({ symbol: "GC", contract: "GC", tf: "30s", signals: [] }),
+    );
+    const api = new ApiClient({ fetchFn });
+
+    await api.fvgSignals("GC", "GC", 100, undefined, "30s");
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orderflow/fvg-signals?symbol=GC&contract=GC&tf=30s&limit=100",
       expect.objectContaining({ credentials: "same-origin" }),
     );
   });

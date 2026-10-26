@@ -1,0 +1,1363 @@
+{
+    "schema_version":  "of7-bardata-oracle-v1",
+    "reference_sha256":  "d47bbcfad05978a3864297e6a569f99be736984ac474c58ab31065e4a4f07cce",
+    "assembly_version":  "7.0.1.0",
+    "authority":  "controlled-replay-original-dll",
+    "scope":  "BarData.AddTick only; synthetic preprocessed ticks; no chart detector/runtime claim",
+    "config":  {
+                   "tick_size":  1,
+                   "value_area_percent":  70,
+                   "imbalance_in_percent":  400,
+                   "minimal_imbalance_volume":  10
+               },
+    "cases":  [
+                  {
+                      "name":  "ties_and_value_area",
+                      "ticks":  [
+                                    {
+                                        "input":  {
+                                                      "price":  100,
+                                                      "volume":  10,
+                                                      "bid":  99,
+                                                      "ask":  100
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  100,
+                                                         "low":  100,
+                                                         "close":  100,
+                                                         "volume":  10,
+                                                         "delta":  10,
+                                                         "poc":  100,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  100,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  102,
+                                                      "volume":  10,
+                                                      "bid":  101,
+                                                      "ask":  102
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  102,
+                                                         "low":  100,
+                                                         "close":  102,
+                                                         "volume":  20,
+                                                         "delta":  20,
+                                                         "poc":  100,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  101,
+                                                      "volume":  2,
+                                                      "bid":  100,
+                                                      "ask":  101
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  102,
+                                                         "low":  100,
+                                                         "close":  101,
+                                                         "volume":  22,
+                                                         "delta":  22,
+                                                         "poc":  100,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  2,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  103,
+                                                      "volume":  9,
+                                                      "bid":  102,
+                                                      "ask":  103
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  103,
+                                                         "low":  100,
+                                                         "close":  103,
+                                                         "volume":  31,
+                                                         "delta":  31,
+                                                         "poc":  100,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  2,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  103,
+                                                                           "bid":  0,
+                                                                           "ask":  9,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  100,
+                                                      "volume":  1,
+                                                      "bid":  100,
+                                                      "ask":  101
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  103,
+                                                         "low":  100,
+                                                         "close":  100,
+                                                         "volume":  32,
+                                                         "delta":  30,
+                                                         "poc":  100,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  1,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  2,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  103,
+                                                                           "bid":  0,
+                                                                           "ask":  9,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  101,
+                                                      "volume":  60,
+                                                      "bid":  100,
+                                                      "ask":  102
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  103,
+                                                         "low":  100,
+                                                         "close":  101,
+                                                         "volume":  92,
+                                                         "delta":  30,
+                                                         "poc":  101,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  101,
+                                                         "ask_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  1,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  2,
+                                                                           "between":  60
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  103,
+                                                                           "bid":  0,
+                                                                           "ask":  9,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  102,
+                                                      "volume":  50,
+                                                      "bid":  102,
+                                                      "ask":  103
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  103,
+                                                         "low":  100,
+                                                         "close":  102,
+                                                         "volume":  142,
+                                                         "delta":  -20,
+                                                         "poc":  101,
+                                                         "poc_bid":  102,
+                                                         "poc_ask":  102,
+                                                         "val":  101,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "bid_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  1,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  2,
+                                                                           "between":  60
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  50,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  103,
+                                                                           "bid":  0,
+                                                                           "ask":  9,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  100,
+                                                      "volume":  70,
+                                                      "bid":  99,
+                                                      "ask":  100
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  103,
+                                                         "low":  100,
+                                                         "close":  100,
+                                                         "volume":  212,
+                                                         "delta":  50,
+                                                         "poc":  100,
+                                                         "poc_bid":  102,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "bid_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  1,
+                                                                           "ask":  80,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  2,
+                                                                           "between":  60
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  50,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  103,
+                                                                           "bid":  0,
+                                                                           "ask":  9,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  103,
+                                                      "volume":  80,
+                                                      "bid":  102,
+                                                      "ask":  103
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  103,
+                                                         "low":  100,
+                                                         "close":  103,
+                                                         "volume":  292,
+                                                         "delta":  130,
+                                                         "poc":  103,
+                                                         "poc_bid":  102,
+                                                         "poc_ask":  103,
+                                                         "val":  101,
+                                                         "vah":  103,
+                                                         "ask_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  1,
+                                                                           "ask":  80,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  2,
+                                                                           "between":  60
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  50,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  103,
+                                                                           "bid":  0,
+                                                                           "ask":  89,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    }
+                                ]
+                  },
+                  {
+                      "name":  "same_totals_forward",
+                      "ticks":  [
+                                    {
+                                        "input":  {
+                                                      "price":  100,
+                                                      "volume":  10,
+                                                      "bid":  99,
+                                                      "ask":  100
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  100,
+                                                         "low":  100,
+                                                         "close":  100,
+                                                         "volume":  10,
+                                                         "delta":  10,
+                                                         "poc":  100,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  100,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  101,
+                                                      "volume":  10,
+                                                      "bid":  100,
+                                                      "ask":  101
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  101,
+                                                         "low":  100,
+                                                         "close":  101,
+                                                         "volume":  20,
+                                                         "delta":  20,
+                                                         "poc":  100,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  101,
+                                                         "ask_imbalances":  [
+                                                                                101
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  102,
+                                                      "volume":  10,
+                                                      "bid":  101,
+                                                      "ask":  102
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  102,
+                                                         "low":  100,
+                                                         "close":  102,
+                                                         "volume":  30,
+                                                         "delta":  30,
+                                                         "poc":  100,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+                                                                                101,
+                                                                                102
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    }
+                                ]
+                  },
+                  {
+                      "name":  "same_totals_reverse",
+                      "ticks":  [
+                                    {
+                                        "input":  {
+                                                      "price":  102,
+                                                      "volume":  10,
+                                                      "bid":  101,
+                                                      "ask":  102
+                                                  },
+                                        "expected":  {
+                                                         "open":  102,
+                                                         "high":  102,
+                                                         "low":  102,
+                                                         "close":  102,
+                                                         "volume":  10,
+                                                         "delta":  10,
+                                                         "poc":  102,
+                                                         "poc_bid":  102,
+                                                         "poc_ask":  102,
+                                                         "val":  102,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  101,
+                                                      "volume":  10,
+                                                      "bid":  100,
+                                                      "ask":  101
+                                                  },
+                                        "expected":  {
+                                                         "open":  102,
+                                                         "high":  102,
+                                                         "low":  101,
+                                                         "close":  101,
+                                                         "volume":  20,
+                                                         "delta":  20,
+                                                         "poc":  102,
+                                                         "poc_bid":  102,
+                                                         "poc_ask":  102,
+                                                         "val":  101,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  100,
+                                                      "volume":  10,
+                                                      "bid":  99,
+                                                      "ask":  100
+                                                  },
+                                        "expected":  {
+                                                         "open":  102,
+                                                         "high":  102,
+                                                         "low":  100,
+                                                         "close":  100,
+                                                         "volume":  30,
+                                                         "delta":  30,
+                                                         "poc":  102,
+                                                         "poc_bid":  102,
+                                                         "poc_ask":  102,
+                                                         "val":  100,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+                                                                                101,
+                                                                                102
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  10,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    }
+                                ]
+                  },
+                  {
+                      "name":  "zero_side_and_sparse",
+                      "ticks":  [
+                                    {
+                                        "input":  {
+                                                      "price":  100,
+                                                      "volume":  5,
+                                                      "bid":  99,
+                                                      "ask":  101
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  100,
+                                                         "low":  100,
+                                                         "close":  100,
+                                                         "volume":  5,
+                                                         "delta":  0,
+                                                         "poc":  100,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  100,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  0,
+                                                                           "ask":  0,
+                                                                           "between":  5
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  104,
+                                                      "volume":  10,
+                                                      "bid":  103,
+                                                      "ask":  105
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  104,
+                                                         "low":  100,
+                                                         "close":  104,
+                                                         "volume":  15,
+                                                         "delta":  0,
+                                                         "poc":  104,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  104,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  0,
+                                                                           "ask":  0,
+                                                                           "between":  5
+                                                                       },
+                                                                       {
+                                                                           "price":  104,
+                                                                           "bid":  0,
+                                                                           "ask":  0,
+                                                                           "between":  10
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  102,
+                                                      "volume":  4,
+                                                      "bid":  102,
+                                                      "ask":  102
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  104,
+                                                         "low":  100,
+                                                         "close":  102,
+                                                         "volume":  19,
+                                                         "delta":  0,
+                                                         "poc":  104,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  102,
+                                                         "vah":  104,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  0,
+                                                                           "ask":  0,
+                                                                           "between":  5
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  0,
+                                                                           "between":  4
+                                                                       },
+                                                                       {
+                                                                           "price":  104,
+                                                                           "bid":  0,
+                                                                           "ask":  0,
+                                                                           "between":  10
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  100,
+                                                      "volume":  11,
+                                                      "bid":  100,
+                                                      "ask":  101
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  104,
+                                                         "low":  100,
+                                                         "close":  100,
+                                                         "volume":  30,
+                                                         "delta":  -11,
+                                                         "poc":  100,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  104,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  11,
+                                                                           "ask":  0,
+                                                                           "between":  5
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  0,
+                                                                           "between":  4
+                                                                       },
+                                                                       {
+                                                                           "price":  104,
+                                                                           "bid":  0,
+                                                                           "ask":  0,
+                                                                           "between":  10
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  104,
+                                                      "volume":  9,
+                                                      "bid":  103,
+                                                      "ask":  104
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  104,
+                                                         "low":  100,
+                                                         "close":  104,
+                                                         "volume":  39,
+                                                         "delta":  -2,
+                                                         "poc":  104,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  104,
+                                                         "val":  100,
+                                                         "vah":  104,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  11,
+                                                                           "ask":  0,
+                                                                           "between":  5
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  0,
+                                                                           "between":  4
+                                                                       },
+                                                                       {
+                                                                           "price":  104,
+                                                                           "bid":  0,
+                                                                           "ask":  9,
+                                                                           "between":  10
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  102,
+                                                      "volume":  7,
+                                                      "bid":  103,
+                                                      "ask":  101
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  104,
+                                                         "low":  100,
+                                                         "close":  102,
+                                                         "volume":  39,
+                                                         "delta":  -2,
+                                                         "poc":  104,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  104,
+                                                         "val":  102,
+                                                         "vah":  104,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  11,
+                                                                           "ask":  0,
+                                                                           "between":  5
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  0,
+                                                                           "ask":  0,
+                                                                           "between":  4
+                                                                       },
+                                                                       {
+                                                                           "price":  104,
+                                                                           "bid":  0,
+                                                                           "ask":  9,
+                                                                           "between":  10
+                                                                       }
+                                                                   ]
+                                                     }
+                                    }
+                                ]
+                  },
+                  {
+                      "name":  "ask_and_bid_poc",
+                      "ticks":  [
+                                    {
+                                        "input":  {
+                                                      "price":  100,
+                                                      "volume":  4,
+                                                      "bid":  100,
+                                                      "ask":  101
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  100,
+                                                         "low":  100,
+                                                         "close":  100,
+                                                         "volume":  4,
+                                                         "delta":  -4,
+                                                         "poc":  100,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  100,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  4,
+                                                                           "ask":  0,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  101,
+                                                      "volume":  7,
+                                                      "bid":  100,
+                                                      "ask":  101
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  101,
+                                                         "low":  100,
+                                                         "close":  101,
+                                                         "volume":  11,
+                                                         "delta":  3,
+                                                         "poc":  101,
+                                                         "poc_bid":  100,
+                                                         "poc_ask":  101,
+                                                         "val":  100,
+                                                         "vah":  101,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  4,
+                                                                           "ask":  0,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  7,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  102,
+                                                      "volume":  12,
+                                                      "bid":  102,
+                                                      "ask":  103
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  102,
+                                                         "low":  100,
+                                                         "close":  102,
+                                                         "volume":  23,
+                                                         "delta":  -9,
+                                                         "poc":  102,
+                                                         "poc_bid":  102,
+                                                         "poc_ask":  101,
+                                                         "val":  101,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  4,
+                                                                           "ask":  0,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  7,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  12,
+                                                                           "ask":  0,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  100,
+                                                      "volume":  15,
+                                                      "bid":  99,
+                                                      "ask":  100
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  102,
+                                                         "low":  100,
+                                                         "close":  100,
+                                                         "volume":  38,
+                                                         "delta":  6,
+                                                         "poc":  100,
+                                                         "poc_bid":  102,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  4,
+                                                                           "ask":  15,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  0,
+                                                                           "ask":  7,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  12,
+                                                                           "ask":  0,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  101,
+                                                      "volume":  8,
+                                                      "bid":  101,
+                                                      "ask":  102
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  102,
+                                                         "low":  100,
+                                                         "close":  101,
+                                                         "volume":  46,
+                                                         "delta":  -2,
+                                                         "poc":  100,
+                                                         "poc_bid":  101,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  101,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  4,
+                                                                           "ask":  15,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  8,
+                                                                           "ask":  7,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  12,
+                                                                           "ask":  0,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  102,
+                                                      "volume":  9,
+                                                      "bid":  101,
+                                                      "ask":  102
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  102,
+                                                         "low":  100,
+                                                         "close":  102,
+                                                         "volume":  55,
+                                                         "delta":  7,
+                                                         "poc":  102,
+                                                         "poc_bid":  101,
+                                                         "poc_ask":  100,
+                                                         "val":  100,
+                                                         "vah":  102,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  4,
+                                                                           "ask":  15,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  8,
+                                                                           "ask":  7,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  12,
+                                                                           "ask":  9,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  103,
+                                                      "volume":  25,
+                                                      "bid":  103,
+                                                      "ask":  104
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  103,
+                                                         "low":  100,
+                                                         "close":  103,
+                                                         "volume":  80,
+                                                         "delta":  -18,
+                                                         "poc":  103,
+                                                         "poc_bid":  103,
+                                                         "poc_ask":  100,
+                                                         "val":  101,
+                                                         "vah":  103,
+                                                         "ask_imbalances":  [
+
+                                                                            ],
+                                                         "bid_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  4,
+                                                                           "ask":  15,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  8,
+                                                                           "ask":  7,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  12,
+                                                                           "ask":  9,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  103,
+                                                                           "bid":  25,
+                                                                           "ask":  0,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    },
+                                    {
+                                        "input":  {
+                                                      "price":  101,
+                                                      "volume":  30,
+                                                      "bid":  100,
+                                                      "ask":  101
+                                                  },
+                                        "expected":  {
+                                                         "open":  100,
+                                                         "high":  103,
+                                                         "low":  100,
+                                                         "close":  101,
+                                                         "volume":  110,
+                                                         "delta":  12,
+                                                         "poc":  101,
+                                                         "poc_bid":  103,
+                                                         "poc_ask":  101,
+                                                         "val":  101,
+                                                         "vah":  103,
+                                                         "ask_imbalances":  [
+                                                                                101
+                                                                            ],
+                                                         "bid_imbalances":  [
+                                                                                102
+                                                                            ],
+                                                         "cells":  [
+                                                                       {
+                                                                           "price":  100,
+                                                                           "bid":  4,
+                                                                           "ask":  15,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  101,
+                                                                           "bid":  8,
+                                                                           "ask":  37,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  102,
+                                                                           "bid":  12,
+                                                                           "ask":  9,
+                                                                           "between":  0
+                                                                       },
+                                                                       {
+                                                                           "price":  103,
+                                                                           "bid":  25,
+                                                                           "ask":  0,
+                                                                           "between":  0
+                                                                       }
+                                                                   ]
+                                                     }
+                                    }
+                                ]
+                  }
+              ]
+}

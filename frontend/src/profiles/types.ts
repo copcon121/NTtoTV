@@ -29,6 +29,24 @@ export interface ProfileMarketOrderSettings {
   riskAmount?: number;
 }
 
+export interface LiquidityChartProfileState {
+  version: 1;
+  heatmap?: import("../liquidity/heatmap").LiquidityHeatmapSettings;
+  timeframe: "30s" | "1m" | "5m";
+  visibleBars: number;
+  offsetBars: number;
+  priceScale: number;
+  pricePanPx: number;
+  filters: {
+    longTerm: boolean;
+    relative: boolean;
+    absolute: boolean;
+  };
+  showVwap: boolean;
+  showBigTrades: boolean;
+  bigTradeSettings: BigTradeSettings;
+}
+
 export interface ChartProfilePayload {
   version: 1;
   timeframe: Timeframe;
@@ -84,6 +102,8 @@ export interface ChartProfilePayload {
   outsideBar?: OutsideBarSettings;
   footprintSettings: FootprintSettings;
   bigTradeSettings?: BigTradeSettings;
+  /** Standalone /lq display state, saved independently from the main chart. */
+  liquidityChart?: LiquidityChartProfileState;
   marketOrderSettings?: ProfileMarketOrderSettings;
   timezoneOffsetMinutes?: number;
   fixedRangeProfileMode?: FixedRangeProfileMode;

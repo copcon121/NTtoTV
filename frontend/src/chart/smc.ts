@@ -7,6 +7,7 @@ export interface SmcSettings {
   showInternal: boolean;
   showZones: boolean;
   showLiquidity: boolean;
+  showSwingFibLevels: boolean;
   liquidityMinSwings: number;
   liquidityLookbackBars: number;
   liquidityAtrMargin: number;
@@ -35,6 +36,7 @@ export const DEFAULT_SMC_SETTINGS: SmcSettings = {
   showInternal: true,
   showZones: true,
   showLiquidity: true,
+  showSwingFibLevels: false,
   // Two matching same-side swings form a pool by default. The user can raise
   // this threshold when a stricter three-, four-, or higher-touch pool is wanted.
   liquidityMinSwings: 2,
@@ -111,7 +113,7 @@ export interface SmcZone {
   label: string;
 }
 
-export type SmcLineKind = "structure";
+export type SmcLineKind = "structure" | "fib_382" | "fib_50";
 
 export interface SmcLine {
   id: string;
@@ -150,6 +152,14 @@ interface OrderBlock {
   type: Direction;
   mitigated: boolean;
   active: boolean;
+}
+
+interface ConfirmedSwingFib {
+  direction: Direction;
+  startTime: number;
+  endTime: number;
+  level382?: number;
+  level50?: number;
 }
 
 interface OrderBlockCandidate extends Omit<OrderBlock, "active"> {
@@ -287,6 +297,7 @@ class LuxSmc {
   readonly internalObs: OrderBlock[] = [];
   readonly fvgs: Fvg[] = [];
   readonly liquidityPools: LiquidityPool[] = [];
+  swingFib: ConfirmedSwingFib | undefined;
   private readonly swingHighs: SwingPoint[] = [];
   private readonly swingLows: SwingPoint[] = [];
   private readonly swingObStack: OrderBlockCandidate[] = [];
@@ -440,6 +451,7 @@ class LuxSmc {
         this.state.prevInternalLow = this.state.internalLow;
         this.state.internalLow = pivot;
       } else {
+        this.updateSwingFib(this.state.swingHigh, pivot, -1, candidatePos);
         const lastLow = this.state.swingLow;
         if (lastLow) {
           if (candidateLow < lastLow.price) this.state.swingLl = true;
@@ -467,6 +479,7 @@ class LuxSmc {
         this.state.prevInternalHigh = this.state.internalHigh;
         this.state.internalHigh = pivot;
       } else {
+        this.updateSwingFib(this.state.swingLow, pivot, 1, candidatePos);
         const lastHigh = this.state.swingHigh;
         if (lastHigh) {
           if (candidateHigh > lastHigh.price) this.state.swingHh = true;
@@ -507,6 +520,43 @@ class LuxSmc {
     }
 
     this.checkBosChoch(isInternal, barIndex);
+  }
+
+  private updateSwingFib(
+    anchor: SwingPoint | undefined,
+    pivot: SwingPoint,
+    direction: Direction,
+    candidatePos: number,
+  ): void {
+    if (!anchor || anchor.barIndex >= pivot.barIndex) {
+      this.swingFib = undefined;
+      return;
+    }
+
+    const rangeLow = Math.min(anchor.price, pivot.price);
+    const rangeHigh = Math.max(anchor.price, pivot.price);
+    const range = rangeHigh - rangeLow;
+    if (!Number.isFinite(range) || range <= 0) {
+      this.swingFib = undefined;
+      return;
+    }
+
+    const level382 = rangeLow + range * 0.382;
+    const level50 = rangeLow + range * 0.5;
+    const confirmationHighs = this.highs.slice(candidatePos + 1);
+    const confirmationLows = this.lows.slice(candidatePos + 1);
+    const confirmationHigh = Math.max(...confirmationHighs);
+    const confirmationLow = Math.min(...confirmationLows);
+    const levelWasCrossed = (level: number) =>
+      direction === 1 ? confirmationLow <= level : confirmationHigh >= level;
+
+    this.swingFib = {
+      direction,
+      startTime: anchor.timestamp,
+      endTime: pivot.timestamp,
+      ...(!levelWasCrossed(level382) ? { level382 } : {}),
+      ...(!levelWasCrossed(level50) ? { level50 } : {}),
+    };
   }
 
   private checkBosChoch(isInternal: boolean, barIndex: number): void {
@@ -1454,6 +1504,32 @@ function addLine(lines: SmcLine[], line: Omit<SmcLine, "id" | "kind">): void {
   });
 }
 
+function pushConfirmedSwingFibLines(
+  lines: SmcLine[],
+  fib: ConfirmedSwingFib | undefined,
+): void {
+  if (!fib) return;
+
+  const pushLevel = (kind: "fib_382" | "fib_50", price: number | undefined) => {
+    if (price === undefined) return;
+    const label = kind === "fib_382" ? "0.382" : "0.5";
+    lines.push({
+      id: `${kind}:swing:${fib.direction}:${fib.startTime}:${fib.endTime}:${price}`,
+      kind,
+      scope: "swing",
+      direction: fib.direction,
+      startTime: fib.startTime,
+      endTime: fib.endTime,
+      labelTime: fib.startTime,
+      price,
+      label,
+    });
+  };
+
+  pushLevel("fib_382", fib.level382);
+  pushLevel("fib_50", fib.level50);
+}
+
 function medianPositiveStepMs(bars: readonly Bar[], centerIndex: number): number {
   const diffs: number[] = [];
   const start = Math.max(1, centerIndex - 40);
@@ -1769,6 +1845,10 @@ export function computeSmcOverlay(
       cfg.structureLineExtendBars,
     );
   });
+
+  if (cfg.showSwingFibLevels) {
+    pushConfirmedSwingFibLines(lines, detector.swingFib);
+  }
 
   const zones: SmcZone[] = [];
   if (cfg.showZones) {

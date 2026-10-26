@@ -49,6 +49,7 @@ def _ms(*args: int) -> int:
 def test_supported_timeframes_match_design():
     assert SUPPORTED_TFS == [
         "15s",
+        "30s",
         "1m",
         "3m",
         "5m",
@@ -79,6 +80,7 @@ def test_bucket_start_floors_intraday_to_interval_multiple():
     # 03:04:05.678 floors to 03:04:00 for 1m.
     ts = _ms(2025, 1, 2, 3, 4, 5) + 678
     assert agg.bucket_start(ts, "15s") == _ms(2025, 1, 2, 3, 4, 0)
+    assert agg.bucket_start(_ms(2025, 1, 2, 3, 4, 35), "30s") == _ms(2025, 1, 2, 3, 4, 30)
     assert agg.bucket_start(ts, "1m") == _ms(2025, 1, 2, 3, 4, 0)
     # 03:04 floors to 03:00 for 5m and 03:00 for 15m/30m/1h.
     assert agg.bucket_start(_ms(2025, 1, 2, 3, 4, 0), "5m") == _ms(2025, 1, 2, 3, 0, 0)

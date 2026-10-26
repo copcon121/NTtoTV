@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS stream_gaps (
 CREATE TABLE IF NOT EXISTS bars (
     symbol    TEXT    NOT NULL,
     contract  TEXT    NOT NULL,
-    timeframe TEXT    NOT NULL,        -- 15s,1m,3m,5m,15m,30m,1h,4h,1D
+    timeframe TEXT    NOT NULL,        -- 15s,30s,1m,3m,5m,15m,30m,1h,4h,1D
     time      INTEGER NOT NULL,        -- bucket start, Canonical_Timestamp
     open      REAL    NOT NULL,
     high      REAL    NOT NULL,
@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS footprint_levels (
     PRIMARY KEY (symbol, contract, timeframe, time, price)
 );
 
--- Confirmed FVG signal grader candle colors (M1).
+-- Confirmed FVG signal grader candle colors (30s and M1).
 CREATE TABLE IF NOT EXISTS fvg_signals (
     symbol         TEXT NOT NULL,
     contract       TEXT NOT NULL,

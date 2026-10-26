@@ -2413,6 +2413,22 @@ export function IndicatorToggles({
                 <label className="fp-toggle-label">
                   <input
                     type="checkbox"
+                    aria-label="SMC show confirmed swing Fib levels"
+                    checked={smc.showSwingFibLevels}
+                    onChange={(e) =>
+                      onSmcChange({
+                        ...smc,
+                        showSwingFibLevels: e.currentTarget.checked,
+                      })
+                    }
+                  />
+                  <span>Fib 0.5 / 0.382</span>
+                </label>
+              </div>
+              <div className="ema-setting-line">
+                <label className="fp-toggle-label">
+                  <input
+                    type="checkbox"
                     checked={smc.fvgAutoThreshold}
                     onChange={(e) =>
                       onSmcChange({

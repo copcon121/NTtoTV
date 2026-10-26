@@ -27,6 +27,7 @@ SUPERTREND_SOURCES = frozenset(
 )
 SUPERTREND_DIRECTIONS = frozenset({"buy", "sell", "both"})
 SUPERTREND_TIMEFRAMES = (
+    "30s",
     "1m",
     "3m",
     "5m",

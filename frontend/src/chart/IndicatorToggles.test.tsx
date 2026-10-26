@@ -858,6 +858,9 @@ describe("IndicatorToggles", () => {
     const fvgFactor = screen.getByLabelText("SMC FVG threshold multiplier");
     const fvgVolume = screen.getByLabelText("FVG volume confirmation");
     const showPd = screen.getByLabelText("Show PD");
+    const showSwingFib = screen.getByLabelText(
+      "SMC show confirmed swing Fib levels",
+    );
     fireEvent.change(swing, { target: { value: "21" } });
     fireEvent.blur(swing);
     fireEvent.change(internal, { target: { value: "3" } });
@@ -875,6 +878,7 @@ describe("IndicatorToggles", () => {
     fireEvent.change(fvgLimit, { target: { value: "4" } });
     fireEvent.blur(fvgLimit);
     fireEvent.click(showPd);
+    fireEvent.click(showSwingFib);
 
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, swingLength: 21 });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, internalLength: 3 });
@@ -891,6 +895,10 @@ describe("IndicatorToggles", () => {
     expect(onSmc).toHaveBeenCalledWith({
       ...SMC,
       showPremiumDiscount: false,
+    });
+    expect(onSmc).toHaveBeenCalledWith({
+      ...SMC,
+      showSwingFibLevels: true,
     });
   });
 

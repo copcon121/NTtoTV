@@ -12,35 +12,66 @@ import {
 } from "react";
 
 import { buildHistoryUrl, type HistoryResponse } from "../cache/historyLoader";
+import { ApiClient } from "../api/client";
+import {
+  BIG_TRADE_SESSIONS,
+  bigTradeMinVolumeForTime,
+  normalizeBigTradeSessionMinVolumes,
+  type BigTradeSession,
+} from "../chart/bigTradeSessions";
+import {
+  DEFAULT_BIG_TRADE_SETTINGS,
+  MAX_BIG_TRADE_VISIBLE,
+  normalizeBigTradeMaxVisible,
+  type BigTradeSettings,
+} from "../chart/IndicatorToggles";
+import {
+  bubbleRadius,
+  reduceBigTradesCapped,
+  type BigTradeMarker,
+} from "../chart/indicatorReducer";
 import { resolveEndpoints } from "../endpoints";
+import type {
+  ChartProfilePayload,
+  LiquidityChartProfileState,
+} from "../profiles/types";
 import { ChartSocket } from "../socket/ChartSocket";
 import type {
   Bar,
+  BigTradeMessage,
   LiquidityAction,
   LiquidityEventKind,
   LiquidityUpdateMessage,
   MarketExplorerSignal,
   MarketExplorerUpdateMessage,
   Timeframe,
-  TrendAnalyzerMarker,
-  TrendAnalyzerPoint,
 } from "../socket/messages";
 import {
-  TREND_ANALYZER_STYLES,
-  mergeTrendMarkers,
-  mergeTrendPoints,
-  trendSeriesInRange,
-  type TrendAnalyzerHistoryResponse,
-} from "./trendAnalyzer";
+  DEFAULT_HEATMAP_SETTINGS,
+  heatmapLineEnd,
+  heatmapLineVisible,
+  knownLineSamples,
+  liquidityHeatmapAlpha,
+  liquidityHeatmapSegments,
+  liquidityLiveProjection,
+  mergeSizeSamples,
+  normalizeHeatmapSettings,
+  removeHeatmapSpeckles,
+  type LiquidityHeatmapSettings,
+  type LiquiditySizeSample,
+} from "./heatmap";
 
 const SYMBOL = "GC";
 const CONTRACT = "GC";
 const RETENTION_MS = 24 * 60 * 60 * 1_000;
-const ACTIVE_LINE_STALE_MS = 90_000;
 const MIN_VISIBLE_BARS = 30;
 const MAX_EVENTS = 20_000;
 const MAX_MARKET_VOLUME_SAMPLES = 20_000;
 const MAX_MARKET_VOLUME_SIGNALS = 2_000;
+const MAX_BIG_TRADES = 500;
+const BIG_TRADE_SOUND_COOLDOWN_MS = 250;
+const LIQUIDITY_PROFILE_STORAGE_KEY = "gc-chart-platform.liquidity-chart";
+const LIQUIDITY_PROFILE_SAVE_DELAY_MS = 1_200;
 const PRICE_AXIS_WIDTH = 78;
 const TIME_AXIS_HEIGHT = 28;
 const MIN_PRICE_SCALE = 0.25;
@@ -50,8 +81,31 @@ const TTW_RELATIVE_BID_COLOR = "#c8ffc8";
 const TTW_RELATIVE_ASK_COLOR = "#ff9696";
 const TTW_RELATIVE_LABEL_FONT = "600 12px Segoe UI, sans-serif";
 const TTW_VSPIKE_TICK_SIZE = 0.1;
+const VWAP_COLOR = "#f5c542";
+const GC_SESSION_OPEN_HOUR_CT = 17;
+const DAY_MS = 24 * 60 * 60 * 1_000;
+const CHICAGO_SESSION_CLOCK = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Chicago",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  hourCycle: "h23",
+});
 
-type LiquidityTimeframe = Extract<Timeframe, "1m" | "5m">;
+type LiquidityTimeframe = Extract<Timeframe, "30s" | "1m" | "5m">;
+
+function liquidityTimeframeMs(tf: LiquidityTimeframe): number {
+  return tf === "30s" ? 30_000 : tf === "1m" ? 60_000 : 300_000;
+}
+
+function defaultLiquidityVisibleBars(tf: LiquidityTimeframe): number {
+  return tf === "30s" ? 480 : tf === "1m" ? 240 : 144;
+}
+
+function maxLiquidityVisibleBars(tf: LiquidityTimeframe): number {
+  return tf === "30s" ? 2_880 : tf === "1m" ? 1_440 : 288;
+}
 
 interface LiquidityEvent {
   sequence: number;
@@ -82,6 +136,7 @@ interface LiquidityLine {
   threshold: number;
   domDistance: number | null;
   active: boolean;
+  samples?: LiquiditySizeSample[];
 }
 
 interface LiquidityHistoryResponse {
@@ -95,12 +150,16 @@ interface LiquidityHistoryResponse {
   lines: LiquidityLine[];
 }
 
+interface BigTradeHistoryResponse {
+  symbol: string;
+  contract: string;
+  trades: Array<Pick<BigTradeMessage, "tradeId" | "time" | "price" | "volume" | "side">>;
+}
+
 interface Filters {
   longTerm: boolean;
   relative: boolean;
   absolute: boolean;
-  trend1: boolean;
-  trend2: boolean;
 }
 
 export interface LiquidityTrackerSettings {
@@ -223,6 +282,97 @@ const DEFAULT_TRACKER_SETTINGS: LiquidityTrackerSettings = {
   longTermMinAgeSeconds: 4 * 60 * 60,
 };
 
+const DEFAULT_FILTERS: Filters = {
+  longTerm: true,
+  relative: true,
+  absolute: true,
+};
+
+function normalizeLiquidityBigTradeSettings(input: unknown): BigTradeSettings {
+  const source = input !== null && typeof input === "object"
+    ? input as Partial<BigTradeSettings>
+    : {};
+  const sessionMinVolumes = normalizeBigTradeSessionMinVolumes(source);
+  return {
+    minVolume: Math.min(
+      sessionMinVolumes.asia,
+      sessionMinVolumes.eu,
+      sessionMinVolumes.us,
+    ),
+    maxVisible: normalizeBigTradeMaxVisible(source.maxVisible),
+    soundEnabled: source.soundEnabled === true,
+    sessionMinVolumes,
+  };
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+export function normalizeLiquidityChartProfileState(
+  input: unknown,
+  sharedProfile: Partial<Pick<
+    ChartProfilePayload,
+    "showBigTrades" | "bigTradeSettings"
+  >> = {},
+): LiquidityChartProfileState {
+  const source = input !== null && typeof input === "object"
+    ? input as Partial<LiquidityChartProfileState>
+    : {};
+  const tf: LiquidityTimeframe =
+    source.timeframe === "30s" || source.timeframe === "5m"
+      ? source.timeframe
+      : "1m";
+  const filterSource = source.filters ?? DEFAULT_FILTERS;
+  const defaultVisibleBars = defaultLiquidityVisibleBars(tf);
+  return {
+    version: 1,
+    heatmap: normalizeHeatmapSettings(source.heatmap),
+    timeframe: tf,
+    visibleBars: clamp(
+      Math.round(finiteNumber(source.visibleBars, defaultVisibleBars)),
+      MIN_VISIBLE_BARS,
+      maxLiquidityVisibleBars(tf),
+    ),
+    offsetBars: Math.round(finiteNumber(source.offsetBars, 0)),
+    priceScale: clamp(
+      finiteNumber(source.priceScale, 1),
+      MIN_PRICE_SCALE,
+      MAX_PRICE_SCALE,
+    ),
+    pricePanPx: finiteNumber(source.pricePanPx, 0),
+    filters: {
+      longTerm: filterSource.longTerm !== false,
+      relative: filterSource.relative !== false,
+      absolute: filterSource.absolute !== false,
+    },
+    showVwap: source.showVwap !== false,
+    showBigTrades:
+      sharedProfile.showBigTrades ?? source.showBigTrades ?? true,
+    bigTradeSettings: normalizeLiquidityBigTradeSettings(
+      sharedProfile.bigTradeSettings ?? source.bigTradeSettings,
+    ),
+  };
+}
+
+function readLocalLiquidityProfile(): LiquidityChartProfileState | undefined {
+  try {
+    const raw = window.localStorage.getItem(LIQUIDITY_PROFILE_STORAGE_KEY);
+    return raw ? normalizeLiquidityChartProfileState(JSON.parse(raw)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistLocalLiquidityProfile(state: LiquidityChartProfileState): void {
+  try {
+    window.localStorage.setItem(LIQUIDITY_PROFILE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    /* Server profile persistence remains available when storage is restricted. */
+  }
+}
+
 const DEFAULT_MARKET_EXPLORER_SIGNAL: MarketExplorerSignalSettings = {
   enabled: true,
   askLevel: 500,
@@ -328,8 +478,62 @@ interface HoverPoint {
   y: number;
 }
 
+export interface SessionVwapPoint {
+  time: number;
+  value: number;
+  sessionKey: string;
+}
+
+export function gcSessionKey(time: number): string {
+  const parts = CHICAGO_SESSION_CLOCK.formatToParts(new Date(time));
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  const year = value("year");
+  const month = value("month");
+  const day = value("day");
+  const hour = value("hour") % 24;
+  const localDate = Date.UTC(year, month - 1, day) -
+    (hour < GC_SESSION_OPEN_HOUR_CT ? DAY_MS : 0);
+  const sessionDate = new Date(localDate);
+  return [
+    sessionDate.getUTCFullYear(),
+    String(sessionDate.getUTCMonth() + 1).padStart(2, "0"),
+    String(sessionDate.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+export function sessionVwapPoints(bars: readonly Bar[]): SessionVwapPoint[] {
+  const points: SessionVwapPoint[] = [];
+  let activeSession = "";
+  let cumulativePriceVolume = 0;
+  let cumulativeVolume = 0;
+  for (const bar of bars) {
+    const sessionKey = gcSessionKey(bar.time);
+    if (sessionKey !== activeSession) {
+      activeSession = sessionKey;
+      cumulativePriceVolume = 0;
+      cumulativeVolume = 0;
+    }
+    const volume = Math.max(0, Number(bar.volume));
+    const typicalPrice = (bar.high + bar.low + bar.close) / 3;
+    if (Number.isFinite(volume) && volume > 0 && Number.isFinite(typicalPrice)) {
+      cumulativePriceVolume += typicalPrice * volume;
+      cumulativeVolume += volume;
+    }
+    if (cumulativeVolume > 0) {
+      points.push({
+        time: bar.time,
+        value: cumulativePriceVolume / cumulativeVolume,
+        sessionKey,
+      });
+    }
+  }
+  return points;
+}
+
 export function LiquidityPage() {
   const endpoints = useMemo(() => resolveEndpoints(), []);
+  const api = useMemo(() => new ApiClient({ basePath: endpoints.api }), [endpoints.api]);
   const socket = useMemo(() => new ChartSocket({ url: endpoints.ws }), [endpoints.ws]);
   const requestSequence = useRef(0);
   const [tf, setTf] = useState<LiquidityTimeframe>("1m");
@@ -338,8 +542,7 @@ export function LiquidityPage() {
   const [lines, setLines] = useState<Map<string, LiquidityLine>>(new Map());
   const [marketVolumeSamples, setMarketVolumeSamples] = useState<MarketVolumeSample[]>([]);
   const [marketVolumeSignals, setMarketVolumeSignals] = useState<MarketExplorerSignal[]>([]);
-  const [trendPoints, setTrendPoints] = useState<TrendAnalyzerPoint[]>([]);
-  const [trendMarkers, setTrendMarkers] = useState<TrendAnalyzerMarker[]>([]);
+  const [bigTrades, setBigTrades] = useState<readonly BigTradeMarker[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] = useState<"connected" | "disconnected">(
@@ -348,13 +551,23 @@ export function LiquidityPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [visibleBars, setVisibleBars] = useState(240);
   const [offsetBars, setOffsetBars] = useState(0);
-  const [filters, setFilters] = useState<Filters>({
-    longTerm: true,
-    relative: true,
-    absolute: true,
-    trend1: true,
-    trend2: true,
-  });
+  const [priceScale, setPriceScale] = useState(1);
+  const [pricePanPx, setPricePanPx] = useState(0);
+  const [filters, setFilters] = useState<Filters>({ ...DEFAULT_FILTERS });
+  const [heatmapSettings, setHeatmapSettings] = useState<LiquidityHeatmapSettings>(DEFAULT_HEATMAP_SETTINGS);
+  const [heatmapDraft, setHeatmapDraft] = useState<LiquidityHeatmapSettings>(DEFAULT_HEATMAP_SETTINGS);
+  const [showVwap, setShowVwap] = useState(true);
+  const [showBigTrades, setShowBigTrades] = useState(true);
+  const showBigTradesRef = useRef(showBigTrades);
+  const [bigTradeSettings, setBigTradeSettings] = useState<BigTradeSettings>(() =>
+    normalizeLiquidityBigTradeSettings(DEFAULT_BIG_TRADE_SETTINGS)
+  );
+  const [bigTradeDraft, setBigTradeDraft] = useState<BigTradeSettings>(() =>
+    normalizeLiquidityBigTradeSettings(DEFAULT_BIG_TRADE_SETTINGS)
+  );
+  const bigTradeSettingsRef = useRef(bigTradeSettings);
+  const lastBigTradeSoundAtRef = useRef(0);
+  const [profileHydrated, setProfileHydrated] = useState(false);
   const [clock, setClock] = useState(Date.now());
   const [trackerSettings, setTrackerSettings] = useState<LiquidityTrackerSettings>(
     DEFAULT_TRACKER_SETTINGS,
@@ -379,8 +592,106 @@ export function LiquidityPage() {
   }, [trackerSettings]);
 
   useEffect(() => {
+    bigTradeSettingsRef.current = bigTradeSettings;
+  }, [bigTradeSettings]);
+
+  useEffect(() => {
+    showBigTradesRef.current = showBigTrades;
+  }, [showBigTrades]);
+
+  useEffect(() => {
     marketExplorerSettingsRef.current = marketExplorerSettings;
   }, [marketExplorerSettings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const localState = readLocalLiquidityProfile();
+    void api
+      .meProfile()
+      .then((profile) => {
+        if (cancelled) return;
+        const payload = profile.payload;
+        const state = normalizeLiquidityChartProfileState(
+          payload.liquidityChart,
+          payload,
+        );
+        setTf(state.timeframe);
+        setVisibleBars(state.visibleBars);
+        setOffsetBars(state.offsetBars);
+        setPriceScale(state.priceScale);
+        setPricePanPx(state.pricePanPx);
+        setFilters({ ...state.filters });
+        setHeatmapSettings(normalizeHeatmapSettings(state.heatmap));
+        setShowVwap(state.showVwap);
+        setShowBigTrades(state.showBigTrades);
+        setBigTradeSettings(state.bigTradeSettings);
+        setBigTradeDraft(state.bigTradeSettings);
+      })
+      .catch(() => {
+        if (cancelled || localState === undefined) return;
+        setTf(localState.timeframe);
+        setVisibleBars(localState.visibleBars);
+        setOffsetBars(localState.offsetBars);
+        setPriceScale(localState.priceScale);
+        setPricePanPx(localState.pricePanPx);
+        setFilters({ ...localState.filters });
+        setHeatmapSettings(normalizeHeatmapSettings(localState.heatmap));
+        setShowVwap(localState.showVwap);
+        setShowBigTrades(localState.showBigTrades);
+        setBigTradeSettings(localState.bigTradeSettings);
+        setBigTradeDraft(localState.bigTradeSettings);
+      })
+      .finally(() => {
+        if (!cancelled) setProfileHydrated(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
+
+  const liquidityProfileState = useMemo<LiquidityChartProfileState>(
+    () => ({
+      version: 1,
+      heatmap: heatmapSettings,
+      timeframe: tf,
+      visibleBars,
+      offsetBars,
+      priceScale,
+      pricePanPx,
+      filters: { ...filters },
+      showVwap,
+      showBigTrades,
+      bigTradeSettings: {
+        ...bigTradeSettings,
+        sessionMinVolumes: {
+          ...normalizeBigTradeSessionMinVolumes(bigTradeSettings),
+        },
+      },
+    }),
+    [
+      bigTradeSettings,
+      filters,
+      heatmapSettings,
+      offsetBars,
+      pricePanPx,
+      priceScale,
+      showBigTrades,
+      showVwap,
+      tf,
+      visibleBars,
+    ],
+  );
+
+  useEffect(() => {
+    if (!profileHydrated) return;
+    persistLocalLiquidityProfile(liquidityProfileState);
+    const timer = window.setTimeout(() => {
+      void api.saveMeLiquidityChart(liquidityProfileState).catch(() => {
+        /* Guests and temporarily offline users keep the local snapshot. */
+      });
+    }, LIQUIDITY_PROFILE_SAVE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [api, liquidityProfileState, profileHydrated]);
 
   useEffect(() => {
     if (marketExplorerToast === null) return;
@@ -392,6 +703,29 @@ export function LiquidityPage() {
     const timer = window.setInterval(() => setClock(Date.now()), 15_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const cutoff = clock - RETENTION_MS;
+    setLines((current) => {
+      let changed = false;
+      const next = new Map<string, LiquidityLine>();
+      for (const line of current.values()) {
+        if ((line.endedAt ?? line.lastAt) < cutoff) {
+          changed = true;
+          continue;
+        }
+        const samples = line.samples;
+        const firstRetained = samples?.findIndex((sample) => sample.time >= cutoff) ?? -1;
+        if (samples && firstRetained > 1) {
+          changed = true;
+          next.set(line.lineId, { ...line, samples: samples.slice(firstRetained - 1) });
+        } else {
+          next.set(line.lineId, line);
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [clock]);
 
   useEffect(() => {
     const offOpen = socket.onOpen(() => setConnection("connected"));
@@ -410,7 +744,7 @@ export function LiquidityPage() {
     socket.subscribe(SYMBOL, ["bar_update"], tf);
     socket.subscribe(SYMBOL, ["liquidity_update"]);
     socket.subscribe(SYMBOL, ["market_explorer_update"]);
-    socket.subscribe(SYMBOL, ["trend_analyzer_update"]);
+    socket.subscribe(SYMBOL, ["big_trade"]);
     const offBar = socket.on("bar_update", (message) => {
       if (message.symbol !== SYMBOL || message.contract !== CONTRACT || message.tf !== tf) {
         return;
@@ -450,21 +784,32 @@ export function LiquidityPage() {
         );
       }
     });
-    const offTrendAnalyzer = socket.on("trend_analyzer_update", (message) => {
+    const offBigTrade = socket.on("big_trade", (message) => {
       if (message.symbol !== SYMBOL || message.contract !== CONTRACT) return;
-      const cutoff = Date.now() - RETENTION_MS;
-      setTrendPoints((current) => mergeTrendPoints(current, message.points, cutoff));
-      setTrendMarkers((current) => mergeTrendMarkers(current, message.markers, cutoff));
+      setBigTrades((current) =>
+        reduceBigTradesCapped(current, [message], MAX_BIG_TRADES),
+      );
+      const settings = bigTradeSettingsRef.current;
+      const now = Date.now();
+      if (
+        showBigTradesRef.current &&
+        settings.soundEnabled === true &&
+        message.volume >= bigTradeMinVolumeForTime(message.time, settings) &&
+        now - lastBigTradeSoundAtRef.current >= BIG_TRADE_SOUND_COOLDOWN_MS
+      ) {
+        lastBigTradeSoundAtRef.current = now;
+        playBigTradeSound();
+      }
     });
     return () => {
       offBar();
       offLiquidity();
       offMarketExplorer();
-      offTrendAnalyzer();
+      offBigTrade();
       socket.unsubscribe(SYMBOL, ["bar_update"], tf);
       socket.unsubscribe(SYMBOL, ["liquidity_update"]);
       socket.unsubscribe(SYMBOL, ["market_explorer_update"]);
-      socket.unsubscribe(SYMBOL, ["trend_analyzer_update"]);
+      socket.unsubscribe(SYMBOL, ["big_trade"]);
     };
   }, [socket, tf]);
 
@@ -494,12 +839,13 @@ export function LiquidityPage() {
       to: String(to),
       limit: String(MAX_MARKET_VOLUME_SAMPLES),
     });
-    const trendAnalyzerParams = new URLSearchParams({
+    const bigTradeParams = new URLSearchParams({
       symbol: SYMBOL,
       contract: CONTRACT,
       from: String(from),
       to: String(to),
-      limit: "50000",
+      limit: String(MAX_BIG_TRADES),
+      cacheOnly: "true",
     });
 
     Promise.all([
@@ -510,13 +856,19 @@ export function LiquidityPage() {
       fetch(`${endpoints.api}/market-explorer?${marketExplorerParams}`, {
         signal: controller.signal,
       }).then(readJson<MarketExplorerHistoryResponse>),
-      fetch(`${endpoints.api}/trend-analyzer?${trendAnalyzerParams}`, {
+      fetch(`${endpoints.api}/big-trades?${bigTradeParams}`, {
         signal: controller.signal,
-      }).then(readJson<TrendAnalyzerHistoryResponse>),
+      })
+        .then(readJson<BigTradeHistoryResponse>)
+        .catch((): BigTradeHistoryResponse => ({
+          symbol: SYMBOL,
+          contract: CONTRACT,
+          trades: [],
+        })),
     ])
-      .then(([history, liquidity, marketExplorer, trendAnalyzer]) => {
+      .then(([history, liquidity, marketExplorer, bigTradeHistory]) => {
         if (sequence !== requestSequence.current) return;
-        const timeframeMs = tf === "1m" ? 60_000 : 300_000;
+        const timeframeMs = liquidityTimeframeMs(tf);
         const liveBucketTime = to - to % timeframeMs;
         setBars((current) =>
           mergeHistoryBars(history.bars, current, from, liveBucketTime)
@@ -529,11 +881,8 @@ export function LiquidityPage() {
         setMarketVolumeSignals((current) =>
           mergeMarketVolumeSignals(marketExplorer.signals, current, from),
         );
-        setTrendPoints((current) =>
-          mergeTrendPoints(trendAnalyzer.points, current, from),
-        );
-        setTrendMarkers((current) =>
-          mergeTrendMarkers(trendAnalyzer.markers, current, from),
+        setBigTrades((current) =>
+          mergeLiquidityBigTrades(bigTradeHistory.trades, current, from),
         );
       })
       .catch((cause: unknown) => {
@@ -575,8 +924,10 @@ export function LiquidityPage() {
 
   const selectTimeframe = (next: LiquidityTimeframe) => {
     setTf(next);
-    setVisibleBars(next === "1m" ? 240 : 144);
+    setVisibleBars(defaultLiquidityVisibleBars(next));
     setOffsetBars(0);
+    setPriceScale(1);
+    setPricePanPx(0);
   };
 
   const configuredEvents = events.filter((event) =>
@@ -585,7 +936,7 @@ export function LiquidityPage() {
   const configuredLines = [...lines.values()].filter((line) =>
     liquidityLineMatchesSettings(line, trackerSettings, clock)
   );
-  const maxVisible = tf === "1m" ? 1_440 : 288;
+  const maxVisible = maxLiquidityVisibleBars(tf);
   const zoom = useCallback(
     (factor: number) => {
       setVisibleBars((current) =>
@@ -596,8 +947,10 @@ export function LiquidityPage() {
   );
 
   const openSettings = () => {
+    setHeatmapDraft({ ...heatmapSettings });
     setSettingsDraft({ ...trackerSettings });
     setMarketExplorerDraft(cloneMarketExplorerSettings(marketExplorerSettings));
+    setBigTradeDraft(normalizeLiquidityBigTradeSettings(bigTradeSettings));
     setSettingsError(null);
     setSettingsNotice(null);
     setSettingsOpen(true);
@@ -612,10 +965,32 @@ export function LiquidityPage() {
       signal: { ...current.signal, ...patch },
     }));
   };
+  const updateBigTradeSessionVolume = (
+    session: BigTradeSession,
+    value: number,
+  ) => {
+    if (!Number.isFinite(value)) return;
+    setBigTradeDraft((current) => {
+      const sessionMinVolumes = {
+        ...normalizeBigTradeSessionMinVolumes(current),
+        [session]: Math.round(value),
+      };
+      return {
+        ...current,
+        minVolume: Math.min(
+          sessionMinVolumes.asia,
+          sessionMinVolumes.eu,
+          sessionMinVolumes.us,
+        ),
+        sessionMinVolumes,
+      };
+    });
+  };
   const saveSettings = async () => {
     const validationError =
       validateLiquidityTrackerSettings(settingsDraft) ??
-      validateMarketExplorerSettings(marketExplorerDraft);
+      validateMarketExplorerSettings(marketExplorerDraft) ??
+      validateBigTradeSettings(bigTradeDraft);
     if (validationError) {
       setSettingsError(validationError);
       return;
@@ -645,10 +1020,14 @@ export function LiquidityPage() {
       if (refilteredKinds.size > 0) setReloadKey((current) => current + 1);
       setMarketExplorerSettings(marketExplorerPayload.settings);
       setMarketExplorerDraft(cloneMarketExplorerSettings(marketExplorerPayload.settings));
+      const nextBigTradeSettings = normalizeLiquidityBigTradeSettings(bigTradeDraft);
+      setHeatmapSettings(normalizeHeatmapSettings(heatmapDraft));
+      setBigTradeSettings(nextBigTradeSettings);
+      setBigTradeDraft(nextBigTradeSettings);
       setSettingsNotice(
         liquidityPayload.sentToBookmap
-          ? "Saved and applied to Bookmap + Rithmic"
-          : "Saved and applied to Rithmic; Bookmap will sync on reconnect",
+          ? "Saved detectors and BigTrade profile settings"
+          : "Saved Rithmic detectors + BigTrade profile; Bookmap will sync on reconnect",
       );
     } catch (cause) {
       setSettingsError(cause instanceof Error ? cause.message : "Save failed");
@@ -667,10 +1046,10 @@ export function LiquidityPage() {
         </nav>
         <div className="liquidity-title">
           <span>GC Liquidity + Market Explorer</span>
-          <span>TTW TrendAnalyzerPro + MV Stop, Volume Spike and Absorption</span>
+          <span>Liquidity Heatmap + MV Stop, Volume Spike and Absorption</span>
         </div>
         <div className="liquidity-segmented" aria-label="Timeframe">
-          {(["1m", "5m"] as const).map((value) => (
+          {(["30s", "1m", "5m"] as const).map((value) => (
             <button
               key={value}
               type="button"
@@ -683,7 +1062,7 @@ export function LiquidityPage() {
         </div>
         <div className="liquidity-filters" aria-label="Liquidity layers">
           <FilterToggle
-            label="Long-term"
+            label="Heatmap"
             checked={filters.longTerm}
             onChange={(checked) => setFilters((value) => ({ ...value, longTerm: checked }))}
           />
@@ -698,14 +1077,14 @@ export function LiquidityPage() {
             onChange={(checked) => setFilters((value) => ({ ...value, absolute: checked }))}
           />
           <FilterToggle
-            label="Trend #1"
-            checked={filters.trend1}
-            onChange={(checked) => setFilters((value) => ({ ...value, trend1: checked }))}
+            label="VWAP"
+            checked={showVwap}
+            onChange={setShowVwap}
           />
           <FilterToggle
-            label="Trend #2"
-            checked={filters.trend2}
-            onChange={(checked) => setFilters((value) => ({ ...value, trend2: checked }))}
+            label="BigTrade"
+            checked={showBigTrades}
+            onChange={setShowBigTrades}
           />
         </div>
         <div className="liquidity-actions">
@@ -748,6 +1127,35 @@ export function LiquidityPage() {
             </header>
 
             <div className="liquidity-settings-groups">
+              <fieldset className="liquidity-settings-group">
+                <legend>Liquidity Heatmap</legend>
+                <div className="liquidity-settings-fields">
+                  <SettingNumber
+                    label="Minimum lifetime (seconds)"
+                    disabled={false}
+                    help="Hide liquidity that disappears before this age. Default 60 seconds removes brief flashes; 0 disables the age filter. Tiny lines under 3 pixels are also hidden."
+                    value={heatmapDraft.minDurationSeconds}
+                    min={0} max={600}
+                    onChange={(value) => setHeatmapDraft((current) => normalizeHeatmapSettings({ ...current, minDurationSeconds: value }))}
+                  />
+                  <SettingNumber
+                    label="Full intensity (x trigger)"
+                    disabled={false}
+                    help="Size reaching this multiple of the line trigger gets the strongest color. Added size brightens only the new segment; reduced size dims it."
+                    value={heatmapDraft.saturationMultiple}
+                    min={2} max={20}
+                    onChange={(value) => setHeatmapDraft((current) => normalizeHeatmapSettings({ ...current, saturationMultiple: value }))}
+                  />
+                  <SettingNumber
+                    label="Contrast"
+                    disabled={false}
+                    help="Higher values dim smaller levels more strongly. Color uses a stable volume scale across timeframes and zoom levels."
+                    value={heatmapDraft.contrast}
+                    min={0.3} max={3} step={0.1}
+                    onChange={(value) => setHeatmapDraft((current) => normalizeHeatmapSettings({ ...current, contrast: value }))}
+                  />
+                </div>
+              </fieldset>
               <LiquiditySettingsGroup
                 title="Relative Liquidity Change"
                 help="So sánh size hiện tại với lần cập nhật trước tại cùng mức giá để đánh dấu thanh khoản được thêm hoặc rút. Khi giá giao dịch đúng tại một Short/Long-term line rồi line biến mất, phần size bị rút cũng hiện bằng marker Relative âm."
@@ -892,6 +1300,51 @@ export function LiquidityPage() {
                   }))
                 }
               />
+              <fieldset className="liquidity-settings-group">
+                <legend>BigTrade</legend>
+                <div className="liquidity-settings-fields">
+                  {BIG_TRADE_SESSIONS.map(({ key, label }) => (
+                    <SettingNumber
+                      key={key}
+                      label={`${label} min volume`}
+                      help={`Minimum executed volume shown during the ${label} session, using the same New York session buckets as the main-chart indicator.`}
+                      value={normalizeBigTradeSessionMinVolumes(bigTradeDraft)[key]}
+                      min={0}
+                      max={100_000}
+                      disabled={false}
+                      onChange={(value) => updateBigTradeSessionVolume(key, value)}
+                    />
+                  ))}
+                  <SettingNumber
+                    label="Display limit"
+                    help="Maximum number of newest BigTrade bubbles retained for display."
+                    value={bigTradeDraft.maxVisible}
+                    min={1}
+                    max={MAX_BIG_TRADE_VISIBLE}
+                    disabled={false}
+                    onChange={(value) =>
+                      setBigTradeDraft((current) => ({
+                        ...current,
+                        maxVisible: Math.round(value),
+                      }))
+                    }
+                  />
+                  <label className="liquidity-settings-field market-explorer-check-field">
+                    <span>Sound</span>
+                    <input
+                      type="checkbox"
+                      aria-label="BigTrade sound"
+                      checked={bigTradeDraft.soundEnabled === true}
+                      onChange={(event) =>
+                        setBigTradeDraft((current) => ({
+                          ...current,
+                          soundEnabled: event.currentTarget.checked,
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+              </fieldset>
             </div>
 
             <footer>
@@ -903,6 +1356,9 @@ export function LiquidityPage() {
                 onClick={() => {
                   setSettingsDraft({ ...DEFAULT_TRACKER_SETTINGS });
                   setMarketExplorerDraft(cloneMarketExplorerSettings());
+                  setBigTradeDraft(
+                    normalizeLiquidityBigTradeSettings(DEFAULT_BIG_TRADE_SETTINGS),
+                  );
                   setSettingsError(null);
                   setSettingsNotice(null);
                 }}
@@ -925,15 +1381,22 @@ export function LiquidityPage() {
         marketVolumeSamples={marketVolumeSamples}
         marketVolumeSignals={marketVolumeSignals}
         marketExplorerSettings={marketExplorerSettings}
-        trendPoints={trendPoints}
-        trendMarkers={trendMarkers}
+        showVwap={showVwap}
+        bigTrades={bigTrades}
+        showBigTrades={showBigTrades}
+        bigTradeSettings={bigTradeSettings}
         trackerSettings={trackerSettings}
+        heatmapSettings={heatmapSettings}
         tf={tf}
         filters={filters}
         visibleBars={visibleBars}
         offsetBars={offsetBars}
+        priceScale={priceScale}
+        pricePanPx={pricePanPx}
         now={clock}
         onOffsetChange={setOffsetBars}
+        onPriceScaleChange={setPriceScale}
+        onPricePanChange={setPricePanPx}
         onVisibleBarsChange={(value) =>
           setVisibleBars(clamp(value, MIN_VISIBLE_BARS, maxVisible))
         }
@@ -941,18 +1404,19 @@ export function LiquidityPage() {
       />
 
       <footer className="liquidity-legend">
-        <span><i className="is-bid-line" /> long-term bid</span>
-        <span><i className="is-ask-line" /> long-term ask</span>
+        <span><i className="is-bid-line" /> heatmap bid</span>
+        <span><i className="is-ask-line" /> heatmap ask</span>
+        <span>Brighter = more resting size; hide levels &lt; {heatmapSettings.minDurationSeconds}s</span>
         <span><i className="is-relative-bid" /> relative bid ±volume</span>
         <span><i className="is-relative-ask" /> relative ask ±volume</span>
         <span><i className="is-absolute" /> absolute threshold</span>
+        <span><i style={{ background: VWAP_COLOR }} /> session VWAP</span>
+        <span><i style={{ background: "rgba(30, 144, 255, 0.8)" }} /> BigTrade buy</span>
+        <span><i style={{ background: "rgba(220, 20, 60, 0.8)" }} /> BigTrade sell</span>
         <span><i style={{ background: marketExplorerSettings.buyLineColor }} /> MV Stop buy</span>
         <span><i style={{ background: marketExplorerSettings.sellLineColor }} /> MV Stop sell</span>
         <span><i style={{ background: marketExplorerSettings.volumeSpike.buyColor }} /> Volume Spike</span>
         <span><i style={{ background: marketExplorerSettings.absorption.sellColor }} /> Absorption</span>
-        <span><i style={{ background: TREND_ANALYZER_STYLES[1].buy }} /> Trend #1 buy/sell</span>
-        <span><i style={{ background: TREND_ANALYZER_STYLES[2].buy }} /> Trend #2 buy/sell</span>
-        <span>TA: 5m x 15, multiplier 3.0, switch 3 ticks</span>
         <span>No raw full-depth data is stored</span>
       </footer>
       {marketExplorerToast ? (
@@ -969,15 +1433,22 @@ function LiquidityCanvas({
   marketVolumeSamples,
   marketVolumeSignals,
   marketExplorerSettings,
-  trendPoints,
-  trendMarkers,
+  showVwap,
+  bigTrades,
+  showBigTrades,
+  bigTradeSettings,
   trackerSettings,
+  heatmapSettings,
   tf,
   filters,
   visibleBars,
   offsetBars,
+  priceScale,
+  pricePanPx,
   now,
   onOffsetChange,
+  onPriceScaleChange,
+  onPricePanChange,
   onVisibleBarsChange,
   onZoom,
 }: {
@@ -987,15 +1458,22 @@ function LiquidityCanvas({
   marketVolumeSamples: MarketVolumeSample[];
   marketVolumeSignals: MarketExplorerSignal[];
   marketExplorerSettings: MarketExplorerSettings;
-  trendPoints: TrendAnalyzerPoint[];
-  trendMarkers: TrendAnalyzerMarker[];
+  showVwap: boolean;
+  bigTrades: readonly BigTradeMarker[];
+  showBigTrades: boolean;
+  bigTradeSettings: BigTradeSettings;
   trackerSettings: LiquidityTrackerSettings;
+  heatmapSettings: LiquidityHeatmapSettings;
   tf: LiquidityTimeframe;
   filters: Filters;
   visibleBars: number;
   offsetBars: number;
+  priceScale: number;
+  pricePanPx: number;
   now: number;
   onOffsetChange: (value: number) => void;
+  onPriceScaleChange: (value: number) => void;
+  onPricePanChange: (value: number) => void;
   onVisibleBarsChange: (value: number) => void;
   onZoom: (factor: number) => void;
 }) {
@@ -1005,8 +1483,6 @@ function LiquidityCanvas({
   const [size, setSize] = useState<CanvasSize>({ width: 0, height: 0 });
   const [interaction, setInteraction] = useState<InteractionMode>("idle");
   const [hover, setHover] = useState<HoverPoint | null>(null);
-  const [priceScale, setPriceScale] = useState(1);
-  const [pricePanPx, setPricePanPx] = useState(0);
 
   useLayoutEffect(() => {
     const host = hostRef.current;
@@ -1020,11 +1496,6 @@ function LiquidityCanvas({
     observer.observe(host);
     return () => observer.disconnect();
   }, []);
-
-  useEffect(() => {
-    setPriceScale(1);
-    setPricePanPx(0);
-  }, [tf]);
 
   const maxOffset = Math.max(0, bars.length - MIN_VISIBLE_BARS);
   const maxFutureOffset = Math.max(
@@ -1043,28 +1514,32 @@ function LiquidityCanvas({
       marketVolumeSamples,
       marketVolumeSignals,
       marketExplorerSettings,
-      trendPoints,
-      trendMarkers,
+      showVwap,
+      bigTrades,
+      showBigTrades,
+      bigTradeSettings,
       trackerSettings,
+      heatmapSettings,
       tf,
       filters,
       visibleBars,
       offsetBars: safeOffset,
       priceScale,
       pricePanPx,
-      now,
+      now: Math.max(now, Date.now()),
       hover,
     });
   }, [
     bars,
+    bigTrades,
+    bigTradeSettings,
     events,
     filters,
     hover,
     lines,
     marketExplorerSettings,
-    trendMarkers,
-    trendPoints,
     trackerSettings,
+    heatmapSettings,
     marketVolumeSamples,
     marketVolumeSignals,
     now,
@@ -1072,6 +1547,8 @@ function LiquidityCanvas({
     priceScale,
     safeOffset,
     size,
+    showBigTrades,
+    showVwap,
     tf,
     visibleBars,
   ]);
@@ -1117,7 +1594,7 @@ function LiquidityCanvas({
     if (!drag || drag.pointerId !== event.pointerId) return;
     if (drag.mode === "scale-price") {
       const delta = drag.startY - event.clientY;
-      setPriceScale(priceScaleFromAxisDrag(drag.startPriceScale, delta));
+      onPriceScaleChange(priceScaleFromAxisDrag(drag.startPriceScale, delta));
       return;
     }
     if (drag.mode === "scale-time") {
@@ -1128,7 +1605,7 @@ function LiquidityCanvas({
     const plotWidth = Math.max(1, size.width - 14 - PRICE_AXIS_WIDTH);
     const plotHeight = Math.max(1, size.height - 18 - TIME_AXIS_HEIGHT);
     const pixelsPerBar = plotWidth / Math.max(1, visibleBars);
-    setPricePanPx(
+    onPricePanChange(
       pricePanFromChartDrag(
         drag.startPricePanPx,
         event.clientY - drag.startY,
@@ -1158,10 +1635,10 @@ function LiquidityCanvas({
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
     if (x >= size.width - PRICE_AXIS_WIDTH) {
-      setPriceScale(1);
-      setPricePanPx(0);
+      onPriceScaleChange(1);
+      onPricePanChange(0);
     } else if (y >= size.height - TIME_AXIS_HEIGHT) {
-      onVisibleBarsChange(tf === "1m" ? 240 : 144);
+      onVisibleBarsChange(defaultLiquidityVisibleBars(tf));
       onOffsetChange(0);
     }
   };
@@ -1319,105 +1796,63 @@ function drawTtwVolumeSpikeSignal(
   context.restore();
 }
 
-function drawTrendAnalyzerLines(
+function drawSessionVwap(
   context: CanvasRenderingContext2D,
-  points: TrendAnalyzerPoint[],
-  filters: Filters,
-  timeFrom: number,
-  timeTo: number,
+  points: readonly SessionVwapPoint[],
+  timeframeMs: number,
   xAt: (time: number) => number,
   yAt: (price: number) => number,
+  plotRight: number,
 ) {
+  if (points.length === 0) return;
   context.save();
+  context.strokeStyle = VWAP_COLOR;
   context.lineWidth = 2;
-  context.lineJoin = "miter";
   context.setLineDash([]);
-  // Draw #2 first so #1 has the same top-layer precedence seen in Bookmap.
-  for (const instance of [2, 1] as const) {
-    if (instance === 1 ? !filters.trend1 : !filters.trend2) continue;
-    for (const side of ["buy", "sell"] as const) {
-      const series = trendSeriesInRange(points, instance, side, timeFrom, timeTo);
-      if (series.length === 0) continue;
-      context.strokeStyle = TREND_ANALYZER_STYLES[instance][side];
-      context.beginPath();
-      let drawing = false;
-      let previousPrice: number | null = null;
-      for (const point of series) {
-        if (point.price === null) {
-          drawing = false;
-          previousPrice = null;
-          continue;
-        }
-        const x = xAt(Math.max(timeFrom, point.time));
-        const y = yAt(point.price);
-        if (!drawing || previousPrice === null) {
-          context.moveTo(x, y);
-          drawing = true;
-        } else {
-          context.lineTo(x, yAt(previousPrice));
-          context.lineTo(x, y);
-        }
-        previousPrice = point.price;
-      }
-      if (drawing && previousPrice !== null) {
-        context.lineTo(xAt(timeTo), yAt(previousPrice));
-      }
-      context.stroke();
+  context.beginPath();
+  let previousSession = "";
+  for (const point of points) {
+    const x = xAt(point.time + timeframeMs / 2);
+    const y = yAt(point.value);
+    if (point.sessionKey !== previousSession) {
+      context.moveTo(x, y);
+      previousSession = point.sessionKey;
+    } else {
+      context.lineTo(x, y);
     }
   }
-  context.restore();
-}
+  context.stroke();
 
-function drawTrendAnalyzerMarkers(
-  context: CanvasRenderingContext2D,
-  markers: TrendAnalyzerMarker[],
-  xAt: (time: number) => number,
-  yAt: (price: number) => number,
-) {
-  context.save();
+  const latest = points[points.length - 1];
+  const latestX = xAt(latest.time + timeframeMs / 2);
+  const latestY = yAt(latest.value);
+  context.fillStyle = VWAP_COLOR;
+  context.beginPath();
+  context.arc(latestX, latestY, 2.5, 0, Math.PI * 2);
+  context.fill();
+
+  const label = `VWAP ${latest.value.toFixed(1)}`;
+  context.font = "600 10px Segoe UI, sans-serif";
   context.textAlign = "center";
   context.textBaseline = "middle";
-  for (const instance of [2, 1] as const) {
-    for (const marker of markers) {
-      if (marker.instance !== instance) continue;
-      const color = TREND_ANALYZER_STYLES[instance][marker.side];
-      const x = xAt(marker.time);
-      const lineY = yAt(marker.linePrice);
-      context.fillStyle = color;
-      context.strokeStyle = "rgba(5, 9, 12, 0.9)";
-      context.lineWidth = 1;
-      if (marker.kind === "new_candle") {
-        context.beginPath();
-        context.arc(x, lineY, 2.5, 0, Math.PI * 2);
-        context.fill();
-        continue;
-      }
-
-      const isBuy = marker.side === "buy";
-      const centerY = lineY + (isBuy ? 9 : -9);
-      const size = 7;
-      context.beginPath();
-      if (isBuy) {
-        context.moveTo(x, centerY - size);
-        context.lineTo(x + size, centerY + size);
-        context.lineTo(x - size, centerY + size);
-      } else {
-        context.moveTo(x, centerY + size);
-        context.lineTo(x + size, centerY - size);
-        context.lineTo(x - size, centerY - size);
-      }
-      context.closePath();
-      context.fill();
-      context.stroke();
-      context.font = "600 10px Segoe UI, sans-serif";
-      context.fillStyle = color;
-      context.fillText(
-        marker.marketPrice.toFixed(1),
-        x,
-        centerY + (isBuy ? size + 9 : -size - 9),
-      );
-    }
-  }
+  const labelWidth = Math.ceil(context.measureText(label).width) + 10;
+  const labelHeight = 18;
+  const labelCenterX = plotRight - labelWidth / 2 - 4;
+  roundedRectPath(
+    context,
+    labelCenterX - labelWidth / 2,
+    latestY - labelHeight / 2,
+    labelWidth,
+    labelHeight,
+    3,
+  );
+  context.fillStyle = "rgba(38, 31, 5, 0.9)";
+  context.fill();
+  context.strokeStyle = "rgba(245, 197, 66, 0.75)";
+  context.lineWidth = 1;
+  context.stroke();
+  context.fillStyle = "#fff5c2";
+  context.fillText(label, labelCenterX, latestY + 0.5);
   context.restore();
 }
 
@@ -1431,9 +1866,12 @@ function drawLiquidityChart(
     marketVolumeSamples: MarketVolumeSample[];
     marketVolumeSignals: MarketExplorerSignal[];
     marketExplorerSettings: MarketExplorerSettings;
-    trendPoints: TrendAnalyzerPoint[];
-    trendMarkers: TrendAnalyzerMarker[];
+    showVwap: boolean;
+    bigTrades: readonly BigTradeMarker[];
+    showBigTrades: boolean;
+    bigTradeSettings: BigTradeSettings;
     trackerSettings: LiquidityTrackerSettings;
+    heatmapSettings: LiquidityHeatmapSettings;
     tf: LiquidityTimeframe;
     filters: Filters;
     visibleBars: number;
@@ -1465,7 +1903,7 @@ function drawLiquidityChart(
   const paneGap = stopPaneHeight > 0 ? 10 : 0;
   const pricePlotHeight = Math.max(1, plotHeight - stopPaneHeight - paneGap);
   const stopPaneTop = top + pricePlotHeight + paneGap;
-  const tfMs = data.tf === "1m" ? 60_000 : 300_000;
+  const tfMs = liquidityTimeframeMs(data.tf);
   const pastOffset = Math.max(0, Math.floor(data.offsetBars));
   const futureSlots = Math.max(0, -Math.floor(data.offsetBars));
   const endIndex = Math.max(0, data.bars.length - pastOffset);
@@ -1488,10 +1926,23 @@ function drawLiquidityChart(
           ? data.filters.absolute
           : data.filters.longTerm),
   );
+  const eligibleBigTrades = eligibleLiquidityBigTrades(
+    data.bigTrades,
+    data.showBigTrades,
+    data.bigTradeSettings,
+  );
+  const visibleBigTrades = eligibleBigTrades.filter(
+    (trade) => trade.time >= timeFrom && trade.time <= timeTo,
+  );
+  const visibleVwapPoints = data.showVwap
+    ? sessionVwapPoints(data.bars).filter(
+        (point) => point.time >= timeFrom && point.time <= timeTo,
+      )
+    : [];
   const lineItems = data.lines.filter((line) => {
-    const fresh = line.active && data.now - line.lastAt <= ACTIVE_LINE_STALE_MS;
-    const effectiveEnd = fresh ? timeTo : (line.endedAt ?? line.lastAt);
-    return line.startedAt <= timeTo && effectiveEnd >= timeFrom;
+    const effectiveEnd = heatmapLineEnd(line, data.now);
+    return line.startedAt <= timeTo && effectiveEnd >= timeFrom &&
+      heatmapLineVisible(line, data.heatmapSettings, data.now, plotWidth / (timeTo - timeFrom));
   });
   const rawMarketVolumeSamples = data.marketVolumeSamples.filter(
     (sample) => sample.time >= timeFrom && sample.time <= timeTo,
@@ -1507,33 +1958,9 @@ function drawLiquidityChart(
   const marketVolumeSignals = data.marketVolumeSignals.filter(
     (signal) => signal.time >= timeFrom && signal.time <= timeTo,
   );
-  const trendEnabled = (instance: 1 | 2) =>
-    instance === 1 ? data.filters.trend1 : data.filters.trend2;
-  const visibleTrendPoints = ([1, 2] as const).flatMap((instance) =>
-    trendEnabled(instance)
-      ? (["buy", "sell"] as const).flatMap((side) =>
-          trendSeriesInRange(data.trendPoints, instance, side, timeFrom, timeTo),
-        )
-      : [],
-  );
-  const visibleTrendMarkers = data.trendMarkers.filter(
-    (marker) =>
-      trendEnabled(marker.instance) &&
-      marker.time >= timeFrom &&
-      marker.time <= timeTo,
-  );
   const prices = visible.flatMap((bar) => [bar.low, bar.high]);
-  if (markerEvents.length > 0) {
-    prices.push(...markerEvents.map((event) => event.price));
-  }
-  if (data.filters.longTerm) prices.push(...lineItems.map((line) => line.price));
-  prices.push(...marketVolumeSignals.map((signal) => signal.price));
-  prices.push(
-    ...visibleTrendPoints.flatMap((point) =>
-      point.price === null ? [] : [point.price],
-    ),
-    ...visibleTrendMarkers.map((marker) => marker.linePrice),
-  );
+  // Fit visible candles. Distant depth levels and other overlays are clipped
+  // to this price viewport instead of compressing the candle chart.
   if (showCurrentPrice && currentPrice !== undefined) prices.push(currentPrice);
   const dataMin = Math.min(...prices);
   const dataMax = Math.max(...prices);
@@ -1587,22 +2014,41 @@ function drawLiquidityChart(
 
   if (data.filters.longTerm) {
     for (const line of lineItems) {
-      const fresh = line.active && data.now - line.lastAt <= ACTIVE_LINE_STALE_MS;
-      const effectiveEnd = fresh ? timeTo : (line.endedAt ?? line.lastAt);
-      const x1 = xAt(Math.max(timeFrom, line.startedAt));
-      const x2 = xAt(Math.min(timeTo, effectiveEnd));
-      if (x2 < left || x1 > left + plotWidth) continue;
+      if (line.price < priceMin || line.price > priceMax) continue;
+      const projection = showCurrentPrice
+        ? liquidityLiveProjection(line, timeFrom, timeTo, data.now)
+        : null;
       const y = yAt(line.price);
       const color = line.side === "bid" ? "0, 214, 143" : "255, 82, 103";
-      context.strokeStyle = `rgba(${color}, ${fresh ? 0.9 : 0.36})`;
-      context.lineWidth = 1 + Math.min(4, line.peakSize / Math.max(1, line.threshold));
-      context.setLineDash(fresh ? [] : [5, 4]);
-      context.beginPath();
-      context.moveTo(x1, y);
-      context.lineTo(x2, y);
-      context.stroke();
-      if (fresh && x2 > left + plotWidth - 120) {
+      // Each row covers one real GC tick. Adjacent occupied levels naturally
+      // form a wider band, without inventing prices by widening a big order.
+      const height = clamp(Math.abs(yAt(line.price - 0.05) - yAt(line.price + 0.05)) * 0.9, 1, 12);
+      const segments = removeHeatmapSpeckles(
+        liquidityHeatmapSegments(line, timeFrom, timeTo, data.now),
+        plotWidth / (timeTo - timeFrom),
+      );
+      for (const segment of segments) {
+        const x1 = xAt(segment.from);
+        const x2 = xAt(segment.to);
+        const alpha = segment.size === null ? 0.3
+          : liquidityHeatmapAlpha(segment.size, line.threshold, data.heatmapSettings);
+        context.fillStyle = `rgba(${color}, ${alpha})`;
+        context.fillRect(x1, y - height / 2, x2 - x1, height);
+      }
+      // Dashed continuation shows the current book in future chart space;
+      // historical size bands above still stop at their actual observation.
+      if (projection) {
+        context.strokeStyle = `rgba(${color}, ${liquidityHeatmapAlpha(projection.size, line.threshold, data.heatmapSettings)})`;
+        context.lineWidth = height;
+        context.setLineDash([6, 4]);
+        context.beginPath();
+        context.moveTo(xAt(projection.from), y);
+        context.lineTo(xAt(projection.to), y);
+        context.stroke();
         context.setLineDash([]);
+      }
+      const x2 = xAt(projection?.to ?? Math.min(timeTo, heatmapLineEnd(line, data.now)));
+      if (projection && x2 > left + plotWidth - 120) {
         context.fillStyle = `rgb(${color})`;
         context.textAlign = "right";
         const label = liquidityLineLabel(line, data.trackerSettings, data.now);
@@ -1635,6 +2081,15 @@ function drawLiquidityChart(
     );
   }
 
+  drawSessionVwap(
+    context,
+    visibleVwapPoints,
+    tfMs,
+    xAt,
+    yAt,
+    left + plotWidth,
+  );
+
   if (
     showCurrentPrice &&
     currentPrice !== undefined &&
@@ -1652,16 +2107,6 @@ function drawLiquidityChart(
     context.setLineDash([]);
   }
 
-  drawTrendAnalyzerLines(
-    context,
-    data.trendPoints,
-    data.filters,
-    timeFrom,
-    timeTo,
-    xAt,
-    yAt,
-  );
-  drawTrendAnalyzerMarkers(context, visibleTrendMarkers, xAt, yAt);
 
   for (const signal of marketVolumeSignals) {
     const style = marketExplorerSignalStyle(data.marketExplorerSettings, signal);
@@ -1773,6 +2218,20 @@ function drawLiquidityChart(
       context.fill();
       context.stroke();
     }
+  }
+
+  const maxBigTradeVolume = eligibleBigTrades.reduce(
+    (maximum, trade) => Math.max(maximum, trade.volume),
+    0,
+  );
+  for (const trade of visibleBigTrades) {
+    drawBigTradeBubble(
+      context,
+      trade,
+      xAt(trade.time),
+      yAt(trade.price),
+      bubbleRadius(trade.volume, maxBigTradeVolume, 13, 30),
+    );
   }
 
   if (
@@ -1941,6 +2400,85 @@ export function relativeLiquidityVolumeLabel(
 
 export function longTermTouchBubbleRadius(volume: number): number {
   return clamp(5 + Math.sqrt(Math.max(1, volume)) * 1.7, 6.5, 24);
+}
+
+function eligibleLiquidityBigTrades(
+  markers: readonly BigTradeMarker[],
+  enabled: boolean,
+  settings: BigTradeSettings,
+): readonly BigTradeMarker[] {
+  if (!enabled) return [];
+  const filtered = markers.filter(
+    (marker) =>
+      marker.volume >= bigTradeMinVolumeForTime(marker.time, settings),
+  );
+  const maxVisible = normalizeBigTradeMaxVisible(settings.maxVisible);
+  return filtered.length > maxVisible
+    ? filtered.slice(-maxVisible)
+    : filtered;
+}
+
+export function visibleLiquidityBigTrades(
+  markers: readonly BigTradeMarker[],
+  timeFrom: number,
+  timeTo: number,
+  enabled = true,
+  settings = DEFAULT_BIG_TRADE_SETTINGS,
+): readonly BigTradeMarker[] {
+  return eligibleLiquidityBigTrades(markers, enabled, settings).filter(
+    (marker) => marker.time >= timeFrom && marker.time <= timeTo,
+  );
+}
+
+function bigTradeTextSize(
+  context: CanvasRenderingContext2D,
+  label: string,
+  radius: number,
+): number {
+  let size = Math.round(
+    Math.max(10, Math.min(16, radius * (label.length >= 3 ? 0.58 : 0.68))),
+  );
+  const maxWidth = radius * 1.55;
+  while (size > 8) {
+    context.font = `400 ${size}px Arial, sans-serif`;
+    if (context.measureText(label).width <= maxWidth) break;
+    size -= 1;
+  }
+  return size;
+}
+
+function drawBigTradeBubble(
+  context: CanvasRenderingContext2D,
+  trade: BigTradeMarker,
+  x: number,
+  y: number,
+  radius: number,
+) {
+  const isBuy = trade.side === "buy";
+  context.save();
+  context.beginPath();
+  context.arc(x, y, Math.max(5, radius), 0, Math.PI * 2);
+  context.fillStyle = isBuy
+    ? "rgba(30, 144, 255, 0.18)"
+    : "rgba(220, 20, 60, 0.18)";
+  context.fill();
+  context.lineWidth = 1.25;
+  context.strokeStyle = isBuy
+    ? "rgba(12, 95, 190, 0.30)"
+    : "rgba(170, 12, 42, 0.30)";
+  context.stroke();
+
+  const label = `${Math.round(trade.volume)}`;
+  const fontSize = bigTradeTextSize(context, label, radius);
+  context.font = `400 ${fontSize}px Arial, sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.lineWidth = 2;
+  context.strokeStyle = "rgba(0, 0, 0, 0.32)";
+  context.strokeText(label, x, y);
+  context.fillStyle = "#ffffff";
+  context.fillText(label, x, y);
+  context.restore();
 }
 
 function drawLongTermLiquidityTouchBubble(
@@ -2575,6 +3113,21 @@ function mergeMarketVolumeSignals(
     .slice(-MAX_MARKET_VOLUME_SIGNALS);
 }
 
+export function mergeLiquidityBigTrades(
+  history: readonly BigTradeMarker[],
+  realtime: readonly BigTradeMarker[],
+  cutoff: number,
+  maxMarkers = MAX_BIG_TRADES,
+): readonly BigTradeMarker[] {
+  const retainedHistory = history.filter((trade) => trade.time >= cutoff);
+  const retainedRealtime = realtime.filter((trade) => trade.time >= cutoff);
+  return reduceBigTradesCapped(
+    [],
+    [...retainedHistory, ...retainedRealtime],
+    maxMarkers,
+  );
+}
+
 function notifyMarketVolumeSignals(
   signals: MarketExplorerSignal[],
   settings: MarketExplorerSettings,
@@ -2615,6 +3168,28 @@ function playMarketExplorerTone(isBuy: boolean) {
   oscillator.addEventListener("ended", () => void context.close());
 }
 
+function playBigTradeSound(): void {
+  try {
+    const Ctx =
+      (globalThis as { AudioContext?: typeof AudioContext }).AudioContext ??
+      (globalThis as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (Ctx === undefined) return;
+    const context = new Ctx();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = 660;
+    gain.gain.value = 0.3;
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.15);
+    oscillator.addEventListener("ended", () => void context.close());
+  } catch {
+    /* Sound is optional and must not interrupt realtime rendering. */
+  }
+}
+
 function playLongTermLiquidityTouchTone(side: "bid" | "ask") {
   if (typeof window === "undefined" || !window.AudioContext) return;
   const context = new window.AudioContext();
@@ -2650,7 +3225,7 @@ function mergeEvents(
     .slice(-MAX_EVENTS);
 }
 
-function mergeHistoryLines(
+export function mergeHistoryLines(
   history: LiquidityLine[],
   current: Map<string, LiquidityLine>,
 ): Map<string, LiquidityLine> {
@@ -2658,7 +3233,14 @@ function mergeHistoryLines(
   for (const line of history) merged.set(line.lineId, line);
   for (const line of current.values()) {
     const existing = merged.get(line.lineId);
-    if (!existing || line.lastAt >= existing.lastAt) merged.set(line.lineId, line);
+    if (!existing) {
+      merged.set(line.lineId, line);
+    } else {
+      merged.set(line.lineId, {
+        ...(line.lastAt >= existing.lastAt ? line : existing),
+        samples: mergeSizeSamples(knownLineSamples(existing), knownLineSamples(line)),
+      });
+    }
   }
   return merged;
 }
@@ -2670,6 +3252,13 @@ export function mergeLiveLine(
   if (!message.lineId) return current;
   const next = new Map(current);
   const existing = next.get(message.lineId);
+  const samples = mergeSizeSamples(existing ? knownLineSamples(existing) : [], [{
+    time: message.time, size: message.size, active: message.action !== "end",
+  }]);
+  if (existing && existing.lastAt > message.time) {
+    next.set(message.lineId, { ...existing, samples });
+    return next;
+  }
   const active = message.action !== "end";
   next.set(message.lineId, {
     lineId: message.lineId,
@@ -2683,6 +3272,7 @@ export function mergeLiveLine(
     threshold: message.threshold,
     domDistance: message.domDistance,
     active,
+    samples,
   });
   return next;
 }
@@ -2910,6 +3500,26 @@ export function validateLiquidityTrackerSettings(
   }
   if (settings.longTermDomFrom > settings.longTermDomTo) {
     return "Long-term DOM level to must be greater than or equal to level from";
+  }
+  return null;
+}
+
+export function validateBigTradeSettings(
+  settings: BigTradeSettings,
+): string | null {
+  const sessionMinVolumes = normalizeBigTradeSessionMinVolumes(settings);
+  for (const { key, label } of BIG_TRADE_SESSIONS) {
+    const value = sessionMinVolumes[key];
+    if (!Number.isInteger(value) || value < 0 || value > 100_000) {
+      return `BigTrade ${label} minimum must be an integer from 0 to 100000`;
+    }
+  }
+  if (
+    !Number.isInteger(settings.maxVisible) ||
+    settings.maxVisible < 1 ||
+    settings.maxVisible > MAX_BIG_TRADE_VISIBLE
+  ) {
+    return `BigTrade display limit must be an integer from 1 to ${MAX_BIG_TRADE_VISIBLE}`;
   }
   return null;
 }

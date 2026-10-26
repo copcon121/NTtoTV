@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .config import Settings
 from .config import settings as default_settings
@@ -439,6 +439,11 @@ class AppRuntime:
         )
         if removed:
             logger.info("purged %s expired raw tick shards", len(removed))
+        from .backfill.rithmic_history import purge_history_archives
+        cutoff = (datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                  - timedelta(days=self._settings.tick_retention_days - 1)).timestamp()
+        await asyncio.to_thread(purge_history_archives,
+                                self._settings.data_dir / "rithmic-history", int(cutoff))
 
     async def _purge_expired_liquidity(self) -> None:
         cutoff = int(datetime.now(timezone.utc).timestamp() * 1000) - (

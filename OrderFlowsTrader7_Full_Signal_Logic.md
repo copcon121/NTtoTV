@@ -15,7 +15,7 @@ Kết quả được đối chiếu giữa metadata/CIL của REA và mã C# dec
 - Managed artifact: `ev_aaa553c2d02b36f872aa5335e74100abe844ad1cfc8341f60f1e8d03cf0c8cad`
 - Managed members/CIL: `ev_70cc7129c505c96a252e398eef3ec74730e748e8b0ef6f92e6344577be79f87d`
 
-Đây là hành vi quan sát từ artifact đã ship, không phải source gốc và chưa phải kết quả chạy replay trong NinjaTrader. Template/workspace của người dùng có thể ghi đè các giá trị mặc định trong báo cáo.
+Đây là hành vi quan sát từ artifact đã ship, không phải source gốc. Đối chiếu bổ sung ngày 25/10/2026 đã chạy lớp `BarData.AddTick` của DLL gốc bằng tick giả lập và kiểm tra các tham số tính toán trên chart NT đang mở. Điều đó chưa đồng nghĩa toàn bộ detector đã được replay đối chiếu trong NinjaTrader. Xem `OF7-VALIDATION.md` cho phạm vi và kết quả mới nhất. Template/workspace có thể ghi đè mặc định.
 
 Indicator có **33 feature/output ID**, được tạo bởi **29 detector chính** trong `DetectZones2()`.
 
@@ -48,8 +48,10 @@ Khi `FastHistoricalDataProcessing = true` và indicator ở Historical state, ch
 
 - `PocPrice` là cell có tổng `Volume = Ask + Bid + Between` lớn nhất.
 - Khi hai cell bằng volume, code ưu tiên cell có tổng volume của cụm ba mức giá `(price - 1 tick, price, price + 1 tick)` lớn hơn.
-- `PocPriceAsk` và `PocPriceBid` theo dõi POC riêng của Ask/Bid, cũng dùng cụm ba mức để phá hòa.
-- Value Area bắt đầu tại POC và mở rộng về phía cell liền kề có volume lớn hơn cho đến khi đạt `ValueAreaInPercent`; mặc định là `70%`.
+- `PocPriceAsk` và `PocPriceBid` phá hòa bằng tổng **volume cùng phía** của cụm ba mức, không phải tổng volume. Nhánh Bid còn có lỗi so với Bid tại general POC được nêu ở mục 6.
+- POC cập nhật theo từng tick: khi volume và cụm ba mức hòa nhau, giữ POC trước, không mặc định chọn giá cao hay thấp. Cùng ladder cuối có thể cho POC khác nếu thứ tự tick khác.
+- Value Area có trạng thái tích lũy: reset khi POC đổi hoặc điều kiện boundary yêu cầu, mở rộng qua các key thực có volume phía lớn hơn; hòa thì ưu tiên phía trên. Nó còn có thể thu hẹp khi volume trong VA tăng, với điều kiện sau khi bỏ boundary phải **lớn hơn** tỷ lệ mục tiêu. Không thể tái tạo chính xác toàn bộ quá trình từ ladder cuối. Mặc định mục tiêu là `70%`.
+- `XArray` không tự fill mọi giá chưa giao dịch. Indexer giá thiếu trả row zero nhưng không thêm key; `ContainsValue` vẫn phân biệt giá có thật. Detector đọc trực tiếp indexer và detector có kiểm tra tồn tại vì vậy có semantics khác nhau.
 
 ### 2.4 Diagonal imbalance
 
@@ -80,10 +82,13 @@ và (Ask[p + 1 tick] == 0 hoặc Bid[p] / Ask[p + 1 tick] >= 4.0)
 
 `GlobalLookBackPeriod = 5`. Với `DetectSwing(barIndex, barData, useLookBack, offset, allowEqual)`:
 
-- Nếu `useLookBack = false`, detector cho qua.
-- Nến giảm: kiểm tra High tại `offset` có lớn hơn MAX của cửa sổ cũ hơn hay không.
-- Nến tăng: kiểm tra Low tại `offset` có nhỏ hơn MIN của cửa sổ cũ hơn hay không.
+- Đầu tiên, nếu `CurrentBar <= offset + 1`, helper trả false, **kể cả khi filter tắt**. Chỉ sau gate này, `useLookBack = false` mới cho qua.
+- Hướng so sánh lấy từ `barData` hiện tại, không đổi sang màu nến tại offset.
+- Nến giảm: kiểm tra High tại `offset` có lớn hơn MAX của **GlobalLookBackPeriod + 1** bar cũ hơn hay không.
+- Nến tăng: kiểm tra Low tại `offset` có nhỏ hơn MIN của cùng cửa sổ hay không. Đầu lịch sử, MAX/MIN có thể dùng cửa sổ còn thiếu.
 - `allowEqual = true` đổi so sánh nghiêm ngặt thành cho phép bằng nhau.
+
+Không áp helper này cho mọi detector: Open POC, Aligned POC, Engulfing VA, Imbalance Reload và Prominent POC không gọi bộ lọc swing chung. Historical fast mode có thể có `CurrentBar = barIndex + 1`; cần giữ hai chỉ số riêng khi đối chiếu.
 
 Trừ khi được ghi rõ khác đi, các property `...UseLookBack` không được gán trong SetDefaults nên mặc định .NET là `false`.
 
@@ -220,8 +225,8 @@ Method: `DetectDeltaDivergence` — token `0x0600104B`.
 
 Nếu `DeltaDivergenceOnlyDailyHighLow=true`:
 
-- Buy khi bar đang tạo low mới của trading day, là nến tăng và `Delta > 0`.
-- Sell khi bar đang tạo high mới của trading day, là nến giảm và `Delta < 0`.
+- Buy khi Low của bar bằng Low trading day đã cập nhật, là nến tăng và `Delta > 0`; chạm lại đúng Low cũng hợp lệ.
+- Sell khi High của bar bằng High trading day đã cập nhật, là nến giảm và `Delta < 0`; chạm lại đúng High cũng hợp lệ.
 
 Nếu `OnlyDailyHighLow=false`:
 
@@ -238,8 +243,8 @@ Method: `DetectPriceActionDivergence` — token `0x0600104C`.
 
 Nếu `PriceActionDivergenceOnlyDailyHighLow=true`:
 
-- Buy: low mới của trading day, nến tăng, nhưng `Delta < 0`.
-- Sell: high mới của trading day, nến giảm, nhưng `Delta > 0`.
+- Buy: Low bằng cực trị trading day sau cập nhật (gồm chạm lại), nến tăng, nhưng `Delta < 0`.
+- Sell: High bằng cực trị trading day sau cập nhật (gồm chạm lại), nến giảm, nhưng `Delta > 0`.
 
 Nếu `OnlyDailyHighLow=false` — đây là mặc định:
 
@@ -277,16 +282,18 @@ Duyệt ladder từ thấp lên cao và gom các cell liên tiếp:
 
 - Buy trên nến tăng: cụm Bid volume `<= MarketSweepVolumeThreshold`.
 - Sell trên nến giảm: cụm Ask volume `<= MarketSweepVolumeThreshold`.
-- Số cell liên tiếp phải `>= MarketSweepClusterSize`.
+- Chuỗi duyệt các key đã giao dịch, và code đo **khoảng giá** cụm so với `(MarketSweepClusterSize - 1) * tick`; không chỉ đếm key. Trên ladder đầy đủ hai cách tương đương, trên ladder thưa có thể khác.
 - Zone bao toàn bộ cụm.
 
-Mặc định là ít nhất ba cell có volume `<= 5`. Detector tìm thanh khoản rất thấp, không phải volume lớn.
+Mặc định tương đương ba cell có volume `<= 5` khi ladder đủ mọi tick. Detector tìm volume thấp phía đối diện, không đo trực tiếp một lệnh lớn quét DOM hay tốc độ di chuyển.
 
 ### 4.8 Market Weakness
 
 Method: `DetectMarketWeakness` — token `0x06001050`.
 
 Với sequence length `N`:
+
+- Gate riêng yêu cầu `barIndex - 1 >= N`, ngoài các gate chung. Với `N=1`, vòng so sánh không chạy nên DLL chỉ còn yêu cầu hướng nến, không kiểm tra dấu Delta; đây là trường hợp biên cần giữ riêng khi nghiên cứu.
 
 - Buy: bar hiện tại là nến tăng; N bar trong chuỗi đều có Delta âm; Delta tăng dần theo thời gian về phía 0.
 - Sell: bar hiện tại là nến giảm; N bar trong chuỗi đều có Delta dương; Delta giảm dần theo thời gian về phía 0.
@@ -307,6 +314,8 @@ Duyệt giá từ thấp lên cao:
 
 - Nến giảm: tìm cụm Bid volume **giảm nghiêm ngặt** qua từng mức giá, độ dài đủ `ClusterSize`.
 - Nến tăng: tìm cụm Ask volume **tăng nghiêm ngặt** qua từng mức giá, độ dài đủ `ClusterSize`.
+
+Độ dài được đo theo khoảng giá `(ClusterSize - 1) * tick`. Row làm đứt chuỗi bị bỏ, không lập tức trở thành row đầu cụm mới; nhánh tăng bỏ Ask=0 ở đầu. Vì vậy không thay thuật toán bằng một rolling monotonic-run thông thường.
 
 Nhánh nến tăng ghi `OrderflowsSequencingBuy = Low` và zone Buy.
 
@@ -464,6 +473,7 @@ Detector gom các Ask/Bid imbalance **liên tiếp**:
 - Stacked mặc định cần ba cell liên tiếp.
 - Inverse mặc định cần hai cell liên tiếp.
 - Zone bao từ cell đầu đến cell cuối của cụm.
+- Các cụm duyệt key có thật, không bắt buộc các key cách nhau đúng một tick khi ladder thưa. Điểm kết thúc zone ở một số nhánh là key kế tiếp trừ một tick, nên có thể rộng hơn cell cuối cụm.
 - Nếu cả hai feature bật, mỗi feature áp swing filter riêng; một filter thất bại làm method return và có thể chặn cả feature còn lại.
 
 Nhánh xử lý cụm Bid kéo dài tới cuối ladder thiếu điều kiện `barData.IsDownBar` cho Stacked Sell; do đó có thể ghi Stacked Sell trên nến tăng. Xem mục bất thường.
@@ -774,6 +784,7 @@ Ngoài ra:
   - Nến giảm có `Ask[Low] > 0` tạo low unfinished-business line.
   - Line được finalize khi bar sau xuyên qua mức đó.
   - Đây là line renderer/base state, không thuộc 33 feature series của `OrderFlowsTrader`.
+  - Đối chiếu bổ sung: base state vẫn cập nhật khi toggle hiển thị tắt; chỉ finalize trên strict crossing của bar đóng, không phải chạm bằng. Bản Python `unfinished.py` đã so khớp 58 line native có origin trong đoạn capture, xem `OF7-VALIDATION.md`.
 
 `DetectImbalanceClusters()` override trong `OrderFlowsTrader` là method rỗng; cluster signal thực tế được xử lý bởi `DetectImbalanceClustersWithInverse()` trong `DetectZones2()`.
 

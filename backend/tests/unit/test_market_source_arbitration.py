@@ -573,7 +573,10 @@ def test_invalid_bookmap_ladder_is_rejected_before_engine_seed(tmp_path):
             pipeline._source_vds["bookmap"]["1m"].current_update(_SYMBOL)
             is None
         )
-        assert pipeline._source_footprints["bookmap"].current_update(_SYMBOL) is None
+        assert (
+            pipeline._source_footprints["bookmap"]["1m"].current_update(_SYMBOL)
+            is None
+        )
     finally:
         ticks.close()
         cache.close()
@@ -864,7 +867,7 @@ def test_bookmap_tick_close_cannot_overwrite_authoritative_snapshot(tmp_path):
 
         # Simulate a delayed tick path holding an incomplete pre-snapshot
         # ladder when the next trade crosses the minute boundary.
-        pipeline._source_footprints["bookmap"].seed_bar(
+        pipeline._source_footprints["bookmap"]["1m"].seed_bar(
             _SYMBOL,
             symbol=_SYMBOL,
             time=_BASE,

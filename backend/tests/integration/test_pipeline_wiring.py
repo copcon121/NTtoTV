@@ -629,6 +629,87 @@ def test_pipeline_grades_finalized_bookmap_footprints_without_nt(tmp_path):
 
 
 @pytest.mark.integration
+def test_pipeline_grades_finalized_rithmic_footprints_on_m1_and_30s(tmp_path):
+    cache = CacheStore(tmp_path / "app.sqlite")
+    tick_store = TickStore(tmp_path / "ticks")
+    resolver = ContractResolver(_CANDIDATES)
+    resolver.set_manual_override(_ACTIVE)
+    registry = WebSocketRegistry()
+    captured: list[OutboundEvent] = []
+    registry.enqueue = captured.append  # type: ignore[assignment]
+    pipeline = Pipeline(
+        registry=registry,
+        cache=cache,
+        tick_store=tick_store,
+        resolver=resolver,
+        symbol=_SYMBOL,
+        native_fvg_signal=FvgSignalEngine(),
+        enable_tick_fvg_signal=False,
+    )
+    pipeline._active_feed = "rithmic"
+    sequence = 0
+
+    async def send_bar(
+        minute: int, open_price: float, close_price: float, delta: int
+    ) -> None:
+        nonlocal sequence
+        time_ms = _BASE + minute * _MINUTE_MS
+        if delta > 0:
+            trades = ((open_price, 1, Side.BUY), (close_price, delta - 1, Side.BUY))
+        elif delta < 0:
+            trades = ((open_price, 1, Side.SELL), (close_price, -delta - 1, Side.SELL))
+        else:
+            trades = ((open_price, 5, Side.SELL), (close_price, 5, Side.BUY))
+        for offset, (price, volume, side) in zip((1_000, 20_000), trades):
+            if volume <= 0:
+                continue
+            sequence += 1
+            await pipeline._run_trade_engines(
+                NormalizedTrade(
+                    symbol=_SYMBOL,
+                    contract=_SYMBOL,
+                    time=time_ms + offset,
+                    price=price,
+                    volume=volume,
+                    bid=price if side is Side.SELL else price - 0.1,
+                    ask=price if side is Side.BUY else price + 0.1,
+                    best_bid=None,
+                    best_ask=None,
+                    sequence=sequence,
+                    source="rithmic",
+                    side=side,
+                ),
+                source="rithmic",
+            )
+
+    try:
+        async def run() -> None:
+            for minute, delta in enumerate([0, 5, 0, 5, 0, 5, 0, 5, -30, -10]):
+                open_price = 99.0 + (minute % 2) * 0.1
+                close_price = open_price + (0.1 if delta >= 0 else -0.1)
+                await send_bar(minute, open_price, close_price, delta)
+            await send_bar(10, 100.0, 100.5, 10)
+            await send_bar(11, 100.6, 101.0, 100)
+            await send_bar(12, 100.7, 100.8, 5)
+            await send_bar(13, 100.8, 100.9, 5)
+
+        asyncio.run(run())
+
+        assert cache.read_fvg_signals(_SYMBOL, _SYMBOL, "1m", limit=10)
+        assert cache.read_fvg_signals(_SYMBOL, _SYMBOL, "30s", limit=10)
+        streamed_tfs = {
+            event.payload["tf"]
+            for event in captured
+            if event.event_type is EventType.FVG_SIGNAL_UPDATE
+            and event.payload.get("phase") == "confirmed"
+        }
+        assert streamed_tfs == {"30s", "1m"}
+    finally:
+        tick_store.close()
+        cache.close()
+
+
+@pytest.mark.integration
 def test_pipeline_recovers_missed_fvg_signals_from_cached_bookmap_footprints(
     tmp_path,
 ):

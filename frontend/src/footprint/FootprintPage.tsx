@@ -31,7 +31,7 @@ import {
 } from "../chart/barReplay";
 import { resolveEndpoints } from "../endpoints";
 import { ChartSocket } from "../socket/ChartSocket";
-import type { ChartEventType } from "../socket/messages";
+import type { ChartEventType, Timeframe } from "../socket/messages";
 import { FootprintCanvas } from "./FootprintCanvas";
 import {
   type FootprintBar,
@@ -44,7 +44,8 @@ const SYMBOL = "GC";
 const CHART_CONTRACT = SYMBOL;
 const DEFAULT_LATEST_COUNT = 500;
 const MIN_LATEST_COUNT = 10;
-const MAX_LATEST_COUNT = 24 * 60;
+const MAX_M1_LATEST_COUNT = 24 * 60;
+const MAX_30S_LATEST_COUNT = 2 * 24 * 60;
 const DEFAULT_HISTORY_CONTEXT = 3;
 const MIN_HISTORY_CONTEXT = 3;
 const MAX_HISTORY_CONTEXT = 500;
@@ -70,6 +71,7 @@ const DEFAULT_PAGE_FOOTPRINT_SETTINGS: FootprintSettings = {
 const identityPriceToY = (price: number) => price;
 
 type PageMode = "latest" | "history";
+type FootprintTimeframe = Extract<Timeframe, "30s" | "1m">;
 type FootprintNumberSettingKey =
   | "vaPercent"
   | "absorptionPercent"
@@ -133,6 +135,9 @@ export function FootprintPage() {
   );
 
   const [mode, setMode] = useState<PageMode>("latest");
+  const [timeframe, setTimeframe] = useState<FootprintTimeframe>("1m");
+  const maxLatestCount =
+    timeframe === "30s" ? MAX_30S_LATEST_COUNT : MAX_M1_LATEST_COUNT;
   const [bars, setBars] = useState<ReadonlyMap<number, FootprintBar>>(new Map());
   const [barCount, setBarCount] = useState(DEFAULT_LATEST_COUNT);
   const [barCountInput, setBarCountInput] = useState(String(DEFAULT_LATEST_COUNT));
@@ -219,6 +224,7 @@ export function FootprintPage() {
       setHistoryMeta(null);
       try {
         const result = await api.footprintDetails(SYMBOL, CHART_CONTRACT, {
+          timeframe,
           from: sessionStart,
         });
         if (seq !== requestSeq.current) return;
@@ -236,7 +242,7 @@ export function FootprintPage() {
         }
       }
     },
-    [api],
+    [api, timeframe],
   );
 
   const loadHistory = useCallback(
@@ -246,6 +252,7 @@ export function FootprintPage() {
       setError(null);
       try {
         const result = await api.footprintDetails(SYMBOL, CHART_CONTRACT, {
+          timeframe,
           at,
           context,
         });
@@ -269,7 +276,7 @@ export function FootprintPage() {
         }
       }
     },
-    [api],
+    [api, timeframe],
   );
 
   useEffect(() => {
@@ -303,11 +310,11 @@ export function FootprintPage() {
 
   useEffect(() => {
     if (mode !== "latest") return;
-    socket.subscribe(SYMBOL, FOOTPRINT_EVENTS, "1m");
+    socket.subscribe(SYMBOL, FOOTPRINT_EVENTS, timeframe);
     const offFootprint = socket.on("footprint_update", (msg) => {
       if (
         msg.symbol !== SYMBOL ||
-        msg.tf !== "1m" ||
+        msg.tf !== timeframe ||
         (CHART_CONTRACT !== SYMBOL && msg.contract !== CHART_CONTRACT)
       ) {
         return;
@@ -321,9 +328,9 @@ export function FootprintPage() {
     });
     return () => {
       offFootprint();
-      socket.unsubscribe(SYMBOL, FOOTPRINT_EVENTS, "1m");
+      socket.unsubscribe(SYMBOL, FOOTPRINT_EVENTS, timeframe);
     };
-  }, [barCount, mode, socket]);
+  }, [barCount, mode, socket, timeframe]);
 
   const liveVisibleBars = useMemo(
     () => selectDisplayBars(bars, barCount),
@@ -600,7 +607,7 @@ export function FootprintPage() {
     const nextCount = clampInteger(
       barCountInput,
       MIN_LATEST_COUNT,
-      MAX_LATEST_COUNT,
+      maxLatestCount,
       DEFAULT_LATEST_COUNT,
     );
     setBarCount(nextCount);
@@ -821,15 +828,44 @@ export function FootprintPage() {
         </a>
         <div className="footprint-page-title">
           <span>GC Footprint</span>
-          <span>{mode === "latest" ? "From 05:00 UTC+7" : "History"}</span>
+          <span>{timeframe.toUpperCase()} · {mode === "latest" ? "From 05:00 UTC+7" : "History"}</span>
         </div>
+        <nav
+          className="timeframe-selector"
+          role="radiogroup"
+          aria-label="Footprint timeframe"
+        >
+          {(["30s", "1m"] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={timeframe === value}
+              onClick={() => {
+                if (value === timeframe) return;
+                exitBarReplay();
+                setMode("latest");
+                const nextMax = value === "30s"
+                  ? MAX_30S_LATEST_COUNT
+                  : MAX_M1_LATEST_COUNT;
+                setBarCount((current) => Math.min(current, nextMax));
+                setBarCountInput((current) =>
+                  String(Math.min(Number(current) || DEFAULT_LATEST_COUNT, nextMax))
+                );
+                setTimeframe(value);
+              }}
+            >
+              {value}
+            </button>
+          ))}
+        </nav>
         <form className="footprint-page-form" onSubmit={submitLatest}>
           <label>
             Bars
             <input
               type="number"
               min={MIN_LATEST_COUNT}
-              max={MAX_LATEST_COUNT}
+              max={maxLatestCount}
               value={barCountInput}
               onChange={(event) => setBarCountInput(event.currentTarget.value)}
             />

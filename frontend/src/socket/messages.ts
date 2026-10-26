@@ -11,6 +11,7 @@
 /** Supported bar aggregation intervals (design Glossary: Timeframe). */
 export type Timeframe =
   | "15s"
+  | "30s"
   | "1m"
   | "3m"
   | "5m"

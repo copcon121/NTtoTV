@@ -33,6 +33,7 @@ __all__ = [
 
 SWEEP_REVERSAL_TIMEFRAMES = (
     "15s",
+    "30s",
     "1m",
     "3m",
     "5m",

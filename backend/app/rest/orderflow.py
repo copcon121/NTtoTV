@@ -33,8 +33,9 @@ from ..engines.footprint_engine import (
     DEFAULT_TICK_SIZE,
     DEFAULT_VALUE_AREA_PERCENT,
     FOOTPRINT_TIMEFRAME,
+    FOOTPRINT_TIMEFRAMES,
 )
-from ..engines.fvg_signal_engine import FVG_SIGNAL_TIMEFRAME
+from ..engines.fvg_signal_engine import FVG_SIGNAL_TIMEFRAME, FVG_SIGNAL_TIMEFRAMES
 from ..engines.volume_delta_engine import VolumeDeltaEngine
 from ..models.timestamp import now_ms
 from ..storage.cache_store import CacheStore
@@ -794,7 +795,7 @@ def _minute_bar_profile_to_dict(
 async def get_volume_delta(
     request: Request,
     symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
-    tf: str = Query(..., description="Timeframe (15s,1m,3m,5m,15m,30m,1h,4h,1D)"),
+    tf: str = Query(..., description="Timeframe (15s,30s,1m,3m,5m,15m,30m,1h,4h,1D)"),
     contract: str | None = Query(
         None, description="GC contract; defaults to the Active_Contract"
     ),
@@ -859,6 +860,9 @@ async def get_volume_delta(
 @router.get("/orderflow/footprint")
 async def get_footprint(
     symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
+    tf: str = Query(
+        FOOTPRINT_TIMEFRAME, description="Footprint timeframe (30s or 1m)"
+    ),
     contract: str | None = Query(
         None, description="GC contract; defaults to the Active_Contract"
     ),
@@ -866,7 +870,7 @@ async def get_footprint(
         DEFAULT_FOOTPRINT_COUNT,
         ge=1,
         le=MAX_FOOTPRINT_COUNT,
-        description="Number of most-recent M1 footprint bars to return",
+        description="Number of most-recent footprint bars to return",
     ),
     frm: int | None = Query(
         None,
@@ -876,7 +880,7 @@ async def get_footprint(
     ),
     at: int | None = Query(
         None,
-        description="M1 bar open Canonical_Timestamp (ms) to center history on",
+        description="Bar open Canonical_Timestamp (ms) to center history on",
     ),
     context: int = Query(
         DEFAULT_FOOTPRINT_CONTEXT,
@@ -887,26 +891,28 @@ async def get_footprint(
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
-    """Return latest, ranged, or centered M1 footprint bars with ladders. (Req 18.6)"""
+    """Return latest, ranged, or centered footprint bars with ladders. (Req 18.6)"""
     if not state.is_known_symbol(symbol):
         raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
+    if tf not in FOOTPRINT_TIMEFRAMES:
+        raise bad_request("Footprint supports only 30s and 1m", field="tf")
     resolved = _resolve_contract(state, symbol, contract)
 
     target_found: bool | None = None
     if at is None:
         read_limit = MAX_ROWS if frm is not None else count
         bars = cache.read_footprint_bars(
-            symbol, resolved, FOOTPRINT_TIMEFRAME, frm, None, read_limit
+            symbol, resolved, tf, frm, None, read_limit
         )
     else:
         before = cache.read_footprint_bars_before(
-            symbol, resolved, FOOTPRINT_TIMEFRAME, at, context
+            symbol, resolved, tf, at, context
         )
         target = cache.read_footprint_bars(
-            symbol, resolved, FOOTPRINT_TIMEFRAME, at, at, 1
+            symbol, resolved, tf, at, at, 1
         )
         after = cache.read_footprint_bars_after(
-            symbol, resolved, FOOTPRINT_TIMEFRAME, at, context
+            symbol, resolved, tf, at, context
         )
         target_found = len(target) > 0
         bars = [*before, *target, *after]
@@ -915,14 +921,14 @@ async def get_footprint(
     if bars:
         levels_by_time = _footprint_levels_by_time(
             cache.read_footprint_levels_range(
-                symbol, resolved, FOOTPRINT_TIMEFRAME, bars[0].time, bars[-1].time
+                symbol, resolved, tf, bars[0].time, bars[-1].time
             )
         )
 
     body: dict[str, Any] = {
         "symbol": symbol,
         "contract": resolved,
-        "tf": FOOTPRINT_TIMEFRAME,
+        "tf": tf,
         "bars": [
             _footprint_bar_to_dict(bar, levels_by_time.get(bar.time, []))
             for bar in bars
@@ -939,7 +945,7 @@ async def get_fvg_signals(
     contract: str | None = Query(
         None, description="GC contract; defaults to the Active_Contract"
     ),
-    tf: str = Query(FVG_SIGNAL_TIMEFRAME, description="Timeframe; only 1m is supported"),
+    tf: str = Query(FVG_SIGNAL_TIMEFRAME, description="FVG timeframe (30s or 1m)"),
     frm: int | None = Query(
         None, alias="from", description="Inclusive start Canonical_Timestamp (ms)"
     ),
@@ -950,13 +956,11 @@ async def get_fvg_signals(
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
-    """Return confirmed M1 FVG signal-grader candle colors."""
+    """Return confirmed FVG signal-grader candle colors."""
     if not state.is_known_symbol(symbol):
         raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
-    if tf != FVG_SIGNAL_TIMEFRAME:
-        raise not_found(
-            f"FVG signals only support tf={FVG_SIGNAL_TIMEFRAME!r}", field="tf"
-        )
+    if tf not in FVG_SIGNAL_TIMEFRAMES:
+        raise not_found("FVG signals support only 30s and 1m", field="tf")
     resolved = _resolve_contract(state, symbol, contract)
     if frm is not None and to is not None and frm > to:
         raise bad_request("'from' must be less than or equal to 'to'", field="from")
@@ -964,12 +968,12 @@ async def get_fvg_signals(
         raise bad_request("'limit' must be a positive integer", field="limit")
     effective_limit = MAX_ROWS if limit is None else min(limit, MAX_ROWS)
     rows = cache.read_fvg_signals(
-        symbol, resolved, FVG_SIGNAL_TIMEFRAME, frm, to, effective_limit
+        symbol, resolved, tf, frm, to, effective_limit
     )
     return {
         "symbol": symbol,
         "contract": resolved,
-        "tf": FVG_SIGNAL_TIMEFRAME,
+        "tf": tf,
         "signals": [_fvg_signal_to_dict(row) for row in rows],
     }
 

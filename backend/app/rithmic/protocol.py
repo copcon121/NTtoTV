@@ -53,6 +53,10 @@ BEST_BID_OFFER = 151
 ORDER_BOOK = 156
 DEPTH_BY_ORDER = 160
 
+# History Plant: one-tick bars retain per-trade bid/ask volume.
+TICK_BAR_REPLAY_REQUEST = 206
+TICK_BAR_REPLAY_RESPONSE = 207
+
 # RequestMarketDataUpdate.UpdateBits.
 UPDATE_LAST_TRADE = 1
 UPDATE_BBO = 2
@@ -241,8 +245,11 @@ def build_login_request(
     os_platform: str | None = None,
     aggregated_quotes: bool = False,
     template_version: str = "5.55",
+    infra_type: int = 1,
 ) -> bytes:
-    """Build a Ticker Plant login.  No other infra type is exposed."""
+    """Build a read-only Ticker or History Plant login."""
+    if infra_type not in (1, 3):
+        raise ValueError("only Ticker Plant (1) and History Plant (3) are supported")
 
     fields = [
         field_string(153634, template_version),
@@ -252,7 +259,7 @@ def build_login_request(
         field_string(130002, app_name),
         field_string(131803, app_version),
         field_string(153628, system_name),
-        field_varint(153621, 1),  # RequestLogin.SysInfraType.TICKER_PLANT
+        field_varint(153621, infra_type),
     ]
     fields.extend(field_string(144108, value) for value in mac_addresses if value)
     if os_version:
@@ -277,6 +284,25 @@ def build_market_data_request(
             field_varint(154211, update_bits),
         ),
     )
+
+
+def build_tick_replay_request(
+    *, symbol: str, exchange: str, start: int, end: int,
+    user_message: str = "nttotv-history", max_count: int = 10_000,
+) -> bytes:
+    """Inclusive logical seconds; Rithmic's wire finish_index is EXCLUSIVE."""
+    if not 0 <= start <= end < 2_147_483_647 or max_count < 1:
+        raise ValueError("invalid tick replay range or count")
+    return _request(TICK_BAR_REPLAY_REQUEST, (
+        field_string(132760, user_message),
+        field_string(110100, symbol), field_string(110101, exchange),
+        field_varint(119200, 1), field_varint(119208, 1),
+        field_string(148162, "1"),
+        field_varint(153002, start), field_varint(153003, end + 1),
+        field_varint(154020, max_count),
+        field_varint(149253, 1), field_varint(149307, 1),
+        field_varint(153642, 0),
+    ))
 
 
 def build_dbo_updates_request(
@@ -483,6 +509,9 @@ def decode_message(data: bytes) -> dict[str, Any]:
     rp_codes = _strings(fields, 132766)
     if rp_codes:
         base["rpCode"] = rp_codes
+    handler_codes = _strings(fields, 132764)
+    if handler_codes:
+        base["handlerRpCode"] = handler_codes
 
     if template == SYSTEM_INFO_RESPONSE:
         base.update(
@@ -565,6 +594,28 @@ def decode_message(data: bytes) -> dict[str, Any]:
             price=_first_double(fields, 154405),
             orders=_dbo_snapshot_orders(fields),
             requestHandlerCode=_strings(fields, 132764),
+        )
+    elif template == TICK_BAR_REPLAY_RESPONSE:
+        seconds = _varints(fields, 119202)
+        micros = _varints(fields, 119203)
+        base.update(
+            type="tick_replay",
+            symbol=_first_string(fields, 110100),
+            exchange=_first_string(fields, 110101),
+            barType=_first_varint(fields, 119200),
+            barSubType=_first_varint(fields, 119208),
+            typeSpecifier=_first_string(fields, 148162),
+            sequences=_strings(fields, 119225),
+            numTrades=_first_varint(fields, 119204),
+            volume=_first_varint(fields, 119205),
+            bidVolume=_first_varint(fields, 119213),
+            askVolume=_first_varint(fields, 119214),
+            open=_first_double(fields, 100019),
+            close=_first_double(fields, 100021),
+            high=_first_double(fields, 100012),
+            low=_first_double(fields, 100013),
+            seconds=seconds, micros=micros,
+            timeMs=(seconds[0] * 1000 + (micros[0] if micros else 0) // 1000) if seconds else None,
         )
     elif template == LAST_TRADE:
         base.update(

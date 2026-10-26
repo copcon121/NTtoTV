@@ -92,7 +92,11 @@ Backend storage:
 - `backend/data/ticks/GC/<contract>/<YYYY-MM-DD>.sqlite`: raw trade/quote shards.
 - `backend/data/liquidity.sqlite`: relative/absolute liquidity markers and
   long-term line lifecycles, retained for 24 hours by default.
-- Raw tick retention is 2 calendar UTC days by default.
+- Raw tick retention is 90 calendar UTC days by default, including today.
+  `NTTOTV_TICK_RETENTION_DAYS` controls it; the Windows runtime pins 90.
+- Footprint cache remains persistent; increasing raw retention does not delete
+  older footprint rows. Rithmic history download/recovery: see
+  `RITHMIC-HISTORY.md` and `scripts/Download-RithmicHistory.ps1`.
 - Historical/deep imports should generally write bars + volume delta only; do
   not import full raw Bid/Ask history unless explicitly needed.
 
@@ -197,12 +201,12 @@ Current NinjaScript behavior:
 - The native chart indicator supplies finalized 1m delta/footprint only while NT
   is the selected fallback. Default behavior posts realtime closed bars, not
   historical reloads, to avoid a large startup burst.
-- FVG Signal Grader candle colors are also driven from the native finalized
-  footprint path. The live AddOn tick pipeline does not emit FVG grader updates
-  in production runtime, preventing old bid/ask-snapshot FVG signals from
-  racing the native source. The tick FVG engine may still run internally for
-  existing breakout/FVG confluence alert context, but it does not write the
-  chart color cache.
+- FVG Signal Grader candle colors are driven by finalized active-source
+  footprints: Bookmap/Rithmic provide 30s and 1m grading, while NT native
+  provides 1m grading during NT fallback. The live AddOn tick pipeline does not
+  emit chart FVG updates, preventing old bid/ask-snapshot signals from racing
+  the finalized footprint source. Its tick FVG engine may still run internally
+  for existing breakout/FVG confluence alert context.
 - Expected NT fallback native-bridge latency is one finalized-bar update per minute:
   localhost HTTP + SQLite upsert + websocket broadcast after NT closes the bar.
   Bookmap-primary footprint/delta is tick-by-tick internally and UI-broadcast
@@ -537,7 +541,7 @@ Gap/history import:
 
 1. If only `.Last.txt` is available, import bars + volume delta only.
 2. Use `Import-TodayLastToChart.ps1` or `Import-NtGap.ps1 -SkipRecentRaw`.
-3. Only use raw Last/Bid/Ask import for the recent 2-day retention window when
+3. Only use raw Last/Bid/Ask import within the configured raw retention window when
    complete files exist.
 
 ## Current Known Good Baseline
@@ -563,7 +567,8 @@ After the latest fixes:
   `NTTOTV_MARKET_DATA_PREFERRED_SOURCE=bookmap`.
 - Realtime OHLCV, BigTrade, volume delta, and footprint prefer Bookmap; NT stays
   warm and owns those shared keys only while selected as the automatic fallback.
-  FVG grading remains driven by finalized NT native footprint rows.
+  FVG grading uses finalized Bookmap/Rithmic 30s and 1m footprints, or finalized
+  NT native 1m rows while NT is the selected fallback.
 - Direct Rithmic Paper L1/L2/MBO is enabled as the first fallback below Bookmap.
   It becomes selectable only after a 65-second continuous warm-up, and falls
   back to NT on disconnect/staleness. Credentials are DPAPI-encrypted outside
@@ -660,9 +665,10 @@ Upload file:
 
     & $scp -F $sshConfig <local-file> "oracle-a1:/tmp/<safe-name>"
 
-_oracle_stage/ssh_config tro toi private key va known-hosts trong
-"C:\Users\Administrator\Desktop\NTtoTV\VPS oracle". Khong copy private key
-vao repo Linux, release, VPS hay output. Khong dung StrictHostKeyChecking=no.
+_oracle_stage/ssh_config tro toi private key va known-hosts local trong
+"C:\Users\Administrator\Desktop\NTtoTV-linux-rithmic\VPS oracle". Thu muc
+nay bi `/VPS oracle/` trong `.gitignore`; khong add/commit private key, dua vao
+release, copy len VPS hay output. Khong dung StrictHostKeyChecking=no.
 Fingerprint ky vong:
 
     SHA256:VJw2HPTPxdFFvpqvyJOADEppTTXWC+InY49678FGgY4
@@ -754,6 +760,27 @@ dung path cu the, roi atomic switch:
 
 Khong xoa release cu trong cung task deploy. Khong copy truc tiep SQLite dang
 co WAL. Backup/restore phai dung SQLite online backup workflow co san.
+
+### Optional Oracle Windows MT5 execution relay (2026-10-25)
+
+Oracle can relay manual trading to the Windows backend over a private SSH
+tunnel. Preserve both existing profiles: `hieu` owns
+`C:\Program Files\MetaTrader 5\terminal64.exe`; `Hai` owns
+`C:\MT5Hai\terminal64.exe`. Windows retains sessions, profiles, account
+bindings, broker credentials and order records. Oracle owner/Admin auth and
+Rithmic settings stay local; all access restrictions above still apply.
+
+Windows startup task: `NTtoTV Oracle MT5 private tunnel`. Manage it with
+`scripts/Start-OracleMt5Tunnel.ps1` / `scripts/Stop-OracleMt5Tunnel.ps1`.
+Oracle `127.0.0.1:18080` forwards to Windows `127.0.0.1:8000`; keep it private.
+Oracle enables the relay using the optional `30-windows-execution.conf` systemd
+drop-in, without changing its protected runtime env file. `/api/execution`
+reports capabilities. See `WINDOWS-EXECUTION.md` in the Linux repository.
+Read-only verification: `backend/scripts/verify_oracle_mt5_bridge.py` here.
+The relay uses its own `nttotv_windows_session` cookie and never retries an
+uncertain trading mutation. Automatic-entry controls remain disabled on Oracle.
+Windows/backend/both MT5 terminals must stay online. Do not send a real order
+as a connectivity test.
 
 ### Dieu kien cutover con lai
 

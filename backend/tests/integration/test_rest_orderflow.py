@@ -266,7 +266,35 @@ def test_fvg_signals_returns_confirmed_chart_contract_rows(env):
 
 
 @pytest.mark.integration
-def test_fvg_signals_rejects_non_m1_timeframe(env):
+def test_fvg_signals_returns_30s_rows(env):
+    client, cache = env
+    cache.upsert_fvg_signal(
+        FvgSignalRecord(
+            symbol=_SYMBOL,
+            contract=_SYMBOL,
+            timeframe="30s",
+            time=_BASE_MS,
+            direction=-1,
+            level=3,
+            pulse=-3,
+            top=2346.0,
+            bottom=2345.5,
+            breakout_ratio=1.7,
+        )
+    )
+
+    resp = client.get(
+        "/api/orderflow/fvg-signals",
+        params={"symbol": _SYMBOL, "contract": _SYMBOL, "tf": "30s"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["tf"] == "30s"
+    assert resp.json()["signals"][0]["pulse"] == -3
+
+
+@pytest.mark.integration
+def test_fvg_signals_rejects_unsupported_timeframe(env):
     client, _ = env
     resp = client.get(
         "/api/orderflow/fvg-signals",
@@ -312,12 +340,12 @@ def test_tdu_signals_returns_chart_contract_rows(env):
     }
 
 
-def _seed_footprint_bar(cache: CacheStore, time_ms: int) -> None:
+def _seed_footprint_bar(cache: CacheStore, time_ms: int, timeframe: str = "1m") -> None:
     cache.upsert_footprint_bar(
         FootprintBarRecord(
             symbol=_SYMBOL,
             contract=_ACTIVE,
-            timeframe="1m",
+            timeframe=timeframe,
             time=time_ms,
             poc=100.1,
             bar_delta=5,
@@ -332,7 +360,7 @@ def _seed_footprint_bar(cache: CacheStore, time_ms: int) -> None:
             FootprintLevelRecord(
                 symbol=_SYMBOL,
                 contract=_ACTIVE,
-                timeframe="1m",
+                timeframe=timeframe,
                 time=time_ms,
                 price=100.1,
                 bid_volume=2,
@@ -342,7 +370,7 @@ def _seed_footprint_bar(cache: CacheStore, time_ms: int) -> None:
             FootprintLevelRecord(
                 symbol=_SYMBOL,
                 contract=_ACTIVE,
-                timeframe="1m",
+                timeframe=timeframe,
                 time=time_ms,
                 price=100.0,
                 bid_volume=4,
@@ -373,6 +401,25 @@ def test_footprint_returns_last_count_bars_with_ladders(env):
     rows = first["rows"]
     assert [r["price"] for r in rows] == [100.1, 100.0]
     assert rows[0]["imbalance"] == "ask"
+
+
+@pytest.mark.integration
+def test_footprint_returns_30s_bars_when_requested(env):
+    client, cache = env
+    _seed_footprint_bar(cache, _BASE_MS, "30s")
+    _seed_footprint_bar(cache, _BASE_MS + 30_000, "30s")
+
+    resp = client.get(
+        "/api/orderflow/footprint",
+        params={"symbol": "GC", "tf": "30s", "count": 2},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["tf"] == "30s"
+    assert [bar["time"] for bar in resp.json()["bars"]] == [
+        _BASE_MS,
+        _BASE_MS + 30_000,
+    ]
 
 
 @pytest.mark.integration

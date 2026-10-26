@@ -19,6 +19,7 @@ $env:NTTOTV_TRADING_ENABLED = "1"
 $env:NTTOTV_LIVE_TRADING_ENABLED = "1"
 $env:NTTOTV_INVITE_CODE = "join-9999"
 $env:NTTOTV_MARKET_DATA_PREFERRED_SOURCE = "bookmap"
+$env:NTTOTV_TICK_RETENTION_DAYS = "90"
 
 # Rithmic Paper Trading connector (profile compatible with Bookmap 7.4.0.21)
 $env:NTTOTV_RITHMIC_ENABLED = "1"

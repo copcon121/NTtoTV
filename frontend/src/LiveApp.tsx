@@ -168,6 +168,7 @@ import type {
 import {
   displayOffsetForTimeframe,
   footprintEnabledForTimeframe,
+  fvgGraderEnabledForTimeframe,
   fixedRangeMsFromAnchors,
   gcPushMomentumEnabledForTimeframe,
   tduSignalsEnabledForTimeframe,
@@ -199,6 +200,7 @@ const DISCONNECT_STATUS_DEBOUNCE_MS = 1_500;
 const DEGRADED_STATUS_TTL_MS = 8_000;
 const PROFILE_TIMEFRAMES = new Set<Timeframe>([
   "15s",
+  "30s",
   "1m",
   "3m",
   "5m",
@@ -220,6 +222,7 @@ function normalizeChartBackgroundColor(value: unknown): string {
 
 const TIMEFRAME_RANK: Record<Timeframe, number> = {
   "15s": 0.25,
+  "30s": 0.5,
   "1m": 1,
   "3m": 3,
   "5m": 5,
@@ -1990,7 +1993,8 @@ function footprintTouchesFixedRange(
 ): boolean {
   const range = fixedRangeMsFromAnchors(drawing.anchors, timeframe);
   if (range === null) return false;
-  const footprintEnd = footprintTime + 60_000 - 1;
+  const footprintDuration = timeframe === "30s" ? 30_000 : 60_000;
+  const footprintEnd = footprintTime + footprintDuration - 1;
   return footprintTime <= range.to && footprintEnd >= range.from;
 }
 
@@ -1999,7 +2003,7 @@ export function appShellClassName(chartFocusMode: boolean): string {
 }
 
 export function bigTradesEnabledForTimeframe(timeframe: Timeframe): boolean {
-  return timeframe === "15s" || timeframe === "1m";
+  return timeframe === "15s" || timeframe === "30s" || timeframe === "1m";
 }
 
 export function outsideBarSettingsForTimeframe(
@@ -2441,6 +2445,9 @@ export function LiveApp() {
     );
   }
   const currentSeriesKey = seriesDataKey(SYMBOL, contract, timeframe);
+  const footprintTimeframe: Extract<Timeframe, "30s" | "1m"> =
+    timeframe === "30s" ? "30s" : "1m";
+  const footprintOverlayKey = `${contract}:${footprintTimeframe}`;
   const realtimeFootprintEnabled =
     ENABLE_REALTIME_FOOTPRINT_UPDATES &&
     indicatorsVisible &&
@@ -2558,8 +2565,14 @@ export function LiveApp() {
           BAR_REPLAY_HISTORY_LIMIT,
           range,
         ),
-        timeframe === "1m"
-          ? api.fvgSignals(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range)
+        fvgGraderEnabledForTimeframe(timeframe)
+          ? api.fvgSignals(
+              SYMBOL,
+              contract,
+              BAR_REPLAY_HISTORY_LIMIT,
+              range,
+              timeframe,
+            )
           : Promise.resolve<FvgSignalUpdateMessage[]>([]),
         api.bigTrades(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range, true),
       ]).then(([deltaResult, fvgResult, bigTradeResult]) => {
@@ -3262,11 +3275,11 @@ export function LiveApp() {
     if (!realtimeFootprintEnabled) {
       return;
     }
-    socket.subscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
+    socket.subscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, footprintTimeframe);
     return () => {
-      socket.unsubscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
+      socket.unsubscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, footprintTimeframe);
     };
-  }, [socket, realtimeFootprintEnabled]);
+  }, [socket, realtimeFootprintEnabled, footprintTimeframe]);
 
   useEffect(() => {
     if (!realtimeBigTradesEnabled) {
@@ -3387,7 +3400,7 @@ export function LiveApp() {
           ...initialWindow,
         });
         let indicatorTimeframe = timeframe;
-        if (timeframe === "15s" && history.bars.length === 0) {
+        if ((timeframe === "15s" || timeframe === "30s") && history.bars.length === 0) {
           const fallbackWindow = initialHistoryWindow(
             SUB_MINUTE_HISTORY_FALLBACK_TF,
           );
@@ -3552,8 +3565,6 @@ export function LiveApp() {
   ]);
 
   useEffect(() => {
-    setLoadedOverlayContract(undefined);
-    setFootprintBars(new Map());
     setFvgSignals(new Map());
     setFvgSignalSeriesKey(undefined);
     setTduSignals(new Map());
@@ -3563,11 +3574,16 @@ export function LiveApp() {
   }, [contract]);
 
   useEffect(() => {
+    setLoadedOverlayContract(undefined);
+    setFootprintBars(new Map());
+  }, [contract, footprintTimeframe]);
+
+  useEffect(() => {
     if (!realtimeFootprintEnabled) {
       setLoadedOverlayContract(undefined);
       return;
     }
-    if (!hasLoadedCurrentSeries || loadedOverlayContract === contract) {
+    if (!hasLoadedCurrentSeries || loadedOverlayContract === footprintOverlayKey) {
       return;
     }
     let cancelled = false;
@@ -3579,6 +3595,7 @@ export function LiveApp() {
             SYMBOL,
             contract,
             MAX_RETAINED_LIVE_FOOTPRINT_BARS,
+            footprintTimeframe,
           );
         } catch {
           footprint = undefined;
@@ -3587,7 +3604,7 @@ export function LiveApp() {
         if (footprint !== undefined) {
           setFootprintBars(new Map(footprint.map((bar) => [bar.time, bar])));
         }
-        setLoadedOverlayContract(contract);
+        setLoadedOverlayContract(footprintOverlayKey);
       })();
     }, DEFERRED_OVERLAY_LOAD_MS);
     return () => {
@@ -3597,6 +3614,8 @@ export function LiveApp() {
   }, [
     api,
     contract,
+    footprintOverlayKey,
+    footprintTimeframe,
     hasLoadedCurrentSeries,
     loadedOverlayContract,
     realtimeFootprintEnabled,
@@ -3653,7 +3672,7 @@ export function LiveApp() {
   ]);
 
   useEffect(() => {
-    if (timeframe !== "1m") {
+    if (!fvgGraderEnabledForTimeframe(timeframe)) {
       return;
     }
     if (!hasLoadedCurrentSeries || !showFvgGrader) {
@@ -3665,7 +3684,7 @@ export function LiveApp() {
         return;
       }
       void api
-        .fvgSignals(SYMBOL, contract, fvgSignalLimit)
+        .fvgSignals(SYMBOL, contract, fvgSignalLimit, undefined, timeframe)
         .then((signals) => {
           if (cancelled) return;
           setFvgSignals((prev) => {
@@ -3774,7 +3793,7 @@ export function LiveApp() {
       }
     };
     const queueFootprintRender = (message: FootprintUpdateMessage) => {
-      // Footprint is latest-state data for the forming 1m bar. Replace the
+      // Footprint is latest-state data for the forming bar. Replace the
       // pending snapshot so a burst causes one React render, not one per frame.
       pendingFootprintRef.current = message;
       if (footprintRenderTimerRef.current !== undefined) return;
@@ -3839,7 +3858,7 @@ export function LiveApp() {
           if (
             msg.symbol !== SYMBOL ||
             !matchesChartContract(msg.contract) ||
-            msg.tf !== "1m"
+            msg.tf !== footprintTimeframe
           ) {
             return;
           }
@@ -3861,11 +3880,12 @@ export function LiveApp() {
       if (
         msg.symbol !== SYMBOL ||
         !matchesChartContract(msg.contract) ||
-        msg.tf !== "1m"
+        !fvgGraderEnabledForTimeframe(timeframe) ||
+        msg.tf !== timeframe
       ) {
         return;
       }
-      setFvgSignalSeriesKey(seriesDataKey(SYMBOL, contract, "1m"));
+      setFvgSignalSeriesKey(seriesDataKey(SYMBOL, contract, timeframe));
       setFvgSignals((prev) => {
         const next = new Map(prev);
         if (msg.phase === "clear" || msg.pulse === 0) {
@@ -3919,6 +3939,7 @@ export function LiveApp() {
     socket,
     contract,
     timeframe,
+    footprintTimeframe,
     scheduleDeltaProfileRefresh,
     publishLatestPrice,
     realtimeFootprintEnabled,
@@ -5500,7 +5521,7 @@ export function LiveApp() {
     indicatorsVisible &&
     hasLoadedCurrentSeries &&
     showFvgGrader &&
-    timeframe === "1m" &&
+    fvgGraderEnabledForTimeframe(timeframe) &&
     (replayActive || fvgSignalSeriesKey === currentSeriesKey)
       ? replayActive
         ? replayChartFvgSignals ?? EMPTY_FVG_SIGNALS
@@ -5737,7 +5758,7 @@ export function LiveApp() {
           }
           tduSignalsDisabled={!tduSignalsEnabledForTimeframe(timeframe)}
           footprintDisabled={!footprintEnabledForTimeframe(timeframe)}
-          fvgGraderDisabled={timeframe !== "1m"}
+          fvgGraderDisabled={!fvgGraderEnabledForTimeframe(timeframe)}
           bigTradeDisabled={!bigTradeOverlayEnabled}
           dailyVolumeProfile={showDailyVolumeProfile}
           dailyVolumeProfileWidth={dailyVolumeProfileWidth}
@@ -5951,7 +5972,11 @@ export function LiveApp() {
             showMgannSwing={indicatorsVisible && showMgannSwingForTimeframe}
             mgannSwing={mgannSwing}
             showFootprint={footprintVisible}
-            showFvgGrader={indicatorsVisible && showFvgGrader && timeframe === "1m"}
+            showFvgGrader={
+              indicatorsVisible &&
+              showFvgGrader &&
+              fvgGraderEnabledForTimeframe(timeframe)
+            }
             showBigTrades={indicatorsVisible && showBigTrades && bigTradeOverlayEnabled}
             bigTradeSettings={bigTradeSettings}
             chartBackgroundColor={chartBackgroundColor}
@@ -6022,7 +6047,7 @@ export function LiveApp() {
                 title={
                   footprintEnabledForTimeframe(timeframe)
                     ? `Footprint ${footprintVisible ? "on" : "off"}`
-                    : "Footprint uses 1m data and is available on 15s/1m charts"
+                    : "Footprint is available on 15s/30s/1m charts"
                 }
                 onClick={() => {
                   if (!indicatorsVisible) {

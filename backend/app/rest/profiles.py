@@ -181,6 +181,12 @@ async def save_my_profile(
 
     now = now_ms()
     existing = cache.profiles.read_user_default_profile(user.id)
+    if (
+        existing is not None
+        and "liquidityChart" not in payload
+        and isinstance(existing.payload.get("liquidityChart"), dict)
+    ):
+        payload = {**payload, "liquidityChart": existing.payload["liquidityChart"]}
     rec = ProfileRecord(
         id=user.id,
         user_id=user.id,
@@ -191,6 +197,55 @@ async def save_my_profile(
     )
     cache.upsert_profile(rec)
     return {"profile": _profile_to_dict(rec)}
+
+
+@router.patch("/me/profile/liquidity-chart")
+async def save_my_liquidity_chart(
+    request: Request,
+    user: AuthenticatedUser = Depends(get_current_user),
+    cache: CacheStore = Depends(get_cache),
+) -> dict[str, Any]:
+    """Update only the authenticated user's liquidity-chart workspace."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise bad_request("Request body must be valid JSON")
+    if not isinstance(body, dict):
+        raise bad_request("Request body must be a JSON object")
+
+    liquidity_chart = body.get("liquidityChart")
+    if not isinstance(liquidity_chart, dict):
+        raise validation_error(
+            "'liquidityChart' must be an object",
+            field="liquidityChart",
+        )
+
+    existing = _read_or_seed_user_profile(cache, user)
+    payload = dict(existing.payload)
+    payload["liquidityChart"] = liquidity_chart
+
+    # BigTrade is one shared indicator configuration. Changes made from /lq
+    # must also be visible when the user returns to the main chart.
+    big_trade_settings = liquidity_chart.get("bigTradeSettings")
+    if isinstance(big_trade_settings, dict):
+        payload["bigTradeSettings"] = big_trade_settings
+    if isinstance(liquidity_chart.get("showBigTrades"), bool):
+        payload["showBigTrades"] = liquidity_chart["showBigTrades"]
+
+    now = now_ms()
+    rec = ProfileRecord(
+        id=user.id,
+        user_id=user.id,
+        name=existing.name or user.username,
+        payload=_migrate_mgann_break_payload(payload),
+        created_at=existing.created_at if existing.created_at > 0 else now,
+        updated_at=now,
+    )
+    cache.upsert_profile(rec)
+    return {
+        "liquidityChart": rec.payload["liquidityChart"],
+        "updatedAt": rec.updated_at,
+    }
 
 
 @router.get("/profiles")

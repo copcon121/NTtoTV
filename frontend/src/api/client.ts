@@ -14,7 +14,11 @@ import {
   type WebPushSendResult,
 } from "../alerts/types";
 import type { AlertEventMessage } from "../socket/messages";
-import { type ChartProfile, type ChartProfilePayload } from "../profiles/types";
+import {
+  type ChartProfile,
+  type ChartProfilePayload,
+  type LiquidityChartProfileState,
+} from "../profiles/types";
 import type {
   DeltaProfileData,
   DeltaProfileSource,
@@ -70,6 +74,7 @@ export interface FootprintRestBar {
 }
 
 export interface FootprintQuery {
+  timeframe?: Timeframe;
   count?: number;
   from?: number;
   at?: number;
@@ -801,6 +806,27 @@ export class ApiClient {
     return body.profile;
   }
 
+  /** Save only /lq state without replacing the rest of the user's profile. */
+  async saveMeLiquidityChart(
+    liquidityChart: LiquidityChartProfileState,
+  ): Promise<LiquidityChartProfileState> {
+    const res = await this.fetchFn(`${this.basePath}/me/profile/liquidity-chart`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ liquidityChart }),
+    });
+    if (!res.ok) {
+      throw new Error(
+        await this.errorMessage(res, "PATCH /me/profile/liquidity-chart"),
+      );
+    }
+    const body = (await res.json()) as {
+      liquidityChart: LiquidityChartProfileState;
+    };
+    return body.liquidityChart;
+  }
+
   /** Load Telegram notification config for the active alert profile. */
   async telegramConfig(profileId = "default"): Promise<TelegramNotificationConfig> {
     const body = await this.getJson<{ telegram: TelegramNotificationConfig }>(
@@ -1033,8 +1059,9 @@ export class ApiClient {
     symbol: string,
     contract: string,
     count = 5,
+    timeframe: Timeframe = "1m",
   ): Promise<FootprintUpdateMessage[]> {
-    const body = await this.footprintDetails(symbol, contract, { count });
+    const body = await this.footprintDetails(symbol, contract, { count, timeframe });
     return body.bars;
   }
 
@@ -1048,6 +1075,9 @@ export class ApiClient {
       symbol,
       contract,
     });
+    if (query.timeframe !== undefined) {
+      params.set("tf", query.timeframe);
+    }
     if (query.count !== undefined) {
       params.set("count", String(query.count));
     }
@@ -1074,17 +1104,18 @@ export class ApiClient {
     };
   }
 
-  /** Confirmed M1 FVG Signal Grader candle colors. */
+  /** Confirmed FVG Signal Grader candle colors. */
   async fvgSignals(
     symbol: string,
     contract: string,
     limit?: number,
     range?: { from?: number; to?: number },
+    timeframe: Timeframe = "1m",
   ): Promise<FvgSignalUpdateMessage[]> {
     const params = new URLSearchParams({
       symbol,
       contract,
-      tf: "1m",
+      tf: timeframe,
     });
     if (limit !== undefined) {
       params.set("limit", String(limit));

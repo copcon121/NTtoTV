@@ -1,7 +1,7 @@
-"""Footprint_Engine: per-M1-bar bid-by-ask ladder and footprint metrics.
+"""Footprint_Engine: per-bar bid-by-ask ladder and footprint metrics.
 
 The Footprint_Engine consumes accepted :class:`~app.models.canonical.NormalizedTrade`
-events for the Active_Contract and builds, per M1 (1-minute) bar, the
+events for the Active_Contract and builds a 30-second or 1-minute
 bid-by-ask price ladder and its derived metrics: POC, bar delta, buy%/sell%,
 value area, per-level diagonal imbalance, Stacked_Imbalance runs, and
 unfinished-auction flags. On every trade it folds the classified volume into
@@ -53,9 +53,8 @@ Per-bar metrics (Req 14.4):
 **Ladder conservation invariant**: ``Σ(bid_volume + ask_volume)`` over all
 levels equals the bar's total traded (filtered) volume.
 
-Bucketization mirrors the Bar_Aggregator at the 1m timeframe: trade times
-(Canonical_Timestamp, ms since epoch UTC) are floored to 60,000 ms multiples,
-which land on UTC minute boundaries. Trades are expected to arrive with
+Bucketization mirrors the Bar_Aggregator at the configured timeframe. Trades
+are expected to arrive with
 non-decreasing timestamps (guaranteed upstream by the sequence validator); a
 trade whose bucket precedes the current bar is ignored so an already-closed bar
 is never corrupted.
@@ -67,6 +66,7 @@ import math
 from dataclasses import dataclass, field
 
 from app.models.canonical import NormalizedTrade, Side
+from app.engines.session_calendar import timeframe_bucket_start
 from app.models.messages import (
     FootprintRow,
     FootprintUpdate,
@@ -77,6 +77,7 @@ from app.models.messages import (
 
 __all__ = [
     "FOOTPRINT_TIMEFRAME",
+    "FOOTPRINT_TIMEFRAMES",
     "DEFAULT_IMBALANCE_PERCENT",
     "DEFAULT_IMBALANCE_MIN_VOLUME",
     "DEFAULT_GROUP_TICKS_PER_LEVEL",
@@ -86,9 +87,10 @@ __all__ = [
     "FootprintEngine",
 ]
 
-# v1 footprint is computed at the 1-minute timeframe only. (Req 14.1)
+# M1 remains the authoritative/default footprint. Both M1 and 30s finalized
+# ladders can drive FVG grading; the 30s engine is exchange-trade based.
 FOOTPRINT_TIMEFRAME = "1m"
-_TF_MS = 60_000
+FOOTPRINT_TIMEFRAMES = ("30s", FOOTPRINT_TIMEFRAME)
 
 # Imbalance / grouping defaults (Req 14.5, 14.10; design "Footprint Ladder").
 DEFAULT_IMBALANCE_PERCENT = 100.0
@@ -121,11 +123,12 @@ class _BarState:
 
 
 class FootprintEngine:
-    """Build the bid-by-ask ladder and footprint metrics per M1 bar. (Req 14)"""
+    """Build the bid-by-ask ladder and footprint metrics per configured bar."""
 
     def __init__(
         self,
         *,
+        timeframe: str = FOOTPRINT_TIMEFRAME,
         imbalance_percent: float = DEFAULT_IMBALANCE_PERCENT,
         imbalance_min_volume: int = DEFAULT_IMBALANCE_MIN_VOLUME,
         group_ticks_per_level: int = DEFAULT_GROUP_TICKS_PER_LEVEL,
@@ -133,6 +136,8 @@ class FootprintEngine:
         tick_size: float = DEFAULT_TICK_SIZE,
         value_area_percent: float = DEFAULT_VALUE_AREA_PERCENT,
     ) -> None:
+        if timeframe not in FOOTPRINT_TIMEFRAMES:
+            raise ValueError(f"unsupported footprint timeframe: {timeframe!r}")
         if imbalance_percent < 0:
             raise ValueError("imbalance_percent must be >= 0")
         if imbalance_min_volume < 0:
@@ -145,6 +150,7 @@ class FootprintEngine:
             raise ValueError("tick_size must be > 0")
         if not 0 <= value_area_percent <= 100:
             raise ValueError("value_area_percent must be between 0 and 100")
+        self.timeframe = timeframe
         self.imbalance_percent = imbalance_percent
         self.imbalance_min_volume = imbalance_min_volume
         self.group_ticks_per_level = group_ticks_per_level
@@ -183,8 +189,8 @@ class FootprintEngine:
     # -- bucketization & price grouping ---------------------------------------
 
     def bucket_start(self, ts_ms: int) -> int:
-        """Floor a Canonical_Timestamp to the start of its 1m bucket."""
-        return (ts_ms // _TF_MS) * _TF_MS
+        """Floor a Canonical_Timestamp to the configured footprint bucket."""
+        return timeframe_bucket_start(ts_ms, self.timeframe)
 
     def level_price(self, price: float) -> float:
         """Map a trade price to its ladder level price (per GroupTicksPerLevel).
@@ -341,7 +347,7 @@ class FootprintEngine:
         return FootprintUpdate(
             symbol=symbol,
             contract=contract,
-            tf=FOOTPRINT_TIMEFRAME,
+            tf=self.timeframe,
             time=bar.time,
             rows=rows,
             open=bar.open,

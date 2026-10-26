@@ -64,6 +64,21 @@ CREATE TABLE IF NOT EXISTS liquidity_lines (
 
 CREATE INDEX IF NOT EXISTS idx_liquidity_lines_range
 ON liquidity_lines(symbol, contract, started_at, ended_at);
+
+CREATE TABLE IF NOT EXISTS liquidity_line_samples (
+    symbol TEXT NOT NULL,
+    contract TEXT NOT NULL,
+    line_id TEXT NOT NULL,
+    event_time INTEGER NOT NULL,
+    size INTEGER NOT NULL,
+    active INTEGER NOT NULL,
+    PRIMARY KEY(symbol, contract, line_id, event_time),
+    FOREIGN KEY(symbol, contract, line_id)
+        REFERENCES liquidity_lines(symbol, contract, line_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_liquidity_samples_range
+ON liquidity_line_samples(symbol, contract, event_time);
 """
 
 
@@ -149,7 +164,10 @@ class LiquidityStore:
                 return
 
             line_id = str(payload["lineId"])
-            started_at = int(payload.get("lineStartTime") or payload["time"])
+            started_at = int(
+                payload["lineStartTime"]
+                if payload.get("lineStartTime") is not None else payload["time"]
+            )
             active = 0 if action == "end" else 1
             ended_at = int(payload["time"]) if action == "end" else None
             conn.execute(
@@ -171,6 +189,7 @@ class LiquidityStore:
                     threshold=excluded.threshold,
                     dom_distance=excluded.dom_distance,
                     active=excluded.active
+                WHERE excluded.last_at >= liquidity_lines.last_at
                 """,
                 (
                     values["symbol"],
@@ -189,6 +208,20 @@ class LiquidityStore:
                     active,
                 ),
             )
+            # Only reduced tracker updates are retained, never raw depth. A
+            # snapshot records the state at receipt, not an invented history
+            # back to lineStartTime. End samples stop the previous segment.
+            conn.execute(
+                """
+                INSERT INTO liquidity_line_samples(
+                    symbol, contract, line_id, event_time, size, active
+                ) VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, contract, line_id, event_time) DO UPDATE SET
+                    size=excluded.size, active=excluded.active
+                """,
+                (values["symbol"], values["contract"], line_id,
+                 values["event_time"], values["size"], active),
+            )
 
         self._writer.write(write)
 
@@ -206,6 +239,7 @@ class LiquidityStore:
         safe_limit = max(1, min(int(limit), 20_000))
         conn = connect_reader(self.path)
         try:
+            conn.execute("BEGIN")
             event_rows = conn.execute(
                 """
                 SELECT * FROM liquidity_events
@@ -226,8 +260,35 @@ class LiquidityStore:
                 """,
                 (symbol, contract, int(end), int(start), safe_limit),
             ).fetchall()
+            # Bound response size; retain a carry-in sample at the left edge.
+            # Missing older samples stay unknown rather than being backfilled
+            # with the latest size. Readers share one SQLite snapshot.
+            sample_rows = conn.execute(
+                """
+                SELECT s.* FROM liquidity_line_samples s
+                JOIN liquidity_lines l USING(symbol, contract, line_id)
+                WHERE s.symbol=? AND s.contract=? AND s.event_time<=?
+                  AND l.started_at<=? AND (l.ended_at IS NULL OR l.ended_at>=?)
+                  AND (s.event_time>=? OR s.event_time=(
+                    SELECT MAX(p.event_time) FROM liquidity_line_samples p
+                    WHERE p.symbol=s.symbol AND p.contract=s.contract
+                      AND p.line_id=s.line_id AND p.event_time<?
+                  ))
+                ORDER BY s.event_time DESC, s.line_id
+                LIMIT 100000
+                """,
+                (symbol, contract, int(end), int(end), int(start), int(start), int(start)),
+            ).fetchall()
         finally:
             conn.close()
+
+        samples: dict[str, list[dict[str, Any]]] = {}
+        for row in reversed(sample_rows):
+            samples.setdefault(str(row["line_id"]), []).append({
+                "time": int(row["event_time"]),
+                "size": int(row["size"]),
+                "active": bool(row["active"]),
+            })
 
         events = [
             {
@@ -269,6 +330,7 @@ class LiquidityStore:
                     None if row["dom_distance"] is None else int(row["dom_distance"])
                 ),
                 "active": bool(row["active"]),
+                "samples": samples.get(str(row["line_id"]), []),
             }
             for row in line_rows
         ]
@@ -278,6 +340,21 @@ class LiquidityStore:
         """Delete expired markers and completed lines; keep still-active lines."""
 
         def write(conn) -> tuple[int, int]:
+            # One anchor per surviving line carries its size into the retained
+            # window, even if the book has stayed unchanged for a long time.
+            conn.execute(
+                """
+                DELETE FROM liquidity_line_samples
+                WHERE event_time<? AND event_time<(
+                    SELECT MAX(p.event_time) FROM liquidity_line_samples p
+                    WHERE p.symbol=liquidity_line_samples.symbol
+                      AND p.contract=liquidity_line_samples.contract
+                      AND p.line_id=liquidity_line_samples.line_id
+                      AND p.event_time<?
+                )
+                """,
+                (int(cutoff_ms), int(cutoff_ms)),
+            )
             events = conn.execute(
                 "DELETE FROM liquidity_events WHERE event_time < ?", (int(cutoff_ms),)
             ).rowcount

@@ -172,8 +172,11 @@ class Settings:
     )
 
     # Raw tick retention (see Requirements 7.4, 7.5). This is a calendar-day
-    # count including today's UTC shard; v1 keeps today and yesterday only.
-    tick_retention_days: int = 2
+    # count including today's UTC shard. Keep three months for ML/replay.
+    # Derived footprints remain persistent (no automatic cache deletion).
+    tick_retention_days: int = field(
+        default_factory=lambda: max(1, int(os.getenv("NTTOTV_TICK_RETENTION_DAYS", "90")))
+    )
     # Compact threshold events and persistent-line lifecycles only. Raw depth
     # is deliberately never written by the backend.
     liquidity_retention_hours: int = field(

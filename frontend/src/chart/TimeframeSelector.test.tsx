@@ -8,6 +8,7 @@ describe("TimeframeSelector", () => {
     const labels = screen.getAllByRole("radio").map((b) => b.textContent);
     expect(labels).toEqual([
       "15s",
+      "30s",
       "1m",
       "3m",
       "5m",
@@ -17,7 +18,7 @@ describe("TimeframeSelector", () => {
       "4h",
       "1D",
     ]);
-    expect(TIMEFRAMES).toHaveLength(9);
+    expect(TIMEFRAMES).toHaveLength(10);
   });
 
   it("marks the active timeframe as checked", () => {

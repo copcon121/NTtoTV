@@ -20,6 +20,7 @@ import {
   DEFAULT_BIG_TRADE_SETTINGS,
   ChartContainer,
   filterBigTradeMarkers,
+  smcComputationBars,
 } from "./index";
 import { type BigTradeMarker } from "./indicatorReducer";
 import { DEFAULT_SMC_SETTINGS } from "./smc";
@@ -1303,7 +1304,16 @@ describe("ChartContainer", () => {
     }
   });
 
-  it("refreshes the SMC overlay after matching realtime bar updates", () => {
+  it("limits SMC computation to about one day with swing warm-up", () => {
+    const rows = Array.from({ length: 5_000 }, (_, index) =>
+      ohlc(index * 300_000, 10, 11, 9, 10),
+    );
+
+    expect(smcComputationBars(rows, "5m", DEFAULT_SMC_SETTINGS)).toHaveLength(288);
+    expect(smcComputationBars(rows, "1h", DEFAULT_SMC_SETTINGS)).toHaveLength(122);
+  });
+
+  it("refreshes SMC only after the chart timeframe bar closes", () => {
     vi.useFakeTimers();
     try {
       const port = new FakePort();
@@ -1336,11 +1346,20 @@ describe("ChartContainer", () => {
         />,
       );
 
-      ws.deliver(barUpdate(ohlc(5, 12.5, 13, 9, 12.5)));
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      const callsBeforeLiveUpdate = port.setSmcOverlayCalls.length;
 
-      // SMC overlay recomputation is throttled to max once per 500ms during
-      // realtime updates to avoid blocking the main thread on every tick.
-      vi.advanceTimersByTime(500);
+      ws.deliver(barUpdate(ohlc(5, 12.5, 13, 9, 12.5)));
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(port.setSmcOverlayCalls).toHaveLength(callsBeforeLiveUpdate);
+
+      ws.deliver(
+        barUpdate(ohlc(5, 12.5, 13, 9, 12.5), { closed: true }),
+      );
 
       const overlay = port.setSmcOverlayCalls[port.setSmcOverlayCalls.length - 1];
       expect(overlay.lines.some((line) => line.label === "BOS")).toBe(true);

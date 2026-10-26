@@ -50,8 +50,15 @@ from .engines.bookmap_big_trade_engine import BookmapBigTradeEngine
 from .engines.breakout_box_engine import BreakoutBoxEngine, BreakoutBoxEvent
 from .engines.contract_resolver import ContractResolver
 from .engines.depth_liquidity import DepthLiquidityEvent, DepthLiquidityTracker
-from .engines.footprint_engine import FOOTPRINT_TIMEFRAME, FootprintEngine
-from .engines.fvg_signal_engine import FvgSignalEngine
+from .engines.footprint_engine import (
+    FOOTPRINT_TIMEFRAME,
+    FOOTPRINT_TIMEFRAMES,
+    FootprintEngine,
+)
+from .engines.fvg_signal_engine import (
+    FVG_SIGNAL_TIMEFRAMES,
+    FvgSignalEngine,
+)
 from .engines.long_term_liquidity_touch import (
     LongTermLiquidityTouch,
     LongTermLiquidityTouchEngine,
@@ -299,9 +306,13 @@ class Pipeline:
         # Compatibility alias for focused tests and replay code that injects the
         # historical NT engine.  Live routing uses the source-scoped map above.
         self._vds = self._source_vds["nt"]
-        self._source_footprints = {
-            "bookmap": FootprintEngine(),
-            "rithmic": FootprintEngine(),
+        self._source_footprints: dict[str, dict[str, FootprintEngine]] = {
+            "bookmap": {
+                tf: FootprintEngine(timeframe=tf) for tf in FOOTPRINT_TIMEFRAMES
+            },
+            "rithmic": {
+                tf: FootprintEngine(timeframe=tf) for tf in FOOTPRINT_TIMEFRAMES
+            },
         }
         self._source_tdu = {
             "nt": TduSignalEngine(),
@@ -313,6 +324,14 @@ class Pipeline:
         self._native_fvg_seeded = (
             native_fvg_seeded if native_fvg_seeded is not None else set()
         )
+        self._footprint_fvg_signals: dict[str, FvgSignalEngine | None] = {
+            FOOTPRINT_TIMEFRAME: self._native_fvg_signal,
+            "30s": FvgSignalEngine(timeframe="30s"),
+        }
+        self._footprint_fvg_seeded: dict[str, set[tuple[str, str]]] = {
+            FOOTPRINT_TIMEFRAME: self._native_fvg_seeded,
+            "30s": set(),
+        }
         self._enable_tick_fvg_signal = enable_tick_fvg_signal
         self._bt = big_trade or BigTradeEngine(dedupe_repeated_timestamp_runs=True)
         self._source_big_trades: dict[str, BigTradeEngine | BookmapBigTradeEngine] = {
@@ -1198,7 +1217,7 @@ class Pipeline:
         raw_rows = payload["rows"]
         if not isinstance(raw_rows, list):
             raise ValueError("Bookmap bar rows must be a list")
-        footprint_engine = self._source_footprints["bookmap"]
+        footprint_engine = self._source_footprints["bookmap"][FOOTPRINT_TIMEFRAME]
         rows: list[tuple[float, int, int]] = []
         seen_prices: set[float] = set()
         row_bid = 0
@@ -1306,30 +1325,39 @@ class Pipeline:
         snapshot: bool,
     ) -> list[FvgSignalUpdate]:
         """Grade one authoritative closed Bookmap M1 footprint bar."""
-        engine = self._native_fvg_signal
         if (
-            engine is None
-            or snapshot
+            snapshot
             or not bar_update.closed
             or bar_update.tf != FOOTPRINT_TIMEFRAME
             or footprint_update is None
         ):
             return []
+        return self._grade_finalized_footprint(footprint_update)
 
+    def _grade_finalized_footprint(
+        self, footprint_update: FootprintUpdate
+    ) -> list[FvgSignalUpdate]:
+        """Grade one finalized active-source 30s/M1 footprint bar."""
+        timeframe = footprint_update.tf
+        if timeframe not in FVG_SIGNAL_TIMEFRAMES:
+            return []
+        engine = self._footprint_fvg_signals.get(timeframe)
+        if engine is None:
+            return []
         catchup_updates = self._seed_shared_fvg_engine(
-            symbol=bar_update.symbol,
-            contract=bar_update.contract,
-            before_time_ms=bar_update.bar.time,
+            symbol=footprint_update.symbol,
+            contract=footprint_update.contract,
+            timeframe=timeframe,
+            before_time_ms=footprint_update.time,
         )
-        bar = bar_update.bar
         live_updates = engine.on_closed_bar(
-            symbol=bar_update.symbol,
-            contract=bar_update.contract,
-            time=bar.time,
-            open=bar.open,
-            high=bar.high,
-            low=bar.low,
-            close=bar.close,
+            symbol=footprint_update.symbol,
+            contract=footprint_update.contract,
+            time=footprint_update.time,
+            open=footprint_update.open,
+            high=footprint_update.high,
+            low=footprint_update.low,
+            close=footprint_update.close,
             rows=[(row.price, row.bid, row.ask) for row in footprint_update.rows],
             emit_clear=True,
         )
@@ -1340,6 +1368,7 @@ class Pipeline:
         *,
         symbol: str,
         contract: str,
+        timeframe: str = FOOTPRINT_TIMEFRAME,
         before_time_ms: int,
     ) -> list[FvgSignalUpdate]:
         """Hydrate the shared grader and return missed confirmed signals.
@@ -1347,22 +1376,23 @@ class Pipeline:
         The latest cached signal is not a processing checkpoint: a quiet grader
         can legitimately go many bars without a match. Replaying up to 3,000
         recent finalized bars both restores engine state and repairs the signal
-        gap left while the former NT-only source was offline.
+        gap left while a grader source was offline.
         """
-        engine = self._native_fvg_signal
+        engine = self._footprint_fvg_signals.get(timeframe)
+        seeded = self._footprint_fvg_seeded.get(timeframe)
         seed_key = (symbol, contract)
-        if engine is None or seed_key in self._native_fvg_seeded:
+        if engine is None or seeded is None or seed_key in seeded:
             return []
 
         existing = self._cache.read_fvg_signals(
             symbol,
             contract,
-            FOOTPRINT_TIMEFRAME,
+            timeframe,
             limit=1,
         )
         persist_after = existing[-1].time if existing else -1
         replay_from = (
-            max(0, persist_after - 30 * 60_000)
+            max(0, persist_after - 30 * engine.timeframe_ms)
             if persist_after >= 0
             else None
         )
@@ -1370,17 +1400,17 @@ class Pipeline:
         bars = self._cache.read_bars(
             symbol,
             contract,
-            FOOTPRINT_TIMEFRAME,
+            timeframe,
             replay_from,
             before_time_ms - 1,
-            3_000,
+            10_000,
         )
         levels_by_time: dict[int, list[tuple[float, int, int]]] = defaultdict(list)
         if bars:
             levels = self._cache.read_footprint_levels_range(
                 symbol,
                 contract,
-                FOOTPRINT_TIMEFRAME,
+                timeframe,
                 bars[0].time,
                 bars[-1].time,
             )
@@ -1414,11 +1444,12 @@ class Pipeline:
                 and update.pulse != 0
                 and update.time > persist_after
             )
-        self._native_fvg_seeded.add(seed_key)
+        seeded.add(seed_key)
         if catchup_updates:
             logger.info(
-                "FVG grader recovered %s Bookmap signals after %s",
+                "FVG grader recovered %s %s signals after %s",
                 len(catchup_updates),
+                timeframe,
                 persist_after,
             )
         return catchup_updates
@@ -1441,35 +1472,31 @@ class Pipeline:
             if update is not None:
                 source_vd_updates.append(update)
 
-        source_fp_update: FootprintUpdate | None = None
-        closed_footprint: FootprintUpdate | None = None
-        footprint_engine = self._source_footprints.get(source)
-        if footprint_engine is not None:
-            # The footprint engine only retains the current forming bar; once a
-            # trade opens a new minute the previous bar's ladder is dropped.
-            # Snapshot the closing bar before on_trade() rolls the bucket so it
-            # can be persisted to the delta-profile cache below. This keeps the
-            # session-daily histogram current even when the Bookmap bar
-            # snapshot does not embed order-flow fields.
-            closed_1m = next(
-                (
-                    u
-                    for u in source_bar_updates
-                    if u.tf == FOOTPRINT_TIMEFRAME and u.closed
-                ),
-                None,
-            )
-            if closed_1m is not None:
-                prev_fp = footprint_engine.current_update(trade.contract)
-                if prev_fp is not None and prev_fp.time == closed_1m.bar.time:
-                    closed_footprint = prev_fp
-            source_fp_update = footprint_engine.on_trade(trade)
+        source_fp_updates: list[FootprintUpdate] = []
+        closed_footprints: list[FootprintUpdate] = []
+        footprint_engines = self._source_footprints.get(source)
+        if footprint_engines is not None:
+            # Each engine retains only its current forming bar. Snapshot a bar
+            # before the trade rolls that timeframe so both 30s and M1 history
+            # can be persisted without losing the closing ladder.
+            for tf, footprint_engine in footprint_engines.items():
+                closed_bar = next(
+                    (u for u in source_bar_updates if u.tf == tf and u.closed),
+                    None,
+                )
+                if closed_bar is not None:
+                    prev_fp = footprint_engine.current_update(trade.contract)
+                    if prev_fp is not None and prev_fp.time == closed_bar.bar.time:
+                        closed_footprints.append(prev_fp)
+                update = footprint_engine.on_trade(trade)
+                if update is not None:
+                    source_fp_updates.append(update)
 
         # 3) Legacy NT tick FVG remains internal for breakout/FVG confluence.
-        # The shared grader confirms from authoritative Bookmap footprint bars
-        # and uses active Bookmap trades only for provisional source-bar color.
-        # When Bookmap is unavailable, finalized NT native bars drive the same
-        # shared engine through the HTTP fallback route.
+        # Shared graders confirm from finalized active-source footprints.
+        # Bookmap M1 remains snapshot-authoritative; Rithmic M1 and both direct
+        # feeds' 30s bars close from their exchange-side trade ladders. NT
+        # native remains the M1-only fallback through the HTTP route.
         raw_fvg_updates = self._fvg.on_trade(trade) if source == "nt" else []
         fvg_updates = raw_fvg_updates if self._enable_tick_fvg_signal else []
         native_fvg_preview_updates: list[FvgSignalUpdate] = []
@@ -1493,6 +1520,7 @@ class Pipeline:
         closed_bars: dict[str, BarUpdate] = {}
         vd_update: VolumeDeltaUpdate | None = None
         fp_update: FootprintUpdate | None = None
+        fp_updates: list[FootprintUpdate] = []
         bar_updates: list[BarUpdate] = []
         vd_updates: list[VolumeDeltaUpdate] = []
         big_trades: list[BigTrade] = []
@@ -1506,7 +1534,24 @@ class Pipeline:
                 vd_updates = source_vd_updates
                 big_trades = source_big_trades
                 tdu_updates = source_tdu_updates
-                fp_update = source_fp_update
+                fp_updates = source_fp_updates
+                fp_update = next(
+                    (u for u in fp_updates if u.tf == FOOTPRINT_TIMEFRAME), None
+                )
+                direct_fvg_updates: list[FvgSignalUpdate] = []
+                for closed_footprint in closed_footprints:
+                    if (
+                        source == "bookmap"
+                        and closed_footprint.tf == FOOTPRINT_TIMEFRAME
+                    ):
+                        # The authoritative Bookmap M1 snapshot grades this bar
+                        # in on_bookmap_bar; avoid grading a provisional ladder.
+                        continue
+                    direct_fvg_updates.extend(
+                        self._grade_finalized_footprint(closed_footprint)
+                    )
+                if direct_fvg_updates:
+                    fvg_updates = [*fvg_updates, *direct_fvg_updates]
                 use_trade_built_bar_alerts = source != "bookmap"
                 for update in bar_updates:
                     if update.closed and use_trade_built_bar_alerts:
@@ -1533,17 +1578,18 @@ class Pipeline:
                 # bar's ladder is persisted here so the REST delta-profile cache
                 # (session-daily histogram) stays current without relying on an
                 # embedded order-flow snapshot from the bridge.
-                fp_persist: list[FootprintUpdate] = []
-                if closed_footprint is not None and not (
-                    source == "bookmap"
-                    and (
-                        closed_footprint.time
-                        in self._bookmap_authoritative_footprint_times
-                        or closed_footprint.time
-                        in self._bookmap_incomplete_footprint_times
+                fp_persist = [
+                    update
+                    for update in closed_footprints
+                    if not (
+                        source == "bookmap"
+                        and update.tf == FOOTPRINT_TIMEFRAME
+                        and (
+                            update.time in self._bookmap_authoritative_footprint_times
+                            or update.time in self._bookmap_incomplete_footprint_times
+                        )
                     )
-                ):
-                    fp_persist.append(closed_footprint)
+                ]
                 await asyncio.to_thread(
                     self._persist_derived_batch,
                     bar_updates,
@@ -1557,7 +1603,7 @@ class Pipeline:
                 if self._analyst_event_sink is not None and (
                     bar_updates
                     or vd_updates
-                    or fp_update is not None
+                    or fp_updates
                     or fvg_updates
                     or big_trades
                 ):
@@ -1569,8 +1615,8 @@ class Pipeline:
                     await self._enqueue(OutboundEvent.from_message(update))
                 for update in vd_updates:
                     await self._enqueue(OutboundEvent.from_message(update))
-                if fp_update is not None:
-                    await self._enqueue(OutboundEvent.from_message(fp_update))
+                for update in fp_updates:
+                    await self._enqueue(OutboundEvent.from_message(update))
                 for update in fvg_updates:
                     await self._enqueue(OutboundEvent.from_message(update))
                 for update in native_fvg_preview_updates:
@@ -2279,10 +2325,15 @@ class Pipeline:
             and now - self._last_footprint_flush >= _FOOTPRINT_FORMING_FLUSH_MS
         ):
             self._last_footprint_flush = now
-            fp_engine = self._source_footprints.get(footprint_source)
-            if fp_engine is not None:
-                forming = fp_engine.current_update(self._chart_contract())
-                if forming is not None:
+            fp_engines = self._source_footprints.get(footprint_source)
+            if fp_engines is not None:
+                forming = [
+                    update
+                    for engine in fp_engines.values()
+                    for update in (engine.current_update(self._chart_contract()),)
+                    if update is not None
+                ]
+                if forming:
                     async with self._derived_source_lock:
                         if self._active_feed == footprint_source:
                             await asyncio.to_thread(
@@ -2291,7 +2342,7 @@ class Pipeline:
                                 [],
                                 [],
                                 [],
-                                [forming],
+                                forming,
                                 True,
                             )
 
@@ -2648,11 +2699,14 @@ class Pipeline:
                 self._chart_contract(), self._symbol
             )
             footprint_snapshots: list[FootprintUpdate] = []
-            footprint_engine = self._source_footprints.get(source)
-            if footprint_engine is not None:
-                footprint = footprint_engine.current_update(self._chart_contract())
-                if footprint is not None:
-                    footprint_snapshots.append(footprint)
+            footprint_engines = self._source_footprints.get(source)
+            if footprint_engines is not None:
+                footprint_snapshots.extend(
+                    footprint
+                    for engine in footprint_engines.values()
+                    for footprint in (engine.current_update(self._chart_contract()),)
+                    if footprint is not None
+                )
             await asyncio.to_thread(
                 self._persist_derived_batch,
                 snapshots,
@@ -2830,15 +2884,15 @@ class Pipeline:
                         None if signal is None else signal.delta_divergence
                     ),
                 )
-            if source == "bookmap" and tf == FOOTPRINT_TIMEFRAME:
+            if source == "bookmap" and tf in FOOTPRINT_TIMEFRAMES:
                 levels = self._cache.read_footprint_levels(
                     self._symbol,
                     chart_contract,
                     bar.time,
-                    FOOTPRINT_TIMEFRAME,
+                    tf,
                 )
                 if levels:
-                    self._source_footprints["bookmap"].seed_bar(
+                    self._source_footprints["bookmap"][tf].seed_bar(
                         chart_contract,
                         symbol=self._symbol,
                         time=bar.time,

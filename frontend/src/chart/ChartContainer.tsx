@@ -36,6 +36,7 @@ import {
   type OutsideBarSettings,
 } from "./outsideBar";
 import {
+  DEFAULT_SMC_SETTINGS,
   type SmcOverlay,
   type SmcSettings,
   computeSmcOverlay,
@@ -311,9 +312,9 @@ export interface ChartContainerProps {
   barsTimeframe?: Timeframe;
   /** Initial volume-delta history for the lower MyVolumeDelta-style candles. */
   volumeDelta?: readonly VolumeDeltaDatum[];
-  /** Initial/live footprint bars keyed by M1 bar time. */
+  /** Initial/live footprint bars keyed by the selected footprint timeframe. */
   footprintBars?: ReadonlyMap<number, FootprintBar>;
-  /** Initial/live FVG Signal Grader candle colors keyed by M1 source-bar time. */
+  /** Initial/live FVG Signal Grader colors keyed by 30s/M1 source-bar time. */
   fvgSignals?: ReadonlyMap<number, FvgSignalUpdateMessage>;
   /** Original TDU momentum triangles and candle/delta divergence. */
   tduSignals?: ReadonlyMap<number, TduSignalUpdateMessage>;
@@ -337,7 +338,7 @@ export interface ChartContainerProps {
   ema?: Partial<EmaSettings>;
   /** Pine-v4-compatible ATR trailing regime overlay. Disabled by default. */
   supertrend?: Partial<SupertrendSettings>;
-  /** Show the M1 footprint overlay on the supported 15s/1m chart timeframes. */
+  /** Show the footprint overlay on supported 30s/M1 chart timeframes. */
   showFootprint?: boolean;
   /** Session volume profile data for the right-edge histogram. */
   sessionVolumeProfile?: DeltaProfileData | null;
@@ -367,7 +368,7 @@ export interface ChartContainerProps {
   mgannSwing?: Partial<MgannSwingSettings>;
   /** Show BigTrade markers on the candle series. */
   showBigTrades?: boolean;
-  /** Show FVG Signal Grader candle recoloring. FVG grading is M1-only. */
+  /** Show FVG Signal Grader candle recoloring on 30s or M1. */
   showFvgGrader?: boolean;
   /** BigTrade display-only filters. */
   bigTradeSettings?: BigTradeSettings;
@@ -492,6 +493,51 @@ function sweepClosedBars(
     return capped.slice(0, -1);
   }
   return capped;
+}
+
+const SMC_COMPUTATION_WINDOW_MS = 24 * 60 * 60 * 1_000;
+const SMC_FVG_VOLUME_WARMUP_BARS = 20;
+
+/**
+ * Keep live SMC work near one chart day while preserving enough warm-up bars
+ * to confirm a pair of external swings and seed the configured rolling filters.
+ */
+export function smcComputationBars(
+  bars: readonly Bar[],
+  timeframe: Timeframe,
+  settings?: Partial<SmcSettings>,
+): readonly Bar[] {
+  const durationMs = barDurationForTimeframe(timeframe);
+  const oneDayBars = Math.max(1, Math.ceil(SMC_COMPUTATION_WINDOW_MS / durationMs));
+  const swingLength = Math.max(
+    1,
+    Math.round(settings?.swingLength ?? DEFAULT_SMC_SETTINGS.swingLength),
+  );
+  const internalLength = Math.max(
+    1,
+    Math.round(settings?.internalLength ?? DEFAULT_SMC_SETTINGS.internalLength),
+  );
+  const liquidityLookback = Math.max(
+    1,
+    Math.round(
+      settings?.liquidityLookbackBars ??
+        DEFAULT_SMC_SETTINGS.liquidityLookbackBars,
+    ),
+  );
+  const fvgLookback = Math.max(
+    1,
+    Math.round(
+      settings?.fvgThresholdLookback ??
+        DEFAULT_SMC_SETTINGS.fvgThresholdLookback,
+    ),
+  );
+  const warmupBars = Math.max(
+    swingLength * 2 + 2,
+    internalLength * 2 + 2,
+    liquidityLookback + 2,
+    fvgLookback + SMC_FVG_VOLUME_WARMUP_BARS + 2,
+  );
+  return bars.slice(-Math.max(oneDayBars, warmupBars));
 }
 
 function matchesVolumeDeltaSeries(
@@ -695,7 +741,6 @@ export function ChartContainer({
   const controllerRef = useRef<ChartSeriesController | null>(null);
   const drawingManagerRef = useRef<DrawingManager | null>(null);
   const showMgannSwingForTimeframe = showMgannSwing;
-  const smcThrottleRef = useRef<number | undefined>(undefined);
   const smcWorkerRef = useRef<Worker | undefined>(undefined);
   const smcWorkerBusyRef = useRef(false);
   const smcRequestIdRef = useRef(0);
@@ -1706,7 +1751,14 @@ export function ChartContainer({
         timer = window.setTimeout(computeWhenIdle, 100);
         return;
       }
-      requestSmcComputation(bars ?? [], smc);
+      requestSmcComputation(
+        smcComputationBars(
+          sweepClosedBars(bars ?? [], timeframe),
+          timeframe,
+          smc,
+        ),
+        smc,
+      );
     };
     timer = window.setTimeout(computeWhenIdle, 100);
     return () => {
@@ -1751,22 +1803,15 @@ export function ChartContainer({
         window.requestAnimationFrame(refreshOrderControlPositions);
       }
 
-      // Throttle SMC overlay recomputation: computeSmcOverlay is O(n) over the
-      // entire bar array, so running it on every realtime tick (multiple per
-      // second) blocks the main thread and causes visible freezing. Debounce to
-      // max once per 500ms during live streaming.
+      // SMC swing/Fib structures are confirmed-bar features. Recompute only on
+      // the close event for the chart's subscribed timeframe (M5 on an M5
+      // chart), and keep the worker input near one chart day.
       const smcCfg = smcConfigRef.current;
-      if (outcome.rendered && smcCfg?.enabled) {
-        if (smcThrottleRef.current === undefined) {
-          smcThrottleRef.current = window.setTimeout(() => {
-            smcThrottleRef.current = undefined;
-            const ctrl = controllerRef.current;
-            const cfg = smcConfigRef.current;
-            if (ctrl && cfg?.enabled && !chartInteractionActiveRef.current) {
-              requestSmcComputation(ctrl.bars, cfg);
-            }
-          }, 500);
-        }
+      if (message.closed && smcCfg?.enabled) {
+        requestSmcComputation(
+          smcComputationBars(controller.bars, timeframe, smcCfg),
+          smcCfg,
+        );
       }
 
       if (message.closed && sweepReversalConfigRef.current?.enabled) {
@@ -1911,10 +1956,6 @@ export function ChartContainer({
     return () => {
       dispose();
       disposeDelta();
-      if (smcThrottleRef.current !== undefined) {
-        window.clearTimeout(smcThrottleRef.current);
-        smcThrottleRef.current = undefined;
-      }
     };
   }, [
     socket,

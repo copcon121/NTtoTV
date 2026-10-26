@@ -1,9 +1,9 @@
 """FVG Signal Grader engine.
 
 This ports the timing signal from the local NinjaTrader ``FvgSignalGrader``
-into backend state. The engine is intentionally 1m-only and consumes finalized
-footprint bars from the active market-data source (Bookmap primary, NT native
-fallback), keeping grading independent from chart display settings.
+into backend state. Each engine instance grades one supported footprint
+timeframe (30s or 1m) from the active market-data source, keeping grading
+independent from chart display settings. NT native remains an M1-only fallback.
 """
 
 from __future__ import annotations
@@ -17,11 +17,13 @@ from app.models.messages import FvgSignalUpdate
 
 __all__ = [
     "FVG_SIGNAL_TIMEFRAME",
+    "FVG_SIGNAL_TIMEFRAMES",
     "FvgSignalEngine",
 ]
 
 FVG_SIGNAL_TIMEFRAME = "1m"
-_TF_MS = 60_000
+FVG_SIGNAL_TIMEFRAMES = ("30s", FVG_SIGNAL_TIMEFRAME)
+_TF_MS = {"30s": 30_000, FVG_SIGNAL_TIMEFRAME: 60_000}
 
 _TICK_SIZE = 0.1
 _VALUE_AREA_PERCENT = 70.0
@@ -109,16 +111,25 @@ class _ContractState:
 
 
 class FvgSignalEngine:
-    """Compute FVG grader candle-color signals from 1m bars and footprint state."""
+    """Compute FVG grader candle-color signals for one footprint timeframe."""
 
-    def __init__(self, *, tick_size: float = _TICK_SIZE) -> None:
+    def __init__(
+        self,
+        *,
+        timeframe: str = FVG_SIGNAL_TIMEFRAME,
+        tick_size: float = _TICK_SIZE,
+    ) -> None:
+        if timeframe not in FVG_SIGNAL_TIMEFRAMES:
+            raise ValueError(f"unsupported FVG timeframe: {timeframe!r}")
         if tick_size <= 0:
             raise ValueError("tick_size must be > 0")
+        self.timeframe = timeframe
+        self.timeframe_ms = _TF_MS[timeframe]
         self.tick_size = tick_size
         self._state: dict[str, _ContractState] = {}
 
     def bucket_start(self, ts_ms: int) -> int:
-        return (ts_ms // _TF_MS) * _TF_MS
+        return (ts_ms // self.timeframe_ms) * self.timeframe_ms
 
     def on_trade(self, t: NormalizedTrade) -> list[FvgSignalUpdate]:
         state = self._state.setdefault(t.contract, _ContractState())
@@ -621,14 +632,13 @@ class FvgSignalEngine:
             return 2
         return 1
 
-    @staticmethod
     def _to_update(
-        signal: _Signal, symbol: str, contract: str, *, phase: str
+        self, signal: _Signal, symbol: str, contract: str, *, phase: str
     ) -> FvgSignalUpdate:
         return FvgSignalUpdate(
             symbol=symbol,
             contract=contract,
-            tf=FVG_SIGNAL_TIMEFRAME,
+            tf=self.timeframe,
             time=signal.source_time,
             direction=signal.direction,
             level=signal.level,
@@ -639,12 +649,13 @@ class FvgSignalEngine:
             phase=phase,
         )
 
-    @staticmethod
-    def _clear_update(symbol: str, contract: str, source_time: int) -> FvgSignalUpdate:
+    def _clear_update(
+        self, symbol: str, contract: str, source_time: int
+    ) -> FvgSignalUpdate:
         return FvgSignalUpdate(
             symbol=symbol,
             contract=contract,
-            tf=FVG_SIGNAL_TIMEFRAME,
+            tf=self.timeframe,
             time=source_time,
             direction=0,
             level=0,

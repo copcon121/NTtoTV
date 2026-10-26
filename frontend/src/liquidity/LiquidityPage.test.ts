@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  gcSessionKey,
   liquidityHistoryKindsChanged,
   liquidityEventMatchesSettings,
   liquidityLineLabel,
@@ -8,20 +9,53 @@ import {
   isLongTermLiquidityLine,
   longTermTouchMatchesSettings,
   longTermTouchBubbleRadius,
+  mergeLiquidityBigTrades,
   mergeLiveLine,
+  mergeHistoryLines,
   mergeHistoryBars,
   panOffsetFromDrag,
   pricePanFromChartDrag,
   priceFromChartY,
   priceScaleFromAxisDrag,
+  normalizeLiquidityChartProfileState,
   relativeLiquidityVolumeLabel,
+  sessionVwapPoints,
   timeScaleFromAxisDrag,
   ttwVolumeSpikeLabel,
   validateLiquidityTrackerSettings,
   validateMarketExplorerSettings,
+  validateBigTradeSettings,
+  visibleLiquidityBigTrades,
 } from "./LiquidityPage";
 
 describe("liquidity bar reconciliation", () => {
+  it("merges REST heatmap history with newer socket samples without reopening an ended level", () => {
+    const history = {
+      lineId: "bid:4200", side: "bid" as const, price: 4200,
+      startedAt: 1000, lastAt: 3000, endedAt: 3000, active: false,
+      currentSize: 0, peakSize: 1200, threshold: 500, domDistance: 20,
+      samples: [
+        { time: 1000, size: 500, active: true },
+        { time: 2000, size: 1200, active: true },
+        { time: 3000, size: 0, active: false },
+      ],
+    };
+    const live = { ...history, lastAt: 2000, endedAt: null, active: true,
+      currentSize: 1200, samples: [history.samples[1]] };
+    const merged = mergeHistoryLines([history], new Map([[live.lineId, live]]));
+    expect(merged.get(history.lineId)?.active).toBe(false);
+    expect(merged.get(history.lineId)?.samples).toEqual(history.samples);
+    const delayed = mergeLiveLine(merged, {
+      type: "liquidity_update", symbol: "GC", contract: "GC", sequence: 10,
+      time: 1500, eventKind: "long_term", action: "update", side: "bid",
+      price: 4200, size: 700, previousSize: 500, change: 200,
+      threshold: 500, domDistance: 20, strength: 1.4,
+      lineId: history.lineId, lineStartTime: 1000, snapshot: false,
+    });
+    expect(delayed.get(history.lineId)?.active).toBe(false);
+    expect(delayed.get(history.lineId)?.samples?.map((sample) => sample.size)).toEqual([500, 700, 1200, 0]);
+  });
+
   it("repairs a stale closed bar from REST while preserving the live websocket bar", () => {
     const staleClosed = {
       time: 60_000,
@@ -357,6 +391,163 @@ describe("Long-term liquidity touch bubbles", () => {
       active: false,
       endedAt: 3_000,
     });
+  });
+});
+
+describe("BigTrade overlay", () => {
+  it("applies the existing session threshold and visible time range", () => {
+    const usSession = Date.UTC(2026, 0, 15, 14, 0);
+    const markers = [
+      { tradeId: 1, time: usSession, price: 4190, volume: 99, side: "buy" as const },
+      { tradeId: 2, time: usSession + 1, price: 4190.1, volume: 100, side: "sell" as const },
+      { tradeId: 3, time: usSession + 60_000, price: 4190.2, volume: 150, side: "buy" as const },
+    ];
+
+    expect(
+      visibleLiquidityBigTrades(markers, usSession, usSession + 10_000),
+    ).toEqual([markers[1]]);
+    expect(
+      visibleLiquidityBigTrades(markers, usSession, usSession + 10_000, false),
+    ).toEqual([]);
+  });
+
+  it("deduplicates REST and realtime trades and keeps the newest capped tail", () => {
+    const history = [
+      { tradeId: 1, time: 1_000, price: 4190, volume: 40, side: "buy" as const },
+      { tradeId: 2, time: 2_000, price: 4191, volume: 50, side: "sell" as const },
+    ];
+    const realtime = [
+      { tradeId: 2, time: 2_000, price: 4191, volume: 55, side: "sell" as const },
+      { tradeId: 3, time: 3_000, price: 4192, volume: 60, side: "buy" as const },
+    ];
+
+    expect(mergeLiquidityBigTrades(history, realtime, 0, 2)).toEqual([
+      realtime[0],
+      realtime[1],
+    ]);
+  });
+
+  it("uses editable session thresholds and display limit", () => {
+    const usSession = Date.UTC(2026, 0, 15, 14, 0);
+    const markers = [
+      { tradeId: 1, time: usSession, price: 4190, volume: 119, side: "buy" as const },
+      { tradeId: 2, time: usSession + 1, price: 4191, volume: 120, side: "sell" as const },
+      { tradeId: 3, time: usSession + 2, price: 4192, volume: 140, side: "buy" as const },
+    ];
+    const settings = {
+      minVolume: 40,
+      maxVisible: 1,
+      soundEnabled: true,
+      sessionMinVolumes: { asia: 40, eu: 60, us: 120 },
+    };
+
+    expect(
+      visibleLiquidityBigTrades(
+        markers,
+        usSession,
+        usSession + 10_000,
+        true,
+        settings,
+      ),
+    ).toEqual([markers[2]]);
+    expect(validateBigTradeSettings(settings)).toBeNull();
+  });
+});
+
+describe("liquidity profile state", () => {
+  it("persists heatmap intensity and short-lived level filtering", () => {
+    const state = normalizeLiquidityChartProfileState({
+      heatmap: { minDurationSeconds: 90, saturationMultiple: 6, contrast: 1.5 },
+    });
+    expect(state.heatmap).toEqual({ minDurationSeconds: 90, saturationMultiple: 6, contrast: 1.5 });
+    expect(normalizeLiquidityChartProfileState({}).heatmap?.minDurationSeconds).toBe(60);
+  });
+  it("restores a 30s viewport", () => {
+    const state = normalizeLiquidityChartProfileState({
+      version: 1,
+      timeframe: "30s",
+      visibleBars: 480,
+    });
+
+    expect(state.timeframe).toBe("30s");
+    expect(state.visibleBars).toBe(480);
+  });
+
+  it("restores chart viewport and lets shared BigTrade settings stay authoritative", () => {
+    const state = normalizeLiquidityChartProfileState(
+      {
+        version: 1,
+        timeframe: "5m",
+        visibleBars: 96,
+        offsetBars: 12,
+        priceScale: 1.4,
+        pricePanPx: -30,
+        filters: {
+          longTerm: true,
+          relative: false,
+          absolute: true,
+          trend1: false,
+          trend2: true,
+        },
+        showVwap: false,
+        showBigTrades: false,
+        bigTradeSettings: {
+          minVolume: 10,
+          maxVisible: 20,
+          sessionMinVolumes: { asia: 10, eu: 20, us: 30 },
+        },
+      },
+      {
+        showBigTrades: true,
+        bigTradeSettings: {
+          minVolume: 40,
+          maxVisible: 250,
+          soundEnabled: true,
+          sessionMinVolumes: { asia: 40, eu: 60, us: 120 },
+        },
+      },
+    );
+
+    expect(state).toMatchObject({
+      timeframe: "5m",
+      visibleBars: 96,
+      offsetBars: 12,
+      priceScale: 1.4,
+      pricePanPx: -30,
+      filters: { relative: false },
+      showVwap: false,
+      showBigTrades: true,
+      bigTradeSettings: {
+        maxVisible: 250,
+        soundEnabled: true,
+        sessionMinVolumes: { asia: 40, eu: 60, us: 120 },
+      },
+    });
+  });
+});
+
+describe("session VWAP", () => {
+  it("resets the GC session at 17:00 Chicago across standard and daylight time", () => {
+    expect(gcSessionKey(Date.UTC(2026, 0, 15, 22, 59))).toBe("2026-01-14");
+    expect(gcSessionKey(Date.UTC(2026, 0, 15, 23, 0))).toBe("2026-01-15");
+    expect(gcSessionKey(Date.UTC(2026, 6, 15, 21, 59))).toBe("2026-07-14");
+    expect(gcSessionKey(Date.UTC(2026, 6, 15, 22, 0))).toBe("2026-07-15");
+  });
+
+  it("accumulates HLC3 by volume and starts fresh in the next session", () => {
+    const firstSession = Date.UTC(2026, 0, 15, 23, 0);
+    const nextSession = Date.UTC(2026, 0, 16, 23, 0);
+    const bars = [
+      { time: firstSession, open: 100, high: 100, low: 100, close: 100, volume: 10 },
+      { time: firstSession + 60_000, open: 110, high: 110, low: 110, close: 110, volume: 30 },
+      { time: nextSession, open: 120, high: 120, low: 120, close: 120, volume: 5 },
+    ];
+
+    expect(sessionVwapPoints(bars).map((point) => point.value)).toEqual([
+      100,
+      107.5,
+      120,
+    ]);
   });
 });
 

@@ -70,3 +70,6 @@ GC *.txt
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local SSH material
+/VPS oracle/

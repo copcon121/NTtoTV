@@ -15,6 +15,82 @@ function bar(
 }
 
 describe("SMC overlay", () => {
+  it("keeps confirmed swing Fib levels opt-in", () => {
+    expect(DEFAULT_SMC_SETTINGS.showSwingFibLevels).toBe(false);
+  });
+
+  it("draws 0.382 and 0.5 only after the latest swing is confirmed", () => {
+    const rows = [
+      bar(0, 10.5, 11, 10, 10.5),
+      bar(1, 9, 10, 8, 9),
+      bar(2, 9.5, 10.5, 9, 9.5),
+      bar(3, 10.5, 11, 10, 10.5),
+      bar(4, 11, 12, 10.5, 11.5),
+      bar(5, 10.7, 11, 10.4, 10.7),
+      bar(6, 10.5, 10.8, 10.2, 10.5),
+    ];
+    const settings = {
+      ...DEFAULT_SMC_SETTINGS,
+      enabled: true,
+      swingLength: 2,
+      internalLength: 1,
+      showSwingFibLevels: true,
+      showZones: false,
+    };
+
+    expect(
+      computeSmcOverlay(rows.slice(0, 6), settings).lines.some((line) =>
+        line.kind.startsWith("fib_"),
+      ),
+    ).toBe(false);
+
+    const fibLines = computeSmcOverlay(rows, settings).lines.filter((line) =>
+      line.kind.startsWith("fib_"),
+    );
+    expect(fibLines).toEqual([
+      expect.objectContaining({
+        kind: "fib_382",
+        direction: 1,
+        startTime: 1,
+        endTime: 4,
+        price: 9.528,
+        label: "0.382",
+      }),
+      expect.objectContaining({
+        kind: "fib_50",
+        direction: 1,
+        startTime: 1,
+        endTime: 4,
+        price: 10,
+        label: "0.5",
+      }),
+    ]);
+  });
+
+  it("omits confirmed swing Fib levels already crossed before confirmation", () => {
+    const overlay = computeSmcOverlay(
+      [
+        bar(0, 10.5, 11, 10, 10.5),
+        bar(1, 9, 10, 8, 9),
+        bar(2, 9.5, 10.5, 9, 9.5),
+        bar(3, 10.5, 11, 10, 10.5),
+        bar(4, 11, 12, 10.5, 11.5),
+        bar(5, 9.8, 11, 9, 9.8),
+        bar(6, 9.7, 10.8, 9.2, 9.7),
+      ],
+      {
+        ...DEFAULT_SMC_SETTINGS,
+        enabled: true,
+        swingLength: 2,
+        internalLength: 1,
+        showSwingFibLevels: true,
+        showZones: false,
+      },
+    );
+
+    expect(overlay.lines.some((line) => line.kind.startsWith("fib_"))).toBe(false);
+  });
+
   it("establishes a liquidity pool from two matching swings", () => {
     expect(DEFAULT_SMC_SETTINGS.liquidityMinSwings).toBe(2);
   });

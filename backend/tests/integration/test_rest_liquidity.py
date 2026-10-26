@@ -128,6 +128,16 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
                     "to": 600_000,
                 },
             )
+            response_30s = client.get(
+                "/api/liquidity",
+                params={
+                    "symbol": "GC",
+                    "contract": "GC",
+                    "tf": "30s",
+                    "from": 0,
+                    "to": 600_000,
+                },
+            )
             bad = client.get("/api/liquidity", params={"tf": "15m"})
     finally:
         store.close()
@@ -143,6 +153,12 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
     assert body["events"][1]["lineStartTime"] == -14_100_000
     assert body["lines"][0]["lineId"] == "ask:42050:300000"
     assert body["lines"][0]["active"] is True
+    assert body["lines"][0]["samples"] == [
+        {"time": 330_000, "size": 650, "active": True}
+    ]
+    assert response_30s.status_code == 200
+    assert response_30s.json()["tf"] == "30s"
+    assert response_30s.json()["events"][0]["bucketTime"] == 300_000
     assert bad.status_code == 400
     assert bad.json()["error"]["field"] == "tf"
 

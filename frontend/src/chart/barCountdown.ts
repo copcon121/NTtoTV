@@ -6,6 +6,7 @@ const HOUR_MS = 60 * MINUTE_MS;
 
 const BAR_DURATION_MS: Record<Timeframe, number> = {
   "15s": 15 * SECOND_MS,
+  "30s": 30 * SECOND_MS,
   "1m": MINUTE_MS,
   "3m": 3 * MINUTE_MS,
   "5m": 5 * MINUTE_MS,

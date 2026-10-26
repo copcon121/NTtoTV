@@ -61,6 +61,17 @@ def test_explicit_bookmap_side_populates_ladder_without_quotes():
 
 
 @pytest.mark.unit
+def test_30s_engine_rolls_on_half_minute_boundary():
+    eng = FootprintEngine(timeframe="30s")
+    first = eng.on_trade(_t(29_999, 100.0, 5, side=Side.SELL))
+    second = eng.on_trade(_t(30_000, 100.1, 8, side=Side.BUY))
+
+    assert first is not None and first.tf == "30s" and first.time == 0
+    assert second is not None and second.tf == "30s" and second.time == 30_000
+    assert sum(row.bid + row.ask for row in second.rows) == 8
+
+
+@pytest.mark.unit
 def test_authoritative_seed_replaces_stale_ladder_levels():
     eng = FootprintEngine()
     eng.on_trade(_t(0, 99.9, 4, side=Side.SELL))

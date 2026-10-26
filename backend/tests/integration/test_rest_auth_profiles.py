@@ -151,6 +151,61 @@ def test_me_profile_requires_auth_and_is_scoped_by_user(app_client: TestClient):
 
 
 @pytest.mark.integration
+def test_liquidity_chart_patch_preserves_chart_profile_and_survives_main_save(
+    app_client: TestClient,
+):
+    assert app_client.post(
+        "/api/auth/register", json={"username": "alice", "password": "pw"}
+    ).status_code == 200
+    assert app_client.put(
+        "/api/me/profile",
+        json={"payload": {"timeframe": "1m", "drawings": []}},
+    ).status_code == 200
+
+    liquidity_chart = {
+        "version": 1,
+        "timeframe": "5m",
+        "visibleBars": 96,
+        "offsetBars": 12,
+        "priceScale": 1.4,
+        "pricePanPx": -30,
+        "filters": {
+            "longTerm": True,
+            "relative": False,
+            "absolute": True,
+            "trend1": True,
+            "trend2": False,
+        },
+        "showVwap": True,
+        "showBigTrades": True,
+        "bigTradeSettings": {
+            "minVolume": 40,
+            "maxVisible": 250,
+            "soundEnabled": True,
+            "sessionMinVolumes": {"asia": 40, "eu": 60, "us": 120},
+        },
+    }
+    patched = app_client.patch(
+        "/api/me/profile/liquidity-chart",
+        json={"liquidityChart": liquidity_chart},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["liquidityChart"] == liquidity_chart
+
+    payload = app_client.get("/api/me/profile").json()["profile"]["payload"]
+    assert payload["timeframe"] == "1m"
+    assert payload["liquidityChart"] == liquidity_chart
+    assert payload["bigTradeSettings"] == liquidity_chart["bigTradeSettings"]
+
+    saved = app_client.put(
+        "/api/me/profile",
+        json={"payload": {"timeframe": "15m", "drawings": []}},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["profile"]["payload"]["liquidityChart"] == liquidity_chart
+
+
+@pytest.mark.integration
 def test_me_profile_retires_stale_mgann_settings_but_keeps_current_customization(
     app_client: TestClient,
 ):
