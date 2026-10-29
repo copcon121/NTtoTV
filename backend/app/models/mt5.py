@@ -72,3 +72,6 @@ class Mt5OrderResult:
     fill_price: float | None = None
     error_code: str | None = None
     error_message: str | None = None
+    submitted_entry_price: float | None = None
+    submitted_sl_price: float | None = None
+    submitted_tp_price: float | None = None

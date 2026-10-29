@@ -1,0 +1,1109 @@
+﻿public class ttw.tradefinder.jF extends ttw.tradefinder.Oe {
+  public static java.lang.String H;
+
+  public int D;
+
+  public int C;
+
+  public ttw.tradefinder.dg M;
+
+  private int b;
+
+  public int c;
+
+  public void E(long, int, int);
+    Code:
+       0: aload_0
+       1: dup
+       2: dup2
+       3: dup2
+       4: dup2
+       5: getfield      #18                 // Field h:I
+       8: istore        5
+      10: getfield      #20                 // Field D:I
+      13: istore        6
+      15: iload         4
+      17: putfield      #22                 // Field c:I
+      20: iload         4
+      22: putfield      #24                 // Field C:I
+      25: iload_3
+      26: putfield      #18                 // Field h:I
+      29: dup
+      30: getfield      #27                 // Field a:I
+      33: putfield      #20                 // Field D:I
+      36: dup
+      37: getfield      #30                 // Field j:I
+      40: iload_3
+      41: iload         5
+      43: isub
+      44: invokestatic  #36                 // Method java/lang/Math.max:(II)I
+      47: putfield      #30                 // Field j:I
+      50: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+      53: dup
+      54: astore        7
+      56: monitorenter
+      57: aload_0
+      58: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+      61: lload_1
+      62: iload         4
+      64: iconst_0
+      65: invokevirtual #43                 // Method ttw/tradefinder/eD.E:(JII)V
+      68: aload         7
+      70: monitorexit
+      71: aload_0
+      72: goto          82
+      75: astore_1
+      76: aload         7
+      78: monitorexit
+      79: aload_1
+      80: athrow
+      81: athrow
+      82: getfield      #48                 // Field c:J
+      85: lconst_0
+      86: lcmp
+      87: ifne          112
+      90: iload_3
+      91: iload         5
+      93: if_icmpgt     97
+      96: return
+      97: aload_0
+      98: getfield      #27                 // Field a:I
+     101: iload         6
+     103: if_icmpne     107
+     106: return
+     107: aload_0
+     108: lload_1
+     109: putfield      #48                 // Field c:J
+     112: return
+    Exception table:
+       from    to  target type
+          57    71    75   any
+
+  public ttw.tradefinder.jF(ttw.tradefinder.dg, int, int, boolean, long);
+    Code:
+       0: aload_0
+       1: dup
+       2: dup_x1
+       3: iload_3
+       4: aload_0
+       5: dup_x2
+       6: aload_0
+       7: lload         5
+       9: dup2_x1
+      10: lload         5
+      12: aload_0
+      13: dup_x2
+      14: aload_0
+      15: lload         5
+      17: dup2_x1
+      18: iload_3
+      19: aload_0
+      20: dup_x1
+      21: iload_3
+      22: iload_2
+      23: aload_0
+      24: dup_x1
+      25: aload_1
+      26: iconst_0
+      27: aload_0
+      28: dup_x1
+      29: iconst_0
+      30: dup
+      31: aload_0
+      32: dup_x1
+      33: iconst_0
+      34: aload_0
+      35: getstatic     #53                 // Field H:Ljava/lang/String;
+      38: iload         4
+      40: new           #41                 // class ttw/tradefinder/eD
+      43: dup
+      44: iconst_3
+      45: invokespecial #56                 // Method ttw/tradefinder/eD."<init>":(I)V
+      48: invokespecial #59                 // Method ttw/tradefinder/Oe."<init>":(Ljava/lang/String;ZLttw/tradefinder/eD;)V
+      51: putfield      #22                 // Field c:I
+      54: putfield      #24                 // Field C:I
+      57: putfield      #20                 // Field D:I
+      60: putfield      #61                 // Field b:I
+      63: putfield      #63                 // Field M:Lttw/tradefinder/dg;
+      66: putfield      #27                 // Field a:I
+      69: putfield      #66                 // Field A:I
+      72: putfield      #22                 // Field c:I
+      75: putfield      #68                 // Field E:J
+      78: putfield      #48                 // Field c:J
+      81: putfield      #70                 // Field H:J
+      84: lconst_1
+      85: lsub
+      86: putfield      #73                 // Field K:J
+      89: lconst_1
+      90: ladd
+      91: putfield      #75                 // Field b:J
+      94: putfield      #78                 // Field k:I
+      97: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+     100: lload         5
+     102: iload_3
+     103: iconst_m1
+     104: invokevirtual #43                 // Method ttw/tradefinder/eD.E:(JII)V
+     107: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+     110: lload         5
+     112: iload_3
+     113: iload_2
+     114: invokevirtual #43                 // Method ttw/tradefinder/eD.E:(JII)V
+     117: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+     120: lload         5
+     122: iload_3
+     123: iconst_m1
+     124: invokevirtual #43                 // Method ttw/tradefinder/eD.E:(JII)V
+     127: return
+
+  public ttw.tradefinder.jF(ttw.tradefinder.dg, ttw.tradefinder.Lg, int, int, boolean, long);
+    Code:
+       0: aload_0
+       1: dup
+       2: dup2
+       3: iload_3
+       4: aload_0
+       5: dup_x2
+       6: aload_0
+       7: dup
+       8: aload_2
+       9: dup_x2
+      10: aload_0
+      11: dup_x2
+      12: aload_0
+      13: aload_2
+      14: dup_x1
+      15: aload_2
+      16: aload_0
+      17: dup_x1
+      18: aload_0
+      19: iload         4
+      21: dup_x1
+      22: iload_3
+      23: aload_0
+      24: dup_x1
+      25: lload         6
+      27: aload_1
+      28: aload_0
+      29: dup_x1
+      30: iconst_0
+      31: dup
+      32: aload_0
+      33: dup_x1
+      34: iconst_0
+      35: dup
+      36: aload_0
+      37: dup_x1
+      38: aload_2
+      39: getfield      #83                 // Field ttw/tradefinder/Lg.M:Ljava/lang/String;
+      42: iload         5
+      44: new           #41                 // class ttw/tradefinder/eD
+      47: dup
+      48: iconst_5
+      49: bipush        100
+      51: invokespecial #86                 // Method ttw/tradefinder/eD."<init>":(II)V
+      54: invokespecial #59                 // Method ttw/tradefinder/Oe."<init>":(Ljava/lang/String;ZLttw/tradefinder/eD;)V
+      57: putfield      #22                 // Field c:I
+      60: putfield      #24                 // Field C:I
+      63: putfield      #20                 // Field D:I
+      66: putfield      #61                 // Field b:I
+      69: putfield      #63                 // Field M:Lttw/tradefinder/dg;
+      72: putfield      #73                 // Field K:J
+      75: putfield      #18                 // Field h:I
+      78: putfield      #22                 // Field c:I
+      81: putfield      #24                 // Field C:I
+      84: getfield      #88                 // Field ttw/tradefinder/Lg.h:J
+      87: putfield      #70                 // Field H:J
+      90: getfield      #89                 // Field ttw/tradefinder/Lg.c:I
+      93: putfield      #66                 // Field A:I
+      96: getfield      #88                 // Field ttw/tradefinder/Lg.h:J
+      99: putfield      #68                 // Field E:J
+     102: invokevirtual #92                 // Method ttw/tradefinder/Lg.j:()I
+     105: putfield      #27                 // Field a:I
+     108: dup
+     109: getfield      #27                 // Field a:I
+     112: putfield      #20                 // Field D:I
+     115: dup
+     116: getfield      #27                 // Field a:I
+     119: putfield      #95                 // Field B:I
+     122: invokevirtual #97                 // Method ttw/tradefinder/Lg.E:()I
+     125: putfield      #78                 // Field k:I
+     128: putfield      #30                 // Field j:I
+     131: dup
+     132: getfield      #27                 // Field a:I
+     135: putfield      #61                 // Field b:I
+     138: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+     141: lload         6
+     143: aload_0
+     144: getfield      #78                 // Field k:I
+     147: iconst_m1
+     148: invokevirtual #43                 // Method ttw/tradefinder/eD.E:(JII)V
+     151: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+     154: lload         6
+     156: aload_0
+     157: getfield      #78                 // Field k:I
+     160: aload_2
+     161: invokevirtual #92                 // Method ttw/tradefinder/Lg.j:()I
+     164: invokevirtual #43                 // Method ttw/tradefinder/eD.E:(JII)V
+     167: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+     170: lload         6
+     172: iload         4
+     174: iconst_0
+     175: invokevirtual #43                 // Method ttw/tradefinder/eD.E:(JII)V
+     178: return
+
+  public ttw.tradefinder.jF(ttw.tradefinder.dg, java.lang.String, int, int, boolean, long);
+    Code:
+       0: iload         4
+       2: aload_0
+       3: dup_x1
+       4: dup_x2
+       5: aload_0
+       6: iload         4
+       8: dup_x1
+       9: iload_3
+      10: aload_0
+      11: dup_x1
+      12: lload         6
+      14: aload_1
+      15: aload_0
+      16: dup_x1
+      17: iconst_0
+      18: dup
+      19: aload_0
+      20: dup_x1
+      21: iconst_0
+      22: dup
+      23: aload_0
+      24: dup_x1
+      25: aload_2
+      26: iload         5
+      28: new           #41                 // class ttw/tradefinder/eD
+      31: dup
+      32: iconst_5
+      33: bipush        100
+      35: invokespecial #86                 // Method ttw/tradefinder/eD."<init>":(II)V
+      38: invokespecial #59                 // Method ttw/tradefinder/Oe."<init>":(Ljava/lang/String;ZLttw/tradefinder/eD;)V
+      41: putfield      #22                 // Field c:I
+      44: putfield      #24                 // Field C:I
+      47: putfield      #20                 // Field D:I
+      50: putfield      #61                 // Field b:I
+      53: putfield      #63                 // Field M:Lttw/tradefinder/dg;
+      56: putfield      #73                 // Field K:J
+      59: putfield      #18                 // Field h:I
+      62: putfield      #22                 // Field c:I
+      65: putfield      #24                 // Field C:I
+      68: putfield      #78                 // Field k:I
+      71: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+      74: lload         6
+      76: iload         4
+      78: iconst_m1
+      79: invokevirtual #43                 // Method ttw/tradefinder/eD.E:(JII)V
+      82: return
+
+  public int E(long, int, int, boolean);
+    Code:
+       0: iload         5
+       2: aload_0
+       3: dup
+       4: getfield      #27                 // Field a:I
+       7: iload_3
+       8: iadd
+       9: putfield      #27                 // Field a:I
+      12: ifeq          25
+      15: aload_0
+      16: dup
+      17: getfield      #95                 // Field B:I
+      20: iload_3
+      21: iadd
+      22: putfield      #95                 // Field B:I
+      25: aload_0
+      26: iload         4
+      28: aload_0
+      29: dup_x1
+      30: lload_1
+      31: putfield      #68                 // Field E:J
+      34: putfield      #66                 // Field A:I
+      37: getfield      #70                 // Field H:J
+      40: lconst_0
+      41: lcmp
+      42: ifne          50
+      45: aload_0
+      46: lload_1
+      47: putfield      #70                 // Field H:J
+      50: aload_0
+      51: iconst_0
+      52: aload_0
+      53: dup_x1
+      54: getfield      #18                 // Field h:I
+      57: iload_3
+      58: isub
+      59: invokestatic  #36                 // Method java/lang/Math.max:(II)I
+      62: putfield      #18                 // Field h:I
+      65: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+      68: dup
+      69: astore        5
+      71: monitorenter
+      72: aload_0
+      73: getfield      #24                 // Field C:I
+      76: iload         4
+      78: if_icmpeq     98
+      81: aload_0
+      82: dup
+      83: iload         4
+      85: putfield      #24                 // Field C:I
+      88: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+      91: lload_1
+      92: iload         4
+      94: iconst_0
+      95: invokevirtual #43                 // Method ttw/tradefinder/eD.E:(JII)V
+      98: aload_0
+      99: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+     102: lload_1
+     103: aload_0
+     104: getfield      #66                 // Field A:I
+     107: iload_3
+     108: invokevirtual #43                 // Method ttw/tradefinder/eD.E:(JII)V
+     111: aload         5
+     113: monitorexit
+     114: aload_0
+     115: goto          125
+     118: astore_1
+     119: aload         5
+     121: monitorexit
+     122: aload_1
+     123: athrow
+     124: athrow
+     125: invokevirtual #103                // Method E:()Z
+     128: ifeq          146
+     131: iload_3
+     132: aload_0
+     133: getfield      #61                 // Field b:I
+     136: iadd
+     137: dup
+     138: istore        5
+     140: aload_0
+     141: iconst_0
+     142: putfield      #61                 // Field b:I
+     145: ireturn
+     146: aload_0
+     147: dup
+     148: getfield      #61                 // Field b:I
+     151: iload_3
+     152: iadd
+     153: putfield      #61                 // Field b:I
+     156: iconst_0
+     157: ireturn
+    Exception table:
+       from    to  target type
+          72   114   118   any
+
+  public void E(long);
+    Code:
+       0: aload_0
+       1: dup
+       2: lload_1
+       3: putfield      #75                 // Field b:J
+       6: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+       9: dup
+      10: astore_3
+      11: monitorenter
+      12: aload_0
+      13: dup
+      14: dup_x1
+      15: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+      18: lload_1
+      19: aload_0
+      20: getfield      #22                 // Field c:I
+      23: iconst_m1
+      24: invokevirtual #43                 // Method ttw/tradefinder/eD.E:(JII)V
+      27: getfield      #39                 // Field C:Lttw/tradefinder/eD;
+      30: invokevirtual #106                // Method ttw/tradefinder/eD.a:()I
+      33: i2l
+      34: lstore        4
+      36: getfield      #27                 // Field a:I
+      39: ifne          46
+      42: dconst_0
+      43: goto          55
+      46: lload         4
+      48: l2d
+      49: aload_0
+      50: getfield      #27                 // Field a:I
+      53: i2d
+      54: ddiv
+      55: dstore        6
+      57: aload_3
+      58: aload_0
+      59: dload         6
+      61: invokestatic  #110                // Method java/lang/Math.round:(D)J
+      64: l2i
+      65: putfield      #78                 // Field k:I
+      68: monitorexit
+      69: return
+      70: astore_1
+      71: aload_3
+      72: monitorexit
+      73: aload_1
+      74: athrow
+    Exception table:
+       from    to  target type
+          12    69    70   any
+
+  public static {};
+    Code:
+       0: ldc           #114                // String }>}4
+       2: invokestatic  #119                // Method ttw/tradefinder/gD.E:(Ljava/lang/Object;)Ljava/lang/String;
+       5: putstatic     #53                 // Field H:Ljava/lang/String;
+       8: return
+}
+public abstract class ttw.tradefinder.Oe {
+  public int k;
+
+  public int B;
+
+  public long K;
+
+  public long E;
+
+  public int j;
+
+  public int a;
+
+  public int h;
+
+  public long H;
+
+  public final java.lang.String D;
+
+  public int A;
+
+  public final ttw.tradefinder.eD C;
+
+  public final boolean M;
+
+  public long b;
+
+  public long c;
+
+  public double a();
+    Code:
+       0: aload_0
+       1: getfield      #26                 // Field E:J
+       4: aload_0
+       5: getfield      #28                 // Field H:J
+       8: lsub
+       9: l2d
+      10: ldc2_w        #29                 // double 1000000.0d
+      13: ddiv
+      14: dreturn
+
+  public boolean j();
+    Code:
+       0: aload_0
+       1: getfield      #34                 // Field b:J
+       4: lconst_0
+       5: lcmp
+       6: ifeq          11
+       9: iconst_1
+      10: ireturn
+      11: iconst_0
+      12: ireturn
+
+  public int E();
+    Code:
+       0: aload_0
+       1: getfield      #37                 // Field c:J
+       4: lconst_0
+       5: lcmp
+       6: ifne          11
+       9: iconst_0
+      10: ireturn
+      11: aload_0
+      12: getfield      #39                 // Field a:I
+      15: ireturn
+
+  public double j();
+    Code:
+       0: aload_0
+       1: getfield      #34                 // Field b:J
+       4: aload_0
+       5: getfield      #41                 // Field K:J
+       8: lsub
+       9: l2d
+      10: ldc2_w        #29                 // double 1000000.0d
+      13: ddiv
+      14: dreturn
+
+  public double E();
+    Code:
+       0: aload_0
+       1: getfield      #34                 // Field b:J
+       4: aload_0
+       5: getfield      #26                 // Field E:J
+       8: lsub
+       9: l2d
+      10: ldc2_w        #29                 // double 1000000.0d
+      13: ddiv
+      14: dreturn
+
+  public ttw.tradefinder.Oe(java.lang.String, boolean, ttw.tradefinder.eD);
+    Code:
+       0: aload_3
+       1: aload_0
+       2: dup_x1
+       3: iload_2
+       4: aload_1
+       5: aload_0
+       6: dup_x1
+       7: lconst_0
+       8: dup2
+       9: aload_0
+      10: dup_x2
+      11: lconst_0
+      12: dup2
+      13: aload_0
+      14: dup_x2
+      15: lconst_0
+      16: iconst_0
+      17: aload_0
+      18: dup_x1
+      19: iconst_0
+      20: dup
+      21: aload_0
+      22: dup_x1
+      23: iconst_0
+      24: dup
+      25: aload_0
+      26: dup_x1
+      27: iconst_0
+      28: aload_0
+      29: invokespecial #46                 // Method java/lang/Object."<init>":()V
+      32: putfield      #48                 // Field h:I
+      35: putfield      #50                 // Field A:I
+      38: putfield      #52                 // Field k:I
+      41: putfield      #39                 // Field a:I
+      44: putfield      #54                 // Field B:I
+      47: putfield      #56                 // Field j:I
+      50: putfield      #26                 // Field E:J
+      53: putfield      #28                 // Field H:J
+      56: putfield      #37                 // Field c:J
+      59: putfield      #41                 // Field K:J
+      62: putfield      #34                 // Field b:J
+      65: putfield      #58                 // Field D:Ljava/lang/String;
+      68: putfield      #60                 // Field M:Z
+      71: putfield      #62                 // Field C:Lttw/tradefinder/eD;
+      74: return
+
+  public int E(long);
+    Code:
+       0: aload_0
+       1: getfield      #62                 // Field C:Lttw/tradefinder/eD;
+       4: lload_1
+       5: invokevirtual #67                 // Method ttw/tradefinder/eD.a:(J)I
+       8: ireturn
+
+  public boolean E();
+    Code:
+       0: aload_0
+       1: getfield      #37                 // Field c:J
+       4: lconst_0
+       5: lcmp
+       6: ifeq          11
+       9: iconst_1
+      10: ireturn
+      11: iconst_0
+      12: ireturn
+}
+public class ttw.tradefinder.se {
+  private int D;
+
+  private final boolean A;
+
+  private java.util.Map<java.lang.String, ttw.tradefinder.jF> C;
+
+  private final ttw.tradefinder.t M;
+
+  private int b;
+
+  private int c;
+
+  public ttw.tradefinder.se(int, boolean, ttw.tradefinder.t);
+    Code:
+       0: iload_1
+       1: aload_0
+       2: dup_x1
+       3: iload_2
+       4: aload_3
+       5: aload_0
+       6: dup_x1
+       7: iconst_0
+       8: dup
+       9: aload_0
+      10: dup
+      11: dup_x2
+      12: invokespecial #20                 // Method java/lang/Object."<init>":()V
+      15: new           #22                 // class java/util/HashMap
+      18: dup
+      19: invokespecial #23                 // Method java/util/HashMap."<init>":()V
+      22: putfield      #25                 // Field C:Ljava/util/Map;
+      25: putfield      #27                 // Field b:I
+      28: putfield      #29                 // Field D:I
+      31: putfield      #31                 // Field M:Lttw/tradefinder/t;
+      34: putfield      #33                 // Field A:Z
+      37: invokevirtual #37                 // Method E:(I)V
+      40: return
+
+  public void E(long, int, int, java.lang.String);
+    Code:
+       0: aload         5
+       2: ifnull        13
+       5: aload         5
+       7: invokevirtual #46                 // Method java/lang/String.isEmpty:()Z
+      10: ifeq          14
+      13: return
+      14: aload_0
+      15: getfield      #27                 // Field b:I
+      18: ifeq          29
+      21: aload_0
+      22: getfield      #27                 // Field b:I
+      25: iload_3
+      26: if_icmpeq     85
+      29: aload_0
+      30: dup
+      31: iload_3
+      32: putfield      #27                 // Field b:I
+      35: getfield      #29                 // Field D:I
+      38: ifeq          70
+      41: aload_0
+      42: getfield      #31                 // Field M:Lttw/tradefinder/t;
+      45: new           #48                 // class ttw/tradefinder/jF
+      48: dup
+      49: getstatic     #53                 // Field ttw/tradefinder/dg.C:Lttw/tradefinder/dg;
+      52: aload_0
+      53: getfield      #29                 // Field D:I
+      56: iload_3
+      57: aload_0
+      58: getfield      #33                 // Field A:Z
+      61: lload_1
+      62: invokespecial #56                 // Method ttw/tradefinder/jF."<init>":(Lttw/tradefinder/dg;IIZJ)V
+      65: invokeinterface #62,  2           // InterfaceMethod ttw/tradefinder/t.j:(Lttw/tradefinder/jF;)V
+      70: aload_0
+      71: dup
+      72: iconst_0
+      73: putfield      #29                 // Field D:I
+      76: getfield      #25                 // Field C:Ljava/util/Map;
+      79: invokeinterface #67,  1           // InterfaceMethod java/util/Map.clear:()V
+      84: return
+      85: aload_0
+      86: getfield      #25                 // Field C:Ljava/util/Map;
+      89: aload         5
+      91: invokeinterface #71,  2           // InterfaceMethod java/util/Map.containsKey:(Ljava/lang/Object;)Z
+      96: ifeq          138
+      99: aload_0
+     100: dup
+     101: dup
+     102: getfield      #29                 // Field D:I
+     105: iload         4
+     107: iadd
+     108: putfield      #29                 // Field D:I
+     111: getfield      #31                 // Field M:Lttw/tradefinder/t;
+     114: new           #73                 // class ttw/tradefinder/Jf
+     117: dup
+     118: getstatic     #53                 // Field ttw/tradefinder/dg.C:Lttw/tradefinder/dg;
+     121: lload_1
+     122: iload         4
+     124: iload_3
+     125: aload_0
+     126: getfield      #33                 // Field A:Z
+     129: invokespecial #76                 // Method ttw/tradefinder/Jf."<init>":(Lttw/tradefinder/dg;JIIZ)V
+     132: aconst_null
+     133: invokeinterface #79,  3           // InterfaceMethod ttw/tradefinder/t.E:(Lttw/tradefinder/Jf;Lttw/tradefinder/jF;)V
+     138: return
+
+  public void E(long, java.lang.String);
+    Code:
+       0: aload_0
+       1: getfield      #25                 // Field C:Ljava/util/Map;
+       4: aload_3
+       5: invokeinterface #86,  2           // InterfaceMethod java/util/Map.remove:(Ljava/lang/Object;)Ljava/lang/Object;
+      10: pop
+      11: return
+
+  public void E(long, java.lang.String, int, int);
+    Code:
+       0: aload_0
+       1: getfield      #25                 // Field C:Ljava/util/Map;
+       4: aload_3
+       5: invokeinterface #90,  2           // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      10: checkcast     #48                 // class ttw/tradefinder/jF
+      13: dup
+      14: astore_3
+      15: ifnonnull     19
+      18: return
+      19: aload_3
+      20: lload_1
+      21: iload         5
+      23: iload         4
+      25: invokevirtual #93                 // Method ttw/tradefinder/jF.E:(JII)V
+      28: return
+
+  public void E(int);
+    Code:
+       0: iload_1
+       1: aload_0
+       2: dup_x1
+       3: aload_0
+       4: iconst_0
+       5: dup_x1
+       6: putfield      #29                 // Field D:I
+       9: putfield      #27                 // Field b:I
+      12: putfield      #95                 // Field c:I
+      15: return
+
+  public void E(long, java.lang.String, int, int, boolean);
+    Code:
+       0: iload         4
+       2: aload_0
+       3: getfield      #27                 // Field b:I
+       6: if_icmpeq     10
+       9: return
+      10: iload         6
+      12: aload_0
+      13: getfield      #33                 // Field A:Z
+      16: if_icmpeq     20
+      19: return
+      20: iload         5
+      22: aload_0
+      23: getfield      #95                 // Field c:I
+      26: if_icmpgt     30
+      29: return
+      30: aload_0
+      31: getfield      #25                 // Field C:Ljava/util/Map;
+      34: aload_3
+      35: new           #48                 // class ttw/tradefinder/jF
+      38: dup
+      39: getstatic     #53                 // Field ttw/tradefinder/dg.C:Lttw/tradefinder/dg;
+      42: aload_3
+      43: iload         5
+      45: iload         4
+      47: iload         6
+      49: lload_1
+      50: invokespecial #99                 // Method ttw/tradefinder/jF."<init>":(Lttw/tradefinder/dg;Ljava/lang/String;IIZJ)V
+      53: invokeinterface #103,  3          // InterfaceMethod java/util/Map.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+      58: pop
+      59: return
+
+  public static java.lang.String E(java.lang.Object);
+    Code:
+       0: aload_0
+       1: astore_1
+       2: iconst_3
+       3: iconst_5
+       4: ixor
+       5: iconst_4
+       6: ishl
+       7: iconst_5
+       8: iconst_1
+       9: ishl
+      10: ixor
+      11: iconst_2
+      12: iconst_5
+      13: ixor
+      14: iconst_2
+      15: iconst_5
+      16: ixor
+      17: iconst_3
+      18: ishl
+      19: iconst_3
+      20: iconst_5
+      21: ixor
+      22: ixor
+      23: aload_1
+      24: checkcast     #42                 // class java/lang/String
+      27: dup
+      28: astore_1
+      29: invokevirtual #108                // Method java/lang/String.length:()I
+      32: dup
+      33: newarray       char
+      35: iconst_1
+      36: dup
+      37: pop2
+      38: swap
+      39: iconst_1
+      40: isub
+      41: dup_x2
+      42: istore_3
+      43: astore_0
+      44: istore        4
+      46: dup_x2
+      47: pop2
+      48: istore_2
+      49: iflt          89
+      52: aload_0
+      53: aload_1
+      54: iload_3
+      55: dup_x1
+      56: invokevirtual #114                // Method java/lang/String.charAt:(I)C
+      59: iinc          3, -1
+      62: iload_2
+      63: ixor
+      64: i2c
+      65: castore
+      66: iload_3
+      67: iflt          89
+      70: aload_0
+      71: aload_1
+      72: iload_3
+      73: iinc          3, -1
+      76: dup_x1
+      77: invokevirtual #114                // Method java/lang/String.charAt:(I)C
+      80: iload         4
+      82: ixor
+      83: i2c
+      84: castore
+      85: iload_3
+      86: goto          49
+      89: new           #42                 // class java/lang/String
+      92: dup
+      93: aload_0
+      94: invokespecial #117                // Method java/lang/String."<init>":([C)V
+      97: areturn
+}
+public class ttw.tradefinder.PE {
+  private int H;
+
+  private int D;
+
+  private int A;
+
+  private final ttw.tradefinder.t C;
+
+  private final boolean M;
+
+  private final ttw.tradefinder.eE b;
+
+  private int c;
+
+  public void E(long, int, int);
+    Code:
+       0: aload_0
+       1: getfield      #19                 // Field H:I
+       4: ifeq          15
+       7: aload_0
+       8: getfield      #19                 // Field H:I
+      11: iload_3
+      12: if_icmpeq     89
+      15: aload_0
+      16: dup
+      17: dup_x1
+      18: iload_3
+      19: putfield      #19                 // Field H:I
+      22: getfield      #21                 // Field b:Lttw/tradefinder/eE;
+      25: iload_3
+      26: invokevirtual #26                 // Method ttw/tradefinder/eE.E:(I)J
+      29: l2i
+      30: ineg
+      31: dup
+      32: istore        4
+      34: ifeq          42
+      37: iload         4
+      39: goto          44
+      42: ldc           #27                 // int -2147483648
+      44: putfield      #29                 // Field D:I
+      47: aload_0
+      48: getfield      #31                 // Field A:I
+      51: ifeq          83
+      54: aload_0
+      55: getfield      #33                 // Field C:Lttw/tradefinder/t;
+      58: new           #35                 // class ttw/tradefinder/jF
+      61: dup
+      62: getstatic     #40                 // Field ttw/tradefinder/dg.b:Lttw/tradefinder/dg;
+      65: aload_0
+      66: getfield      #31                 // Field A:I
+      69: iload_3
+      70: aload_0
+      71: getfield      #42                 // Field M:Z
+      74: lload_1
+      75: invokespecial #46                 // Method ttw/tradefinder/jF."<init>":(Lttw/tradefinder/dg;IIZJ)V
+      78: invokeinterface #52,  2           // InterfaceMethod ttw/tradefinder/t.j:(Lttw/tradefinder/jF;)V
+      83: aload_0
+      84: iconst_0
+      85: putfield      #31                 // Field A:I
+      88: return
+      89: aload_0
+      90: getfield      #29                 // Field D:I
+      93: ifne          146
+      96: iload         4
+      98: aload_0
+      99: getfield      #54                 // Field c:I
+     102: if_icmpgt     106
+     105: return
+     106: aload_0
+     107: dup
+     108: dup
+     109: getfield      #31                 // Field A:I
+     112: iload         4
+     114: iadd
+     115: putfield      #31                 // Field A:I
+     118: getfield      #33                 // Field C:Lttw/tradefinder/t;
+     121: new           #56                 // class ttw/tradefinder/Jf
+     124: dup
+     125: getstatic     #40                 // Field ttw/tradefinder/dg.b:Lttw/tradefinder/dg;
+     128: lload_1
+     129: iload         4
+     131: iload_3
+     132: aload_0
+     133: getfield      #42                 // Field M:Z
+     136: invokespecial #59                 // Method ttw/tradefinder/Jf."<init>":(Lttw/tradefinder/dg;JIIZ)V
+     139: aconst_null
+     140: invokeinterface #62,  3           // InterfaceMethod ttw/tradefinder/t.E:(Lttw/tradefinder/Jf;Lttw/tradefinder/jF;)V
+     145: return
+     146: aload_0
+     147: dup
+     148: dup
+     149: getfield      #29                 // Field D:I
+     152: iload         4
+     154: iadd
+     155: putfield      #29                 // Field D:I
+     158: getfield      #29                 // Field D:I
+     161: ifle          205
+     164: iconst_0
+     165: aload_0
+     166: dup_x1
+     167: dup_x2
+     168: dup
+     169: getfield      #29                 // Field D:I
+     172: putfield      #31                 // Field A:I
+     175: putfield      #29                 // Field D:I
+     178: getfield      #33                 // Field C:Lttw/tradefinder/t;
+     181: new           #56                 // class ttw/tradefinder/Jf
+     184: dup
+     185: getstatic     #40                 // Field ttw/tradefinder/dg.b:Lttw/tradefinder/dg;
+     188: lload_1
+     189: iload         4
+     191: iload_3
+     192: aload_0
+     193: getfield      #42                 // Field M:Z
+     196: invokespecial #59                 // Method ttw/tradefinder/Jf."<init>":(Lttw/tradefinder/dg;JIIZ)V
+     199: aconst_null
+     200: invokeinterface #62,  3           // InterfaceMethod ttw/tradefinder/t.E:(Lttw/tradefinder/Jf;Lttw/tradefinder/jF;)V
+     205: return
+
+  public ttw.tradefinder.PE(ttw.tradefinder.eE, int, boolean, ttw.tradefinder.t);
+    Code:
+       0: iload_2
+       1: aload_0
+       2: dup_x1
+       3: iload_3
+       4: aload         4
+       6: aload_0
+       7: dup_x1
+       8: aload_1
+       9: iconst_0
+      10: aload_0
+      11: dup_x1
+      12: ldc           #27                 // int -2147483648
+      14: iconst_0
+      15: aload_0
+      16: dup_x1
+      17: invokespecial #69                 // Method java/lang/Object."<init>":()V
+      20: putfield      #19                 // Field H:I
+      23: putfield      #29                 // Field D:I
+      26: putfield      #31                 // Field A:I
+      29: putfield      #21                 // Field b:Lttw/tradefinder/eE;
+      32: putfield      #33                 // Field C:Lttw/tradefinder/t;
+      35: putfield      #42                 // Field M:Z
+      38: invokevirtual #72                 // Method E:(I)V
+      41: return
+
+  public static java.lang.String E(java.lang.Object);
+    Code:
+       0: aload_0
+       1: astore_1
+       2: iconst_5
+       3: iconst_4
+       4: ishl
+       5: iconst_3
+       6: iconst_2
+       7: ishl
+       8: iconst_3
+       9: ixor
+      10: ixor
+      11: iconst_3
+      12: iconst_5
+      13: ixor
+      14: iconst_5
+      15: iconst_4
+      16: ishl
+      17: iconst_3
+      18: iconst_2
+      19: ishl
+      20: iconst_1
+      21: ixor
+      22: ixor
+      23: aload_1
+      24: checkcast     #75                 // class java/lang/String
+      27: dup
+      28: astore_1
+      29: invokevirtual #79                 // Method java/lang/String.length:()I
+      32: dup
+      33: newarray       char
+      35: iconst_1
+      36: dup
+      37: pop2
+      38: swap
+      39: iconst_1
+      40: isub
+      41: dup_x2
+      42: istore_3
+      43: astore_0
+      44: istore        4
+      46: dup_x2
+      47: pop2
+      48: istore_2
+      49: iflt          89
+      52: aload_0
+      53: aload_1
+      54: iload_3
+      55: dup_x1
+      56: invokevirtual #85                 // Method java/lang/String.charAt:(I)C
+      59: iinc          3, -1
+      62: iload_2
+      63: ixor
+      64: i2c
+      65: castore
+      66: iload_3
+      67: iflt          89
+      70: aload_0
+      71: aload_1
+      72: iload_3
+      73: iinc          3, -1
+      76: dup_x1
+      77: invokevirtual #85                 // Method java/lang/String.charAt:(I)C
+      80: iload         4
+      82: ixor
+      83: i2c
+      84: castore
+      85: iload_3
+      86: goto          49
+      89: new           #75                 // class java/lang/String
+      92: dup
+      93: aload_0
+      94: invokespecial #88                 // Method java/lang/String."<init>":([C)V
+      97: areturn
+
+  public void E(int);
+    Code:
+       0: iload_1
+       1: aload_0
+       2: dup_x1
+       3: iconst_0
+       4: dup
+       5: aload_0
+       6: dup_x1
+       7: ldc           #27                 // int -2147483648
+       9: putfield      #29                 // Field D:I
+      12: putfield      #31                 // Field A:I
+      15: putfield      #19                 // Field H:I
+      18: putfield      #54                 // Field c:I
+      21: return
+}

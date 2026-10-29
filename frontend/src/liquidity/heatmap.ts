@@ -2,6 +2,7 @@ export interface LiquidityHeatmapSettings {
   minDurationSeconds: number;
   saturationMultiple: number;
   contrast: number;
+  opacity: number;
 }
 
 export interface LiquiditySizeSample {
@@ -24,6 +25,7 @@ export const DEFAULT_HEATMAP_SETTINGS: LiquidityHeatmapSettings = {
   minDurationSeconds: 60,
   saturationMultiple: 4,
   contrast: 1,
+  opacity: 1,
 };
 const RETENTION_MS = 24 * 60 * 60 * 1_000;
 const MAX_SAMPLES_PER_LINE = 20_000;
@@ -38,6 +40,7 @@ export function normalizeHeatmapSettings(input: unknown): LiquidityHeatmapSettin
     minDurationSeconds: number(source.minDurationSeconds, 60, 0, 600),
     saturationMultiple: number(source.saturationMultiple, 4, 2, 20),
     contrast: number(source.contrast, 1, 0.3, 3),
+    opacity: number(source.opacity, 1, 0, 2),
   };
 }
 
@@ -107,6 +110,95 @@ export function liquidityHeatmapAlpha(
     Math.log1p(Math.max(0, ratio - 1)) / Math.log(settings.saturationMultiple),
   ));
   return 0.12 + 0.82 * Math.pow(intensity, settings.contrast);
+}
+
+export function liquidityLineAppearance(
+  size: number | null,
+  threshold: number,
+  settings: LiquidityHeatmapSettings,
+  ended = false,
+  stale = false,
+): { alpha: number; width: number; dash: number[] } {
+  const alpha = size === null ? 0.3 : liquidityHeatmapAlpha(size, threshold, settings);
+  // Use the size of THIS observation, never a lifetime peak. A refill followed
+  // by a reduction must return to the same brightness and width as before.
+  const intensity = size === null ? 0 : Math.max(0, (alpha - 0.12) / 0.82);
+  return {
+    alpha: Math.min(1, alpha * (ended || stale ? 0.55 : 1) * settings.opacity),
+    width: 1 + 4 * intensity,
+    dash: ended ? [5, 4] : [],
+  };
+}
+
+export type LiquiditySizeChange = "steady" | "add" | "remove";
+
+export function liquidityLineColor(
+  size: number | null,
+  threshold: number,
+  settings: LiquidityHeatmapSettings,
+  change: LiquiditySizeChange,
+  side: "bid" | "ask",
+): string {
+  if (size === null || change === "steady") {
+    return side === "bid" ? "0, 214, 143" : "255, 82, 103";
+  }
+  if (change === "remove") return "156, 126, 232";
+  // A fixed volume scale, so a refill warms up without recoloring other rows.
+  const intensity = Math.max(0, (liquidityHeatmapAlpha(size, threshold, settings) - 0.12) / 0.82);
+  const stops = [[34, 160, 255], [35, 224, 213], [255, 223, 80], [255, 142, 56]];
+  const position = Math.min(stops.length - 1, intensity * (stops.length - 1));
+  const index = Math.min(stops.length - 2, Math.floor(position));
+  return stops[index].map((value, channel) =>
+    Math.round(value + (stops[index + 1][channel] - value) * (position - index)),
+  ).join(", ");
+}
+
+export function drawLiquidityLevel(
+  context: CanvasRenderingContext2D,
+  line: HeatmapLine & { side: "bid" | "ask"; threshold: number },
+  viewport: {
+    from: number; to: number; now: number; pixelsPerMs: number;
+    showLive: boolean; y: number; xAt: (time: number) => number;
+    settings: LiquidityHeatmapSettings;
+  },
+): number | null {
+  const { from, to, now, pixelsPerMs, showLive, y, xAt, settings } = viewport;
+  if (settings.opacity === 0) return null;
+  const ended = line.endedAt !== null && line.endedAt <= now;
+  const stale = !ended && now - line.lastAt > LIQUIDITY_STALE_MS;
+  const samples = knownLineSamples(line);
+  let sampleIndex = 0;
+  let change: LiquiditySizeChange = "steady";
+  const changeAt = (time: number): LiquiditySizeChange => {
+    while (sampleIndex + 1 < samples.length && samples[sampleIndex + 1].time <= time) {
+      const before = samples[sampleIndex];
+      const after = samples[++sampleIndex];
+      if (!before.active || after.time - before.time > LIQUIDITY_STALE_MS) change = "steady";
+      else if (after.size !== before.size) change = after.size > before.size ? "add" : "remove";
+    }
+    return change;
+  };
+  const stroke = (start: number, end: number, size: number | null, retired: boolean, faded: boolean) => {
+    const style = liquidityLineAppearance(size, line.threshold, settings, retired, faded);
+    const color = liquidityLineColor(size, line.threshold, settings, changeAt(start), line.side);
+    context.strokeStyle = `rgba(${color}, ${style.alpha})`;
+    context.lineWidth = style.width;
+    context.setLineDash(style.dash);
+    context.beginPath();
+    context.moveTo(xAt(start), y);
+    context.lineTo(xAt(end), y);
+    context.stroke();
+  };
+  context.save();
+  context.lineCap = "butt";
+  const segments = removeHeatmapSpeckles(liquidityHeatmapSegments(line, from, to, now), pixelsPerMs);
+  for (const segment of segments) stroke(segment.from, segment.to, segment.size, ended, stale);
+  const projection = showLive ? liquidityLiveProjection(line, from, to, now) : null;
+  // The live book uses the same solid style as its latest observed size.
+  // Dashed strokes are reserved for completed levels, never future space.
+  if (projection) stroke(projection.from, projection.to, projection.size, false, false);
+  context.restore();
+  return projection ? xAt(projection.to) : null;
 }
 
 export function liquidityHeatmapSegments(

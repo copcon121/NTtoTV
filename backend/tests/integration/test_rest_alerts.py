@@ -33,6 +33,37 @@ from app.engines.alert_engine import (
 )
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
+from app.engines.smc_fail_break import SMC_FAIL_BREAK_RETEST
+
+
+@pytest.mark.integration
+def test_rest_creates_fail_break_with_live_pb_and_preserves_custom_parameters(tmp_path):
+    cache = CacheStore(tmp_path / "app.sqlite")
+    app = create_app()
+    app.state.contract_state = ContractStateStore(cache, settings=Settings(
+        data_dir=tmp_path, supported_symbols=("GC",), gc_candidate_contracts=("GC 12-26",),
+    ))
+    try:
+        with TestClient(app) as client:
+            response = client.post("/api/alerts", json={
+                "symbol": "GC", "type": SMC_FAIL_BREAK_RETEST,
+                "params": {"maxBars": 200, "requirePb": True, "direction": "short"},
+            })
+            assert response.status_code == 201
+            created = response.json()
+            assert created["params"]["maxBars"] == 200
+            assert created["params"]["useChartSmc"] is True
+            assert "minDisplacementTicks" not in created["params"]
+            assert created["params"]["requirePb"] is True
+            assert created["params"]["repeat"] is True
+            assert cache.read_alert(created["id"]).type == SMC_FAIL_BREAK_RETEST
+            invalid = client.post("/api/alerts", json={
+                "symbol": "GC", "type": SMC_FAIL_BREAK_RETEST,
+                "params": {"maxBars": 0},
+            })
+            assert invalid.status_code == 422
+    finally:
+        cache.close()
 
 
 @pytest.mark.integration

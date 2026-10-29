@@ -1,0 +1,559 @@
+[
+  {
+    "class": "velox/indicators/sionchart/SitIndicator.class",
+    "strings": [
+      "BM.Indicators.IcebergsTracker",
+      "Stops&Icebergs On-Chart"
+    ]
+  },
+  {
+    "class": "com/bookmap/a/a/a/a.class",
+    "strings": [
+      "aggressorOrderId",
+      "onDepth",
+      "onTrade",
+      "passiveOrderId"
+    ]
+  },
+  {
+    "class": "com/bookmap/a/a/a/b.class",
+    "strings": [
+      "onTrade",
+      "passiveOrderId"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/c.class",
+    "strings": [
+      "Arithmetic overflow while calculating weighted average for Icebergs on chart",
+      "icebergsIconsHeight",
+      "showIcebergs",
+      "showIcebergsNumber"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/e.class",
+    "strings": [
+      "Iceberg $INSTR $SIDE at $PRICE crossed $THRESHOLD",
+      "getIcebergsHiddenAskColor",
+      "getIcebergsHiddenBidColor",
+      "getStopsHiddenAskColor",
+      "getStopsHiddenBidColor",
+      "icebergsAggThreshold",
+      "icebergsAlertAutoThreshold",
+      "icebergsAlertEnabled",
+      "icebergsAlertSdInterval",
+      "icebergsAlertSdMultiplier",
+      "icebergsAlertTemplate",
+      "icebergsAlertThreshold",
+      "icebergsAskColor",
+      "icebergsAutoThreshold",
+      "icebergsBidColor",
+      "icebergsHiddenAskColor",
+      "icebergsHiddenBidColor",
+      "icebergsHiddenTransparency",
+      "icebergsIconsHeight",
+      "icebergsIconsOffset",
+      "icebergsNotAggregated",
+      "icebergsOffsetLineWidth",
+      "icebergsOrderLineWidth",
+      "icebergsPopupEnabled",
+      "icebergsPriceAreaMultiplier",
+      "icebergsSdInterval",
+      "icebergsSdMultiplier",
+      "icebergsShowHiddenIcons",
+      "icebergsThreshold",
+      "icebergsTimeAreaMultiplier",
+      "setHiddenColors",
+      "showIcebergs",
+      "showIcebergsNumber",
+      "stopsHiddenAskColor",
+      "stopsHiddenBidColor",
+      "stopsHiddenTransparency",
+      "stopsShowHiddenIcons"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/f.class",
+    "strings": [
+      "\u0001 \u0001 Cancel order id: \u0001",
+      "\u0001 \u0001 Replace order id: \u0001 price: \u0001 size:\u0001",
+      "\u0001 \u0001 Send order id: \u0001\u0001 price: \u0001 size:\u0001",
+      "\u0001 \u0001 onDepth \u0001 price = \u0001 size = \u0001",
+      "aggressorOrderId",
+      "onDepth",
+      "onTrade",
+      "passiveOrderId"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/g.class",
+    "strings": [
+      "aggressorOrderId",
+      "onTrade",
+      "passiveOrderId"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/h.class",
+    "strings": [
+      "aggressorOrderId",
+      "icebergsAlertEnabled",
+      "icebergsAlertThreshold",
+      "icebergsPopupEnabled",
+      "onTrade",
+      "passiveOrderId"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/i.class",
+    "strings": [
+      "aggressorOrderId",
+      "new iceberg detected",
+      "onTrade",
+      "passiveOrderId"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/s.class",
+    "strings": [
+      "icebergsSdInterval"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/t.class",
+    "strings": [
+      "icebergsSdInterval"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/u.class",
+    "strings": [
+      "icebergsAlertSdInterval"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/m.class",
+    "strings": [
+      "Calc icebergs alerts threshold thread",
+      "Calc icebergs threshold thread",
+      "Iceberg",
+      "To enable and configure the addon for \u0001 synthetic instrument use the addon configuration of the original instrument.The name of the synthetic instrument should start with the name of original instrument. Example: ESU4.CME@RITHMIC -> ESU4.CME-123@TM.Pro",
+      "getIcebergsHiddenAskColor",
+      "getIcebergsHiddenBidColor",
+      "getStopsHiddenAskColor",
+      "getStopsHiddenBidColor",
+      "icebergsAlertAutoThreshold",
+      "icebergsAlertEnabled",
+      "icebergsAlertSdInterval",
+      "icebergsAlertSdMultiplier",
+      "icebergsAlertThreshold",
+      "icebergsAskColor",
+      "icebergsAutoThreshold",
+      "icebergsBidColor",
+      "icebergsHiddenTransparency",
+      "icebergsSdInterval",
+      "icebergsSdMultiplier",
+      "icebergsThreshold",
+      "setHiddenColors",
+      "showIcebergs",
+      "stopsHiddenTransparency"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/v.class",
+    "strings": [
+      "getIcebergsHiddenAskColor",
+      "getIcebergsHiddenBidColor",
+      "getStopsHiddenAskColor",
+      "getStopsHiddenBidColor",
+      "icebergsAggThreshold",
+      "icebergsAlertAutoThreshold",
+      "icebergsAskColor",
+      "icebergsAutoThreshold",
+      "icebergsBidColor",
+      "icebergsIconsHeight",
+      "icebergsIconsOffset",
+      "icebergsNotAggregated",
+      "icebergsOffsetLineWidth",
+      "icebergsOrderLineWidth",
+      "icebergsPriceAreaMultiplier",
+      "icebergsShowHiddenIcons",
+      "icebergsThreshold",
+      "icebergsTimeAreaMultiplier",
+      "showIcebergs",
+      "stopsShowHiddenIcons"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/w.class",
+    "strings": [
+      "Iceberg $INSTR $SIDE at $PRICE crossed $THRESHOLD",
+      "icebergsAlertEnabled",
+      "icebergsAlertTemplate",
+      "icebergsAlertThreshold",
+      "icebergsPopupEnabled"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/A.class",
+    "strings": [
+      "Iceberg $INSTR $SIDE at $PRICE crossed $THRESHOLD",
+      "Icebergs",
+      "Please, note, that alert threshold is applied to individual iceberg orders, while on the chart the values could be aggregated.",
+      "icebergs",
+      "icebergsAlertAutoThreshold",
+      "icebergsAlertEnabled",
+      "icebergsAlertSdInterval",
+      "icebergsAlertSdMultiplier",
+      "icebergsAlertTemplate",
+      "icebergsAlertThreshold",
+      "icebergsPopupEnabled"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/E.class",
+    "strings": [
+      "Inconsistent MBO data for \u0001. Stops and icebergs detection may be inaccurate.",
+      "aggressorOrderId",
+      "onTrade",
+      "passiveOrderId"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/broadcast/BroadcastingApiFacade.class",
+    "strings": [
+      "getIcebergsHiddenAskColor",
+      "getIcebergsHiddenBidColor",
+      "icebergsAggThreshold",
+      "icebergsAlertAutoThreshold",
+      "icebergsAlertEnabled",
+      "icebergsAlertSdInterval",
+      "icebergsAlertSdMultiplier",
+      "icebergsAlertTemplate",
+      "icebergsAlertThreshold",
+      "icebergsAskColor",
+      "icebergsAutoThreshold",
+      "icebergsBidColor",
+      "icebergsHiddenTransparency",
+      "icebergsIconsHeight",
+      "icebergsIconsOffset",
+      "icebergsNotAggregated",
+      "icebergsOffsetLineWidth",
+      "icebergsOrderLineWidth",
+      "icebergsPriceAreaMultiplier",
+      "icebergsSdInterval",
+      "icebergsSdMultiplier",
+      "icebergsShowHiddenIcons",
+      "icebergsThreshold",
+      "icebergsTimeAreaMultiplier",
+      "showIcebergs",
+      "showIcebergsNumber",
+      "stopsHiddenAskColor",
+      "stopsHiddenBidColor",
+      "stopsHiddenTransparency",
+      "stopsShowHiddenIcons",
+      "velox/indicators/sionchart/broadcasting/implementations/IcebergEvent"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/broadcast/DataStructureInterfaceWrapper$1.class",
+    "strings": [
+      "icebergsByAlias"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/broadcast/DataStructureInterfaceWrapper.class",
+    "strings": [
+      "getIcebergs",
+      "icebergsByAlias",
+      "velox/indicators/sionchart/broadcasting/implementations/IcebergEvent"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/a/c.class",
+    "strings": [
+      "\u0001;applyThresholdToActiveIcebergs",
+      "\u0001;hiddenIcebergsTransparency",
+      "\u0001;icebergsAggThresholdSize",
+      "\u0001;icebergsAsksColorConfig",
+      "\u0001;icebergsAutoThreshold",
+      "\u0001;icebergsBidsColorConfig",
+      "\u0001;icebergsIconsOffset",
+      "\u0001;icebergsIconsSize",
+      "\u0001;icebergsNotAggregated",
+      "\u0001;icebergsOffsetLineWidth",
+      "\u0001;icebergsOrderLineWidth",
+      "\u0001;icebergsPriceAreaMultiplier",
+      "\u0001;icebergsSdInterval",
+      "\u0001;icebergsSdMultiplier",
+      "\u0001;icebergsShowHiddenIcons",
+      "\u0001;icebergsThresholdSize",
+      "\u0001;icebergsTimeAreaMultiplier",
+      "\u0001;showIcebergs",
+      "\u0001;showIcebergsNumber",
+      "Apply threshold to active icebergs",
+      "Calculate executed and partially executed icebergs volume together",
+      "Show icebergs",
+      "Show icebergs number",
+      "icebergsAggThreshold",
+      "icebergsAskColor",
+      "icebergsAutoThreshold",
+      "icebergsBidColor",
+      "icebergsHiddenTransparency",
+      "icebergsIconsHeight",
+      "icebergsIconsOffset",
+      "icebergsNotAggregated",
+      "icebergsOffsetLineWidth",
+      "icebergsOrderLineWidth",
+      "icebergsPriceAreaMultiplier",
+      "icebergsSdInterval",
+      "icebergsSdMultiplier",
+      "icebergsShowHiddenIcons",
+      "icebergsThreshold",
+      "icebergsTimeAreaMultiplier",
+      "showIcebergs",
+      "showIcebergsNumber"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/a/d.class",
+    "strings": [
+      "Apply size threshold to active (partially filled) icebergs",
+      "Icebergs visual settings"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/a/e.class",
+    "strings": [
+      "\u0001;stopsHiddenTransparency",
+      "\u0001;stopsShowHiddenIcons",
+      "stopsHiddenTransparency",
+      "stopsShowHiddenIcons"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/b/s.class",
+    "strings": [
+      "onDepth",
+      "onTrade"
+    ]
+  },
+  {
+    "class": "org/json/JSONObject.class",
+    "strings": [
+      "getAnnotationDepth"
+    ]
+  },
+  {
+    "class": "com/fasterxml/jackson/core/JsonFactory.class",
+    "strings": [
+      "canHandleBinaryNatively"
+    ]
+  },
+  {
+    "class": "com/fasterxml/jackson/core/JsonGenerator.class",
+    "strings": [
+      "No native support for writing Object Ids",
+      "No native support for writing Type Ids",
+      "No native support for writing embedded objects of type ",
+      "canWriteBinaryNatively"
+    ]
+  },
+  {
+    "class": "com/fasterxml/jackson/core/json/ByteSourceJsonBootstrapper.class",
+    "strings": [
+      "ensureLoaded"
+    ]
+  },
+  {
+    "class": "com/fasterxml/jackson/core/util/JsonGeneratorDelegate.class",
+    "strings": [
+      "canWriteBinaryNatively"
+    ]
+  },
+  {
+    "class": "javassist/CtClassType.class",
+    "strings": [
+      "getHiddenMethods",
+      "hiddenMethods"
+    ]
+  },
+  {
+    "class": "javassist/CtNewWrappedMethod.class",
+    "strings": [
+      "getHiddenMethods",
+      "javassist/bytecode/SyntheticAttribute"
+    ]
+  },
+  {
+    "class": "javassist/Modifier.class",
+    "strings": [
+      "NATIVE",
+      "isNative"
+    ]
+  },
+  {
+    "class": "javassist/bytecode/AccessFlag.class",
+    "strings": [
+      "NATIVE",
+      "SYNTHETIC"
+    ]
+  },
+  {
+    "class": "javassist/bytecode/AttributeInfo.class",
+    "strings": [
+      "Synthetic",
+      "javassist/bytecode/SyntheticAttribute"
+    ]
+  },
+  {
+    "class": "javassist/bytecode/SyntheticAttribute.class",
+    "strings": [
+      "Synthetic",
+      "javassist/bytecode/SyntheticAttribute"
+    ]
+  },
+  {
+    "class": "javassist/compiler/AccessorMaker.class",
+    "strings": [
+      "javassist/bytecode/SyntheticAttribute"
+    ]
+  },
+  {
+    "class": "javassist/compiler/Lex.class",
+    "strings": [
+      "native"
+    ]
+  },
+  {
+    "class": "javassist/compiler/TokenId.class",
+    "strings": [
+      "NATIVE"
+    ]
+  },
+  {
+    "class": "javassist/tools/reflect/Reflection.class",
+    "strings": [
+      "isNative"
+    ]
+  },
+  {
+    "class": "javassist/tools/rmi/StubGenerator.class",
+    "strings": [
+      " must be public, non-native, and non-abstract.",
+      "isNative"
+    ]
+  },
+  {
+    "class": "javassist/util/HotSwapper.class",
+    "strings": [
+      "failed to reload: ",
+      "reload",
+      "reload2"
+    ]
+  },
+  {
+    "class": "org/objenesis/instantiator/basic/ClassDefinitionUtils.class",
+    "strings": [
+      "ACC_SYNTHETIC"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/broadcasting/EventInterface.class",
+    "strings": [
+      "getOrderId"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/broadcasting/SitSettings.class",
+    "strings": [
+      "getIcebergsAggThreshold",
+      "getIcebergsAlertSdInterval",
+      "getIcebergsAlertSdMultiplier",
+      "getIcebergsAlertTemplate",
+      "getIcebergsAlertThreshold",
+      "getIcebergsAskColor",
+      "getIcebergsBidColor",
+      "getIcebergsHiddenAskColor",
+      "getIcebergsHiddenBidColor",
+      "getIcebergsHiddenTransparency",
+      "getIcebergsIconsHeight",
+      "getIcebergsIconsOffset",
+      "getIcebergsOffsetLineWidth",
+      "getIcebergsOrderLineWidth",
+      "getIcebergsPriceAreaMultiplier",
+      "getIcebergsSdInterval",
+      "getIcebergsSdMultiplier",
+      "getIcebergsThreshold",
+      "getIcebergsTimeAreaMultiplier",
+      "getStopsHiddenAskColor",
+      "getStopsHiddenBidColor",
+      "getStopsHiddenTransparency",
+      "icebergsAggThreshold",
+      "icebergsAlertAutoThreshold",
+      "icebergsAlertEnabled",
+      "icebergsAlertSdInterval",
+      "icebergsAlertSdMultiplier",
+      "icebergsAlertTemplate",
+      "icebergsAlertThreshold",
+      "icebergsAskColor",
+      "icebergsAutoThreshold",
+      "icebergsBidColor",
+      "icebergsHiddenAskColor",
+      "icebergsHiddenBidColor",
+      "icebergsHiddenTransparency",
+      "icebergsIconsHeight",
+      "icebergsIconsOffset",
+      "icebergsNotAggregated",
+      "icebergsOffsetLineWidth",
+      "icebergsOrderLineWidth",
+      "icebergsPriceAreaMultiplier",
+      "icebergsSdInterval",
+      "icebergsSdMultiplier",
+      "icebergsShowHiddenIcons",
+      "icebergsThreshold",
+      "icebergsTimeAreaMultiplier",
+      "isIcebergsAlertAutoThreshold",
+      "isIcebergsAlertEnabled",
+      "isIcebergsAutoThreshold",
+      "isIcebergsNotAggregated",
+      "isIcebergsShowHiddenIcons",
+      "isShowIcebergs",
+      "isShowIcebergsNumber",
+      "isStopsShowHiddenIcons",
+      "isTelegramIsEnabledForIcebergs",
+      "showIcebergs",
+      "showIcebergsNumber",
+      "stopsHiddenAskColor",
+      "stopsHiddenBidColor",
+      "stopsHiddenTransparency",
+      "stopsShowHiddenIcons",
+      "telegramIsEnabledForIcebergs"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/broadcasting/implementations/IcebergEvent.class",
+    "strings": [
+      "IcebergEvent{orderId=\u0001, type=\u0001, time=\u0001, dateTime=\u0001, price=\u0001, size=\u0001, totalSize=\u0001, isBid=\u0001}",
+      "getOrderId",
+      "orderId",
+      "velox/indicators/sionchart/broadcasting/implementations/IcebergEvent"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/broadcasting/implementations/StopEvent.class",
+    "strings": [
+      "StopEvent{orderId=\u0001, type=\u0001, time=\u0001, dateTime=\u0001, price=\u0001, size=\u0001, totalSize=\u0001, isBid=\u0001}",
+      "getOrderId",
+      "orderId"
+    ]
+  },
+  {
+    "class": "velox/indicators/sionchart/broadcasting/implementations/ThresholdFilter.class",
+    "strings": [
+      "icebergThreshold",
+      "velox/indicators/sionchart/broadcasting/implementations/IcebergEvent"
+    ]
+  }
+]

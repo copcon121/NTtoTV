@@ -90,6 +90,7 @@ from ..engines.sweep_reversal import (
     SWEEP_REVERSAL_TIMEFRAMES,
 )
 from ..models.timestamp import now_ms
+from ..engines.smc_fail_break import FAIL_BREAK_DEFAULTS, SMC_FAIL_BREAK_RETEST
 from ..storage.cache_store import CacheStore
 from ..storage.records import AlertRecord
 from .contract_state import ContractStateStore
@@ -151,6 +152,10 @@ def _canonical_alert_type(alert_type: str) -> str:
 
 def _canonical_alert_params(alert_type: str, params: dict[str, Any]) -> dict[str, Any]:
     out = dict(params)
+    if alert_type == SMC_FAIL_BREAK_RETEST:
+        out = {**FAIL_BREAK_DEFAULTS, **out}
+        out.pop("minDisplacementTicks", None)
+        out.pop("retestToleranceTicks", None)
     if alert_type == MGANN_BIG_TRADE_SWEEP:
         out["requireBigTrade"] = True
     elif alert_type == MGANN_SWEEP:
@@ -215,6 +220,24 @@ def _validate_params(alert_type: str, params: Any) -> dict[str, Any]:
         params["maxBars"] = SMC_DEFAULT_MAX_BARS
         params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
         params["retestToleranceTicks"] = SMC_DEFAULT_RETEST_TOLERANCE_TICKS
+    elif alert_type == SMC_FAIL_BREAK_RETEST:
+        params.pop("minDisplacementTicks", None)
+        params.pop("retestToleranceTicks", None)
+        params = {**FAIL_BREAK_DEFAULTS, **params}
+        if params["timeframe"] != "1m":
+            raise validation_error("fail break retest supports M1", field="timeframe")
+        for key, minimum, maximum in (
+            ("swingLength", 1, 500), ("maxBars", 3, 2000),
+        ):
+            value = params[key]
+            if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+                raise validation_error(f"'{key}' must be an integer from {minimum} to {maximum}", field=key)
+        if not isinstance(params["useChartSmc"], bool):
+            raise validation_error("'useChartSmc' must be a boolean", field="useChartSmc")
+        if not isinstance(params["requirePb"], bool):
+            raise validation_error("'requirePb' must be a boolean", field="requirePb")
+        if params["direction"] not in ("both", "long", "short"):
+            raise validation_error("'direction' must be both, long or short", field="direction")
     elif alert_type == SWEEP_REVERSAL:
         timeframe = params.get("timeframe", "1m")
         if not isinstance(timeframe, str) or timeframe not in SWEEP_REVERSAL_TIMEFRAMES:
@@ -588,7 +611,8 @@ async def list_alerts(
 ) -> dict[str, Any]:
     """Return the configured alerts. (Req 18.8)"""
     profile_id = _normalize_profile_id(profile_id)
-    return {"alerts": [_alert_to_dict(a) for a in cache.read_alerts(profile_id=profile_id)]}
+    return {"alerts": [_alert_to_dict(a) for a in cache.read_alerts(profile_id=profile_id)
+                       if not a.params.get("mpDeletedAt")]}
 
 
 @router.post("/alerts", status_code=201)
@@ -657,7 +681,7 @@ async def update_alert(
     """
     profile_id = _normalize_profile_id(profile_id)
     existing = cache.read_alert(alert_id, profile_id)
-    if existing is None:
+    if existing is None or existing.params.get("mpDeletedAt"):
         raise not_found(f"Unknown alert id {alert_id!r}", field="id")
 
     try:
@@ -696,6 +720,19 @@ async def delete_alert(
     Unknown ids yield a 404 so the client learns the resource did not exist.
     """
     profile_id = _normalize_profile_id(profile_id)
+    existing = cache.read_alert(alert_id, profile_id)
+    if existing is not None and existing.params.get("source") == "mp_plan":
+        # Keep a disabled tombstone so planner reconciliation cannot recreate
+        # the alert, while its plan links and event history remain readable.
+        existing.enabled = False
+        existing.params["mpDeletedAt"] = now_ms()
+        existing.params.pop("mpPaused", None)
+        existing.updated_at = now_ms()
+        cache.upsert_alert(existing)
+        engine = _runtime_alert_engine(request)
+        if engine is not None:
+            engine.upsert(Alert.from_record(existing))
+        return Response(status_code=204)
     removed = cache.delete_alert(alert_id, profile_id)
     if not removed:
         raise not_found(f"Unknown alert id {alert_id!r}", field="id")

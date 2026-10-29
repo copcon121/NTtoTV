@@ -23,7 +23,7 @@ import {
   smcComputationBars,
 } from "./index";
 import { type BigTradeMarker } from "./indicatorReducer";
-import { DEFAULT_SMC_SETTINGS } from "./smc";
+import { DEFAULT_SMC_SETTINGS, computeSmcOverlay } from "./smc";
 import type { BarSeries } from "./index";
 import { type Bar } from "../cache/types";
 import { ChartSocket, SocketReadyState, type WebSocketLike } from "../socket";
@@ -1309,8 +1309,21 @@ describe("ChartContainer", () => {
       ohlc(index * 300_000, 10, 11, 9, 10),
     );
 
-    expect(smcComputationBars(rows, "5m", DEFAULT_SMC_SETTINGS)).toHaveLength(288);
-    expect(smcComputationBars(rows, "1h", DEFAULT_SMC_SETTINGS)).toHaveLength(122);
+    expect(smcComputationBars(rows, "1m", DEFAULT_SMC_SETTINGS)).toHaveLength(1440);
+    expect(smcComputationBars(rows, "5m", DEFAULT_SMC_SETTINGS)).toBe(rows);
+    expect(smcComputationBars(rows, "1h", DEFAULT_SMC_SETTINGS)).toBe(rows);
+  });
+
+  it.each(["3m", "5m", "15m", "1h", "4h"] as const)("preserves older external SMC structure on %s", (tf) => {
+    const rows = Array.from({ length: 800 }, (_, i) =>
+      ohlc(i * 300_000, i > 201 ? 112 : 100, i > 201 ? 113 : 101, i > 201 ? 111 : 99, i > 201 ? 112 : 100),
+    );
+    rows[1] = ohlc(300_000, 100, 110, 90, 100);
+    const settings = { ...DEFAULT_SMC_SETTINGS, enabled: true };
+    const truncated = computeSmcOverlay(rows.slice(-302), settings);
+    const complete = computeSmcOverlay(smcComputationBars(rows, tf, settings), settings);
+    expect(truncated.lines.filter((line) => line.kind === "structure")).toHaveLength(0);
+    expect(complete.lines.some((line) => line.kind === "structure")).toBe(true);
   });
 
   it("refreshes SMC only after the chart timeframe bar closes", () => {

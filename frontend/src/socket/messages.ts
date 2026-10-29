@@ -34,6 +34,7 @@ export type ChartEventType =
   | "fvg_signal_update"
   | "tdu_signal_update"
   | "liquidity_update"
+  | "iceberg_update"
   | "market_explorer_update"
   | "trend_analyzer_update"
   | "big_trade"
@@ -48,6 +49,34 @@ export type ChartEventType =
 
 /** Order-flow / status side discriminator used across several messages. */
 export type Side = "buy" | "sell";
+
+/** Direct Rithmic MBO detection; side is the passive order's side. */
+export interface NativeIcebergState {
+  symbol: string;
+  contract: string;
+  source: "rithmic";
+  sourceContract: string;
+  sessionId: string;
+  orderId: string;
+  side: Side;
+  price: number;
+  time: number;
+  firstSeenTime: number;
+  detectedTime: number;
+  lastTradeTime: number | null;
+  endTime: number | null;
+  executedVolume: number;
+  displayedSize: number;
+  refillCount: number;
+  status: "active" | "executed" | "canceled" | "invalidated";
+  detectionReason: "overfill" | "refill";
+  sequence: number;
+  method: "native";
+}
+
+export interface IcebergUpdateMessage extends NativeIcebergState {
+  type: "iceberg_update";
+}
 
 /**
  * Footprint imbalance side: which side of the bid-by-ask ladder is imbalanced
@@ -337,6 +366,14 @@ export interface MarketDataStatusMessage {
   switchedAt?: number | null;
   reason?: string | null;
   sources: Record<string, MarketDataSourceStatus>;
+  historySync?: {
+    state: string;
+    connected: boolean;
+    highWatermark?: number | null;
+    lastSuccessAt?: number | null;
+    pendingRanges?: number[][];
+    lastError?: string | null;
+  };
 }
 
 /** Alert firing event (Req 5.2, 17.2). */
@@ -506,6 +543,7 @@ export type InboundMessage =
   | FvgSignalUpdateMessage
   | TduSignalUpdateMessage
   | LiquidityUpdateMessage
+  | IcebergUpdateMessage
   | MarketExplorerUpdateMessage
   | TrendAnalyzerUpdateMessage
   | BigTradeMessage

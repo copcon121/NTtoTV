@@ -1,0 +1,471 @@
+﻿Compiled from "SourceFile"
+public class velox.indicators.sionchart.e {
+  public static final java.awt.Color AGGREGATION_LINE_DEFAULT_COLOR;
+
+  public java.awt.Color icebergsAskColor;
+
+  public java.awt.Color icebergsBidColor;
+
+  private java.awt.Color icebergsHiddenAskColor;
+
+  private java.awt.Color icebergsHiddenBidColor;
+
+  public int icebergsIconsHeight;
+
+  public int icebergsIconsOffset;
+
+  public int icebergsOrderLineWidth;
+
+  public int icebergsOffsetLineWidth;
+
+  public int icebergsThreshold;
+
+  public int icebergsAggThreshold;
+
+  public int icebergsPriceAreaMultiplier;
+
+  public int icebergsTimeAreaMultiplier;
+
+  public boolean showIcebergs;
+
+  public boolean showDetection;
+
+  public boolean showTrades;
+
+  public boolean showExecution;
+
+  public boolean showCancellation;
+
+  public boolean showActive;
+
+  public boolean showTotals;
+
+  public boolean showLetters;
+
+  public boolean showEventVolumes;
+
+  public boolean applyThresholdToActive;
+
+  public boolean icebergsAutoThreshold;
+
+  public boolean showIcebergsNumber;
+
+  public boolean aggregateEC;
+
+  public int icebergsSdInterval;
+
+  public double icebergsSdMultiplier;
+
+  public boolean icebergsAlertEnabled;
+
+  public boolean icebergsPopupEnabled;
+
+  public java.lang.String icebergsAlertTemplate;
+
+  public int icebergsAlertThreshold;
+
+  public boolean icebergsAlertAutoThreshold;
+
+  public int icebergsAlertSdInterval;
+
+  public double icebergsAlertSdMultiplier;
+
+  public boolean icebergsShowHiddenIcons;
+
+  public int icebergsHiddenTransparency;
+
+  public boolean icebergsNotAggregated;
+
+  public java.awt.Color stopsAskColor;
+
+  public java.awt.Color stopsBidColor;
+
+  public java.awt.Color stopsHiddenAskColor;
+
+  public java.awt.Color stopsHiddenBidColor;
+
+  public int stopsIconsHeight;
+
+  public int stopsIconsOffset;
+
+  public int stopsOrderLineWidth;
+
+  public int stopsOffsetLineWidth;
+
+  public int stopsThreshold;
+
+  public int stopsAggThreshold;
+
+  public int stopsPriceAreaMultiplier;
+
+  public int stopsTimeAreaMultiplier;
+
+  public boolean showStops;
+
+  public boolean showStopsTotals;
+
+  public boolean showStopsNumber;
+
+  public boolean stopsAutoThreshold;
+
+  public int stopsSdInterval;
+
+  public double stopsSdMultiplier;
+
+  public boolean stopsAlertEnabled;
+
+  public boolean stopsPopupEnabled;
+
+  public java.lang.String stopsAlertTemplate;
+
+  public int stopsAlertThreshold;
+
+  public boolean stopsAlertAutoThreshold;
+
+  public int stopsAlertSdInterval;
+
+  public double stopsAlertSdMultiplier;
+
+  public boolean stopsShowHiddenIcons;
+
+  public int stopsHiddenTransparency;
+
+  public boolean showOnlyStopsTBPL;
+
+  public boolean showOnlyStopsTBPLAlerts;
+
+  public boolean stopsNotAggregated;
+
+  public boolean showAggregationLines;
+
+  public java.awt.Color aggregationLineColor;
+
+  public velox.indicators.sionchart.TelegramSettingsExtended telegramSettings;
+
+  public velox.indicators.sionchart.e();
+    Code:
+       0: aload_0
+       1: invokespecial #90                 // Method java/lang/Object."<init>":()V
+       4: aload_0
+       5: getstatic     #82                 // Field velox/indicators/sionchart/m.a:Ljava/awt/Color;
+       8: putfield      #22                 // Field icebergsAskColor:Ljava/awt/Color;
+      11: aload_0
+      12: getstatic     #83                 // Field velox/indicators/sionchart/m.b:Ljava/awt/Color;
+      15: putfield      #24                 // Field icebergsBidColor:Ljava/awt/Color;
+      18: aload_0
+      19: bipush        17
+      21: putfield      #28                 // Field icebergsIconsHeight:I
+      24: aload_0
+      25: bipush        120
+      27: putfield      #29                 // Field icebergsIconsOffset:I
+      30: aload_0
+      31: iconst_3
+      32: putfield      #32                 // Field icebergsOrderLineWidth:I
+      35: aload_0
+      36: iconst_2
+      37: putfield      #31                 // Field icebergsOffsetLineWidth:I
+      40: aload_0
+      41: iconst_0
+      42: putfield      #38                 // Field icebergsThreshold:I
+      45: aload_0
+      46: iconst_0
+      47: putfield      #15                 // Field icebergsAggThreshold:I
+      50: aload_0
+      51: sipush        200
+      54: putfield      #34                 // Field icebergsPriceAreaMultiplier:I
+      57: aload_0
+      58: bipush        10
+      60: putfield      #39                 // Field icebergsTimeAreaMultiplier:I
+      63: aload_0
+      64: iconst_1
+      65: putfield      #46                 // Field showIcebergs:Z
+      68: aload_0
+      69: iconst_0
+      70: putfield      #43                 // Field showDetection:Z
+      73: aload_0
+      74: iconst_0
+      75: putfield      #55                 // Field showTrades:Z
+      78: aload_0
+      79: iconst_1
+      80: putfield      #45                 // Field showExecution:Z
+      83: aload_0
+      84: iconst_1
+      85: putfield      #42                 // Field showCancellation:Z
+      88: aload_0
+      89: iconst_1
+      90: putfield      #40                 // Field showActive:Z
+      93: aload_0
+      94: iconst_1
+      95: putfield      #54                 // Field showTotals:Z
+      98: aload_0
+      99: iconst_0
+     100: putfield      #48                 // Field showLetters:Z
+     103: aload_0
+     104: iconst_0
+     105: putfield      #44                 // Field showEventVolumes:Z
+     108: aload_0
+     109: iconst_0
+     110: putfield      #14                 // Field applyThresholdToActive:Z
+     113: aload_0
+     114: iconst_0
+     115: putfield      #23                 // Field icebergsAutoThreshold:Z
+     118: aload_0
+     119: iconst_0
+     120: putfield      #47                 // Field showIcebergsNumber:Z
+     123: aload_0
+     124: iconst_1
+     125: putfield      #12                 // Field aggregateEC:Z
+     128: aload_0
+     129: bipush        60
+     131: putfield      #35                 // Field icebergsSdInterval:I
+     134: aload_0
+     135: dconst_1
+     136: putfield      #36                 // Field icebergsSdMultiplier:D
+     139: aload_0
+     140: iconst_0
+     141: putfield      #17                 // Field icebergsAlertEnabled:Z
+     144: aload_0
+     145: iconst_0
+     146: putfield      #33                 // Field icebergsPopupEnabled:Z
+     149: aload_0
+     150: ldc           #2                  // String Iceberg $INSTR $SIDE at $PRICE crossed $THRESHOLD
+     152: putfield      #20                 // Field icebergsAlertTemplate:Ljava/lang/String;
+     155: aload_0
+     156: bipush        10
+     158: putfield      #21                 // Field icebergsAlertThreshold:I
+     161: aload_0
+     162: iconst_0
+     163: putfield      #16                 // Field icebergsAlertAutoThreshold:Z
+     166: aload_0
+     167: bipush        60
+     169: putfield      #18                 // Field icebergsAlertSdInterval:I
+     172: aload_0
+     173: dconst_1
+     174: putfield      #19                 // Field icebergsAlertSdMultiplier:D
+     177: aload_0
+     178: iconst_1
+     179: putfield      #37                 // Field icebergsShowHiddenIcons:Z
+     182: aload_0
+     183: bipush        85
+     185: putfield      #27                 // Field icebergsHiddenTransparency:I
+     188: aload_0
+     189: iconst_0
+     190: putfield      #30                 // Field icebergsNotAggregated:Z
+     193: aload_0
+     194: getstatic     #84                 // Field velox/indicators/sionchart/m.c:Ljava/awt/Color;
+     197: putfield      #63                 // Field stopsAskColor:Ljava/awt/Color;
+     200: aload_0
+     201: getstatic     #85                 // Field velox/indicators/sionchart/m.d:Ljava/awt/Color;
+     204: putfield      #65                 // Field stopsBidColor:Ljava/awt/Color;
+     207: aload_0
+     208: bipush        17
+     210: putfield      #69                 // Field stopsIconsHeight:I
+     213: aload_0
+     214: bipush        80
+     216: putfield      #70                 // Field stopsIconsOffset:I
+     219: aload_0
+     220: iconst_3
+     221: putfield      #73                 // Field stopsOrderLineWidth:I
+     224: aload_0
+     225: iconst_2
+     226: putfield      #72                 // Field stopsOffsetLineWidth:I
+     229: aload_0
+     230: iconst_0
+     231: putfield      #79                 // Field stopsThreshold:I
+     234: aload_0
+     235: iconst_0
+     236: putfield      #56                 // Field stopsAggThreshold:I
+     239: aload_0
+     240: sipush        200
+     243: putfield      #75                 // Field stopsPriceAreaMultiplier:I
+     246: aload_0
+     247: bipush        10
+     249: putfield      #80                 // Field stopsTimeAreaMultiplier:I
+     252: aload_0
+     253: iconst_1
+     254: putfield      #51                 // Field showStops:Z
+     257: aload_0
+     258: iconst_1
+     259: putfield      #53                 // Field showStopsTotals:Z
+     262: aload_0
+     263: iconst_0
+     264: putfield      #52                 // Field showStopsNumber:Z
+     267: aload_0
+     268: iconst_0
+     269: putfield      #64                 // Field stopsAutoThreshold:Z
+     272: aload_0
+     273: bipush        60
+     275: putfield      #76                 // Field stopsSdInterval:I
+     278: aload_0
+     279: dconst_1
+     280: putfield      #77                 // Field stopsSdMultiplier:D
+     283: aload_0
+     284: iconst_0
+     285: putfield      #58                 // Field stopsAlertEnabled:Z
+     288: aload_0
+     289: iconst_0
+     290: putfield      #74                 // Field stopsPopupEnabled:Z
+     293: aload_0
+     294: ldc           #3                  // String Stop $INSTR $SIDE at $PRICE volume $VOLUME
+     296: putfield      #61                 // Field stopsAlertTemplate:Ljava/lang/String;
+     299: aload_0
+     300: bipush        10
+     302: putfield      #62                 // Field stopsAlertThreshold:I
+     305: aload_0
+     306: iconst_0
+     307: putfield      #57                 // Field stopsAlertAutoThreshold:Z
+     310: aload_0
+     311: bipush        60
+     313: putfield      #59                 // Field stopsAlertSdInterval:I
+     316: aload_0
+     317: dconst_1
+     318: putfield      #60                 // Field stopsAlertSdMultiplier:D
+     321: aload_0
+     322: iconst_1
+     323: putfield      #78                 // Field stopsShowHiddenIcons:Z
+     326: aload_0
+     327: bipush        85
+     329: putfield      #68                 // Field stopsHiddenTransparency:I
+     332: aload_0
+     333: iconst_0
+     334: putfield      #49                 // Field showOnlyStopsTBPL:Z
+     337: aload_0
+     338: iconst_0
+     339: putfield      #50                 // Field showOnlyStopsTBPLAlerts:Z
+     342: aload_0
+     343: iconst_0
+     344: putfield      #71                 // Field stopsNotAggregated:Z
+     347: aload_0
+     348: iconst_1
+     349: putfield      #41                 // Field showAggregationLines:Z
+     352: aload_0
+     353: getstatic     #11                 // Field AGGREGATION_LINE_DEFAULT_COLOR:Ljava/awt/Color;
+     356: putfield      #13                 // Field aggregationLineColor:Ljava/awt/Color;
+     359: aload_0
+     360: new           #6                  // class velox/indicators/sionchart/TelegramSettingsExtended
+     363: dup
+     364: invokespecial #91                 // Method velox/indicators/sionchart/TelegramSettingsExtended."<init>":()V
+     367: putfield      #81                 // Field telegramSettings:Lvelox/indicators/sionchart/TelegramSettingsExtended;
+     370: return
+
+  private int getAlphaByTransparency(int);
+    Code:
+       0: bipush        100
+       2: iload_1
+       3: isub
+       4: i2d
+       5: ldc2_w        #9                  // double 2.55d
+       8: dmul
+       9: d2i
+      10: ireturn
+
+  public java.awt.Color getStopsHiddenAskColor();
+    Code:
+       0: aload_0
+       1: getfield      #66                 // Field stopsHiddenAskColor:Ljava/awt/Color;
+       4: areturn
+
+  public java.awt.Color getStopsHiddenBidColor();
+    Code:
+       0: aload_0
+       1: getfield      #67                 // Field stopsHiddenBidColor:Ljava/awt/Color;
+       4: areturn
+
+  public java.awt.Color getIcebergsHiddenAskColor();
+    Code:
+       0: aload_0
+       1: getfield      #25                 // Field icebergsHiddenAskColor:Ljava/awt/Color;
+       4: areturn
+
+  public java.awt.Color getIcebergsHiddenBidColor();
+    Code:
+       0: aload_0
+       1: getfield      #26                 // Field icebergsHiddenBidColor:Ljava/awt/Color;
+       4: areturn
+
+  public void setHiddenColors();
+    Code:
+       0: aload_0
+       1: aload_0
+       2: getfield      #27                 // Field icebergsHiddenTransparency:I
+       5: invokevirtual #92                 // Method getAlphaByTransparency:(I)I
+       8: istore_1
+       9: aload_0
+      10: aload_0
+      11: getfield      #68                 // Field stopsHiddenTransparency:I
+      14: invokevirtual #92                 // Method getAlphaByTransparency:(I)I
+      17: istore_2
+      18: aload_0
+      19: new           #4                  // class java/awt/Color
+      22: dup
+      23: aload_0
+      24: getfield      #22                 // Field icebergsAskColor:Ljava/awt/Color;
+      27: invokevirtual #89                 // Method java/awt/Color.getRed:()I
+      30: aload_0
+      31: getfield      #22                 // Field icebergsAskColor:Ljava/awt/Color;
+      34: invokevirtual #88                 // Method java/awt/Color.getGreen:()I
+      37: aload_0
+      38: getfield      #22                 // Field icebergsAskColor:Ljava/awt/Color;
+      41: invokevirtual #87                 // Method java/awt/Color.getBlue:()I
+      44: iload_1
+      45: invokespecial #86                 // Method java/awt/Color."<init>":(IIII)V
+      48: putfield      #25                 // Field icebergsHiddenAskColor:Ljava/awt/Color;
+      51: aload_0
+      52: new           #4                  // class java/awt/Color
+      55: dup
+      56: aload_0
+      57: getfield      #24                 // Field icebergsBidColor:Ljava/awt/Color;
+      60: invokevirtual #89                 // Method java/awt/Color.getRed:()I
+      63: aload_0
+      64: getfield      #24                 // Field icebergsBidColor:Ljava/awt/Color;
+      67: invokevirtual #88                 // Method java/awt/Color.getGreen:()I
+      70: aload_0
+      71: getfield      #24                 // Field icebergsBidColor:Ljava/awt/Color;
+      74: invokevirtual #87                 // Method java/awt/Color.getBlue:()I
+      77: iload_1
+      78: invokespecial #86                 // Method java/awt/Color."<init>":(IIII)V
+      81: putfield      #26                 // Field icebergsHiddenBidColor:Ljava/awt/Color;
+      84: aload_0
+      85: new           #4                  // class java/awt/Color
+      88: dup
+      89: aload_0
+      90: getfield      #63                 // Field stopsAskColor:Ljava/awt/Color;
+      93: invokevirtual #89                 // Method java/awt/Color.getRed:()I
+      96: aload_0
+      97: getfield      #63                 // Field stopsAskColor:Ljava/awt/Color;
+     100: invokevirtual #88                 // Method java/awt/Color.getGreen:()I
+     103: aload_0
+     104: getfield      #63                 // Field stopsAskColor:Ljava/awt/Color;
+     107: invokevirtual #87                 // Method java/awt/Color.getBlue:()I
+     110: iload_2
+     111: invokespecial #86                 // Method java/awt/Color."<init>":(IIII)V
+     114: putfield      #66                 // Field stopsHiddenAskColor:Ljava/awt/Color;
+     117: aload_0
+     118: new           #4                  // class java/awt/Color
+     121: dup
+     122: aload_0
+     123: getfield      #65                 // Field stopsBidColor:Ljava/awt/Color;
+     126: invokevirtual #89                 // Method java/awt/Color.getRed:()I
+     129: aload_0
+     130: getfield      #65                 // Field stopsBidColor:Ljava/awt/Color;
+     133: invokevirtual #88                 // Method java/awt/Color.getGreen:()I
+     136: aload_0
+     137: getfield      #65                 // Field stopsBidColor:Ljava/awt/Color;
+     140: invokevirtual #87                 // Method java/awt/Color.getBlue:()I
+     143: iload_2
+     144: invokespecial #86                 // Method java/awt/Color."<init>":(IIII)V
+     147: putfield      #67                 // Field stopsHiddenBidColor:Ljava/awt/Color;
+     150: return
+
+  static {};
+    Code:
+       0: new           #4                  // class java/awt/Color
+       3: dup
+       4: sipush        255
+       7: sipush        255
+      10: iconst_0
+      11: sipush        128
+      14: invokespecial #86                 // Method java/awt/Color."<init>":(IIII)V
+      17: putstatic     #11                 // Field AGGREGATION_LINE_DEFAULT_COLOR:Ljava/awt/Color;
+      20: return
+}

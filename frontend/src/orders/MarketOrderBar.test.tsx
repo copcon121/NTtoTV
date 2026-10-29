@@ -12,6 +12,25 @@ const settings = {
 };
 
 describe("MarketOrderBar", () => {
+  it("ignores the second click of a double-click on a market entry button", () => {
+    const onMarketOrder = vi.fn();
+    render(
+      <MarketOrderBar
+        account={{ accountId: "a", login: 1, server: "Fake", tradeMode: "demo" }}
+        openOrderCount={0}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={onMarketOrder}
+      />,
+    );
+    const buy = screen.getByRole("button", { name: "BUY" });
+    fireEvent.click(buy, { detail: 1 });
+    fireEvent.click(buy, { detail: 2 });
+    expect(onMarketOrder).toHaveBeenCalledTimes(1);
+    fireEvent.click(buy, { detail: 1 });
+    expect(onMarketOrder).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the bottom login action hidden when the user is not authenticated", () => {
     render(
       <MarketOrderBar
@@ -98,8 +117,7 @@ describe("MarketOrderBar", () => {
     expect(onMarketOrder).toHaveBeenNthCalledWith(2, "buy");
   });
 
-  it("offers independent Auto L and Auto S toggles using the configured lots", () => {
-    const onAutoTradeSettingsChange = vi.fn();
+  it("keeps manual trading controls without Auto L or Auto S toggles", () => {
     render(
       <MarketOrderBar
         account={{
@@ -115,40 +133,15 @@ describe("MarketOrderBar", () => {
         settings={settings}
         onSettingsChange={vi.fn()}
         onMarketOrder={vi.fn()}
-        autoTradeSettings={{
-          longEnabled: false,
-          shortEnabled: false,
-          volumeLots: 0.1,
-          updatedAt: 1,
-        }}
-        onAutoTradeSettingsChange={onAutoTradeSettingsChange}
       />,
     );
 
-    expect(screen.queryByText(/BOS\/CHoCH/)).not.toBeInTheDocument();
-    expect(screen.getByText("Auto L").closest("label")).toHaveAttribute(
-      "title",
-      expect.stringContaining("close 50% at +1R"),
-    );
-    expect(screen.getByText("Auto S").closest("label")).toHaveAttribute(
-      "title",
-      expect.stringContaining("remaining 50% at +3R"),
-    );
-    fireEvent.click(screen.getByLabelText("Auto trade L"));
-    fireEvent.click(screen.getByLabelText("Auto trade S"));
-
-    expect(onAutoTradeSettingsChange).toHaveBeenNthCalledWith(1, {
-      longEnabled: true,
-      shortEnabled: false,
-      volumeLots: 0.1,
-      updatedAt: 1,
-    });
-    expect(onAutoTradeSettingsChange).toHaveBeenNthCalledWith(2, {
-      longEnabled: false,
-      shortEnabled: true,
-      volumeLots: 0.1,
-      updatedAt: 1,
-    });
+    expect(screen.queryByLabelText("Auto trade L")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Auto trade S")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "SELL" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "BUY" })).toBeEnabled();
+    expect(screen.getByLabelText("Take profit 50% at 1R")).toBeInTheDocument();
+    expect(screen.getByLabelText("Auto SuperTrend trailing after 1R")).toBeInTheDocument();
   });
 
   it("toggles automatic 50% take profit at 1R", () => {
@@ -169,6 +162,26 @@ describe("MarketOrderBar", () => {
       ...settings,
       takeProfit1rEnabled: false,
     });
+  });
+
+  it("accepts a custom R target and shows the same target for SuperTrend", () => {
+    const onSettingsChange = vi.fn();
+    render(
+      <MarketOrderBar
+        openOrderCount={0}
+        settings={{ ...settings, takeProfitR: 2.5 }}
+        onSettingsChange={onSettingsChange}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText("Take profit 50% at 2.5R")).toBeChecked();
+    expect(screen.getByText("ST @ 2.5R")).toBeInTheDocument();
+    const input = screen.getByLabelText("R");
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "1,5" } });
+    fireEvent.blur(input);
+    expect(onSettingsChange).toHaveBeenCalledWith({ ...settings, takeProfitR: 1.5 });
   });
 
   it("toggles SuperTrend trailing for the remainder after 1R", () => {

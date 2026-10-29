@@ -5,6 +5,7 @@ export interface SmcSettings {
   swingLength: number;
   internalLength: number;
   showInternal: boolean;
+  showSwingLabels: boolean;
   showZones: boolean;
   showLiquidity: boolean;
   showSwingFibLevels: boolean;
@@ -34,6 +35,7 @@ export const DEFAULT_SMC_SETTINGS: SmcSettings = {
   swingLength: 50,
   internalLength: 5,
   showInternal: true,
+  showSwingLabels: true,
   showZones: true,
   showLiquidity: true,
   showSwingFibLevels: false,
@@ -1375,6 +1377,7 @@ function pushStateMarkers(
   state: StructureState,
   bar: Bar,
   showInternal: boolean,
+  showSwingLabels: boolean,
 ): void {
   if (state.bosBull) {
     addMarker(markers, {
@@ -1413,7 +1416,7 @@ function pushStateMarkers(
     });
   }
 
-  if (state.swingHh && state.swingHigh) {
+  if (showSwingLabels && state.swingHh && state.swingHigh) {
     addMarker(markers, {
       time: state.swingHigh.timestamp,
       price: state.swingHigh.price,
@@ -1423,7 +1426,7 @@ function pushStateMarkers(
       kind: "swing_label",
     });
   }
-  if (state.swingLh && state.swingHigh) {
+  if (showSwingLabels && state.swingLh && state.swingHigh) {
     addMarker(markers, {
       time: state.swingHigh.timestamp,
       price: state.swingHigh.price,
@@ -1433,7 +1436,7 @@ function pushStateMarkers(
       kind: "swing_label",
     });
   }
-  if (state.swingHl && state.swingLow) {
+  if (showSwingLabels && state.swingHl && state.swingLow) {
     addMarker(markers, {
       time: state.swingLow.timestamp,
       price: state.swingLow.price,
@@ -1443,7 +1446,7 @@ function pushStateMarkers(
       kind: "swing_label",
     });
   }
-  if (state.swingLl && state.swingLow) {
+  if (showSwingLabels && state.swingLl && state.swingLow) {
     addMarker(markers, {
       time: state.swingLow.timestamp,
       price: state.swingLow.price,
@@ -1835,7 +1838,7 @@ export function computeSmcOverlay(
 
   bars.forEach((bar, index) => {
     const state = detector.update(bar, index);
-    pushStateMarkers(markers, state, bar, cfg.showInternal);
+    pushStateMarkers(markers, state, bar, cfg.showInternal, cfg.showSwingLabels);
     pushStateLines(
       lines,
       state,

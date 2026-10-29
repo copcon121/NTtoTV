@@ -9,12 +9,15 @@ increasing the raw tick shards or the main chart cache.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from ..models.icebergs import IcebergUpdate
 from .connection import SingleWriter, connect, connect_reader
 
-__all__ = ["LiquidityStore"]
+__all__ = ["LiquidityStore", "ICEBERG_RETENTION_MS"]
+ICEBERG_RETENTION_MS = 48 * 60 * 60 * 1000
 
 
 _SCHEMA = """
@@ -79,11 +82,28 @@ CREATE TABLE IF NOT EXISTS liquidity_line_samples (
 
 CREATE INDEX IF NOT EXISTS idx_liquidity_samples_range
 ON liquidity_line_samples(symbol, contract, event_time);
+
+CREATE TABLE IF NOT EXISTS iceberg_states (
+    symbol TEXT NOT NULL,
+    contract TEXT NOT NULL,
+    source_contract TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    event_time INTEGER NOT NULL,
+    detected_time INTEGER NOT NULL,
+    executed_volume INTEGER NOT NULL,
+    source_sequence INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY(symbol, contract, source_contract, session_id, order_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_iceberg_states_range
+ON iceberg_states(symbol, contract, source_contract, event_time);
 """
 
 
 class LiquidityStore:
-    """Single-writer SQLite store for one-day liquidity chart data."""
+    """One-day liquidity signals and two-day compact iceberg lifecycles."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -335,6 +355,59 @@ class LiquidityStore:
             for row in line_rows
         ]
         return events, lines
+
+    def record_icebergs(self, payloads: Iterable[dict[str, Any]]) -> None:
+        """Keep the latest compact state per exchange order and feed session."""
+        updates = [IcebergUpdate.from_dict(payload) for payload in payloads]
+
+        def write(conn) -> None:
+            conn.executemany(
+                """
+                INSERT INTO iceberg_states(
+                    symbol, contract, source_contract, session_id, order_id,
+                    event_time, detected_time, executed_volume, source_sequence, payload
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, contract, source_contract, session_id, order_id)
+                DO UPDATE SET event_time=excluded.event_time,
+                    detected_time=excluded.detected_time,
+                    executed_volume=excluded.executed_volume,
+                    source_sequence=excluded.source_sequence, payload=excluded.payload
+                WHERE excluded.source_sequence > iceberg_states.source_sequence
+                """,
+                [(row.symbol, row.contract, row.source_contract, row.session_id, row.order_id,
+                  row.time, row.detected_time, row.executed_volume, row.sequence,
+                  json.dumps(row.to_dict(), separators=(",", ":"))) for row in updates],
+            )
+
+        if updates:
+            self._writer.write(write)
+
+    def read_icebergs(
+        self, symbol: str, contract: str, source_contract: str, start: int, end: int,
+        *, limit: int = 5000, min_volume: int = 1,
+    ) -> list[dict[str, Any]]:
+        """Read retained order lifecycles intersecting the requested time range."""
+        conn = connect_reader(self.path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT payload FROM iceberg_states
+                WHERE symbol=? AND contract=? AND source_contract=?
+                  AND event_time>=? AND detected_time<=? AND executed_volume>=?
+                ORDER BY event_time DESC, source_sequence DESC, session_id DESC, order_id DESC
+                LIMIT ?
+                """,
+                (symbol, contract, source_contract, int(start), int(end), int(min_volume),
+                 max(1, min(int(limit), 5000))),
+            ).fetchall()
+            return [json.loads(row["payload"]) for row in reversed(rows)]
+        finally:
+            conn.close()
+
+    def purge_icebergs_before(self, cutoff_ms: int) -> int:
+        return int(self._writer.execute(
+            "DELETE FROM iceberg_states WHERE event_time < ?", (int(cutoff_ms),)
+        ).rowcount)
 
     def purge_before(self, cutoff_ms: int) -> tuple[int, int]:
         """Delete expired markers and completed lines; keep still-active lines."""

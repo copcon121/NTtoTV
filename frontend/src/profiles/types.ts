@@ -19,9 +19,11 @@ export interface ProfileMarketOrderSettings {
   volumeLots: number;
   slDistanceGc: number;
   tpDistanceGc: number;
-  /** Close half of each new manual Market/Limit order once it reaches +1R. */
+  /** Close half of each new manual Market/Limit order at the configured R. */
   takeProfit1rEnabled?: boolean;
-  /** Arm the current SuperTrend trailing configuration after the 1R partial. */
+  /** Partial take profit R multiple; older profiles default to 1. */
+  takeProfitR?: number;
+  /** Arm the current SuperTrend trailing configuration after the partial close. */
   autoSupertrendAfter1rEnabled?: boolean;
   /** Optional sizing mode for backwards compatibility with older profiles. */
   sizingMode?: "lots" | "risk";
@@ -32,7 +34,7 @@ export interface ProfileMarketOrderSettings {
 export interface LiquidityChartProfileState {
   version: 1;
   heatmap?: import("../liquidity/heatmap").LiquidityHeatmapSettings;
-  timeframe: "30s" | "1m" | "5m";
+  timeframe: "15s" | "30s" | "1m" | "5m";
   visibleBars: number;
   offsetBars: number;
   priceScale: number;
@@ -44,6 +46,11 @@ export interface LiquidityChartProfileState {
   };
   showVwap: boolean;
   showBigTrades: boolean;
+  /** Native iceberg display settings belong to the standalone liquidity page. */
+  showNativeIcebergs?: boolean;
+  nativeIcebergSessionMinVolumes?: import("../liquidity/icebergSessions").IcebergSessionMinVolumes;
+  nativeIcebergFilters?: import("../liquidity/icebergFilters").IcebergFilterSettings;
+  alertSounds?: import("../liquidity/alertSounds").LiquidityAlertSounds;
   bigTradeSettings: BigTradeSettings;
 }
 

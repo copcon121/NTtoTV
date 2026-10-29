@@ -12,6 +12,23 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe("ApiClient auth, MT5, and user profile", () => {
+  it("reports a rejected alert deletion instead of treating it as success", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(
+      { error: { message: "Alert could not be deleted" } }, { status: 400 },
+    ));
+    const api = new ApiClient({ fetchFn });
+
+    await expect(api.deleteAlert("mp_test", "user-a")).rejects.toThrow("Alert could not be deleted");
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/alerts/mp_test?profileId=user-a", { method: "DELETE" },
+    );
+  });
+
+  it("accepts an empty successful alert deletion response", async () => {
+    const api = new ApiClient({ fetchFn: vi.fn(async () => new Response(null, { status: 204 })) });
+    await expect(api.deleteAlert("mp_test", "user-a")).resolves.toBeUndefined();
+  });
+
   it("registers a user through /auth/register", async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({ user: { id: "user_1", username: "alice" } }),

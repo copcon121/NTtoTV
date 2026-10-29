@@ -15,6 +15,21 @@ function bar(
 }
 
 describe("SMC overlay", () => {
+  it("can hide swing labels while preserving structure and zones", () => {
+    const rows = [
+      bar(0, 95, 99, 91, 95), bar(1, 95, 100, 92, 95),
+      bar(2, 95, 99, 91, 95), bar(3, 95, 99, 91, 95),
+      bar(4, 101, 102, 94, 101), bar(5, 99, 100, 98, 99),
+      bar(6, 97, 98, 96, 97), bar(7, 103, 104, 97, 103),
+    ];
+    const settings = { ...DEFAULT_SMC_SETTINGS, enabled: true, swingLength: 2, internalLength: 1 };
+    const visible = computeSmcOverlay(rows, settings);
+    const hidden = computeSmcOverlay(rows, { ...settings, showSwingLabels: false });
+    expect(visible.markers.some((marker) => marker.kind === "swing_label")).toBe(true);
+    expect(hidden.markers).toEqual(visible.markers.filter((marker) => marker.kind !== "swing_label"));
+    expect(hidden.lines).toEqual(visible.lines);
+    expect(hidden.zones).toEqual(visible.zones);
+  });
   it("keeps confirmed swing Fib levels opt-in", () => {
     expect(DEFAULT_SMC_SETTINGS.showSwingFibLevels).toBe(false);
   });

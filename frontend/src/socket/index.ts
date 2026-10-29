@@ -20,6 +20,8 @@ export type {
   Bar,
   BarUpdateMessage,
   BigTradeMessage,
+  IcebergUpdateMessage,
+  NativeIcebergState,
   ChartEventType,
   FootprintRow,
   FootprintUpdateMessage,

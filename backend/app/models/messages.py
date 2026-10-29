@@ -34,11 +34,12 @@ Channels:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, ClassVar
 
 from .canonical import NormalizedQuote, NormalizedTrade, Side
+from .icebergs import IcebergUpdate
 from .timestamp import CanonicalTimestamp
 
 __all__ = [
@@ -71,6 +72,7 @@ __all__ = [
     "FvgSignalUpdate",
     "TduSignalUpdate",
     "LiquidityUpdate",
+    "IcebergUpdate",
     "MarketExplorerUpdate",
     "TrendAnalyzerUpdate",
     "BigTrade",
@@ -130,6 +132,7 @@ class EventType(str, Enum):
     FVG_SIGNAL_UPDATE = "fvg_signal_update"
     TDU_SIGNAL_UPDATE = "tdu_signal_update"
     LIQUIDITY_UPDATE = "liquidity_update"
+    ICEBERG_UPDATE = "iceberg_update"
     MARKET_EXPLORER_UPDATE = "market_explorer_update"
     TREND_ANALYZER_UPDATE = "trend_analyzer_update"
     BIG_TRADE = "big_trade"
@@ -1046,9 +1049,10 @@ class MarketDataStatus:
     switched_at: CanonicalTimestamp | None
     reason: str | None
     sources: dict[str, dict[str, Any]]
+    history_sync: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "type": self.type,
             "symbol": self.symbol,
             "time": self.time,
@@ -1058,6 +1062,9 @@ class MarketDataStatus:
             "reason": self.reason,
             "sources": self.sources,
         }
+        if self.history_sync:
+            payload["historySync"] = self.history_sync
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MarketDataStatus":
@@ -1072,6 +1079,7 @@ class MarketDataStatus:
             ),
             reason=data.get("reason"),
             sources=dict(data.get("sources") or {}),
+            history_sync=dict(data.get("historySync") or {}),
         )
 
 

@@ -227,6 +227,7 @@ export interface OrderSubmitInput {
   slDistanceGc?: number;
   tpDistanceGc?: number;
   takeProfit1rEnabled?: boolean;
+  takeProfitR?: number;
   autoSupertrendAfter1rEnabled?: boolean;
   trailingTimeframe?: Timeframe;
   trailingPeriod?: number;
@@ -1339,12 +1340,15 @@ export class ApiClient {
 
   /** Delete an alert (Req 18.11). */
   async deleteAlert(id: string, profileId = "default"): Promise<void> {
-    await this.fetchFn(
+    const res = await this.fetchFn(
       `${this.basePath}/alerts/${encodeURIComponent(id)}?${this.profileQuery(profileId)}`,
       {
         method: "DELETE",
       },
     );
+    if (!res.ok) {
+      throw new Error(await this.errorMessage(res, "DELETE /alerts"));
+    }
   }
 
   private async getJson<T>(path: string, init: RequestInit = {}): Promise<T> {

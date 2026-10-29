@@ -84,7 +84,7 @@ def _raw_rebuild_source(request: Request) -> str:
         source = status.active_source or status.preferred_source
     else:
         source = default_settings.market_data_preferred_source
-    return source if source in ("nt", "bookmap") else "nt"
+    return source if source in ("nt", "bookmap", "rithmic") else "nt"
 
 
 def _raw_rebuild_contract(

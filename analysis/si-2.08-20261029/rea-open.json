@@ -1,0 +1,18 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"result\":{\"path\":\"C:\\\\Bookmap\\\\API\\\\Layer1ApiModules\\\\7.4.0.1---7.7.1.9999---2---stops-icebergs-on-chart---2.08.jar\",\"format\":\"zip\",\"kind\":\"archive\",\"loaderArgs\":[],\"sha256\":\"317e2a8b45e3290e2d4fd41a371e06f08f71b9f3c2fc1072f91b3eb682a215ab\",\"architecture\":null}}"
+    }
+  ],
+  "structuredContent": {
+    "result": {
+      "path": "C:\\Bookmap\\API\\Layer1ApiModules\\7.4.0.1---7.7.1.9999---2---stops-icebergs-on-chart---2.08.jar",
+      "format": "zip",
+      "kind": "archive",
+      "loaderArgs": [],
+      "sha256": "317e2a8b45e3290e2d4fd41a371e06f08f71b9f3c2fc1072f91b3eb682a215ab",
+      "architecture": null
+    }
+  }
+}

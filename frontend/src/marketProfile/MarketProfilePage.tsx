@@ -13,19 +13,15 @@ import type { Bar } from "../cache/types";
 import { resolveEndpoints } from "../endpoints";
 import type { DeltaProfileData, DeltaProfileRow, DeltaProfileSource } from "../orderflow/deltaProfile";
 import type { Timeframe } from "../socket/messages";
+import { MarketProfilePlanner } from "./MarketProfilePlanner";
+import { mpRequest } from "./plannerApi";
+import { profileSessionWindow, type ExchangeDay, type ProfileSessionMode } from "./profileSessions";
 
 const SYMBOL = "GC";
 const CHART_CONTRACT = SYMBOL;
 const DEFAULT_DAYS = 5;
 const MIN_DAYS = 1;
 const MAX_DAYS = 20;
-const SESSION_TZ_OFFSET_MS = 7 * 60 * 60 * 1000;
-const SESSION_OPEN_LOCAL_HOUR = 5;
-const SESSION_CLOSE_LOCAL_HOUR = 4;
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * 60 * 60 * 1000;
-const SESSION_TRADING_MS =
-  ((24 + SESSION_CLOSE_LOCAL_HOUR - SESSION_OPEN_LOCAL_HOUR) % 24) * HOUR_MS;
 const PRICE_AXIS_WIDTH = 74;
 const TIME_AXIS_HEIGHT = 34;
 const TOP_PADDING = 24;
@@ -176,6 +172,7 @@ export function MarketProfilePage() {
   const api = useMemo(() => new ApiClient({ basePath: endpoints.api }), [endpoints.api]);
   const [tf, setTf] = useState<MarketProfileTimeframe>("15m");
   const [profileMode, setProfileMode] = useState<ProfileMode>("volume");
+  const [sessionMode, setSessionMode] = useState<ProfileSessionMode>("full");
   const [priceDisplayMode, setPriceDisplayMode] = useState<PriceDisplayMode>("line");
   const [dayCount, setDayCount] = useState(DEFAULT_DAYS);
   const [dayInput, setDayInput] = useState(String(DEFAULT_DAYS));
@@ -190,51 +187,56 @@ export function MarketProfilePage() {
   useEffect(() => {
     let cancelled = false;
     const now = Date.now();
-    const starts = recentSessionStarts(dayCount, now);
-    const from = starts[0];
-    const to = Math.min(now, sessionEndForStart(starts[starts.length - 1]));
 
     async function load() {
       setLoading(true);
       setError(null);
+      setState(null);
       try {
-        const bars = await loadHistoryBars({
-          tf,
-          from,
-          to,
-          basePath: endpoints.api,
-        });
+        const response = await mpRequest<{ sessions: ExchangeDay[] }>(`/sessions?count=${dayCount}`);
+        if (response.sessions.length === 0) throw new Error("No trading sessions available");
+        const windows = response.sessions.map((day) => profileSessionWindow(day, sessionMode));
+        const from = windows[0].start;
+        const to = Math.min(now, windows[windows.length - 1].end);
         const source: DeltaProfileSource =
           profileMode === "delta" ? "footprint_cache" : "minute_bars";
-        const profiles = await Promise.all(
-          starts.map((start) =>
-            api.deltaProfile({
-              symbol: SYMBOL,
-              contract: CHART_CONTRACT,
-              from: start,
-              to: Math.min(sessionEndForStart(start), to),
-              rowTicks: PROFILE_ROW_TICKS,
-              valueAreaPct: 70,
-              source,
-            }),
-          ),
-        );
-        if (cancelled) return;
-        setState({
-          bars,
-          from,
-          to,
-          days: starts.map((start, index) => {
-            const end = sessionEndForStart(start);
-            const dayBars = bars.filter((bar) => bar.time >= start && bar.time <= end);
+        const days = await Promise.all(
+          windows.map(async ({ start, end }): Promise<MarketProfileDay> => {
+            // Keep today's empty US slot visible before 19:00 without issuing
+            // reversed/future history or profile requests.
+            if (start > now) return { start, end, bars: [], profile: null, tpo: null };
+            const range = { from: start, to: Math.min(end, now), basePath: endpoints.api };
+            // Fetch each session separately so the 5000-bar limit cannot drop
+            // older sessions, especially for the 1m TPO input.
+            const [history, tpoHistory, profile] = await Promise.all([
+              loadHistoryBars({ ...range, tf }),
+              profileMode === "tpo" ? loadHistoryBars({ ...range, tf: "1m" }) : Promise.resolve([]),
+              api.deltaProfile({
+                symbol: SYMBOL,
+                contract: CHART_CONTRACT,
+                from: range.from,
+                to: range.to,
+                rowTicks: PROFILE_ROW_TICKS,
+                valueAreaPct: 70,
+                source,
+              }),
+            ]);
+            const inSession = (bar: Bar) => bar.time >= start && bar.time <= range.to;
             return {
               start,
               end,
-              bars: dayBars,
-              profile: profiles[index] ?? null,
-              tpo: buildTpoProfile(dayBars, start, end),
+              bars: history.filter(inSession),
+              profile,
+              tpo: buildTpoProfile(tpoHistory.filter(inSession), start, end),
             };
           }),
+        );
+        if (cancelled) return;
+        setState({
+          bars: days.flatMap((day) => day.bars),
+          from,
+          to,
+          days,
         });
       } catch (err) {
         if (!cancelled) {
@@ -250,7 +252,7 @@ export function MarketProfilePage() {
     return () => {
       cancelled = true;
     };
-  }, [api, dayCount, endpoints.api, profileMode, reloadKey, tf]);
+  }, [api, dayCount, endpoints.api, profileMode, reloadKey, sessionMode, tf]);
 
   const submitDays = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -266,6 +268,8 @@ export function MarketProfilePage() {
       : state
         ? `${state.bars.length} ${tf} bars - ${formatProfileMode(profileMode)}`
           + ` - ${PROFILE_ROW_TICKS} ticks/profile row`
+          + (sessionMode === "us-comex" && state.days[state.days.length - 1]?.start > Date.now()
+            ? " - US profile starts at 19:00 UTC+7" : "")
         : "No data";
 
   return (
@@ -282,7 +286,24 @@ export function MarketProfilePage() {
         </a>
         <div className="market-profile-title">
           <span>GC Market Profile</span>
-          <span>Daily</span>
+          <span>{sessionMode === "full" ? "Daily" : "19:00-04:00 UTC+7"}</span>
+        </div>
+        <div className="market-profile-segmented" role="group" aria-label="Profile session">
+          <button
+            type="button"
+            aria-pressed={sessionMode === "full"}
+            onClick={() => setSessionMode("full")}
+          >
+            Full Session
+          </button>
+          <button
+            type="button"
+            aria-pressed={sessionMode === "us-comex"}
+            title="US COMEX profile: 19:00-04:00 UTC+7, including the hour before the US window"
+            onClick={() => setSessionMode("us-comex")}
+          >
+            US COMEX
+          </button>
         </div>
         <form className="market-profile-form" onSubmit={submitDays}>
           <label>
@@ -393,6 +414,7 @@ export function MarketProfilePage() {
           {status}
         </div>
       </header>
+      <div className="market-profile-workspace">
       <main className="market-profile-chart">
         <MarketProfileCanvas
           data={state}
@@ -403,6 +425,8 @@ export function MarketProfilePage() {
           onToolDeselect={() => setActiveDrawingTool(null)}
         />
       </main>
+      <MarketProfilePlanner api={api} ws={endpoints.ws} />
+      </div>
     </div>
   );
 }
@@ -725,7 +749,7 @@ function MarketProfileCanvas({
 }
 
 async function loadHistoryBars(input: {
-  tf: MarketProfileTimeframe;
+  tf: Timeframe;
   from: number;
   to: number;
   basePath: string;
@@ -1387,7 +1411,7 @@ function drawAxes(
   ctx.textBaseline = "top";
   ctx.fillStyle = dark ? "#ffffff" : "#666666";
   for (const day of days) {
-    const x = xForTime(day.start + DAY_MS / 2);
+    const x = xForTime(day.start + (day.end - day.start + 1) / 2);
     if (x < plot.left - 40 || x > plot.right + 40) continue;
     ctx.fillText(formatSessionDate(day.start), x, plot.bottom + 9);
   }
@@ -1739,53 +1763,9 @@ function inferProfileStep(rows: readonly DeltaProfileRow[]): number {
   return inferPriceStep(rows.map((row) => row.price));
 }
 
-function recentSessionStarts(count: number, now: number): number[] {
-  const starts: number[] = [];
-  let cursor = sessionStartForUtc(now);
-  let scanned = 0;
-  const maxScan = count + 14;
-  while (starts.length < count && scanned < maxScan) {
-    if (isTradingSessionStart(cursor)) {
-      starts.push(cursor);
-    }
-    cursor -= DAY_MS;
-    scanned += 1;
-  }
-  return starts.reverse();
-}
-
-function sessionStartForUtc(time: number): number {
-  const local = new Date(time + SESSION_TZ_OFFSET_MS);
-  let start =
-    Date.UTC(
-      local.getUTCFullYear(),
-      local.getUTCMonth(),
-      local.getUTCDate(),
-      SESSION_OPEN_LOCAL_HOUR,
-      0,
-      0,
-      0,
-    ) - SESSION_TZ_OFFSET_MS;
-  if (time < start) start -= DAY_MS;
-  return start;
-}
-
-function sessionEndForStart(start: number): number {
-  return sessionCloseForStart(start) - 1;
-}
-
-function sessionCloseForStart(start: number): number {
-  return start + SESSION_TRADING_MS;
-}
-
-function isTradingSessionStart(start: number): boolean {
-  const weekday = new Date(start + SESSION_TZ_OFFSET_MS).getUTCDay();
-  return weekday >= 1 && weekday <= 5;
-}
-
 function sessionCloseMarker(day: MarketProfileDay): { time: number; price: number } | null {
   if (day.bars.length === 0) return null;
-  const closeTime = sessionCloseForStart(day.start);
+  const closeTime = day.end + 1;
   const bars = day.bars
     .filter((bar) => bar.time < closeTime && isFiniteNumber(bar.close))
     .sort((a, b) => a.time - b.time);
@@ -1816,9 +1796,9 @@ function compressedSessionPosition(
   if (days.length === 0) return 0;
   for (let index = 0; index < days.length; index++) {
     const start = days[index].start;
-    const end = sessionEndForStart(start);
+    const end = days[index].end;
     if (time >= start && time <= end) {
-      return index + clampNumber((time - start) / DAY_MS, 0, 1);
+      return index + clampNumber((time - start) / Math.max(1, end - start + 1), 0, 1);
     }
   }
   if (time < days[0].start) return 0;

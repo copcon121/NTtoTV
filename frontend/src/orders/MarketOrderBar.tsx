@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { AutoTradeSettings, Mt5Account } from "../api/client";
+import type { Mt5Account } from "../api/client";
 
 export interface MarketOrderSettings {
   volumeLots: number;
   slDistanceGc: number;
   tpDistanceGc: number;
   takeProfit1rEnabled: boolean;
+  takeProfitR?: number;
   autoSupertrendAfter1rEnabled: boolean;
   sizingMode?: "lots" | "risk";
   riskAmount?: number;
@@ -42,9 +43,6 @@ export interface MarketOrderBarProps {
   settings: MarketOrderSettings;
   onSettingsChange: (settings: MarketOrderSettings) => void;
   onMarketOrder: (side: "buy" | "sell") => void;
-  autoTradeSettings?: AutoTradeSettings;
-  autoTradePending?: boolean;
-  onAutoTradeSettingsChange?: (settings: AutoTradeSettings) => void;
   onOrderRowBreakEven?: (id: string) => void;
   onOrderRowSupertrendTrailing?: (id: string) => void;
   onOrderRowClose?: (id: string) => void;
@@ -72,9 +70,6 @@ export function MarketOrderBar({
   settings,
   onSettingsChange,
   onMarketOrder,
-  autoTradeSettings,
-  autoTradePending = false,
-  onAutoTradeSettingsChange,
   onOrderRowBreakEven,
   onOrderRowSupertrendTrailing,
   onOrderRowClose,
@@ -87,6 +82,7 @@ export function MarketOrderBar({
   const drawer = variant === "drawer";
   const expanded = !drawer || drawerOpen;
   const sizingMode = settings.sizingMode === "risk" ? "risk" : "lots";
+  const takeProfitR = settings.takeProfitR ?? 1;
   const riskAmount =
     typeof settings.riskAmount === "number" && Number.isFinite(settings.riskAmount)
       ? settings.riskAmount
@@ -188,17 +184,26 @@ export function MarketOrderBar({
                     ? "auto-trade-toggle active take-profit-1r"
                     : "auto-trade-toggle take-profit-1r"
                 }
-                title="Close 50% once a new Market or Limit order reaches +1R"
+                title={`Close 50% once a new Market or Limit order reaches +${takeProfitR}R`}
               >
                 <input
                   type="checkbox"
                   checked={settings.takeProfit1rEnabled}
-                  aria-label="Take profit 50% at 1R"
+                  aria-label={`Take profit 50% at ${takeProfitR}R`}
                   onChange={(event) =>
                     update({ takeProfit1rEnabled: event.currentTarget.checked })
                   }
                 />
-                <span>50% @ 1R</span>
+                <span>TP 50%</span>
+              </label>
+              <label title="R multiple for the 50% partial take profit on new Market and Limit orders">
+                <span>R</span>
+                <NumberSettingInput
+                  value={takeProfitR}
+                  min={0.1}
+                  step="0.1"
+                  onCommit={(value) => update({ takeProfitR: value })}
+                />
               </label>
               <label
                 className={
@@ -206,61 +211,21 @@ export function MarketOrderBar({
                     ? "auto-trade-toggle active supertrend-after-1r"
                     : "auto-trade-toggle supertrend-after-1r"
                 }
-                title="After the 1R partial close, trail the remainder with the current SuperTrend settings"
+                title={`After the ${takeProfitR}R partial close, trail the remainder with the current SuperTrend settings`}
               >
                 <input
                   type="checkbox"
                   checked={settings.autoSupertrendAfter1rEnabled}
                   disabled={!settings.takeProfit1rEnabled}
-                  aria-label="Auto SuperTrend trailing after 1R"
+                  aria-label={`Auto SuperTrend trailing after ${takeProfitR}R`}
                   onChange={(event) =>
                     update({
                       autoSupertrendAfter1rEnabled: event.currentTarget.checked,
                     })
                   }
                 />
-                <span>ST @ 1R</span>
+                <span>ST @ {takeProfitR}R</span>
               </label>
-              {connected && autoTradeSettings && onAutoTradeSettingsChange && (
-                <span className="auto-trade-controls" aria-label="Automatic mGann trading">
-                  <label
-                    className={autoTradeSettings.longEnabled ? "auto-trade-toggle active long" : "auto-trade-toggle long"}
-                    title="Auto mGann Long: optimized detector; close 50% at +1R, keep the original SL, and take the remaining 50% at +3R"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={autoTradeSettings.longEnabled}
-                      disabled={autoTradePending}
-                      aria-label="Auto trade L"
-                      onChange={(event) =>
-                        onAutoTradeSettingsChange({
-                          ...autoTradeSettings,
-                          longEnabled: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <span>Auto L</span>
-                  </label>
-                  <label
-                    className={autoTradeSettings.shortEnabled ? "auto-trade-toggle active short" : "auto-trade-toggle short"}
-                    title="Auto mGann Short: optimized detector; close 50% at +1R, keep the original SL, and take the remaining 50% at +3R"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={autoTradeSettings.shortEnabled}
-                      disabled={autoTradePending}
-                      aria-label="Auto trade S"
-                      onChange={(event) =>
-                        onAutoTradeSettingsChange({
-                          ...autoTradeSettings,
-                          shortEnabled: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <span>Auto S</span>
-                  </label>
-                </span>
-              )}
             </div>
             <div className="market-order-actions">
               {connected ? (
@@ -269,7 +234,10 @@ export function MarketOrderBar({
                     type="button"
                     className="market-button sell"
                     disabled={pending}
-                    onClick={() => onMarketOrder("sell")}
+                    onClick={(event) => {
+                      if (event.detail > 1) return;
+                      onMarketOrder("sell");
+                    }}
                   >
                     SELL
                   </button>
@@ -277,7 +245,10 @@ export function MarketOrderBar({
                     type="button"
                     className="market-button buy"
                     disabled={pending}
-                    onClick={() => onMarketOrder("buy")}
+                    onClick={(event) => {
+                      if (event.detail > 1) return;
+                      onMarketOrder("buy");
+                    }}
                   >
                     BUY
                   </button>

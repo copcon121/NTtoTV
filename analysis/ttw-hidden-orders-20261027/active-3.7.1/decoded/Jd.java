@@ -1,0 +1,72 @@
+/*
+ * Decompiled with CFR 0.152.
+ */
+package ttw.tradefinder;
+
+import ttw.tradefinder.ae_1;
+import ttw.tradefinder.ff_0;
+
+/*
+ * Duplicate member names - consider using --renamedupmembers true
+ */
+public class Jd {
+    private final String M;
+    private final float b;
+    private final String c;
+
+    public String j() {
+        Jd a2;
+        return a2.c;
+    }
+
+    public Jd(String a2, String a3, float a4) {
+        Jd a5;
+        Jd jd = a5;
+        jd.M = a3;
+        jd.b = a4;
+        if (!a2.isEmpty()) {
+            a5.c = "at " + a2;
+            return;
+        }
+        a5.c = "";
+    }
+
+    public static Jd j() {
+        return new Jd("", "", 1.0f);
+    }
+
+    public String toString() {
+        Jd a2;
+        if (!a2.M.isEmpty()) {
+            if (!a2.c.isEmpty()) {
+                Jd jd = a2;
+                return jd.M + jd.c;
+            }
+            return a2.M;
+        }
+        if (!a2.c.isEmpty()) {
+            return a2.c;
+        }
+        return "empty";
+    }
+
+    public static Jd E() {
+        return new Jd("846.4", "1375", 2.0f);
+    }
+
+    public boolean E(boolean a2) {
+        Jd a3;
+        return a3.M.isEmpty() && (!a2 || a3.c.isEmpty());
+    }
+
+    public String E() {
+        Jd a2;
+        return a2.M;
+    }
+
+    public float E() {
+        Jd a2;
+        return a2.b;
+    }
+}
+

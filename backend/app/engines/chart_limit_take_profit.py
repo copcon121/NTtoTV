@@ -1,7 +1,7 @@
 """Tick-driven partial take profit for configured manual chart orders.
 
 The chart order bracket keeps its broker-side SL and final TP. Once a filled
-market or limit reaches +1R in GC price space, this engine closes one half of
+market or limit reaches its configured R target in GC price space, this engine closes one half of
 the managed volume and records a durable event so later ticks (and backend
 restarts) cannot repeat the partial close. Configured orders then arm the
 existing confirmed-bar SuperTrend trailing rule for the remaining position.
@@ -44,7 +44,7 @@ _AUTO_SUPERTREND_ARMED_EVENT = "chart_order_auto_supertrend_armed_after_1r"
 
 
 class ChartLimitTakeProfitEngine:
-    """Close 50% of an enabled manual market/limit at its first +1R touch."""
+    """Close 50% of an enabled manual order at its configured R target."""
 
     def __init__(
         self,
@@ -100,7 +100,7 @@ class ChartLimitTakeProfitEngine:
                 and order.status is OrderStatus.FILLED
                 and order.broker_position_ticket is not None
                 and order.id not in already_taken
-                and _has_reached_one_r(order, gc_price)
+                and _has_reached_target(order, gc_price)
             ]
             if not candidates:
                 continue
@@ -139,7 +139,7 @@ class ChartLimitTakeProfitEngine:
                             changed += 1
             except Exception as exc:
                 logger.warning(
-                    "chart limit 1R take profit skipped for account %s: %s",
+                    "chart partial take profit skipped for account %s: %s",
                     account.id,
                     exc,
                 )
@@ -190,6 +190,8 @@ class ChartLimitTakeProfitEngine:
             {
                 "gcPrice": gc_price,
                 "oneRPrice": _one_r_price(updated),
+                "targetR": updated.take_profit_r,
+                "targetPrice": _take_profit_price(updated),
                 "entryGc": updated.entry_gc,
                 "slGc": updated.sl_gc,
                 "originalVolumeLots": original_volume,
@@ -285,25 +287,35 @@ class ChartLimitTakeProfitEngine:
         )
 
 
-def _one_r_price(order: OrderRecord) -> float | None:
+def _take_profit_price(order: OrderRecord, multiple: float | None = None) -> float | None:
     if order.entry_gc is None or order.sl_gc is None:
+        return None
+    multiple = order.take_profit_r if multiple is None else multiple
+    if not math.isfinite(multiple) or multiple < 0.1:
         return None
     risk = (
         order.entry_gc - order.sl_gc
         if order.side is OrderSide.BUY
         else order.sl_gc - order.entry_gc
     )
-    if risk <= 0:
+    if not math.isfinite(risk) or risk <= 0:
         return None
-    raw = order.entry_gc + risk if order.side is OrderSide.BUY else order.entry_gc - risk
+    distance = risk * multiple
+    raw = order.entry_gc + distance if order.side is OrderSide.BUY else order.entry_gc - distance
+    if not math.isfinite(raw):
+        return None
     return round(raw * 10) / 10
 
 
-def _has_reached_one_r(order: OrderRecord, gc_price: float) -> bool:
-    one_r = _one_r_price(order)
-    if one_r is None:
+def _one_r_price(order: OrderRecord) -> float | None:
+    return _take_profit_price(order, 1.0)
+
+
+def _has_reached_target(order: OrderRecord, gc_price: float) -> bool:
+    target = _take_profit_price(order)
+    if target is None:
         return False
-    return gc_price >= one_r if order.side is OrderSide.BUY else gc_price <= one_r
+    return gc_price >= target if order.side is OrderSide.BUY else gc_price <= target
 
 
 def half_close_volume(

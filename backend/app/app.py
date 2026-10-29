@@ -20,6 +20,7 @@ from fastapi import FastAPI
 
 from . import __version__
 from .analyst.routes import router as analyst_router
+from .market_profile.routes import router as mp_router
 from .ingest.endpoint import router as nt_router
 from .ingest.bookmap_endpoint import router as bookmap_ingest_router
 from .registry.endpoint import router as chart_router
@@ -107,6 +108,7 @@ def create_app(*, lifespan: bool = True) -> FastAPI:
     app.include_router(smc_ai_router)
     app.include_router(signals_router)
     app.include_router(analyst_router)
+    app.include_router(mp_router)
     app.include_router(nt_native_router)
     app.include_router(nt_router)
     app.include_router(bookmap_ingest_router)

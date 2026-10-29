@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from ..models.orders import OrderEventRecord, OrderKind, OrderRecord, OrderStatus
+from ..models.orders import OrderEventRecord, OrderKind, OrderRecord, OrderSource, OrderStatus
 from ..models.timestamp import now_ms
 from ..mt5.manager import Mt5Manager
 from ..storage.cache_store import CacheStore
@@ -60,6 +60,11 @@ class AnchoredSyncEngine:
 
     def _sync_order(self, order: OrderRecord, symbol: SymbolMap, backend) -> bool:
         if not order.gc_anchored:
+            return False
+        # Market-bar brackets specify broker price distances. Repricing these
+        # with a changing GC/XAU basis silently changes the chosen risk. Include
+        # legacy orders whose gc_anchored flag was saved by older clients.
+        if order.source is OrderSource.MARKET_BAR and order.kind is OrderKind.MARKET:
             return False
         if order.status in {OrderStatus.FILLED, OrderStatus.SYNC_ERROR}:
             if order.broker_position_ticket is None:

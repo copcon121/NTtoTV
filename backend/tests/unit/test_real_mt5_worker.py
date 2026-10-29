@@ -6,7 +6,122 @@ import pytest
 
 from app.config import Settings
 from app.models.orders import OrderKind, OrderRecord, OrderSide, OrderSource, OrderStatus
-from app.mt5.worker import RealMt5Backend, _mt5_comment, _mt5_filling_type
+from app.mt5.worker import RealMt5Backend, _match_position_ticket, _mt5_comment, _mt5_filling_type
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("side", [OrderSide.BUY, OrderSide.SELL])
+@pytest.mark.parametrize("wide_spread", [False, True])
+def test_market_bracket_uses_final_quote_and_rejects_spread_overlap(monkeypatch, side, wide_spread):
+    requests = []
+    bid, ask = (2355.0, 2359.0 if wide_spread else 2355.2)
+    fake = SimpleNamespace(
+        initialize=lambda **kwargs: True,
+        symbol_info=lambda symbol: SimpleNamespace(
+            filling_mode=2, trade_tick_size=0.001, point=0.001,
+            digits=3, trade_stops_level=500,
+        ),
+        symbol_info_tick=lambda symbol: SimpleNamespace(bid=bid, ask=ask),
+        order_send=lambda request: requests.append(dict(request)) or SimpleNamespace(
+            retcode=10009, order=123, deal=124, position=123, price=request["price"],
+        ),
+        ORDER_TIME_GTC=0, ORDER_FILLING_IOC=1, SYMBOL_FILLING_IOC=2,
+        TRADE_ACTION_DEAL=1, ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1,
+        TRADE_RETCODE_DONE=10009, TRADE_RETCODE_PLACED=10008,
+        TRADE_RETCODE_DONE_PARTIAL=10010,
+    )
+    monkeypatch.setattr("app.mt5.worker.importlib.import_module", lambda name: fake)
+    direction = 1 if side is OrderSide.BUY else -1
+    order = OrderRecord(
+        id="ord_final_quote", user_id="u", account_id="a", source=OrderSource.MARKET_BAR,
+        symbol_internal="GC", contract_internal="GC", source_contract="GC 12-26",
+        symbol_broker="XAUUSDm", side=side, kind=OrderKind.MARKET,
+        volume_lots=0.1, gc_anchored=False, status=OrderStatus.PENDING_SUBMIT,
+        idempotency_key="final-quote", created_at=1, updated_at=1,
+        entry_broker=2350.0, sl_broker=2350.0 - direction * 3,
+        tp_broker=2350.0 + direction * 6,
+    )
+    result = RealMt5Backend().place_order(order)
+    if wide_spread:
+        assert result.accepted is False
+        assert result.error_code == "invalid_stops"
+        assert requests == []
+    else:
+        assert result.accepted is True
+        assert len(requests) == 1
+        entry = ask if side is OrderSide.BUY else bid
+        assert requests[0]["price"] == entry
+        assert requests[0]["sl"] == pytest.approx(entry - direction * 3)
+        assert requests[0]["tp"] == pytest.approx(entry + direction * 6)
+        assert result.submitted_entry_price == entry
+        assert result.submitted_sl_price == requests[0]["sl"]
+        assert result.submitted_tp_price == requests[0]["tp"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("matched,volume", [(False, 0.1), (True, 0.1), (True, 0.05)])
+def test_position_resolution_requires_broker_identity(matched, volume):
+    order = OrderRecord(
+        id="ord_identity", user_id="u", account_id="a", source=OrderSource.API,
+        symbol_internal="GC", contract_internal="GC", source_contract="GC 12-26",
+        symbol_broker="XAUUSDm", side=OrderSide.BUY, kind=OrderKind.MARKET,
+        volume_lots=0.1, gc_anchored=True, status=OrderStatus.SUBMITTED,
+        idempotency_key="identity", created_at=1, updated_at=1,
+    )
+    position = SimpleNamespace(
+        ticket=101, identifier=202 if matched else 101, symbol="XAUUSDm",
+        type=0, volume=volume, magic=240606, price_open=4300.0, time_msc=1,
+    )
+    assert _match_position_ticket(
+        [position], order, order_ticket=202, fill_price=4300.0,
+    ) == (101 if matched else None)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("retcode", [None, 10012, 10031])
+def test_uncertain_entry_reply_is_not_reported_as_definitive_rejection(monkeypatch, retcode):
+    requests = []
+    fake = SimpleNamespace(
+        initialize=lambda **kwargs: True,
+        symbol_info=lambda symbol: SimpleNamespace(filling_mode=2),
+        symbol_info_tick=lambda symbol: SimpleNamespace(bid=2350, ask=2350.1),
+        order_send=lambda request: requests.append(request) or (
+            None if retcode is None else SimpleNamespace(retcode=retcode, comment="transport error")
+        ),
+        last_error=lambda: (-10005, "IPC timeout"),
+        ORDER_TIME_GTC=0, ORDER_FILLING_IOC=1, SYMBOL_FILLING_IOC=2,
+        TRADE_ACTION_DEAL=1, ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1,
+    )
+    monkeypatch.setattr("app.mt5.worker.importlib.import_module", lambda name: fake)
+    order = OrderRecord(
+        id="ord_unknown", user_id="u", account_id="a", source=OrderSource.API,
+        symbol_internal="GC", contract_internal="GC", source_contract="GC 12-26",
+        symbol_broker="XAUUSDm", side=OrderSide.BUY, kind=OrderKind.MARKET,
+        volume_lots=0.1, gc_anchored=False, status=OrderStatus.PENDING_SUBMIT,
+        idempotency_key="unknown", created_at=1, updated_at=1,
+    )
+    with pytest.raises(RuntimeError, match="acknowledgement"):
+        RealMt5Backend().place_order(order)
+    assert len(requests) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("method", ["orders", "positions"])
+@pytest.mark.parametrize("rows", [None, ()])
+def test_broker_read_failure_is_not_an_empty_snapshot(monkeypatch, method, rows):
+    fake = SimpleNamespace(
+        initialize=lambda **kwargs: True,
+        orders_get=lambda: rows,
+        positions_get=lambda: rows,
+        last_error=lambda: (-10001, "IPC receive failed"),
+    )
+    monkeypatch.setattr("app.mt5.worker.importlib.import_module", lambda _name: fake)
+    backend = RealMt5Backend()
+    if rows is None:
+        with pytest.raises(RuntimeError, match=f"{method}_get failed"):
+            getattr(backend, method)("u", "a")
+    else:
+        assert getattr(backend, method)("u", "a") == []
 
 
 @pytest.mark.unit

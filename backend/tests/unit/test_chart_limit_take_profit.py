@@ -143,6 +143,32 @@ def test_disabled_partial_take_profit_does_not_manage_the_order(tmp_path):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("side", [OrderSide.BUY, OrderSide.SELL])
+@pytest.mark.parametrize("multiple", [0.5, 1.5, 2.0])
+def test_custom_r_target_is_persisted_and_closes_half_once(tmp_path, side, multiple):
+    cache, fake, user, account, order, engine = _setup(
+        tmp_path, side=side, auto_trailing=True
+    )
+    try:
+        order.take_profit_r = multiple
+        cache.orders.update(order)
+        saved = cache.orders.read(order.id, user.id)
+        assert saved.take_profit_r == multiple
+        direction = 1 if side is OrderSide.BUY else -1
+        target = 100.0 + direction * multiple
+        assert engine.take_profit_at_1r(target - direction * 0.1) == 0
+        assert cache.supertrend_trailing.read(user.id, "order", order.id) is None
+        assert engine.take_profit_at_1r(target) == 1
+        assert fake.positions(user.id, account.id)[0]["volumeLots"] == 0.05
+        assert cache.supertrend_trailing.read(user.id, "order", order.id) is not None
+        # A fresh engine uses the persisted event to prevent a second close.
+        restarted = ChartLimitTakeProfitEngine(cache, engine._mt5)
+        assert restarted.take_profit_at_1r(target + direction) == 0
+    finally:
+        cache.close()
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     ("volume", "expected"),
     [

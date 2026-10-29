@@ -15,6 +15,8 @@ Covers the ingest -> engines -> registry -> frontend pipeline assembled by
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 
@@ -24,10 +26,13 @@ from app.engines.alert_engine import (
     SMC_EXTERNAL_BREAK_BIG_TRADE,
 )
 from app.engines.fvg_signal_engine import FvgSignalEngine
+from app.engines.smc_fail_break import SMC_FAIL_BREAK_RETEST
 from app.ingest.control_plane import ControlPlaneCoordinator
 from app.models.canonical import NormalizedTrade, Side
 from app.models.messages import (
     ControlAction,
+    BarUpdate,
+    OHLCVBar,
     ControlCommand,
     EventType,
     NTStatusEvent,
@@ -1087,6 +1092,46 @@ def test_pipeline_smc_strategy_alert_fires_on_qualifying_big_trade(pipeline_env)
     assert alerts[-1]["alertType"] == SMC_EXTERNAL_BREAK_BIG_TRADE
     assert alerts[-1]["level"] == 100
     assert "big trade 80 > 50" in alerts[-1]["message"]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("source", ["nt", "bookmap"])
+def test_fail_break_retest_fires_from_live_bar_before_close(pipeline_env, source):
+    pipeline, cache, _, _, captured = pipeline_env
+    fixture = json.loads((Path(__file__).parents[3] / "test-fixtures/mgann_multi_wave_retest.json").read_text())
+    prices = fixture["pivotPrices"]
+    rows = []
+    for i in range(fixture["retestIndex"]):
+        if i <= 5:
+            price = prices[1] + (prices[0]-prices[1])*i/5
+        else:
+            segment = min((i-5)//6, len(prices)-2)
+            price = prices[segment] + (prices[segment+1]-prices[segment])*(i-5-segment*6)/6
+        rows.append((price, price, price))
+    cache.upsert_bars([
+        BarRecord("GC", "GC", "1m", _BASE+i*60000, close, high, low, close, 10, True)
+        for i, (close, high, low) in enumerate(rows)
+    ])
+    pipeline.alert_engine.upsert(Alert(
+        id="live-fail", symbol="GC", type=SMC_FAIL_BREAK_RETEST,
+        params={"swingLength": 2, "repeat": True},
+    ))
+
+    async def run():
+        at = _BASE + fixture["retestIndex"]*60000
+        if source == "nt":
+            await pipeline.on_trade(_trade(at+1000, 100, 10, seq=0))
+            await pipeline.on_trade(_trade(at+2000, 100, 10, seq=1))
+        else:
+            update = BarUpdate("GC", "GC", "1m", OHLCVBar(at, 100, 100, 100, 100, 10), False)
+            await pipeline._evaluate_bookmap_bar_alerts([update], at+1000)
+            await pipeline._evaluate_bookmap_bar_alerts([update], at+2000)
+
+    asyncio.run(run())
+    events = [e.payload for e in captured if e.event_type == EventType.ALERT_EVENT]
+    assert len(events) == 1
+    assert events[0]["alertType"] == SMC_FAIL_BREAK_RETEST
+    assert events[0]["direction"] == -1 and events[0]["level"] == 100
 
 
 @pytest.mark.integration

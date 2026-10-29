@@ -64,24 +64,35 @@ class ReconciliationEngine:
                 current_time = now_ms()
                 if (
                     order.status in {OrderStatus.FILLED, OrderStatus.SYNC_ERROR}
-                    and order.broker_position_ticket is None
+                    and order.broker_order_ticket not in broker_orders
                 ):
                     matched_position = _match_broker_position(
                         order,
                         broker_positions.values(),
                     )
                     if matched_position is not None:
-                        order.broker_position_ticket = int(
-                            matched_position["ticket"]
-                        )
-                        if order.status is OrderStatus.SYNC_ERROR:
+                        ticket = int(matched_position["ticket"])
+                        if (
+                            order.broker_position_ticket != ticket
+                            or order.status is OrderStatus.SYNC_ERROR
+                        ):
+                            order.broker_position_ticket = ticket
                             order.status = OrderStatus.FILLED
+                            entry = matched_position.get("entryBroker")
+                            if isinstance(entry, (int, float)):
+                                order.fill_price_broker = float(entry)
+                            order.filled_at = int(
+                                matched_position.get("time")
+                                or order.filled_at
+                                or current_time
+                            )
                             order.last_broker_error_code = None
                             order.last_broker_error_message = None
-                        order.updated_at = now_ms()
-                        changed = True
+                            order.updated_at = current_time
+                            changed = True
                     elif (
-                        order.kind is OrderKind.MARKET
+                        order.broker_position_ticket is None
+                        and order.kind is OrderKind.MARKET
                         and (
                             order.broker_order_ticket is None
                             or order.broker_order_ticket not in broker_orders
@@ -112,7 +123,9 @@ class ReconciliationEngine:
                         entry = matched_position.get("entryBroker")
                         if isinstance(entry, (int, float)):
                             order.fill_price_broker = float(entry)
-                        order.filled_at = current_time
+                        order.filled_at = int(matched_position.get("time") or current_time)
+                        order.last_broker_error_code = None
+                        order.last_broker_error_message = None
                     else:
                         order.status = OrderStatus.CANCELLED
                     order.updated_at = current_time
@@ -204,18 +217,15 @@ def _match_broker_position(order, positions) -> dict | None:
         side = row.get("side")
         if side in (OrderSide.BUY.value, OrderSide.SELL.value) and side != order.side.value:
             continue
-        volume = row.get("volumeLots")
-        if isinstance(volume, (int, float)) and volume > 0:
-            if abs(float(volume) - order.volume_lots) > 1e-9:
-                continue
-
         score = 0.0
         identifier = row.get("identifier")
         row_order_id = row.get("orderId")
         if row_order_id == order.id:
             score += 120.0
         if order.broker_position_ticket is not None and ticket == order.broker_position_ticket:
-            score += 110.0
+            # A prior association can be wrong. Broker order identity and the
+            # app's order comment take precedence over a cached position ticket.
+            score += 10.0
         if order.broker_order_ticket is not None and (
             ticket == order.broker_order_ticket or identifier == order.broker_order_ticket
         ):
@@ -227,19 +237,16 @@ def _match_broker_position(order, positions) -> dict | None:
         comment = str(row.get("comment") or "")
         if expected_suffix and expected_suffix in comment.replace("_", ""):
             score += 40.0
-        if row.get("magic") == 240606:
-            score += 20.0
-        fill_price = order.fill_price_broker or order.entry_broker
-        entry = row.get("entryBroker")
-        if isinstance(fill_price, (int, float)) and isinstance(entry, (int, float)):
-            score += max(0.0, 10.0 - min(10.0, abs(float(entry) - float(fill_price))))
+        # Shared magic, size and nearby prices do not identify an order.
+        if score <= 0:
+            continue
         timestamp = int(row.get("time") or 0)
         candidates.append((score, timestamp, row))
     if not candidates:
         return None
     candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
     best_score, _, best = candidates[0]
-    if best_score > 0 or len(candidates) == 1:
+    if len(candidates) == 1 or best_score > candidates[1][0]:
         return best
     return None
 

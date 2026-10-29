@@ -61,6 +61,41 @@ from .routes import (
 
 router = APIRouter(prefix="/api", tags=["orderflow"])
 
+
+@router.get("/orderflow/icebergs")
+async def iceberg_history(
+    request: Request,
+    symbol: str = Query(default="GC"),
+    contract: str = Query(default="GC"),
+    limit: int = Query(default=500, ge=1, le=5000),
+    min_volume: int = Query(default=1, ge=1),
+    frm: int | None = Query(default=None, alias="from", ge=0),
+    to: int | None = Query(default=None, ge=0),
+) -> dict[str, Any]:
+    """Read compact native detections from the existing direct Rithmic session.
+
+    Compact order states are retained for 48 hours across restarts. Bars, L2 snapshots
+    and footprint imports cannot reconstruct historical per-order executions.
+    """
+    if symbol not in default_settings.supported_symbols:
+        raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
+    if contract != symbol:
+        raise not_found("Icebergs use the logical chart contract", field="contract")
+    if frm is not None and to is not None and frm > to:
+        raise bad_request("from must be <= to", field="from")
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        return {
+            "symbol": symbol, "contract": contract, "source": "rithmic",
+            "sourceContract": None, "sessionId": None, "connected": False,
+            "synchronized": False, "method": "native", "historyMode": "memory",
+            "limit": limit, "icebergs": [],
+            "droppedOrders": 0,
+        }
+    return runtime.pipeline.iceberg_snapshot(
+        limit=limit, min_volume=min_volume, frm=frm, to=to,
+    )
+
 # Supported volume-delta timeframes mirror the Bar_Aggregator's set.
 from ..engines.bar_aggregator import SUPPORTED_TFS as _SUPPORTED_TFS_LIST
 

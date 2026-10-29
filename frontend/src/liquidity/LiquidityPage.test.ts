@@ -455,11 +455,23 @@ describe("BigTrade overlay", () => {
 });
 
 describe("liquidity profile state", () => {
+  it("restores independent sound choices alongside existing layer preferences", () => {
+    expect(normalizeLiquidityChartProfileState({
+      alertSounds: { icebergEnabled: true, iceberg: "voice", bigTrade: "pulse", longTermEnabled: false },
+      filters: { longTerm: false, relative: false, absolute: true },
+    })).toMatchObject({
+      alertSounds: { icebergEnabled: true, iceberg: "voice", bigTrade: "pulse", longTermEnabled: false },
+      filters: { longTerm: false, relative: false, absolute: true },
+    });
+  });
+  it("retains the selected line opacity when restoring a profile", () => {
+    expect(normalizeLiquidityChartProfileState({ heatmap: { opacity: 0.45 } }).heatmap?.opacity).toBe(0.45);
+  });
   it("persists heatmap intensity and short-lived level filtering", () => {
     const state = normalizeLiquidityChartProfileState({
       heatmap: { minDurationSeconds: 90, saturationMultiple: 6, contrast: 1.5 },
     });
-    expect(state.heatmap).toEqual({ minDurationSeconds: 90, saturationMultiple: 6, contrast: 1.5 });
+    expect(state.heatmap).toEqual({ minDurationSeconds: 90, saturationMultiple: 6, contrast: 1.5, opacity: 1 });
     expect(normalizeLiquidityChartProfileState({}).heatmap?.minDurationSeconds).toBe(60);
   });
   it("restores a 30s viewport", () => {
@@ -471,6 +483,42 @@ describe("liquidity profile state", () => {
 
     expect(state.timeframe).toBe("30s");
     expect(state.visibleBars).toBe(480);
+  });
+
+  it("restores a 15s viewport with a four-hour default and a two-day zoom limit", () => {
+    expect(normalizeLiquidityChartProfileState({ timeframe: "15s" })).toMatchObject({
+      timeframe: "15s", visibleBars: 960,
+    });
+    const saved = normalizeLiquidityChartProfileState({ timeframe: "15s", visibleBars: 1_500 });
+    expect(normalizeLiquidityChartProfileState(JSON.parse(JSON.stringify(saved))))
+      .toMatchObject({ timeframe: "15s", visibleBars: 1_500 });
+    expect(normalizeLiquidityChartProfileState({ timeframe: "15s", visibleBars: 20_000 }).visibleBars)
+      .toBe(11_520);
+  });
+
+  it("restores independent iceberg session filters across profile saves", () => {
+    const state = normalizeLiquidityChartProfileState({
+      showNativeIcebergs: false, nativeIcebergSessionMinVolumes: { us: 25, other: 8 },
+    });
+    expect(normalizeLiquidityChartProfileState(JSON.parse(JSON.stringify(state)))).toMatchObject({
+      showNativeIcebergs: false, nativeIcebergSessionMinVolumes: { us: 25, other: 8 },
+    });
+    expect(normalizeLiquidityChartProfileState({ nativeIcebergSessionMinVolumes: { us: -5, other: 7 } }))
+      .toMatchObject({ showNativeIcebergs: true, nativeIcebergSessionMinVolumes: { us: 1, other: 7 } });
+    expect(normalizeLiquidityChartProfileState({ nativeIcebergMinVolume: 1 }))
+      .toMatchObject({ nativeIcebergSessionMinVolumes: { us: 10, other: 5 } });
+  });
+
+  it("migrates older ICE profiles to Auto and round-trips explicit filter preferences", () => {
+    expect(normalizeLiquidityChartProfileState({})).toMatchObject({
+      nativeIcebergFilters: { automatic: true, lookbackMinutes: 60, standardDeviations: 1, applyToActive: true },
+    });
+    const saved = normalizeLiquidityChartProfileState({ nativeIcebergFilters: {
+      automatic: false, showFiltered: true, aggregateMinVolume: 25, showCanceled: false,
+    } });
+    expect(normalizeLiquidityChartProfileState(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
+    expect(saved.nativeIcebergFilters).toMatchObject({ automatic: false, showFiltered: true,
+      aggregateMinVolume: 25, showCanceled: false });
   });
 
   it("restores chart viewport and lets shared BigTrade settings stay authoritative", () => {

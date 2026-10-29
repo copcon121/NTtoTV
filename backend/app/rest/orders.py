@@ -6,6 +6,7 @@ import asyncio
 from contextlib import contextmanager
 from dataclasses import replace
 import logging
+import math
 import secrets
 from typing import Any, Iterator
 
@@ -119,12 +120,20 @@ async def create_order(
     volume = _required_number(body, "volumeLots")
     gc_anchored = bool(body.get("gcAnchored", True))
     take_profit_1r_enabled = _optional_bool(body, "takeProfit1rEnabled", False)
+    take_profit_r = body.get("takeProfitR", 1.0)
+    if (
+        isinstance(take_profit_r, bool)
+        or not isinstance(take_profit_r, (int, float))
+        or not math.isfinite(take_profit_r)
+        or take_profit_r < 0.1
+    ):
+        raise bad_request("Take profit R must be a finite number >= 0.1", field="takeProfitR")
     auto_supertrend_after_1r_enabled = _optional_bool(
         body, "autoSupertrendAfter1rEnabled", False
     )
     if auto_supertrend_after_1r_enabled and not take_profit_1r_enabled:
         raise bad_request(
-            "Auto SuperTrend after 1R requires 50% take profit at 1R",
+            "Auto SuperTrend after partial close requires 50% take profit",
             field="autoSupertrendAfter1rEnabled",
         )
     trailing_timeframe, trailing_config = _trailing_config(
@@ -164,9 +173,13 @@ async def create_order(
             entry_gc = snap.price
         if sl_gc is None and "slDistanceGc" in body:
             sl_distance = _required_number(body, "slDistanceGc")
+            if sl_distance <= 0:
+                raise bad_request("Stop loss distance must be positive", field="slDistanceGc")
             sl_gc = entry_gc - sl_distance if side is OrderSide.BUY else entry_gc + sl_distance
         if tp_gc is None and "tpDistanceGc" in body:
             tp_distance = _required_number(body, "tpDistanceGc")
+            if tp_distance <= 0:
+                raise bad_request("Take profit distance must be positive", field="tpDistanceGc")
             tp_gc = entry_gc + tp_distance if side is OrderSide.BUY else entry_gc - tp_distance
 
         broker_mid = (tick.bid + tick.ask) / 2
@@ -226,7 +239,18 @@ async def create_order(
             raise conflict("GC/XAU basis is stale; trading is paused", field="basis")
         if source is OrderSource.CHART_BRACKET and kind is not OrderKind.MARKET and entry_broker is not None:
             kind = _pending_kind_for_broker_price(side, entry_broker.price, tick)
-        _guard_stops(entry_broker.price if entry_broker else None, sl_broker.price if sl_broker else None, tp_broker.price if tp_broker else None, symbol_info.stops_level)
+        stop_reference = (
+            tick.bid if side is OrderSide.BUY else tick.ask
+        ) if kind is OrderKind.MARKET else entry_broker.price
+        direction = 1 if side is OrderSide.BUY else -1
+        for level, field, distance in (
+            (sl_broker, "slGc", None if sl_broker is None else direction * (stop_reference - sl_broker.price)),
+            (tp_broker, "tpGc", None if tp_broker is None else direction * (tp_broker.price - stop_reference)),
+        ):
+            if level is not None and (distance <= 0 or distance + 1e-9 < symbol_info.stops_level):
+                raise bad_request("Stop is on the wrong side or inside the broker spread/stops level", field=field)
+        if source is OrderSource.MARKET_BAR and kind is OrderKind.MARKET:
+            gc_anchored = False
 
         now = now_ms()
         order = OrderRecord(
@@ -243,6 +267,7 @@ async def create_order(
             volume_lots=volume,
             gc_anchored=gc_anchored,
             take_profit_1r_enabled=take_profit_1r_enabled,
+            take_profit_r=float(take_profit_r),
             auto_supertrend_after_1r_enabled=auto_supertrend_after_1r_enabled,
             trailing_timeframe=trailing_timeframe,
             trailing_period=None if trailing_config is None else trailing_config.period,
@@ -266,14 +291,18 @@ async def create_order(
             basis_at_submit=(entry_broker or sl_broker or tp_broker).basis if (entry_broker or sl_broker or tp_broker) else None,
             basis_at_last_sync=(entry_broker or sl_broker or tp_broker).basis if (entry_broker or sl_broker or tp_broker) else None,
         )
-        cache.orders.create(order)
+        if not cache.orders.create_once(order):
+            existing = cache.orders.read_by_idempotency(user.id, idempotency)
+            return {"order": order_to_dict(existing), "idempotent": True}
         cache.orders.append_event(OrderEventRecord(order.id, user.id, "created", order_to_dict(order), now))
 
         try:
             result = mt5.place_order(order)
         except Exception as exc:
-            order.status = OrderStatus.REJECTED
-            order.reject_reason = str(exc)
+            # The broker may have executed before transport/response handling
+            # failed. Retain the order for reconciliation instead of inviting
+            # another entry by marking it rejected.
+            order.status = OrderStatus.SYNC_ERROR
             order.last_broker_error_message = str(exc)
             order.updated_at = now_ms()
             cache.orders.update(order)
@@ -282,12 +311,12 @@ async def create_order(
                     order.id,
                     user.id,
                     "broker_exception",
-                    {"errorMessage": str(exc)},
+                    {"errorMessage": str(exc), "outcomeUnknown": True},
                     now_ms(),
                 )
             )
             _enqueue_order_update(request, order)
-            raise conflict(f"MT5 order failed: {exc}", field="account")
+            raise conflict(f"MT5 order outcome is unknown; check open trades before placing again: {exc}", field="account")
     order.submitted_at = now_ms()
     order.updated_at = order.submitted_at
     if result.accepted:
@@ -296,6 +325,16 @@ async def create_order(
         order.broker_position_ticket = result.broker_position_ticket
         order.broker_deal_ticket = result.broker_deal_ticket
         order.fill_price_broker = result.fill_price
+        if result.submitted_entry_price is not None:
+            order.entry_broker = result.submitted_entry_price
+            order.sl_broker = result.submitted_sl_price
+            order.tp_broker = result.submitted_tp_price
+            # Keep the submitted bracket and its chart projection consistent
+            # across the worker process boundary.
+            submit_basis = order.basis_at_submit or 0.0
+            order.entry_gc = round(order.entry_broker - submit_basis, 1)
+            order.sl_gc = None if order.sl_broker is None else round(order.sl_broker - submit_basis, 1)
+            order.tp_gc = None if order.tp_broker is None else round(order.tp_broker - submit_basis, 1)
         if result.fill_price is not None:
             fill_gc = basis.from_broker(result.fill_price, symbol_map)
             order.fill_price_gc_estimate = fill_gc.price
@@ -312,7 +351,14 @@ async def create_order(
             order.id,
             user.id,
             "broker_result",
-            {"accepted": result.accepted, "status": result.status},
+            {
+                "accepted": result.accepted,
+                "status": result.status,
+                "entryBroker": order.entry_broker,
+                "slBroker": order.sl_broker,
+                "tpBroker": order.tp_broker,
+                "fillPriceBroker": order.fill_price_broker,
+            },
             now_ms(),
         )
     )
@@ -370,9 +416,9 @@ async def patch_order(
         except Exception as exc:
             raise conflict(f"MT5 tick lookup failed: {exc}", field="symbolBroker")
         basis.update_broker_mid((tick.bid + tick.ask) / 2, tick.time)
-        entry_broker = None if candidate.entry_gc is None else basis.to_broker(candidate.entry_gc, symbol_map)
-        sl_broker = None if candidate.sl_gc is None else basis.to_broker(candidate.sl_gc, symbol_map)
-        tp_broker = None if candidate.tp_gc is None else basis.to_broker(candidate.tp_gc, symbol_map)
+        entry_broker = None if "entryGc" not in body or candidate.entry_gc is None else basis.to_broker(candidate.entry_gc, symbol_map)
+        sl_broker = None if "slGc" not in body or candidate.sl_gc is None else basis.to_broker(candidate.sl_gc, symbol_map)
+        tp_broker = None if "tpGc" not in body or candidate.tp_gc is None else basis.to_broker(candidate.tp_gc, symbol_map)
         if any(c is not None and c.stale for c in (entry_broker, sl_broker, tp_broker)):
             raise conflict("GC/XAU basis is stale; trading is paused", field="basis")
         _guard_stops(
@@ -383,10 +429,10 @@ async def patch_order(
         )
         if entry_broker is not None:
             candidate.entry_broker = entry_broker.price
-        if sl_broker is not None:
-            candidate.sl_broker = sl_broker.price
-        if tp_broker is not None:
-            candidate.tp_broker = tp_broker.price
+        if "slGc" in body:
+            candidate.sl_broker = None if sl_broker is None else sl_broker.price
+        if "tpGc" in body:
+            candidate.tp_broker = None if tp_broker is None else tp_broker.price
         converted = entry_broker or sl_broker or tp_broker
         if converted is not None:
             candidate.basis_at_last_sync = converted.basis
@@ -676,7 +722,7 @@ def _required_str(body: dict[str, Any], field: str) -> str:
 
 def _required_number(body: dict[str, Any], field: str) -> float:
     value = body.get(field)
-    if not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise bad_request(f"Missing or invalid field {field!r}", field=field)
     return float(value)
 
@@ -685,7 +731,7 @@ def _optional_number(body: dict[str, Any], field: str) -> float | None:
     value = body.get(field)
     if value is None:
         return None
-    if not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise bad_request(f"Field {field!r} must be a number", field=field)
     return float(value)
 

@@ -27,7 +27,8 @@ DEFAULT_RESOLVER_QUOTE_WEIGHT = 0.1
 # User-facing symbols supported by the platform. v1 ships GC only; the Frontend
 # presents the symbol as ``GC`` (Req 10.1, 18.1).
 DEFAULT_SUPPORTED_SYMBOLS = ("GC",)
-DEFAULT_OPENAI_BASE_URL = "http://43.228.214.251:20128/v1"
+# The installed 9router exposes an OpenAI-compatible API on this machine.
+DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:20128/v1"
 DEFAULT_RPROTOCOL_ARCHIVE = Path(__file__).resolve().parents[2] / "RProtocolAPI.zip"
 
 # Configured GC Candidate_Contract list. The REST contracts endpoints surface
@@ -171,6 +172,26 @@ class Settings:
         default_factory=lambda: float(os.getenv("NTTOTV_RITHMIC_RECONNECT_MAX_S", "30"))
     )
 
+    # Read-only History Plant audits are separate from realtime arbitration.
+    rithmic_history_enabled: bool = field(
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_HISTORY_ENABLED", "1") == "1"
+    )
+    rithmic_history_audit_s: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_RITHMIC_HISTORY_AUDIT_S", "300"))
+    )
+    rithmic_history_initial_lookback_days: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_RITHMIC_HISTORY_INITIAL_LOOKBACK_DAYS", "30"))
+    )
+    rithmic_history_request_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("NTTOTV_RITHMIC_HISTORY_REQUEST_TIMEOUT_S", "120"))
+    )
+    rithmic_history_quiet_s: float = field(
+        default_factory=lambda: float(os.getenv("NTTOTV_RITHMIC_HISTORY_QUIET_S", "2"))
+    )
+    rithmic_history_weekly_byte_limit: int = field(
+        default_factory=lambda: int(os.getenv("NTTOTV_RITHMIC_HISTORY_WEEKLY_BYTE_LIMIT", "38000000000"))
+    )
+
     # Raw tick retention (see Requirements 7.4, 7.5). This is a calendar-day
     # count including today's UTC shard. Keep three months for ML/replay.
     # Derived footprints remain persistent (no automatic cache deletion).
@@ -244,6 +265,9 @@ class Settings:
     analyst_enabled: bool = field(
         default_factory=lambda: os.getenv("NTTOTV_ANALYST_ENABLED", "0") == "1"
     )
+    mp_planner_enabled: bool = field(
+        default_factory=lambda: os.getenv("NTTOTV_MP_PLANNER_ENABLED", "0") == "1"
+    )
     analyst_db_name: str = field(
         default_factory=lambda: os.getenv("NTTOTV_ANALYST_DB_NAME", "analyst.sqlite")
     )
@@ -280,7 +304,7 @@ class Settings:
         )
     )
     llm_model: str = field(
-        default_factory=lambda: os.getenv("NTTOTV_LLM_MODEL", "cx/gpt-5.5")
+        default_factory=lambda: os.getenv("NTTOTV_LLM_MODEL", "cx/gpt-6.1-sol")
     )
     llm_reasoning_effort: str = field(
         default_factory=lambda: os.getenv("NTTOTV_LLM_REASONING_EFFORT", "medium")

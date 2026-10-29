@@ -27,6 +27,16 @@ function open() {
 }
 
 describe("IndicatorToggles", () => {
+  it("keeps the liquidity-page iceberg control out of the main-chart menu", () => {
+    render(<IndicatorToggles footprint={false} bigTrades={false} ema={EMA} smc={SMC}
+      footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+      onFootprintSettingsChange={() => {}}
+      onFootprintChange={() => {}} onBigTradesChange={() => {}}
+      onEmaChange={() => {}} onSmcChange={() => {}} />);
+    open();
+    expect(screen.queryByText(/Native Icebergs/i)).not.toBeInTheDocument();
+  });
+
   it("configures the optional Orderflows Gaps swing filter", () => {
     const onSettings = vi.fn();
     render(
@@ -879,6 +889,8 @@ describe("IndicatorToggles", () => {
     fireEvent.blur(fvgLimit);
     fireEvent.click(showPd);
     fireEvent.click(showSwingFib);
+    fireEvent.click(screen.getByLabelText("SMC show swing labels"));
+    expect(onSmc).toHaveBeenCalledWith({ ...SMC, showSwingLabels: false });
 
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, swingLength: 21 });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, internalLength: 3 });

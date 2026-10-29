@@ -26,6 +26,9 @@ from .config import settings as default_settings
 from .analyst.event_provider import LlmAnalystEventProvider, MockAnalystEventProvider
 from .analyst.poi_scanner import PoiScanner
 from .analyst.store import AnalystStore
+from .market_profile.llm import MpLlmClient
+from .market_profile.planner import MpPlanner
+from .market_profile.store import MpStore
 from .engines.anchored_sync import AnchoredSyncEngine
 from .engines.auto_mgann_trade import AutoMgannTradeEngine
 from .engines.chart_limit_take_profit import ChartLimitTakeProfitEngine
@@ -37,10 +40,11 @@ from .engines.reconciliation import ReconciliationEngine
 from .ingest.control_plane import ControlPlaneCoordinator
 from .pipeline import Pipeline
 from .rithmic.service import RithmicMarketDataService
+from .rithmic.history_sync import RithmicHistoryService
 from .registry.registry import OutboundEvent, WebSocketRegistry
 from .rest.contract_state import ContractStateStore
 from .storage.cache_store import CacheStore
-from .storage.liquidity_store import LiquidityStore
+from .storage.liquidity_store import ICEBERG_RETENTION_MS, LiquidityStore
 from .storage.tick_store import TickStore
 from .mt5.manager import Mt5Manager
 
@@ -91,10 +95,10 @@ class AppRuntime:
         if resolver is None and s.gc_candidate_contracts:
             self._contract_state.set_active(self._symbol, s.gc_candidate_contracts[-1])
         self._analyst_store: AnalystStore | None = (
-            AnalystStore(s.analyst_db_path) if s.analyst_enabled else None
+            AnalystStore(s.analyst_db_path) if s.analyst_enabled or s.mp_planner_enabled else None
         )
         self._poi_scanner: PoiScanner | None = None
-        if self._analyst_store is not None:
+        if self._analyst_store is not None and s.analyst_enabled:
             self._poi_scanner = PoiScanner(
                 cache=self._cache,
                 store=self._analyst_store,
@@ -148,7 +152,14 @@ class AppRuntime:
             manual_trailing_closed_bar_sink=self._on_manual_supertrend_closed_bar,
             enable_tick_fvg_signal=False,
         )
+        self.mp_planner: MpPlanner | None = None
+        if s.mp_planner_enabled and self._analyst_store is not None:
+            self.mp_planner = MpPlanner(
+                self._cache, MpStore(self._analyst_store),
+                MpLlmClient.from_settings(s), self._pipeline.alert_engine,
+            )
         self._rithmic_service: RithmicMarketDataService | None = None
+        self._rithmic_history_service: RithmicHistoryService | None = None
         if s.rithmic_enabled:
             if not s.rithmic_shadow_mode:
                 logger.info(
@@ -157,6 +168,9 @@ class AppRuntime:
             self._rithmic_service = RithmicMarketDataService.from_settings(
                 s, self._pipeline
             )
+            if s.rithmic_history_enabled:
+                self._rithmic_history_service = RithmicHistoryService.from_settings(s, self._cache, self._pipeline)
+                self._pipeline.bind_history_sync_requester(self._rithmic_history_service.request_sync)
         self._flush_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._retention_task: asyncio.Task[None] | None = None
@@ -302,11 +316,19 @@ class AppRuntime:
             self._reconciliation_task = asyncio.create_task(self._reconciliation_loop())
         if self._poi_scanner is not None:
             self._poi_scanner.start()
+        if self.mp_planner is not None:
+            self.mp_planner.start()
         if self._rithmic_service is not None:
             await self._rithmic_service.start()
+        if self._rithmic_history_service is not None:
+            await self._rithmic_history_service.start()
 
     async def stop(self) -> None:
         """Cancel the background loops and close the stores."""
+        if self._rithmic_history_service is not None:
+            await self._rithmic_history_service.stop()
+        if self.mp_planner is not None:
+            await self.mp_planner.stop()
         if self._rithmic_service is not None:
             await self._rithmic_service.stop()
         for task in (
@@ -451,6 +473,10 @@ class AppRuntime:
         )
         events, lines = await asyncio.to_thread(
             self._liquidity_store.purge_before, cutoff
+        )
+        await asyncio.to_thread(
+            self._liquidity_store.purge_icebergs_before,
+            int(datetime.now(timezone.utc).timestamp() * 1000) - ICEBERG_RETENTION_MS,
         )
         if events or lines:
             logger.info(

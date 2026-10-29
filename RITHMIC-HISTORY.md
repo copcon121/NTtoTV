@@ -1,5 +1,48 @@
 # Rithmic raw history and ML footprint archive
 
+## Automatic Windows chart repair
+
+When the direct Rithmic connector is enabled, the backend also starts a separate
+read-only History Plant service. It audits the trailing 24 hours every five
+minutes and requests another audit after a Rithmic connect, disconnect, or
+sequence gap. A longer outage is recovered from the latest cached closed minute;
+an empty cache defaults to a 30-day initial lookback.
+Each audit compares minute summaries, saved provenance and ladder totals. Dense
+volume profiles are downloaded only for missing/revised data and the recent
+overlap; complete older ladders are reused to keep weekly downloads bounded.
+
+The service repairs closed M1 candles, final delta and footprint ladders, then
+rebuilds closed larger-timeframe bars/delta. It does not fabricate 15s/30s bars
+from minute history. Cache-miss rebuilds can use locally recorded Rithmic ticks.
+Bookmap/NT rows, open bars, physical-contract ML archives, and history owned by
+a different physical contract are preserved. Matching realtime delta extrema
+are retained; missing extrema can only be bounded by the final minute delta.
+Unclassified traded volume remains unknown in `footprint_history_quality`.
+
+Repair writes use the existing source lock and SQLite single writer. Downloaded
+rows never enter live tick evaluation, alerts, or order execution. The main chart
+and `/lq` refresh REST data after a successful repair, without a browser reload.
+`GET /api/market-data/status` exposes `historySync` with state, pending ranges,
+last success, written counts and weekly download usage. Failed or unterminated
+responses never advance the successful watermark.
+
+The LQ page also reloads its 48-hour candle and Volume Delta viewport after a
+websocket reconnect, browser resume, or network recovery. Existing delta stays
+visible during reload; REST repairs completed buckets while newer live updates
+are preserved. Candle loading is independent of liquidity/Market Explorer
+overlay failures, so an unavailable overlay cannot discard recovered candles.
+
+Settings: `NTTOTV_RITHMIC_HISTORY_ENABLED=1`,
+`NTTOTV_RITHMIC_HISTORY_AUDIT_S=300`,
+`NTTOTV_RITHMIC_HISTORY_INITIAL_LOOKBACK_DAYS=30`, and
+`NTTOTV_RITHMIC_HISTORY_WEEKLY_BYTE_LIMIT=38000000000`.
+The service uses the existing Windows DPAPI-loaded credential and live connector
+identity; no Oracle Admin configuration is read or changed. L2/MBO/iceberg gaps
+cannot be reconstructed from minute bars and volume profiles.
+
+The manual workflow below remains independent and retains its tick-level ML
+archive, resumable hourly downloads, and raw retention behavior.
+
 Windows backend raw retention is 90 UTC calendar days including today. The
 runtime launcher pins `NTTOTV_TICK_RETENTION_DAYS=90`. Existing derived footprint
 history remains persistent; no old footprint data is deleted by this change.

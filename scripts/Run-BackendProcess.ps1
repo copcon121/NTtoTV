@@ -20,9 +20,27 @@ $env:NTTOTV_LIVE_TRADING_ENABLED = "1"
 $env:NTTOTV_INVITE_CODE = "join-9999"
 $env:NTTOTV_MARKET_DATA_PREFERRED_SOURCE = "bookmap"
 $env:NTTOTV_TICK_RETENTION_DAYS = "90"
+$env:NTTOTV_MP_PLANNER_ENABLED = "1"
+
+# Load the persisted provider settings before launch. IDE/terminal processes can
+# retain old inherited values after the Windows User configuration is changed.
+foreach ($settingName in @(
+    "NTTOTV_OPENAI_API_KEY", "NTTOTV_OPENAI_BASE_URL", "OPENAI_BASE_URL",
+    "NTTOTV_LLM_MODEL", "NTTOTV_LLM_REASONING_EFFORT"
+)) {
+    $settingValue = [Environment]::GetEnvironmentVariable($settingName, "User")
+    if ($settingValue -and (
+        $settingName.StartsWith("NTTOTV_") -or
+        -not [Environment]::GetEnvironmentVariable($settingName, "Process")
+    )) {
+        [Environment]::SetEnvironmentVariable($settingName, $settingValue, "Process")
+    }
+}
 
 # Rithmic Paper Trading connector (profile compatible with Bookmap 7.4.0.21)
 $env:NTTOTV_RITHMIC_ENABLED = "1"
+$env:NTTOTV_RITHMIC_HISTORY_ENABLED = "1"
+$env:NTTOTV_RITHMIC_HISTORY_AUDIT_S = "300"
 $env:NTTOTV_RITHMIC_SHADOW_MODE = "0"
 $env:NTTOTV_RITHMIC_URI = "wss://rprotocol-mobile.rithmic.com:443"
 $env:NTTOTV_RITHMIC_SYSTEM = "Rithmic Paper Trading"

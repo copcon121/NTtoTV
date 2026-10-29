@@ -92,6 +92,13 @@ Backend storage:
 - `backend/data/ticks/GC/<contract>/<YYYY-MM-DD>.sqlite`: raw trade/quote shards.
 - `backend/data/liquidity.sqlite`: relative/absolute liquidity markers and
   long-term line lifecycles, retained for 24 hours by default.
+  Compact native iceberg states persist here for 48 hours across restarts;
+  old-session active orders are shown as invalidated historical traces until
+  fresh MBO establishes a new identity. Raw MBO is never stored. The LQ candle
+  and Volume Delta viewport supports 48 hours to match iceberg history.
+  Iceberg display/sound minimums are saved per profile: fixed UTC+7 US
+  19:00-04:00 defaults to 10, other hours default to 5. Each iceberg uses its
+  detectedTime session; these windows are independent of New York/DST.
 - Raw tick retention is 90 calendar UTC days by default, including today.
   `NTTOTV_TICK_RETENTION_DAYS` controls it; the Windows runtime pins 90.
 - Footprint cache remains persistent; increasing raw retention does not delete
@@ -570,6 +577,12 @@ After the latest fixes:
   FVG grading uses finalized Bookmap/Rithmic 30s and 1m footprints, or finalized
   NT native 1m rows while NT is the selected fallback.
 - Direct Rithmic Paper L1/L2/MBO is enabled as the first fallback below Bookmap.
+  Windows also runs a read-only History Plant worker: startup/reconnect/sequence
+  gaps trigger repair, and the trailing 24 hours are audited every 300 seconds.
+  Closed M1 bars/delta/footprint and larger rollups are repaired under the source
+  lock; Bookmap/NT rows and live bars are preserved. `/api/market-data/status`
+  exposes `historySync`, and chart/LQ refresh after success. Minute replay does
+  not reconstruct 15s/30s or MBO/icebergs. See `RITHMIC-HISTORY.md`.
   It becomes selectable only after a 65-second continuous warm-up, and falls
   back to NT on disconnect/staleness. Credentials are DPAPI-encrypted outside
   the repository; do not put them in source, logs, or runtime-state JSON.

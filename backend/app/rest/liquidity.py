@@ -194,8 +194,8 @@ async def liquidity_history(
     to: int | None = Query(None),
     limit: int = Query(10_000, ge=1, le=20_000),
 ) -> dict:
-    if tf not in {"30s", "1m", "5m"}:
-        raise bad_request("Liquidity chart supports only 30s, 1m and 5m", field="tf")
+    if tf not in {"15s", "30s", "1m", "5m"}:
+        raise bad_request("Liquidity chart supports only 15s, 30s, 1m and 5m", field="tf")
     end = now_ms() if to is None else int(to)
     retention_ms = default_settings.liquidity_retention_hours * 60 * 60 * 1000
     start = end - retention_ms if from_ is None else int(from_)
@@ -208,7 +208,7 @@ async def liquidity_history(
     lines = [
         line for line in lines if _line_matches_settings(line, settings, end)
     ]
-    bucket_ms = {"30s": 30_000, "1m": 60_000, "5m": 300_000}[tf]
+    bucket_ms = {"15s": 15_000, "30s": 30_000, "1m": 60_000, "5m": 300_000}[tf]
     for event in events:
         event["bucketTime"] = event["time"] - event["time"] % bucket_ms
     return {

@@ -38,7 +38,7 @@ import asyncio
 import inspect
 import logging
 import math
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from dataclasses import dataclass, field, replace
 from typing import Awaitable, Callable
 
@@ -82,6 +82,7 @@ from .models.messages import (
     FootprintUpdate,
     FvgSignalUpdate,
     LiquidityUpdate,
+    IcebergUpdate,
     MarketExplorerUpdate,
     MarketDataStatus,
     NTStatusEvent,
@@ -94,7 +95,7 @@ from .models.messages import (
 from .registry.registry import OutboundEvent, WebSocketRegistry
 from .rest.notifications import send_telegram_alert_from_event, send_web_push_alert_from_event
 from .storage.cache_store import CacheStore
-from .storage.liquidity_store import LiquidityStore
+from .storage.liquidity_store import ICEBERG_RETENTION_MS, LiquidityStore
 from .storage.records import (
     BarRecord,
     BigTradeRecord,
@@ -265,12 +266,17 @@ class Pipeline:
         trend_analyzer: TrendAnalyzerEngine | None = None,
     ) -> None:
         self._settings = settings or default_settings
+        self._history_sync_requester = None
+        self._history_sync_status: dict = {}
         self._registry = registry
         self._cache = cache
         self._tick_store = tick_store
         self._liquidity_store = liquidity_store
         self._resolver = resolver
         self._symbol = symbol
+        # Compact direct-feed detections are independent of OHLCV ownership.
+        # Raw MBO stays in the Rithmic service; retain only bounded latest states.
+        self._icebergs: OrderedDict[tuple[str, str, str], IcebergUpdate] = OrderedDict()
         self._auto_trade_closed_bar_sink = auto_trade_closed_bar_sink
         self._auto_trade_price_sink = auto_trade_price_sink
         self._manual_trailing_closed_bar_sink = manual_trailing_closed_bar_sink
@@ -647,6 +653,7 @@ class Pipeline:
         self._rithmic_liquidity.reset()
         self._source_liquidity_lines["rithmic"].clear()
         self._note_feed_heartbeat("rithmic", now_ms())
+        self._request_rithmic_history()
 
     async def on_rithmic_disconnect(self, reason: str | None = None) -> None:
         state = self._feed_states["rithmic"]
@@ -659,7 +666,26 @@ class Pipeline:
             await self._publish_long_term_liquidity_touches(
                 self._long_term_liquidity_touch.flush_all()
             )
+        self._request_rithmic_history()
         await self._evaluate_source_selection(now_ms())
+
+    def bind_history_sync_requester(self, requester: Callable[[], None] | None) -> None:
+        self._history_sync_requester = requester
+
+    def _request_rithmic_history(self) -> None:
+        if self._history_sync_requester is not None:
+            self._history_sync_requester()
+
+    async def persist_rithmic_history(self, physical_contract: str,
+                                     persist: Callable[[], tuple[int, int]]) -> tuple[int, int]:
+        async with self._derived_source_lock:
+            if physical_contract != self._active_contract():
+                raise ValueError("History source contract differs from the active chart contract")
+            return await asyncio.to_thread(persist)
+
+    async def on_rithmic_history_status(self, status: dict) -> None:
+        self._history_sync_status = dict(status)
+        await self._enqueue(OutboundEvent.from_message(self.market_data_status_message()))
 
     async def on_rithmic_health(self, details: dict) -> None:
         state = self._feed_states["rithmic"]
@@ -692,6 +718,7 @@ class Pipeline:
         if sequence_gap:
             state.sequence_gaps += 1
             state.orderflow_gap_pending = True
+            self._request_rithmic_history()
         elif bool(details.get("mboSynchronized", False)):
             state.orderflow_gap_pending = False
         if book_update is not None:
@@ -712,6 +739,7 @@ class Pipeline:
         if decision.outcome is SeqOutcome.GAP:
             state.sequence_gaps += 1
             state.orderflow_gap_pending = True
+            self._request_rithmic_history()
         state.contract = trade.contract
         self._note_feed_event("rithmic", trade.time, trade.bridge_time, received)
         if trade.contract != self._active_contract():
@@ -723,6 +751,90 @@ class Pipeline:
         await self._run_trade_engines(
             _trade_for_contract(trade, self._chart_contract()), source="rithmic"
         )
+
+    async def on_rithmic_icebergs(self, events: list[dict]) -> None:
+        """Publish direct MBO detections even while Bookmap supplies candles.
+
+        Order identities never cross source contracts or connection generations.
+        This dedicated channel cannot overwrite shared OHLCV/order-flow rows.
+        """
+        accepted = []
+        for event in events:
+            update = IcebergUpdate.from_dict(event)
+            if update.symbol != self._symbol or update.contract != self._chart_contract():
+                continue
+            key = (update.source_contract, update.session_id, update.order_id)
+            previous = self._icebergs.get(key)
+            if previous is not None and update.sequence <= previous.sequence:
+                continue
+            self._icebergs[key] = update
+            self._icebergs.move_to_end(key)
+            while len(self._icebergs) > 5_000:
+                self._icebergs.popitem(last=False)
+            accepted.append(update)
+        if self._liquidity_store is not None and accepted:
+            await asyncio.to_thread(
+                self._liquidity_store.record_icebergs, [row.to_dict() for row in accepted]
+            )
+        for update in accepted:
+            if update.source_contract == self._active_contract():
+                await self._enqueue(OutboundEvent.from_message(update))
+
+    def iceberg_snapshot(
+        self, *, limit: int = 500, min_volume: int = 1,
+        frm: int | None = None, to: int | None = None,
+    ) -> dict:
+        """Current detections plus two days of compact, persisted history."""
+        state = self._feed_states["rithmic"]
+        source_contract = self._active_contract()
+        start = frm
+        retained = {}
+        if self._liquidity_store is not None:
+            start = max(now_ms() - ICEBERG_RETENTION_MS, frm or 0)
+            stored = self._liquidity_store.read_icebergs(
+                self._symbol, self._chart_contract(), source_contract, start,
+                now_ms() if to is None else to, limit=limit, min_volume=min_volume,
+            )
+            retained = {(row["sourceContract"], row["sessionId"], row["orderId"]): row for row in stored}
+        for key, update in self._icebergs.items():
+            previous = retained.get(key)
+            if previous is None or update.sequence >= previous["sequence"]:
+                retained[key] = update.to_dict()
+        rows = [
+            row for row in retained.values()
+            if row["sourceContract"] == source_contract
+            and row["executedVolume"] >= min_volume
+            and (start is None or row["time"] >= start)
+            and (to is None or row["detectedTime"] <= to)
+        ]
+        for row in rows:
+            if row["status"] == "active" and (not state.connected
+                    or row["sessionId"] != state.details.get("icebergSessionId")):
+                # A restarted detector must re-establish identity from fresh MBO.
+                # End the historical trace at its last observation, not at restart.
+                row["status"] = "invalidated"
+                row["endTime"] = row["time"]
+        rows.sort(key=lambda row: (row["time"], row["sequence"]))
+        return {
+            "symbol": self._symbol,
+            "contract": self._chart_contract(),
+            "source": "rithmic",
+            "sourceContract": source_contract,
+            "sessionId": state.details.get("icebergSessionId"),
+            "connected": state.connected,
+            "synchronized": bool(
+                state.connected
+                and state.contract == source_contract
+                and state.details.get("icebergSynchronized", False)
+            ),
+            "method": "native",
+            "historyMode": "persistent" if self._liquidity_store is not None else "memory",
+            "retentionHours": ICEBERG_RETENTION_MS // 3_600_000,
+            "from": start,
+            "droppedOrders": int(state.details.get("icebergDroppedOrders", 0)),
+            "limit": limit,
+            "icebergs": rows[-limit:],
+        }
 
     async def on_rithmic_quote(self, quote: NormalizedQuote) -> None:
         """Record source-isolated direct BBO; never broadcast while shadowed."""
@@ -736,6 +848,7 @@ class Pipeline:
         state = self._feed_states["rithmic"]
         if decision.outcome is SeqOutcome.GAP:
             state.sequence_gaps += 1
+            self._request_rithmic_history()
         state.contract = quote.contract
         self._note_feed_event("rithmic", quote.time, quote.bridge_time, received)
 
@@ -1661,8 +1774,26 @@ class Pipeline:
                 fvg_level=fvg_confirmed_level,
                 fvg_direction=fvg_confirmed_direction,
             )
+            for update in bar_updates:
+                if update.tf == _ALERT_BAR_TF and not update.closed:
+                    await self._evaluate_live_fail_break(update, trade.time, vd_update)
             if self._auto_trade_price_sink is not None:
                 await _maybe_await(self._auto_trade_price_sink(trade.price, trade.time))
+
+    async def _evaluate_live_fail_break(
+        self, update: BarUpdate, event_time: int,
+        delta: VolumeDeltaUpdate | None = None,
+    ) -> None:
+        bar = update.bar
+        ctx = MarketContext(
+            symbol=update.symbol, contract=update.contract, time=event_time,
+            bar_closed=False, bar_tf=update.tf, bar_time=bar.time,
+            bar_open=bar.open, bar_high=bar.high, bar_low=bar.low,
+            bar_close=bar.close, bar_volume=bar.volume,
+            bar_volume_delta=(delta.delta if delta is not None
+                              and delta.time == bar.time and delta.tf == update.tf else None),
+        )
+        await self._emit_alerts(self._alerts.evaluate_live_fail_break(ctx))
 
     async def _evaluate_alerts(
         self,
@@ -1791,6 +1922,8 @@ class Pipeline:
         """Evaluate bar-close alerts from authoritative Bookmap bar snapshots."""
         for update in updates:
             if not update.closed:
+                if update.tf == _ALERT_BAR_TF:
+                    await self._evaluate_live_fail_break(update, event_time, volume_delta_update)
                 continue
             bar = update.bar
             breakout_events: list[BreakoutBoxEvent] = []
@@ -2379,6 +2512,7 @@ class Pipeline:
                 source: self._feed_status_dict(source, state, now)
                 for source, state in self._feed_states.items()
             },
+            history_sync=dict(self._history_sync_status),
         )
 
     def market_data_status_dict(self) -> dict:
@@ -3004,7 +3138,8 @@ class Pipeline:
     async def _emit_alerts(self, events) -> None:
         for ev in events:
             await self._send_web_push_safely(ev)
-            if self._registry.client_count == 0:
+            delivery_clients = getattr(self._registry, "alert_delivery_client_count", self._registry.client_count)
+            if ev.alert_id.startswith("mp_") or delivery_clients == 0:
                 await self._send_alert_text_safely(ev)
             await self._enqueue(OutboundEvent.from_message(ev))
 

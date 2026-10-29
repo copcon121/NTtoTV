@@ -499,8 +499,8 @@ const SMC_COMPUTATION_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const SMC_FVG_VOLUME_WARMUP_BARS = 20;
 
 /**
- * Keep live SMC work near one chart day while preserving enough warm-up bars
- * to confirm a pair of external swings and seed the configured rolling filters.
+ * Bound fast-timeframe work to a day plus warm-up; higher timeframes retain
+ * loaded history so older external pivots and their structures remain visible.
  */
 export function smcComputationBars(
   bars: readonly Bar[],
@@ -508,6 +508,10 @@ export function smcComputationBars(
   settings?: Partial<SmcSettings>,
 ): readonly Bar[] {
   const durationMs = barDurationForTimeframe(timeframe);
+  // Higher-timeframe external pivots can predate the most recent day by many
+  // sessions. Re-seeding from a short tail loses BOS/CHoCH and order blocks
+  // while PD still renders, so use the chart's loaded history on these TFs.
+  if (durationMs > 60_000) return bars;
   const oneDayBars = Math.max(1, Math.ceil(SMC_COMPUTATION_WINDOW_MS / durationMs));
   const swingLength = Math.max(
     1,
@@ -1505,6 +1509,7 @@ export function ChartContainer({
   useEffect(() => {
     portRef.current?.setTimezoneOffsetMinutes?.(timezoneOffsetMinutes);
   }, [timezoneOffsetMinutes]);
+
 
   useEffect(() => {
     const next = showBigTrades ? displayedBigTrades : [];

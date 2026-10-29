@@ -21,6 +21,7 @@ import {
   mergeMt5OpenTradeProfitUpdates,
   persistActiveProfileId,
   persistProfileHotSnapshot,
+  projectBrokerAnchoredOrders,
   readActiveProfileId,
   readProfileHotSnapshot,
   resolveEndpoints,
@@ -29,6 +30,7 @@ import {
   visibleDrawingsForTimeframe,
 } from "./LiveApp";
 import type { SupertrendTrailing } from "./api/client";
+import type { TradingOrder } from "./socket/messages";
 import {
   DEFAULT_EMA_SETTINGS,
   DEFAULT_FOOTPRINT_SETTINGS,
@@ -74,6 +76,51 @@ describe("resolveEndpoints", () => {
         host: "charts.example.test",
       }).ws,
     ).toBe("wss://charts.example.test/ws/chart");
+  });
+});
+
+describe("broker-fixed market bracket display", () => {
+  it("keeps pending SL/TP edits above stale broker and profit snapshots", () => {
+    const order = {
+      id: "ord_drag", source: "market_bar", kind: "market", gcAnchored: false,
+      brokerPositionTicket: 7, entryGc: 2360, slGc: 2357, tpGc: 2366,
+    } as TradingOrder;
+    const position = {
+      brokerPositionTicket: 7, side: "buy" as const, volumeLots: 0.1,
+      entryBroker: 2350, entryGcEstimate: 2365, slGc: 2362, tpGc: 2371,
+      updatedAt: 1,
+    };
+    const edits = new Map([[order.id, { slGc: 2363, tpGc: 2375 }]]);
+    const projected = projectBrokerAnchoredOrders([order], [position], edits)[0];
+    expect(projected).toMatchObject({ entryGc: 2365, slGc: 2363, tpGc: 2375 });
+    expect(projectBrokerAnchoredOrders([order], [
+      { ...position, profit: 20, updatedAt: 2 },
+    ], edits)[0]).toMatchObject({ slGc: 2363, tpGc: 2375 });
+    expect(position.slGc).toBe(2362);
+    expect(order.slGc).toBe(2357);
+    // Removing a rejected edit restores the actual broker levels.
+    expect(projectBrokerAnchoredOrders([order], [position])[0]).toMatchObject({
+      slGc: 2362, tpGc: 2371,
+    });
+  });
+
+  it("projects the actual MT5 position without changing stored order anchors", () => {
+    const order = {
+      id: "ord_fixed", source: "market_bar", kind: "market", gcAnchored: true,
+      brokerPositionTicket: 7, entryGc: 2360, slGc: 2357, tpGc: 2366,
+    } as TradingOrder;
+    const position = {
+      brokerPositionTicket: 7, side: "buy" as const, volumeLots: 0.1,
+      entryBroker: 2350, entryGcEstimate: 2365, slGc: 2362, tpGc: 2371,
+      updatedAt: 1,
+    };
+    expect(projectBrokerAnchoredOrders([order], [position])[0]).toMatchObject({
+      entryGc: 2365, slGc: 2362, tpGc: 2371,
+    });
+    expect(order.slGc).toBe(2357);
+    expect(projectBrokerAnchoredOrders([order], [])[0]).toBe(order);
+    const chartOrder = { ...order, source: "chart_bracket" as const, kind: "limit" as const };
+    expect(projectBrokerAnchoredOrders([chartOrder], [position])[0]).toBe(chartOrder);
   });
 });
 
@@ -210,6 +257,7 @@ describe("mobile chart limit order draft", () => {
       tpGc: 2366,
       gcAnchored: true,
       takeProfit1rEnabled: true,
+      takeProfitR: 1,
       autoSupertrendAfter1rEnabled: true,
     });
   });
@@ -232,6 +280,7 @@ describe("mobile chart limit order draft", () => {
       tpGc: 2374,
       gcAnchored: true,
       takeProfit1rEnabled: true,
+      takeProfitR: 1,
       autoSupertrendAfter1rEnabled: true,
     });
   });
@@ -244,6 +293,15 @@ describe("mobile chart limit order draft", () => {
         settings,
       }),
     ).toBeUndefined();
+  });
+
+  it("passes the custom partial take profit R to mobile limit orders", () => {
+    const draft = buildChartLimitOrderDraft({
+      entryPrice: 2360,
+      referencePrice: 2370,
+      settings: { ...settings, takeProfitR: 1.5 },
+    });
+    expect(draft?.takeProfitR).toBe(1.5);
   });
 
   it("sizes a chart bracket from the target risk and floors to the broker lot step", () => {

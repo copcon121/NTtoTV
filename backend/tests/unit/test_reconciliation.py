@@ -11,6 +11,67 @@ from app.storage.cache_store import CacheStore
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "status,kind,stored_ticket,pending,matching,expected_status,expected_ticket",
+    [
+        (OrderStatus.FILLED, OrderKind.LIMIT, 101, False, True, OrderStatus.FILLED, 202),
+        (OrderStatus.SYNC_ERROR, OrderKind.LIMIT, None, True, False, OrderStatus.SYNC_ERROR, None),
+        (OrderStatus.WORKING, OrderKind.LIMIT, None, False, False, OrderStatus.CANCELLED, None),
+        (OrderStatus.SYNC_ERROR, OrderKind.MARKET, None, False, False, OrderStatus.CLOSED, None),
+    ],
+)
+def test_reconciliation_uses_position_identity_instead_of_similar_trade(
+    tmp_path, status, kind, stored_ticket, pending, matching,
+    expected_status, expected_ticket,
+):
+    class PositionBackend:
+        def orders(self, user_id, account_id):
+            return [{"ticket": 202}] if pending else []
+
+        def positions(self, user_id, account_id):
+            rows = [{
+                "ticket": 101, "identifier": 101, "symbol": "XAUUSDm",
+                "side": "buy", "volumeLots": 0.1, "entryBroker": 4300.0,
+                "magic": 240606, "comment": "NTtoTV-ord-otherposition", "time": 2,
+            }]
+            if matching:
+                rows.append({
+                    "ticket": 202, "identifier": 202, "symbol": "XAUUSDm",
+                    "side": "buy", "volumeLots": 0.1, "entryBroker": 4301.0,
+                    "time": 3,
+                })
+            return rows
+
+    cache = CacheStore(tmp_path / "app.sqlite")
+    try:
+        user = cache.users.create_user("u", "p")
+        account = cache.users.upsert_mt5_account(
+            user_id=user.id, login=1, password="fake", server="Fake-Demo",
+            symbol_broker="XAUUSDm", credential_key="k",
+        )
+        cache.orders.create(OrderRecord(
+            id="ord_identity", user_id=user.id, account_id=account.id,
+            source=OrderSource.API, symbol_internal="GC", contract_internal="GC",
+            source_contract="GC 12-26", symbol_broker="XAUUSDm",
+            side=OrderSide.BUY, kind=kind, volume_lots=0.1, gc_anchored=True,
+            status=status, idempotency_key="identity", created_at=1, updated_at=1,
+            broker_order_ticket=202, broker_position_ticket=stored_ticket,
+            entry_broker=4300.0,
+        ))
+        manager = Mt5Manager(backend=PositionBackend())
+        ReconciliationEngine(cache, manager).run_account(account)
+        saved = cache.orders.read("ord_identity", user.id)
+        assert saved.status is expected_status
+        assert saved.broker_position_ticket == expected_ticket
+        if matching:
+            assert saved.fill_price_broker == 4301.0
+            assert saved.filled_at == 3
+            assert ReconciliationEngine(cache, manager).run_account(account) == 0
+    finally:
+        cache.close()
+
+
+@pytest.mark.unit
 def test_reconciliation_marks_missing_working_order_cancelled(tmp_path):
     cache = CacheStore(tmp_path / "app.sqlite")
     manager = Mt5Manager(backend=FakeMt5Backend())

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +9,8 @@ from fastapi.testclient import TestClient
 from app.app import create_app
 from app.config import Settings
 from app.engines.basis_engine import BasisEngine
+from app.engines.alert_engine import Alert, AlertEngine
+from app.engines.smc_fail_break import SMC_FAIL_BREAK_RETEST
 from app.rest import auth as auth_routes
 from app.rest.profiles import (
     MGANN_BREAK_SETTINGS_VERSION,
@@ -55,6 +58,24 @@ def test_register_creates_session_and_duplicate_conflicts(app_client: TestClient
         "/api/auth/login", json={"username": "alice", "password": "secret"}
     )
     assert login.status_code == 200
+
+
+@pytest.mark.integration
+def test_saved_smc_length_refreshes_dependent_fail_break_alert(app_client: TestClient):
+    assert app_client.post("/api/auth/register", json={"username": "smc-test", "password": "secret"}).status_code == 200
+    saved = app_client.put("/api/me/profile", json={"payload": {"smc": {"swingLength": 20}}})
+    assert saved.status_code == 200
+    profile_id = saved.json()["profile"]["id"]
+    cache = app_client.app.state.contract_state.cache
+    engine = AlertEngine(cache)
+    app_client.app.state.runtime = SimpleNamespace(pipeline=SimpleNamespace(alert_engine=engine))
+    engine.upsert(Alert(id="follow-profile", profile_id=profile_id, symbol="GC", type=SMC_FAIL_BREAK_RETEST,
+                        params={"swingLength": 50, "repeat": True}))
+    assert engine._fail_break_state["follow-profile"].params["swingLength"] == 20
+    changed = app_client.put("/api/me/profile", json={"payload": {"smc": {"swingLength": 35}}})
+    assert changed.status_code == 200
+    assert engine._fail_break_state["follow-profile"].params["swingLength"] == 35
+    assert cache.read_alert_events("follow-profile") == []
 
 
 @pytest.mark.integration

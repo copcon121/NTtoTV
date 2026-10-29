@@ -133,6 +133,10 @@ class AnalystStore:
     def db_path(self) -> Path:
         return self._db_path
 
+    @property
+    def writer(self) -> SingleWriter:
+        return self._writer
+
     def reader(self):
         return connect_reader(self._db_path)
 

@@ -209,9 +209,15 @@ def test_settings_default_llm_model_and_reasoning(monkeypatch):
 
     settings = Settings()
 
-    assert settings.llm_model == "cx/gpt-5.5"
+    assert settings.llm_model == "cx/gpt-6.1-sol"
     assert settings.llm_reasoning_effort == "medium"
     assert settings.llm_manual_reasoning_effort == "high"
+
+
+def test_default_api_uses_local_9router(monkeypatch):
+    monkeypatch.delenv("NTTOTV_OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    assert Settings().openai_base_url == "http://127.0.0.1:20128/v1"
 
 
 def test_responses_url_accepts_base_or_full_responses_endpoint():

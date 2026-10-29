@@ -7,6 +7,7 @@ import {
   normalizeMgannSwingSettings,
 } from "./mgannSwing";
 import type { Bar } from "../cache/types";
+import pbFixture from "../../../test-fixtures/mgann_pb_live.json";
 
 function bar(time: number, high: number, low: number): Bar {
   const close = (high + low) / 2;
@@ -134,6 +135,23 @@ function bullishImpulseBars(): Bar[] {
 }
 
 describe("MGannSwing model", () => {
+  it.each([false, true])("matches backend live PB before pivot confirmation (mirror=%s)", (mirror) => {
+    const bars = internalFiveSwingBars(pbFixture.pivotPrices, pbFixture.tailPrice).map((source, index) => ({
+      ...source,
+      time: source.time * 60_000,
+      volume: index >= pbFixture.boostVolumeFromIndex && index <= pbFixture.signalIndex
+        ? pbFixture.boostVolume : pbFixture.baseVolume,
+      ...(mirror ? { open: 200-source.open, high: 200-source.low, low: 200-source.high, close: 200-source.close } : {}),
+    }));
+    const live = buildMgannSwingOverlay(bars.slice(0, pbFixture.signalIndex+1), new Map(),
+      { smartFilter: false }, { includeDeveloping: true });
+    expect(live.signals).toContainEqual(expect.objectContaining({
+      time: pbFixture.signalIndex * 60_000, confirmed: false,
+      labels: expect.arrayContaining(["[PB]"]),
+    }));
+    const confirmed = buildMgannSwingOverlay(bars.slice(0, pbFixture.signalIndex+1), new Map(), { smartFilter: false });
+    expect(confirmed.signals.some((signal) => signal.time === pbFixture.signalIndex * 60_000)).toBe(false);
+  });
   it("uses fixed SMC internal-5 confirmed pivots for the zigzag line", () => {
     const bars = [
       bar(0, 10, 10),

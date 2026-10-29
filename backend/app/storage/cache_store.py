@@ -302,6 +302,7 @@ CREATE TABLE IF NOT EXISTS orders (
     volume_lots                REAL NOT NULL,
     gc_anchored                INTEGER NOT NULL,
     take_profit_1r_enabled     INTEGER NOT NULL DEFAULT 0,
+    take_profit_r              REAL NOT NULL DEFAULT 1.0,
     auto_supertrend_after_1r_enabled INTEGER NOT NULL DEFAULT 0,
     trailing_timeframe         TEXT,
     trailing_period            INTEGER,
@@ -459,6 +460,7 @@ class CacheStore:
         existing = {str(row["name"]) for row in rows}
         columns = {
             "take_profit_1r_enabled": "INTEGER NOT NULL DEFAULT 0",
+            "take_profit_r": "REAL NOT NULL DEFAULT 1.0",
             "auto_supertrend_after_1r_enabled": "INTEGER NOT NULL DEFAULT 0",
             "trailing_timeframe": "TEXT",
             "trailing_period": "INTEGER",

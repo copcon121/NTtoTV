@@ -463,6 +463,7 @@ def test_market_order_distances_are_anchored_to_broker_tick(client: TestClient):
             "slDistanceGc": 3,
             "tpDistanceGc": 6,
             "takeProfit1rEnabled": True,
+            "takeProfitR": 1.5,
             "autoSupertrendAfter1rEnabled": True,
             "trailingTimeframe": "5m",
             "trailingPeriod": 14,
@@ -478,7 +479,9 @@ def test_market_order_distances_are_anchored_to_broker_tick(client: TestClient):
     assert placed.entry_broker == 2350.1
     assert placed.sl_broker == 2347.1
     assert placed.tp_broker == 2356.1
+    assert placed.gc_anchored is False
     assert placed.take_profit_1r_enabled is True
+    assert placed.take_profit_r == 1.5
     assert placed.auto_supertrend_after_1r_enabled is True
     assert placed.trailing_timeframe == "5m"
     assert placed.trailing_period == 14
@@ -486,7 +489,127 @@ def test_market_order_distances_are_anchored_to_broker_tick(client: TestClient):
     assert placed.trailing_atr_method == "sma"
     assert placed.trailing_source == "close"
     assert resp.json()["order"]["takeProfit1rEnabled"] is True
+    assert resp.json()["order"]["takeProfitR"] == 1.5
+    listed = client.get("/api/orders").json()["orders"]
+    assert next(row for row in listed if row["id"] == placed.id)["takeProfitR"] == 1.5
     assert resp.json()["order"]["autoSupertrendAfter1rEnabled"] is True
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("field,value", [("slDistanceGc", 0), ("slDistanceGc", -3), ("tpDistanceGc", -6), ("slDistanceGc", True), ("slDistanceGc", 0.05)])
+def test_invalid_market_distances_do_not_reach_broker(client, field, value):
+    backend = _StrictSymbolBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    _login_and_connect(client)
+    payload = dict(source="market_bar", side="buy", kind="market", volumeLots=0.1,
+                   slDistanceGc=3, tpDistanceGc=6, idempotencyKey="bad-distance")
+    payload[field] = value
+    response = client.post("/api/orders", json=payload)
+    assert response.status_code == 400
+    assert backend.placed_orders == []
+
+
+@pytest.mark.integration
+def test_market_worker_bracket_is_saved_and_tp_edit_preserves_sl(client):
+    class MovedQuoteBackend(_StrictSymbolBackend):
+        def place_order(self, order):
+            result = super().place_order(order)
+            result.submitted_entry_price = 2351.1
+            result.submitted_sl_price = 2348.1
+            result.submitted_tp_price = 2357.1
+            result.fill_price = 2351.1
+            return result
+
+    backend = MovedQuoteBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    _login_and_connect(client)
+    response = client.post("/api/orders", json=dict(
+        source="market_bar", side="buy", kind="market", volumeLots=0.1,
+        referenceGc=2360, slDistanceGc=3, tpDistanceGc=6, idempotencyKey="moved-quote",
+    ))
+    assert response.status_code == 200
+    order = response.json()["order"]
+    assert order["entryBroker"] == 2351.1
+    assert order["slBroker"] == 2348.1
+    assert order["tpBroker"] == 2357.1
+    assert order["gcAnchored"] is False
+    client.app.state.basis_engine.update_gc(2365)
+    patched = client.patch(f"/api/orders/{order['id']}", json={"tpGc": 2380})
+    assert patched.status_code == 200
+    after = patched.json()["order"]
+    assert after["slBroker"] == order["slBroker"]
+    assert after["entryBroker"] == order["entryBroker"]
+
+
+@pytest.mark.integration
+def test_submission_claim_catches_duplicate_after_stale_lookup(client, monkeypatch):
+    backend = _StrictSymbolBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    _login_and_connect(client)
+    payload = dict(source="market_bar", side="buy", kind="market", volumeLots=0.1,
+                   slDistanceGc=3, tpDistanceGc=6, idempotencyKey="stale-lookup")
+    first = client.post("/api/orders", json=payload)
+    assert first.status_code == 200
+    store = client.app.state.contract_state.cache.orders
+    read = store.read_by_idempotency
+    lookups = []
+
+    def stale_read(user_id, key):
+        lookups.append(key)
+        return None if len(lookups) == 1 else read(user_id, key)
+
+    monkeypatch.setattr(store, "read_by_idempotency", stale_read)
+    second = client.post("/api/orders", json=payload)
+    assert second.status_code == 200
+    assert second.json()["idempotent"] is True
+    assert second.json()["order"]["id"] == first.json()["order"]["id"]
+    assert len(backend.placed_orders) == 1
+
+
+@pytest.mark.integration
+def test_lost_broker_reply_remains_reconcilable_and_is_not_resubmitted(client):
+    class LostReplyBackend(_PositionTrackingBackend):
+        def place_order(self, order):
+            result = super().place_order(order)
+            self.positions_by_ticket[result.broker_position_ticket]["orderId"] = order.id
+            raise RuntimeError("worker reply lost")
+
+    backend = LostReplyBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    _login_and_connect(client)
+    payload = dict(source="market_bar", side="buy", kind="market", volumeLots=0.1,
+                   slDistanceGc=3, tpDistanceGc=6, idempotencyKey="lost-reply")
+    first = client.post("/api/orders", json=payload)
+    assert first.status_code == 409
+    assert "outcome is unknown" in first.json()["error"]["message"]
+    retry = client.post("/api/orders", json=payload)
+    assert retry.status_code == 200
+    assert retry.json()["idempotent"] is True
+    assert retry.json()["order"]["status"] == "sync_error"
+    listed = client.get("/api/orders?openOnly=true")
+    assert listed.status_code == 200
+    assert listed.json()["orders"][0]["status"] == "filled"
+    assert len(backend.placed_orders) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("value", [0, -1, 0.01, True, "2", None])
+def test_partial_take_profit_rejects_invalid_r(client: TestClient, value):
+    _login_and_connect(client)
+    response = client.post(
+        "/api/orders",
+        json={
+            "source": "market_bar",
+            "side": "buy",
+            "kind": "market",
+            "volumeLots": 0.1,
+            "takeProfit1rEnabled": True,
+            "takeProfitR": value,
+            "idempotencyKey": "invalid-partial-r",
+        },
+    )
+    assert response.status_code == 400
+    assert "takeProfitR" in response.text
 
 
 @pytest.mark.integration

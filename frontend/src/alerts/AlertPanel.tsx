@@ -24,6 +24,8 @@ import {
 export interface AlertPanelProps {
   /** Configured alerts (from `GET /api/alerts`). */
   alerts: readonly Alert[];
+  error?: string;
+  smcSwingLength?: number;
   /** The most recent `alert_event`, or undefined. Drives toast and sound. */
   lastEvent?: AlertEventMessage;
   /** Enable/disable an alert (parent persists via PATCH). */
@@ -67,6 +69,7 @@ export interface AlertPanelProps {
 
 const DEFAULT_TOAST_MS = 4000;
 const SMC_EXTERNAL_BREAK_TYPE: AlertType = "smc_external_break_big_trade";
+const FAIL_BREAK_TYPE: AlertType = "smc_fail_break_retest";
 const LIQUIDITY_POOL_BREAK_TYPE: AlertType = "liquidity_pool_break";
 const MGANN_BREAK_LS_TYPE: AlertType = "mgann_break_ls";
 const MGANN_SWEEP_TYPE: AlertType = "mgann_sweep";
@@ -165,6 +168,9 @@ function alertInputPlaceholder(type: AlertType): string {
 }
 
 function alertDescription(alert: Alert): string {
+  if (alert.type === FAIL_BREAK_TYPE) {
+    return `M1 External Fail Break Retest ${String(alert.params.direction ?? "both").toUpperCase()}, mGann multi-wave return, pivot wick zone${alert.params.requirePb ? " + live PB" : ""}${alert.params.repeat ? " (repeat)" : ""}`;
+  }
   if (alert.type === "supertrend_direction_change") {
     const timeframe = String(alert.params.timeframe ?? "1m").toUpperCase();
     const period = String(alert.params.period ?? 10);
@@ -225,6 +231,8 @@ function alertDescription(alert: Alert): string {
 
 export function AlertPanel({
   alerts,
+  error,
+  smcSwingLength = 50,
   lastEvent,
   onToggle,
   onDelete,
@@ -248,6 +256,9 @@ export function AlertPanel({
   const [newType, setNewType] = useState<AlertType>("price_crosses_level");
   const [newValue, setNewValue] = useState("");
   const [newRepeat, setNewRepeat] = useState(false);
+  const [failBreakDirection, setFailBreakDirection] = useState("both");
+  const [failBreakMaxBars, setFailBreakMaxBars] = useState("120");
+  const [failBreakPb, setFailBreakPb] = useState(false);
   const [newMgannRequireBigTrade, setNewMgannRequireBigTrade] = useState(false);
   const [newMgannFilterLiquidity, setNewMgannFilterLiquidity] = useState(true);
   const [newMgannLiquidityMinSwings, setNewMgannLiquidityMinSwings] = useState(
@@ -277,7 +288,7 @@ export function AlertPanel({
     handledRef.current = lastEvent;
     setToast(lastEvent);
     playSound();
-    if (lastEvent.alertType === "price_crosses_level") {
+    if (lastEvent.alertType === "price_crosses_level" && !lastEvent.alertId.startsWith("mp_")) {
       onDelete?.(lastEvent.alertId);
     }
   }, [lastEvent, onDelete, playSound]);
@@ -297,21 +308,23 @@ export function AlertPanel({
   const isLevelType = isLevelAlertType(newType);
   const isThresholdType = isThresholdAlertType(newType);
   const isExternalBreakType = newType === SMC_EXTERNAL_BREAK_TYPE;
+  const isFailBreak = newType === FAIL_BREAK_TYPE;
   const isLiquidityPoolBreak = isLiquidityPoolBreakType(newType);
   const isMgannSweep = isMgannBreakType(newType);
   const isMgannSweepWithBigTrade = isMgannSweep && newMgannRequireBigTrade;
   const showNumericInput =
-    !isLiquidityPoolBreak && !isMgannSweep;
+    !isLiquidityPoolBreak && !isMgannSweep && !isFailBreak;
   const showRepeat =
     isThresholdType ||
     isSmcAlertType(newType) ||
     isLiquidityPoolBreak ||
-    isMgannSweep;
+    isMgannSweep || isFailBreak;
   const paramKey = isLevelType ? "level" : "threshold";
   const hasWebPushPublicKey = Boolean(webPush?.publicKey);
 
   const changeType = (type: AlertType) => {
     setNewType(type);
+    if (type === FAIL_BREAK_TYPE) setNewRepeat(true);
     if (type === SMC_EXTERNAL_BREAK_TYPE) {
       setNewValue((value) => value || SMC_EXTERNAL_BIG_TRADE_DEFAULT);
       setNewRepeat(true);
@@ -336,6 +349,17 @@ export function AlertPanel({
 
   const submitCreate = (e: FormEvent) => {
     e.preventDefault();
+    if (isFailBreak) {
+      const maxBars = Number(failBreakMaxBars);
+      if (!Number.isInteger(maxBars) || maxBars < 3 || maxBars > 2000) return;
+      onCreate?.({
+        type: FAIL_BREAK_TYPE,
+        params: { timeframe: "1m", swingLength: smcSwingLength, useChartSmc: true,
+          maxBars, requirePb: failBreakPb,
+          direction: failBreakDirection, repeat: newRepeat },
+      });
+      return;
+    }
     if (isLiquidityPoolBreak) {
       const rawMinSwings = Number(newLiquidityBreakMinSwings);
       if (!Number.isFinite(rawMinSwings)) return;
@@ -468,6 +492,7 @@ export function AlertPanel({
 
       {open && (
         <div className="alert-panel" aria-label="Alerts">
+      {error && <p role="alert">{error}</p>}
       <form className="alert-create" onSubmit={submitCreate} aria-label="Create alert">
         <select
           aria-label="Alert type"
@@ -485,6 +510,7 @@ export function AlertPanel({
           <option value="smc_external_break_big_trade">
             External BOS/CHoCH + BigTrade
           </option>
+          <option value="smc_fail_break_retest">External Fail Break Retest</option>
           <option value="mgann_break_ls">
             mGann Break L/S
           </option>
@@ -498,6 +524,34 @@ export function AlertPanel({
             value={newValue}
             onChange={(e) => setNewValue(e.target.value)}
           />
+        )}
+        {isFailBreak && (
+          <div className="alert-strategy-settings">
+            <select aria-label="Fail break direction" value={failBreakDirection}
+              onChange={(e) => setFailBreakDirection(e.target.value)}>
+              <option value="both">Long + Short</option>
+              <option value="long">Long only</option>
+              <option value="short">Short only</option>
+            </select>
+            {([
+              ["Fail break expiry bars", failBreakMaxBars, setFailBreakMaxBars, 3, 2000],
+            ] as const).map(([label, value, setter, min, max]) => (
+              <label className="alert-param" key={label}>
+                <span>{label}</span>
+                <input type="number" step={1} min={min} max={max} required
+                  aria-label={label} value={value} onChange={(e) => setter(e.target.value)} />
+              </label>
+            ))}
+            <label className="alert-param alert-param-checkbox">
+              <input type="checkbox" aria-label="Require live mGann PB"
+                checked={failBreakPb} onChange={(e) => setFailBreakPb(e.target.checked)} />
+              <span>Require live mGann PB</span>
+            </label>
+            <p className="alert-strategy-help">M1 external swing follows chart SMC ({smcSwingLength}). A mGann wave reclaims the pivot wick zone;
+              the return may zigzag through several child waves before retesting. No fixed tick distance.
+              Live PB, when enabled, must qualify on the wave testing the zone; no pivot confirmation required.
+            </p>
+          </div>
         )}
         {isLiquidityPoolBreak && (
           <>

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEATMAP_SETTINGS,
+  drawLiquidityLevel,
+  liquidityLineAppearance,
+  liquidityLineColor,
   heatmapLineVisible,
   liquidityHeatmapAlpha,
   liquidityHeatmapSegments,
@@ -22,6 +25,66 @@ const line: HeatmapLine = {
 };
 
 describe("liquidity heatmap", () => {
+  it("changes opacity for resting, ended, stale and legacy lines without changing width or color", () => {
+    for (const [size, ended, stale] of [
+      [700, false, false], [700, true, false], [700, false, true], [null, false, false],
+    ] as const) {
+      const original = liquidityLineAppearance(size, 500, DEFAULT_HEATMAP_SETTINGS, ended, stale);
+      const fadedSettings = { ...DEFAULT_HEATMAP_SETTINGS, opacity: 0.5 };
+      const faded = liquidityLineAppearance(size, 500, fadedSettings, ended, stale);
+      const strong = liquidityLineAppearance(size, 500, { ...DEFAULT_HEATMAP_SETTINGS, opacity: 2 }, ended, stale);
+      expect(faded).toEqual({ ...original, alpha: original.alpha * 0.5 });
+      expect(strong).toEqual({ ...original, alpha: Math.min(1, original.alpha * 2) });
+      expect(liquidityLineColor(size, 500, fadedSettings, "add", "bid"))
+        .toBe(liquidityLineColor(size, 500, DEFAULT_HEATMAP_SETTINGS, "add", "bid"));
+    }
+    expect(recordStrokes(line, 100_000, true, { ...DEFAULT_HEATMAP_SETTINGS, opacity: 0 })).toEqual([]);
+    expect(normalizeHeatmapSettings({ opacity: -1 }).opacity).toBe(0);
+    expect(normalizeHeatmapSettings({ opacity: 9 }).opacity).toBe(2);
+    expect(normalizeHeatmapSettings({ opacity: NaN }).opacity).toBe(1);
+  });
+
+  it("restores brightness and width after a refill is reduced, with separate add/remove colors", () => {
+    const original = liquidityLineAppearance(500, 500, DEFAULT_HEATMAP_SETTINGS);
+    const refill = liquidityLineAppearance(1500, 500, DEFAULT_HEATMAP_SETTINGS);
+    const reduced = liquidityLineAppearance(500, 500, DEFAULT_HEATMAP_SETTINGS);
+    expect(refill.alpha).toBeGreaterThan(original.alpha);
+    expect(refill.width).toBeGreaterThan(original.width);
+    expect(reduced).toEqual(original);
+    expect(liquidityLineColor(1500, 500, DEFAULT_HEATMAP_SETTINGS, "add", "bid"))
+      .not.toBe(liquidityLineColor(1500, 500, DEFAULT_HEATMAP_SETTINGS, "remove", "bid"));
+    expect(liquidityLineAppearance(100000, 500, DEFAULT_HEATMAP_SETTINGS).width).toBeLessThanOrEqual(5);
+  });
+
+  it("draws resting levels solid, including future space, and preserves each historical size", () => {
+    const strokes = recordStrokes({ ...line, currentSize: 500, samples: [
+      { time: 0, size: 500, active: true },
+      { time: 30_000, size: 1500, active: true },
+      { time: 60_000, size: 500, active: true },
+      { time: 90_000, size: 500, active: true },
+    ] });
+    expect(strokes).toHaveLength(4);
+    expect(strokes.every((stroke) => stroke.dash.length === 0)).toBe(true);
+    expect(strokes[1].width).toBeGreaterThan(strokes[0].width);
+    expect(strokes[2].width).toBe(strokes[0].width);
+    expect(strokes[2].color).not.toBe(strokes[0].color);
+    expect(strokes[3].color).toBe(strokes[2].color);
+    expect(strokes[3].to).toBe(300_000);
+  });
+
+  it("draws completed levels dashed up to their end, and never treats stale data as consumption", () => {
+    const completed = recordStrokes({ ...line, active: false, currentSize: 0,
+      endedAt: 90_000, samples: [...line.samples!.slice(0, -1),
+        { time: 90_000, size: 0, active: false }] });
+    expect(completed.length).toBeGreaterThan(0);
+    expect(completed.every((stroke) => stroke.dash.join(",") === "5,4")).toBe(true);
+    expect(Math.max(...completed.map((stroke) => stroke.to))).toBe(90_000);
+    const stale = recordStrokes(line, 200_000);
+    expect(stale.every((stroke) => stroke.dash.length === 0)).toBe(true);
+    expect(Math.max(...stale.map((stroke) => stroke.to))).toBe(90_000);
+    const historical = recordStrokes(line, 100_000, false);
+    expect(Math.max(...historical.map((stroke) => stroke.to))).toBe(100_000);
+  });
   it("shows current resting size across the right margin without extending recorded history", () => {
     expect(liquidityLiveProjection(line, 0, 300_000, 100_000)).toEqual({
       from: 100_000, to: 300_000, size: 700,
@@ -154,7 +217,26 @@ describe("liquidity heatmap", () => {
   it("restores defaults for old profiles and bounds invalid settings", () => {
     expect(normalizeHeatmapSettings(undefined)).toEqual(DEFAULT_HEATMAP_SETTINGS);
     expect(normalizeHeatmapSettings({ minDurationSeconds: -1, contrast: NaN, saturationMultiple: 999 })).toEqual({
-      minDurationSeconds: 0, contrast: 1, saturationMultiple: 20,
+      minDurationSeconds: 0, contrast: 1, saturationMultiple: 20, opacity: 1,
     });
   });
 });
+
+function recordStrokes(input: HeatmapLine, now = 100_000, showLive = true, settings = DEFAULT_HEATMAP_SETTINGS) {
+  const strokes: Array<{ width: number; color: string; dash: number[]; to: number }> = [];
+  let dash: number[] = [];
+  let to = 0;
+  const context = {
+    strokeStyle: "", lineWidth: 1, lineCap: "butt",
+    save() {}, restore() {}, beginPath() {}, moveTo() {},
+    setLineDash(value: number[]) { dash = value; },
+    lineTo(x: number) { to = x; },
+    stroke() { strokes.push({ width: this.lineWidth, color: this.strokeStyle, dash, to }); },
+  };
+  drawLiquidityLevel(context as unknown as CanvasRenderingContext2D,
+    { ...input, side: "bid", threshold: 500 }, {
+      from: 0, to: 300_000, now, showLive, y: 50,
+      pixelsPerMs: 0.001, xAt: (time) => time, settings,
+    });
+  return strokes;
+}

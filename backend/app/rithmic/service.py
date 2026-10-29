@@ -18,6 +18,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from ..config import Settings
+from ..engines.native_iceberg import NativeIcebergDetector
 from ..models.canonical import NormalizedQuote, NormalizedTrade, Side
 from ..models.timestamp import now_ms
 from .book import RithmicBookState
@@ -62,6 +63,8 @@ class RithmicSink(Protocol):
         sequence_gap: bool = False,
         book_update: dict[str, Any] | None = None,
     ) -> None: ...
+
+    async def on_rithmic_icebergs(self, events: list[dict[str, Any]]) -> None: ...
 
 
 def _host_mac() -> str:
@@ -124,14 +127,17 @@ class RithmicMarketDataService:
     """Reconnect a Ticker Plant session and normalize L1 into NTtoTV models.
 
     The service never constructs or sends an order-entry template. L2/MBO stay
-    in memory; only compact liquidity events derived from L2 may be persisted
-    when Rithmic owns market-data arbitration.
+    in memory. Compact L2 liquidity and native iceberg lifecycle events pass
+    to the pipeline, which owns their publication policy.
     """
 
     def __init__(self, config: RithmicServiceConfig, sink: RithmicSink) -> None:
         self.config = config
         self.sink = sink
         self.book = RithmicBookState()
+        self._icebergs = NativeIcebergDetector(
+            symbol=config.logical_symbol, source_contract=config.contract
+        )
         self._task: asyncio.Task[None] | None = None
         self._stopping = asyncio.Event()
         self._counts: Counter[str] = Counter()
@@ -145,6 +151,7 @@ class RithmicMarketDataService:
         self._last_ask_size = 0
         self._last_health_publish = 0.0
         self._mbo_resync_requested = False
+        self._mbo_snapshot_pending = False
         self._websocket: Any | None = None
         self._option_probe_lock = asyncio.Lock()
         self._option_waiters: dict[str, asyncio.Queue[dict[str, Any]]] = {}
@@ -339,6 +346,9 @@ class RithmicMarketDataService:
             except Exception as exc:
                 reason = self._safe_reason(exc)
                 logger.warning("Rithmic shadow connection ended: %s", reason)
+                await self._emit_icebergs(
+                    self._icebergs.invalidate(now_ms(), new_session=False)
+                )
                 await self.sink.on_rithmic_disconnect(reason)
             if self._stopping.is_set():
                 break
@@ -350,6 +360,7 @@ class RithmicMarketDataService:
             delay = min(self.config.reconnect_max_s, delay * 2)
 
     async def _run_connection(self) -> None:
+        await self._emit_icebergs(self._icebergs.invalidate(now_ms()))
         self.book.reset()
         self._counts.clear()
         self._subscriptions = {"l1": False, "l2": False, "mbo": False}
@@ -358,6 +369,7 @@ class RithmicMarketDataService:
         self._last_bid_size = 0
         self._last_ask_size = 0
         self._mbo_resync_requested = False
+        self._mbo_snapshot_pending = False
         ssl_context = ssl_context_from_archive(self.config.archive_path)
 
         async with websockets.connect(
@@ -400,7 +412,7 @@ class RithmicMarketDataService:
                     await self._dispatch(message)
                     if self._mbo_resync_requested:
                         self._mbo_resync_requested = False
-                        self.book.begin_mbo_snapshot()
+                        await self._begin_mbo_snapshot()
                         await websocket.send(
                             build_dbo_snapshot_request(
                                 symbol=self.config.wire_symbol,
@@ -412,6 +424,9 @@ class RithmicMarketDataService:
                     f"websocket closed code={exc.code} reason={exc.reason or 'none'}"
                 ) from exc
             finally:
+                await self._emit_icebergs(
+                    self._icebergs.invalidate(now_ms(), new_session=False)
+                )
                 self._websocket = None
                 self._fail_option_waiters("Rithmic Ticker Plant connection ended")
                 heartbeat_task.cancel()
@@ -460,7 +475,7 @@ class RithmicMarketDataService:
                     subscribe=True,
                 )
             )
-            self.book.begin_mbo_snapshot()
+            await self._begin_mbo_snapshot()
             await websocket.send(
                 build_dbo_snapshot_request(
                     symbol=self.config.wire_symbol,
@@ -505,17 +520,28 @@ class RithmicMarketDataService:
             if not message.get("snapshot"):
                 trade = self._normalize_trade(message)
                 if trade is not None:
+                    await self._emit_icebergs(self._icebergs.on_trade(trade))
                     await self.sink.on_rithmic_trade(trade)
         elif message_type == "bbo":
             quote = self._normalize_quote(message)
             if quote is not None:
                 await self.sink.on_rithmic_quote(quote)
         elif message_type == "order_book":
+            if message.get("updateType") in {"clear", "no_book"}:
+                await self._emit_icebergs(
+                    self._icebergs.invalidate(self._event_time(message), new_session=False)
+                )
+                if "mbo" in self.config.modes:
+                    self._mbo_resync_requested = True
             book_update = self.book.apply_l2(message)
             await self.sink.on_rithmic_depth(
                 self._status_details(), book_update=book_update
             )
         elif message_type == "mbo_snapshot":
+            if not self._mbo_snapshot_pending:
+                # A duplicate completion or stale image must not reseed a
+                # synchronized detector and erase its executed quantities.
+                return
             self.book.apply_mbo_snapshot(message)
             gap = False
             if "rpCode" in message:
@@ -524,19 +550,63 @@ class RithmicMarketDataService:
                         f"MBO snapshot rejected rpCode={message.get('rpCode')}"
                     )
                 gap = self.book.finish_mbo_snapshot()
+                self._mbo_snapshot_pending = False
                 if gap:
                     self._mbo_resync_requested = True
+                    await self._emit_icebergs(
+                        self._icebergs.invalidate(self._event_time(message), new_session=False)
+                    )
+                elif self.book.metrics()["mboSynchronized"]:
+                    await self._emit_icebergs(
+                        self._icebergs.seed_orders(
+                            self.book.orders.values(), self._event_time(message)
+                        )
+                    )
             await self.sink.on_rithmic_depth(
                 self._status_details(), sequence_gap=gap
             )
         elif message_type == "mbo_update":
+            previous_sequence = self.book.last_mbo_sequence
+            sequence = message.get("sequence")
+            duplicate = (
+                sequence is not None
+                and previous_sequence is not None
+                and int(sequence) <= previous_sequence
+            )
             gap = self.book.apply_mbo_update(message)
             if gap:
                 self._mbo_resync_requested = True
+                await self._emit_icebergs(
+                    self._icebergs.invalidate(self._event_time(message), new_session=False)
+                )
+            elif not duplicate:
+                await self._emit_icebergs(
+                    self._icebergs.on_mbo_update(message, self._event_time(message))
+                )
             await self.sink.on_rithmic_depth(
                 self._status_details(), sequence_gap=gap
             )
         await self._publish_health()
+
+    async def _emit_icebergs(self, events: list[dict[str, Any]]) -> None:
+        # Keep older sinks/test adapters usable while the optional compact
+        # iceberg event stream is introduced.
+        callback = getattr(self.sink, "on_rithmic_icebergs", None)
+        if events and callback is not None:
+            await callback(events)
+
+    async def _begin_mbo_snapshot(self) -> None:
+        await self._emit_icebergs(self._icebergs.invalidate(now_ms()))
+        self.book.begin_mbo_snapshot()
+        self._mbo_snapshot_pending = True
+
+    @staticmethod
+    def _event_time(message: dict[str, Any]) -> int:
+        nanos = message.get("sourceTimeNanos")
+        if nanos is not None:
+            return int(nanos) // 1_000_000
+        value = message.get("timeMs")
+        return now_ms() if value is None else int(value)
 
     async def _request_option_rows(
         self,
@@ -895,6 +965,7 @@ class RithmicMarketDataService:
             "messageCounts": dict(sorted(self._counts.items())),
             "reconnects": self._reconnects,
             **self.book.metrics(),
+            **self._icebergs.metrics(),
         }
 
     async def _best_effort_logout(self, websocket) -> None:

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useOrderSubmissionLock } from "./orders/useOrderSubmissionLock";
 import type { UTCTimestamp } from "lightweight-charts";
 
 import {
@@ -118,6 +119,7 @@ import {
   type HistoryResponse,
 } from "./cache/historyLoader";
 import { MemoryCache } from "./cache/memoryCache";
+import { HistorySyncRefreshTracker } from "./cache/historySync";
 import { type Bar } from "./cache/types";
 import { AuthDialog, type AuthDialogMode } from "./auth/AuthDialog";
 import {
@@ -312,6 +314,7 @@ const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
   slDistanceGc: 3,
   tpDistanceGc: 6,
   takeProfit1rEnabled: true,
+  takeProfitR: 1,
   autoSupertrendAfter1rEnabled: false,
   sizingMode: "lots",
   riskAmount: 100,
@@ -357,6 +360,7 @@ export interface ChartLimitOrderDraft {
   tpGc: number;
   gcAnchored: true;
   takeProfit1rEnabled: boolean;
+  takeProfitR: number;
   autoSupertrendAfter1rEnabled: boolean;
 }
 
@@ -666,6 +670,7 @@ export function buildChartLimitOrderDraft(input: {
     tpGc,
     gcAnchored: true,
     takeProfit1rEnabled: settings.takeProfit1rEnabled,
+    takeProfitR: settings.takeProfitR ?? 1,
     autoSupertrendAfter1rEnabled:
       settings.takeProfit1rEnabled && settings.autoSupertrendAfter1rEnabled,
   };
@@ -678,6 +683,7 @@ function sanitizeMarketOrderSettings(
   const slDistanceGc = Number(value?.slDistanceGc);
   const tpDistanceGc = Number(value?.tpDistanceGc);
   const riskAmount = Number(value?.riskAmount);
+  const takeProfitR = Number(value?.takeProfitR);
   return {
     volumeLots: Number.isFinite(volumeLots)
       ? Math.max(0.01, Math.round(volumeLots * 100) / 100)
@@ -693,6 +699,9 @@ function sanitizeMarketOrderSettings(
         ? DEFAULT_MARKET_ORDER_SETTINGS.takeProfit1rEnabled
         : value.takeProfit1rEnabled === true,
     autoSupertrendAfter1rEnabled: value?.autoSupertrendAfter1rEnabled === true,
+    takeProfitR: Number.isFinite(takeProfitR) && takeProfitR >= 0.1
+      ? takeProfitR
+      : DEFAULT_MARKET_ORDER_SETTINGS.takeProfitR,
     sizingMode: value?.sizingMode === "risk" ? "risk" : "lots",
     riskAmount: Number.isFinite(riskAmount)
       ? Math.max(1, Math.round(riskAmount * 100) / 100)
@@ -873,6 +882,36 @@ function toOrderLines(orders: readonly TradingOrder[]): OrderLine[] {
     }
   }
   return lines;
+}
+
+type OrderLevelPatch = Pick<
+  Parameters<ApiClient["patchOrder"]>[1], "entryGc" | "slGc" | "tpGc"
+>;
+
+export function projectBrokerAnchoredOrders(
+  orders: readonly TradingOrder[],
+  positions: readonly TradingPosition[],
+  pendingEdits: ReadonlyMap<string, OrderLevelPatch> = new Map(),
+): readonly TradingOrder[] {
+  const byTicket = new Map(positions.map((position) => [position.brokerPositionTicket, position]));
+  return orders.map((order) => {
+    const fixedBrokerBracket = !order.gcAnchored ||
+      (order.source === "market_bar" && order.kind === "market");
+    const position = order.brokerPositionTicket == null
+      ? undefined : byTicket.get(order.brokerPositionTicket);
+    const projected = !fixedBrokerBracket || position === undefined ||
+      !isFinitePrice(position.entryGcEstimate)
+      ? order
+      : {
+          ...order,
+          fillPriceGcEstimate: position.entryGcEstimate,
+          entryGc: position.entryGcEstimate,
+          slGc: position.slGc,
+          tpGc: position.tpGc,
+        };
+    const edit = pendingEdits.get(order.id);
+    return edit === undefined ? projected : { ...projected, ...edit };
+  });
 }
 
 function orderEntryGc(order: TradingOrder): number | undefined {
@@ -2057,6 +2096,7 @@ export function LiveApp() {
   const disconnectStatusTimerRef = useRef<number | undefined>(undefined);
   const degradedStatusTimerRef = useRef<number | undefined>(undefined);
   const [socketGeneration, setSocketGeneration] = useState(0);
+  const historySyncRefresh = useRef(new HistorySyncRefreshTracker());
   const [overlayRefreshNonce, setOverlayRefreshNonce] = useState(0);
   const [bars, setBars] = useState<readonly Bar[]>([]);
   const [loadedBarsTimeframe, setLoadedBarsTimeframe] =
@@ -2174,6 +2214,7 @@ export function LiveApp() {
     DEFAULT_TIMEZONE_OFFSET_MINUTES,
   );
   const [alerts, setAlerts] = useState<readonly Alert[]>([]);
+  const [alertError, setAlertError] = useState("");
   const alertsRef = useRef(alerts);
   alertsRef.current = alerts;
   const mgannBreakSettingsRef = useRef(mgannBreakSettings);
@@ -2217,6 +2258,11 @@ export function LiveApp() {
   const [mt5Pending, setMt5Pending] = useState(false);
   const [mt5Error, setMt5Error] = useState("");
   const [orders, setOrders] = useState<readonly TradingOrder[]>([]);
+  const pendingOrderEditsRef = useRef(new Map<string, OrderLevelPatch>());
+  const orderEditRevisionRef = useRef(0);
+  const [pendingOrderEdits, setPendingOrderEdits] = useState<
+    ReadonlyMap<string, OrderLevelPatch>
+  >(() => new Map());
   const [mt5OpenTrades, setMt5OpenTrades] = useState<Mt5OpenTrades>(
     EMPTY_MT5_OPEN_TRADES,
   );
@@ -2245,11 +2291,18 @@ export function LiveApp() {
     mt5OpenTrades.orders.length > 0;
   const [marketOrderSettings, setMarketOrderSettings] =
     useState<MarketOrderSettings>(() => readMarketOrderSettings());
+  const marketOrderSettingsRef = useRef(marketOrderSettings);
+  marketOrderSettingsRef.current = marketOrderSettings;
+  const updateMarketOrderSettings = (settings: MarketOrderSettings) => {
+    const next = sanitizeMarketOrderSettings(settings);
+    marketOrderSettingsRef.current = next;
+    setMarketOrderSettings(next);
+  };
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(
     DEFAULT_AUTO_TRADE_SETTINGS,
   );
-  const [autoTradePending, setAutoTradePending] = useState(false);
-  const [orderPending, setOrderPending] = useState(false);
+  const orderSubmission = useOrderSubmissionLock();
+  const orderPending = orderSubmission.pending;
   const [orderError, setOrderError] = useState("");
   // TradingView-style chart context menu, anchored at the click point.
   const [chartMenu, setChartMenu] = useState<ChartMenuState | undefined>(
@@ -2890,8 +2943,7 @@ export function LiveApp() {
     if (
       !authUser ||
       (!autoTradeSettings.longEnabled && !autoTradeSettings.shortEnabled) ||
-      autoTradeSettings.volumeLots === marketOrderSettings.volumeLots ||
-      autoTradePending
+      autoTradeSettings.volumeLots === marketOrderSettings.volumeLots
     ) {
       return;
     }
@@ -2913,7 +2965,7 @@ export function LiveApp() {
     return () => {
       cancelled = true;
     };
-  }, [api, authUser, autoTradePending, autoTradeSettings, marketOrderSettings.volumeLots]);
+  }, [api, authUser, autoTradeSettings, marketOrderSettings.volumeLots]);
 
   useEffect(() => {
     if (!authUser || !profileHydrated) return;
@@ -3166,7 +3218,7 @@ export function LiveApp() {
     });
     const offAlert = socket.on("alert_event", (msg) => {
       if ((msg.profileId ?? DEFAULT_PROFILE_ID) === profileIdRef.current) {
-        if (msg.alertType !== "price_crosses_level") {
+        if (msg.alertType !== "price_crosses_level" || msg.alertId.startsWith("mp_")) {
           setAlerts((prev) =>
             prev.map((alert) =>
               alert.id === msg.alertId && alert.params.repeat !== true
@@ -3193,6 +3245,10 @@ export function LiveApp() {
       }
     });
     const offMarketDataStatus = socket.on("market_data_status", (msg) => {
+      if (historySyncRefresh.current.accept(msg)) {
+        setSocketGeneration((generation) => generation + 1);
+        setOverlayRefreshNonce((generation) => generation + 1);
+      }
       setMarketDataStatus((current) => {
         if (
           current === undefined ||
@@ -3293,6 +3349,7 @@ export function LiveApp() {
 
   // Resolve profile-scoped alerts when the active profile changes.
   useEffect(() => {
+    setAlertError("");
     if (!authUser || !profileHydrated) {
       setAlerts([]);
       setLastAlert(undefined);
@@ -3959,11 +4016,21 @@ export function LiveApp() {
       onTradingLogin();
       return;
     }
-    setAlerts((prev) => prev.filter((a) => a.id !== id));
-    setAlertSignalMarkers((prev) =>
-      prev.filter((marker) => !marker.id.startsWith(`${id}:`)),
-    );
-    void api.deleteAlert(id, profileId);
+    setAlertError("");
+    void (async () => {
+      try {
+        await api.deleteAlert(id, profileId);
+        if (profileIdRef.current !== profileId) return;
+        setAlerts((prev) => prev.filter((a) => a.id !== id));
+        setAlertSignalMarkers((prev) =>
+          prev.filter((marker) => !marker.id.startsWith(`${id}:`)),
+        );
+      } catch (error) {
+        if (profileIdRef.current !== profileId) return;
+        setAlertError(error instanceof Error ? error.message : "Alert delete failed");
+        setAlertPanelOpen(true);
+      }
+    })();
   };
   const onCreateAlert = (input: {
     type: Alert["type"];
@@ -4273,29 +4340,32 @@ export function LiveApp() {
     })();
   };
   const onMarketOrder = (side: "buy" | "sell") => {
+    // A settings input may have just committed on blur, before this click's
+    // render. Read that value synchronously for both sizing and the bracket.
+    const settings = marketOrderSettingsRef.current;
     const marketGcReference =
       latestPriceRef.current ??
       latestPrice ??
       (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
-  const marketVolumeLots =
+    const marketVolumeLots =
       marketGcReference === undefined
-        ? marketOrderSettings.sizingMode === "risk"
+        ? settings.sizingMode === "risk"
           ? undefined
-          : marketOrderSettings.volumeLots
+          : settings.volumeLots
         : resolveOrderVolumeLots({
-            settings: marketOrderSettings,
+            settings,
             entryGc: marketGcReference,
             slGc:
               side === "buy"
-                ? marketGcReference - marketOrderSettings.slDistanceGc
-                : marketGcReference + marketOrderSettings.slDistanceGc,
+                ? marketGcReference - settings.slDistanceGc
+                : marketGcReference + settings.slDistanceGc,
             symbol: mt5Symbol,
           });
     if (marketVolumeLots === undefined) {
       setOrderError("Risk sizing needs a live MT5 symbol and current price.");
       return;
     }
-    setOrderPending(true);
+    if (!orderSubmission.acquire()) return;
     setOrderError("");
     void (async () => {
       try {
@@ -4307,16 +4377,17 @@ export function LiveApp() {
           ...(marketGcReference !== undefined
             ? { referenceGc: roundGcPrice(marketGcReference) }
             : {}),
-          slDistanceGc: marketOrderSettings.slDistanceGc,
-          tpDistanceGc: marketOrderSettings.tpDistanceGc,
-          takeProfit1rEnabled: marketOrderSettings.takeProfit1rEnabled,
+          slDistanceGc: settings.slDistanceGc,
+          tpDistanceGc: settings.tpDistanceGc,
+          takeProfit1rEnabled: settings.takeProfit1rEnabled,
+          takeProfitR: settings.takeProfitR ?? 1,
           ...supertrendAfter1rOrderFields(
-            marketOrderSettings.takeProfit1rEnabled &&
-              marketOrderSettings.autoSupertrendAfter1rEnabled,
+            settings.takeProfit1rEnabled &&
+              settings.autoSupertrendAfter1rEnabled,
             timeframe,
             supertrend,
           ),
-          gcAnchored: true,
+          gcAnchored: false,
           idempotencyKey: newIdempotencyKey(),
         });
         setOrders((prev) => {
@@ -4327,8 +4398,9 @@ export function LiveApp() {
         await refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Order failed");
+        await refreshTradingState().catch(() => undefined);
       } finally {
-        setOrderPending(false);
+        orderSubmission.release();
       }
     })();
   };
@@ -4338,6 +4410,7 @@ export function LiveApp() {
   };
 
   const submitOrderBracketDrawing = (drawing: DrawingState) => {
+    if (submittedOrderDrawingIdsRef.current.has(drawing.id)) return;
     if (drawing.anchors.length < 3) return;
     const [entryAnchor, slAnchor, tpAnchor] = drawing.anchors;
     const entryGc = roundGcPrice(entryAnchor.price);
@@ -4365,6 +4438,12 @@ export function LiveApp() {
       setOrderError("Risk sizing requires a valid Entry-to-SL distance and MT5 symbol data.");
       return;
     }
+    if (!orderSubmission.acquire()) {
+      invalidOrderDrawingIdsRef.current.add(drawing.id);
+      removeTransientDrawing(drawing.id);
+      setOrderError("Wait for the current order submission to finish.");
+      return;
+    }
     submittedOrderDrawingIdsRef.current.add(drawing.id);
     const side: "buy" | "sell" = isBuy ? "buy" : "sell";
     const latestBar = hasLoadedCurrentSeries ? bars[bars.length - 1] : undefined;
@@ -4373,7 +4452,6 @@ export function LiveApp() {
       side === "buy"
         ? entryGc <= referencePrice ? "limit" : "stop"
         : entryGc >= referencePrice ? "limit" : "stop";
-    setOrderPending(true);
     setOrderError("");
     void (async () => {
       try {
@@ -4388,6 +4466,7 @@ export function LiveApp() {
           tpGc,
           takeProfit1rEnabled:
             kind === "limit" && marketOrderSettings.takeProfit1rEnabled,
+          takeProfitR: marketOrderSettings.takeProfitR ?? 1,
           ...supertrendAfter1rOrderFields(
             kind === "limit" &&
               marketOrderSettings.takeProfit1rEnabled &&
@@ -4396,7 +4475,7 @@ export function LiveApp() {
             supertrend,
           ),
           gcAnchored: true,
-          idempotencyKey: newIdempotencyKey(),
+          idempotencyKey: `chart-bracket:${drawing.id}`,
         });
         setOrders((prev) => {
           const without = prev.filter((item) => item.id !== order.id);
@@ -4407,8 +4486,9 @@ export function LiveApp() {
         await refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Chart order failed");
+        await refreshTradingState().catch(() => undefined);
       } finally {
-        setOrderPending(false);
+        orderSubmission.release();
       }
     })();
   };
@@ -4424,6 +4504,49 @@ export function LiveApp() {
         submitOrderBracketDrawing(drawing);
       }
     }
+  };
+
+  const commitOrderLevelPatch = (orderId: string, patch: OrderLevelPatch) => {
+    const edit = { ...pendingOrderEditsRef.current.get(orderId), ...patch };
+    pendingOrderEditsRef.current.set(orderId, edit);
+    orderEditRevisionRef.current += 1;
+    setPendingOrderEdits(new Map(pendingOrderEditsRef.current));
+    setOrderError("");
+    setOrders((prev) => prev.map((order) =>
+      order.id === orderId ? { ...order, ...patch } : order,
+    ));
+    void (async () => {
+      try {
+        const updated = await api.patchOrder(orderId, patch);
+        setOrders((prev) => {
+          const without = prev.filter((order) => order.id !== updated.id);
+          return isOpenTradingOrder(updated) ? [updated, ...without] : without;
+        });
+      } catch (error) {
+        setOrderError(error instanceof Error ? error.message : "Modify order failed");
+        try {
+          setOrders(await api.orders(true));
+        } catch {
+          /* The next scheduled refresh will reconcile the order. */
+        }
+      } finally {
+        // Refresh the broker projection before removing the optimistic levels.
+        // Profit-only websocket updates do not contain the new SL/TP.
+        try {
+          const trades = await api.mt5OpenTrades();
+          if (pendingOrderEditsRef.current.get(orderId) === edit) {
+            setMt5OpenTrades(trades);
+          }
+        } catch {
+          /* The next scheduled refresh will reconcile the broker levels. */
+        }
+        if (pendingOrderEditsRef.current.get(orderId) === edit) {
+          pendingOrderEditsRef.current.delete(orderId);
+          orderEditRevisionRef.current += 1;
+          setPendingOrderEdits(new Map(pendingOrderEditsRef.current));
+        }
+      }
+    })();
   };
 
   const onOrderDragCommit = (id: string, price: number) => {
@@ -4501,28 +4624,7 @@ export function LiveApp() {
     const level = roundGcPrice(price);
     const patch: Parameters<ApiClient["patchOrder"]>[1] = {};
     patch[parsed.field] = level;
-    setOrderError("");
-    setOrders((prev) =>
-      prev.map((item) =>
-        item.id === parsed.orderId ? { ...item, [parsed.field]: level } : item,
-      ),
-    );
-    void (async () => {
-      try {
-        const updated = await api.patchOrder(parsed.orderId, patch);
-        setOrders((prev) => {
-          const without = prev.filter((item) => item.id !== updated.id);
-          return isOpenTradingOrder(updated) ? [updated, ...without] : without;
-        });
-      } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Modify order failed");
-        try {
-          setOrders(await api.orders(true));
-        } catch {
-          /* Keep the optimistic state if refresh also fails. */
-        }
-      }
-    })();
+    commitOrderLevelPatch(parsed.orderId, patch);
   };
 
   const onOrderDragBatchCommit = (
@@ -4629,28 +4731,7 @@ export function LiveApp() {
       ) {
         continue;
       }
-      setOrderError("");
-      setOrders((prev) =>
-        prev.map((item) =>
-          item.id === orderId ? { ...item, ...patch } : item,
-        ),
-      );
-      void (async () => {
-        try {
-          const updated = await api.patchOrder(orderId, patch);
-          setOrders((prev) => {
-            const without = prev.filter((item) => item.id !== updated.id);
-            return isOpenTradingOrder(updated) ? [updated, ...without] : without;
-          });
-        } catch (error) {
-          setOrderError(error instanceof Error ? error.message : "Modify order failed");
-          try {
-            setOrders(await api.orders(true));
-          } catch {
-            /* Keep the optimistic state if refresh also fails. */
-          }
-        }
-      })();
+      commitOrderLevelPatch(orderId, patch);
     }
   };
 
@@ -5017,22 +5098,6 @@ export function LiveApp() {
     });
   };
 
-  const onAutoTradeSettingsChange = (next: AutoTradeSettings) => {
-    setAutoTradePending(true);
-    setOrderError("");
-    void api
-      .updateAutoTradeSettings({
-        longEnabled: next.longEnabled,
-        shortEnabled: next.shortEnabled,
-        volumeLots: marketOrderSettings.volumeLots,
-      })
-      .then((settings) => setAutoTradeSettings(settings))
-      .catch((error) => {
-        setOrderError(error instanceof Error ? error.message : "Auto trade update failed");
-      })
-      .finally(() => setAutoTradePending(false));
-  };
-
   // Create a price-crosses-level alert at the price the user right-clicked.
   const onConfirmAlertAtPrice = (price: number) => {
     const rounded = roundGcPrice(price);
@@ -5042,12 +5107,11 @@ export function LiveApp() {
 
   const onConfirmLimitOrderDraft = (draft: ChartLimitOrderDraft) => {
     setChartMenu(undefined);
-    if (orderPending) return;
     if (!mt5Account) {
       setOrderError("Connect MT5 before placing chart orders.");
       return;
     }
-    setOrderPending(true);
+    if (!orderSubmission.acquire()) return;
     setOrderError("");
     void (async () => {
       try {
@@ -5068,8 +5132,9 @@ export function LiveApp() {
         await refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Chart order failed");
+        await refreshTradingState().catch(() => undefined);
       } finally {
-        setOrderPending(false);
+        orderSubmission.release();
       }
     })();
   };
@@ -5149,7 +5214,7 @@ export function LiveApp() {
       ),
     });
     if (payload.marketOrderSettings) {
-      setMarketOrderSettings(sanitizeMarketOrderSettings(payload.marketOrderSettings));
+      updateMarketOrderSettings(sanitizeMarketOrderSettings(payload.marketOrderSettings));
     }
     setTimezoneOffsetMinutes(
       normalizeTimezoneOffsetMinutes(payload.timezoneOffsetMinutes),
@@ -5283,6 +5348,7 @@ export function LiveApp() {
     if (!authUser || !mt5Account) return;
     let cancelled = false;
     const refreshOrders = () => {
+      const editRevision = orderEditRevisionRef.current;
       void Promise.allSettled([
         api.orders(true),
         api.mt5OpenTrades(),
@@ -5290,30 +5356,26 @@ export function LiveApp() {
         api.supertrendTrailings(),
       ]).then(([ordersResult, openTradesResult, statusResult, trailingResult]) => {
         if (cancelled) return;
-        if (ordersResult.status === "fulfilled") {
+        const levelsUnchanged = editRevision === orderEditRevisionRef.current &&
+          pendingOrderEditsRef.current.size === 0;
+        if (levelsUnchanged && ordersResult.status === "fulfilled") {
           const next = ordersResult.value;
           setOrders((prev) => {
             if (prev.length !== next.length) return next;
             for (let i = 0; i < prev.length; i++) {
-              if (prev[i].id !== next[i].id || prev[i].status !== next[i].status) return next;
+              if (
+                prev[i].id !== next[i].id ||
+                prev[i].status !== next[i].status ||
+                prev[i].version !== next[i].version
+              ) return next;
             }
             return prev;
           });
         }
-        if (openTradesResult.status === "fulfilled") {
+        if (levelsUnchanged && openTradesResult.status === "fulfilled") {
           const next = openTradesResult.value;
           setMt5OpenTrades((prev) => {
-            if (
-              prev.positions.length !== next.positions.length ||
-              prev.orders.length !== next.orders.length
-            ) return next;
-            for (let i = 0; i < prev.positions.length; i++) {
-              if (
-                prev.positions[i].brokerPositionTicket !== next.positions[i].brokerPositionTicket ||
-                prev.positions[i].profit !== next.positions[i].profit
-              ) return next;
-            }
-            return prev;
+            return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
           });
         }
         if (statusResult.status === "fulfilled") {
@@ -5402,19 +5464,23 @@ export function LiveApp() {
   // Alert level lines drawn on the candle scale (Req 16.5). Recomputed only
   // when the alert set changes.
   const alertLines = useMemo(() => toAlertLines(alerts), [alerts]);
+  const displayedOrders = useMemo(
+    () => projectBrokerAnchoredOrders(orders, mt5OpenTrades.positions, pendingOrderEdits),
+    [orders, mt5OpenTrades.positions, pendingOrderEdits],
+  );
   const orderLines = useMemo(
     () =>
       [
-        ...toOrderLines(orders),
+        ...toOrderLines(displayedOrders),
         ...manualPositionLines(mt5OpenTrades.positions, orders),
         ...manualPendingOrderLines(mt5OpenTrades.orders, orders),
       ],
-    [orders, mt5OpenTrades],
+    [orders, displayedOrders, mt5OpenTrades],
   );
   const orderRows = useMemo(
     () =>
       toMarketOrderRows(
-        orders,
+        displayedOrders,
         latestPrice,
         mt5Symbol,
         mt5OpenTrades,
@@ -5425,7 +5491,7 @@ export function LiveApp() {
         supertrendTrailingPendingIds,
       ),
     [
-      orders,
+      displayedOrders,
       latestPrice,
       mt5Symbol,
       mt5OpenTrades,
@@ -5439,7 +5505,7 @@ export function LiveApp() {
   const orderControls = useMemo(
     () =>
       toOrderControls(
-        orders,
+        displayedOrders,
         latestPrice,
         mt5Symbol,
         mt5OpenTrades,
@@ -5447,7 +5513,7 @@ export function LiveApp() {
         cancellingOrderIds,
       ),
     [
-      orders,
+      displayedOrders,
       latestPrice,
       mt5Symbol,
       mt5OpenTrades,
@@ -5670,6 +5736,8 @@ export function LiveApp() {
 
   useEffect(() => {
     if (!lastAlert || !telegramConfig.enabled) return;
+    // MP alerts are delivered by the backend even while chart tabs are open.
+    if (lastAlert.alertId.startsWith("mp_")) return;
     const key = `${profileId}:${lastAlert.alertId}:${lastAlert.time}`;
     if (telegramSentRef.current === key) return;
     telegramSentRef.current = key;
@@ -5875,7 +5943,9 @@ export function LiveApp() {
             />
             <AlertPanel
               open={alertPanelOpen}
+              smcSwingLength={smc.swingLength}
               alerts={alerts}
+              error={alertError}
               lastEvent={lastAlert}
               onToggle={onToggleAlert}
               onDelete={onDeleteAlert}
@@ -6092,13 +6162,8 @@ export function LiveApp() {
               openOrderCount={orderRows.length}
               orderRows={orderRows}
               settings={marketOrderSettings}
-              onSettingsChange={(settings) =>
-                setMarketOrderSettings(sanitizeMarketOrderSettings(settings))
-              }
+              onSettingsChange={updateMarketOrderSettings}
               onMarketOrder={onMarketOrder}
-              autoTradeSettings={autoTradeSettings}
-              autoTradePending={autoTradePending}
-              onAutoTradeSettingsChange={onAutoTradeSettingsChange}
               onOrderRowBreakEven={onOrderRowBreakEven}
               onOrderRowSupertrendTrailing={onOrderRowSupertrendTrailing}
               onOrderRowClose={onOrderRowClose}

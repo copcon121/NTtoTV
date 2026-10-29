@@ -12,7 +12,8 @@ from app.storage.cache_store import CacheStore
 
 
 @pytest.mark.unit
-def test_anchored_sync_modifies_when_basis_moves(tmp_path):
+@pytest.mark.parametrize("market_bar", [False, True])
+def test_anchored_sync_modifies_when_basis_moves(tmp_path, market_bar):
     cache = CacheStore(tmp_path / "app.sqlite")
     fake = FakeMt5Backend(bid=2338.0, ask=2338.1)
     manager = Mt5Manager(backend=fake)
@@ -31,16 +32,16 @@ def test_anchored_sync_modifies_when_basis_moves(tmp_path):
             id="ord",
             user_id=user.id,
             account_id=account.id,
-            source=OrderSource.API,
+            source=OrderSource.MARKET_BAR if market_bar else OrderSource.API,
             symbol_internal="GC",
             contract_internal="GC",
             source_contract="GC 08-26",
             symbol_broker="XAUUSDm",
             side=OrderSide.BUY,
-            kind=OrderKind.LIMIT,
+            kind=OrderKind.MARKET if market_bar else OrderKind.LIMIT,
             volume_lots=0.1,
             gc_anchored=True,
-            status=OrderStatus.WORKING,
+            status=OrderStatus.FILLED if market_bar else OrderStatus.WORKING,
             idempotency_key="i",
             created_at=1,
             updated_at=1,
@@ -51,6 +52,7 @@ def test_anchored_sync_modifies_when_basis_moves(tmp_path):
             sl_broker=2347.0,
             tp_broker=2356.0,
             broker_order_ticket=10,
+            broker_position_ticket=11 if market_bar else None,
         )
         cache.orders.create(order)
         current = now_ms()
@@ -64,10 +66,15 @@ def test_anchored_sync_modifies_when_basis_moves(tmp_path):
             config=AnchoredSyncConfig(threshold_ticks=1, min_interval_ms=0),
         ).run_once()
 
-        assert changed == 1
+        assert changed == (0 if market_bar else 1)
         saved = cache.orders.read("ord", user.id)
         assert saved is not None
-        assert saved.entry_broker != 2350.0
+        if market_bar:
+            assert saved.entry_broker == 2350.0
+            assert saved.sl_broker == 2347.0
+            assert saved.tp_broker == 2356.0
+        else:
+            assert saved.entry_broker != 2350.0
     finally:
         cache.close()
 

@@ -1,0 +1,195 @@
+[
+  {
+    "class": "com/microsoft/applicationinsights/core/dependencies/apachecommons/logging/LogFactory.class",
+    "strings": [
+      "]. Trying alternative implementations..."
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/core/dependencies/google/common/primitives/Longs.class",
+    "strings": [
+      "getSyntheticSource",
+      "setSyntheticSource"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/core/dependencies/google/gson/internal/Excluder.class",
+    "strings": [
+      "isSynthetic"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/core/dependencies/http/conn/ssl/AbstractVerifier.class",
+    "strings": [
+      "> doesn't match any of the subject alternative names: ",
+      "> doesn't contain a common name and does not have alternative names"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/core/dependencies/http/conn/ssl/DefaultHostnameVerifier.class",
+    "strings": [
+      "> doesn't match any of the subject alternative names: ",
+      "> doesn't contain a common name and does not have alternative names",
+      "getSubjectAlternativeNames"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/core/dependencies/http/conn/ssl/SSLConnectionSocketFactory.class",
+    "strings": [
+      "getSubjectAlternativeNames",
+      " peer alternative names: ",
+      "getIssuerAlternativeNames",
+      " issuer alternative names: ",
+      "> doesn't match any of the subject alternative names: "
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/core/dependencies/xstream/converters/basic/DateConverter.class",
+    "strings": [
+      "Alternative date pattern"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/extensibility/context/ContextTagKeys.class",
+    "strings": [
+      "SyntheticSource",
+      "getSyntheticSource",
+      "ai.operation.syntheticSource"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/internal/config/ReflectionUtils.class",
+    "strings": [
+      "com/microsoft/applicationinsights/internal/processor/SyntheticSourceFilter"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/internal/config/TelemetryConfigurationFactory.class",
+    "strings": [
+      "com/microsoft/applicationinsights/internal/processor/SyntheticSourceFilter"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/internal/heartbeat/HeartBeatProvider.class",
+    "strings": [
+      "setSyntheticSource"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/internal/perfcounter/AbstractWindowsPerformanceCounter.class",
+    "strings": [
+      "Native code exception in wrapper while fetching counter value '%s'",
+      "Native code exception in internal wrapper while fetching counter value '%s'",
+      "Native code exception performance counter '%s' not found",
+      "Native code exception while fetching counter value '%s'",
+      "Native code unknown exception while fetching counter value '%s'"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/internal/perfcounter/JniPCConnector.class",
+    "strings": [
+      "applicationinsights-core-native-win64.dll",
+      "applicationinsights-core-native-win32.dll",
+      "native",
+      "Failed to create a read/write folder for the native dll."
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/internal/perfcounter/jvm/DeadLockDetectorPerformanceCounter.class",
+    "strings": [
+      "isInNative",
+      " (running in native)"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/internal/processor/SyntheticSourceFilter.class",
+    "strings": [
+      "com/microsoft/applicationinsights/internal/processor/SyntheticSourceFilter",
+      "getSyntheticSource"
+    ]
+  },
+  {
+    "class": "com/microsoft/applicationinsights/telemetry/ContextTagsMap.class",
+    "strings": [
+      "getSyntheticSource"
+    ]
+  },
+  {
+    "class": "okhttp3/MultipartBody.class",
+    "strings": [
+      "ALTERNATIVE",
+      "multipart/alternative"
+    ]
+  },
+  {
+    "class": "okhttp3/internal/tls/OkHostnameVerifier.class",
+    "strings": [
+      "getSubjectAlternativeNames"
+    ]
+  },
+  {
+    "class": "ttw/tradefinder/dd.class",
+    "strings": [
+      "componentHidden"
+    ]
+  },
+  {
+    "class": "ttw/tradefinder/rd.class",
+    "strings": [
+      "componentHidden"
+    ]
+  },
+  {
+    "class": "ttw/tradefinder/IC.class",
+    "strings": [
+      "componentHidden"
+    ]
+  },
+  {
+    "class": "ttw/tradefinder/Jb.class",
+    "strings": [
+      "passiveOrderId",
+      "Hidden \u0001"
+    ]
+  },
+  {
+    "class": "ttw/tradefinder/Kf.class",
+    "strings": [
+      "aggressorOrderId",
+      "passiveOrderId"
+    ]
+  },
+  {
+    "class": "ttw/tradefinder/IE.class",
+    "strings": [
+      "aggressorOrderId",
+      "passiveOrderId"
+    ]
+  },
+  {
+    "class": "ttw/tradefinder/ba.class",
+    "strings": [
+      "velox/api/layer1/messages/Layer1ApiUserMessageReloadStrategyGui"
+    ]
+  },
+  {
+    "class": "ttw/tradefinder/ag.class",
+    "strings": [
+      "onTrade",
+      "onMboSend",
+      "onMboCancel",
+      "onDepth",
+      "onMboReplace"
+    ]
+  },
+  {
+    "class": "ttw/tradefinder/xf.class",
+    "strings": [
+      "onTrade",
+      "onMboCancel",
+      "onMboSend",
+      "onDepth",
+      "onMboReplace"
+    ]
+  }
+]

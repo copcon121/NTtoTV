@@ -53,6 +53,7 @@ from ..models.messages import (
     FootprintUpdate,
     FvgSignalUpdate,
     LiquidityUpdate,
+    IcebergUpdate,
     MarketExplorerUpdate,
     Ping,
     QuoteUpdate,
@@ -115,6 +116,7 @@ OutboundMessage = (
     | FootprintUpdate
     | FvgSignalUpdate
     | LiquidityUpdate
+    | IcebergUpdate
     | MarketExplorerUpdate
     | TduSignalUpdate
     | TrendAnalyzerUpdate
@@ -190,6 +192,8 @@ def coalescing_subkey(payload: Mapping[str, Any]) -> Hashable:
             payload["price"],
             payload["side"],
         )
+    if t == "iceberg_update":
+        return ("iceberg_update", payload.get("sourceContract"), payload.get("sessionId"), payload.get("orderId"))
     if t == "liquidity_update":
         if payload.get("eventKind") == "long_term":
             return ("liquidity_update", "long_term", payload.get("lineId"))
@@ -604,6 +608,18 @@ class WebSocketRegistry:
         """Number of currently registered clients."""
 
         return len(self._clients)
+
+    @property
+    def alert_delivery_client_count(self) -> int:
+        """Chart consumers that can own the legacy Telegram screenshot path.
+
+        MP's alert-only socket displays notifications but never sends Telegram.
+        Its presence must not suppress backend delivery of manual alerts.
+        """
+        return sum(
+            1 for client in self._clients.values()
+            if set().union(*client.subscriptions.values()) != {EventType.ALERT_EVENT}
+        )
 
     # -- subscription management -----------------------------------------------
 

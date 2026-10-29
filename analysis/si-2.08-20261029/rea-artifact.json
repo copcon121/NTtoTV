@@ -1,0 +1,25 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"error\":{\"code\":\"artifact_operation_failed\",\"category\":\"execution_failure\",\"message\":\"Artifact contains an unsafe or conflicting internal path. Inspect the reported path and correct the artifact before retrying.\",\"retryable\":false,\"remediation\":{\"action\":\"Artifact contains an unsafe or conflicting internal path. Inspect the reported path and correct the artifact before retrying.\"},\"details\":{\"operation\":\"inspect_artifact\",\"reason\":\"path\",\"detail\":\"Artifact path collision: velox/indicators/sionchart/B.class differs only in case from velox/indicators/sionchart/b.class\"}}}"
+    }
+  ],
+  "structuredContent": {
+    "error": {
+      "code": "artifact_operation_failed",
+      "category": "execution_failure",
+      "message": "Artifact contains an unsafe or conflicting internal path. Inspect the reported path and correct the artifact before retrying.",
+      "retryable": false,
+      "remediation": {
+        "action": "Artifact contains an unsafe or conflicting internal path. Inspect the reported path and correct the artifact before retrying."
+      },
+      "details": {
+        "operation": "inspect_artifact",
+        "reason": "path",
+        "detail": "Artifact path collision: velox/indicators/sionchart/B.class differs only in case from velox/indicators/sionchart/b.class"
+      }
+    }
+  },
+  "isError": true
+}

@@ -3670,8 +3670,17 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
     for (const line of lines) {
       const pendingPrice = this.pendingOrderLineCommits.get(line.id);
+      // Account/profit updates can redraw these levels during a pointer drag.
+      // Keep the preview until release so a stale server level cannot be sent
+      // back as the user's chosen price.
+      const dragPrice =
+        this.draggingPriceLine?.kind === "order" &&
+        this.draggingPriceLine.id === line.id
+          ? this.orderLineMeta.get(line.id)?.price
+          : undefined;
+      const displayPrice = dragPrice ?? pendingPrice ?? line.price;
       const displayLine =
-        pendingPrice === undefined ? line : { ...line, price: pendingPrice };
+        displayPrice === line.price ? line : { ...line, price: displayPrice };
       const existing = this.orderLinesById.get(line.id);
       const selected = this.isPriceLineSelected("order", line.id);
       if (existing) {
