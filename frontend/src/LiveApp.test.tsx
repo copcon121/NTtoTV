@@ -27,6 +27,7 @@ import {
   resolveEndpoints,
   seriesDataKey,
   supertrendTrailingActivationError,
+  toAlertLines,
   visibleDrawingsForTimeframe,
 } from "./LiveApp";
 import type { SupertrendTrailing } from "./api/client";
@@ -39,6 +40,7 @@ import type { DrawingState } from "./chart/drawings/types";
 import { DEFAULT_SMC_SETTINGS } from "./chart/smc";
 import { DEFAULT_SUPERTREND_SETTINGS } from "./chart/supertrend";
 import type { ChartProfilePayload } from "./profiles/types";
+import type { Alert } from "./alerts/types";
 
 afterEach(() => {
   cleanup();
@@ -55,6 +57,21 @@ const profilePayload: ChartProfilePayload = {
   footprintSettings: DEFAULT_FOOTPRINT_SETTINGS,
   drawings: [],
 };
+
+describe("MP alert chart lifecycle", () => {
+  it("removes consumed and expired MP lines while retaining current and manual levels", () => {
+    const managed: Alert = { id: "mp_active", symbol: "GC", type: "price_crosses_level",
+      enabled: true, params: { source: "mp_plan", level: 4055.5, mpExpiresAt: 2000 } };
+    const rows: Alert[] = [managed,
+      { ...managed, id: "mp_fired", enabled: false, params: { ...managed.params, mpFiredAt: 900 } },
+      { ...managed, id: "mp_deleted", enabled: false, params: { ...managed.params, mpDeletedAt: 900 } },
+      { ...managed, id: "mp_expired", params: { ...managed.params, mpExpiresAt: 1000 } },
+      { ...managed, id: "manual_disabled", enabled: false, params: { level: 4068 } },
+    ];
+    expect(toAlertLines(rows, 1000).map((line) => line.id)).toEqual(["mp_active", "manual_disabled"]);
+    expect(toAlertLines(rows, 2000).map((line) => line.id)).toEqual(["manual_disabled"]);
+  });
+});
 
 describe("resolveEndpoints", () => {
   it("keeps the chart WebSocket on the Vite dev origin", () => {

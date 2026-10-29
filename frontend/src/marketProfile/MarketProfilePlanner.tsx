@@ -89,6 +89,18 @@ export function MarketProfilePlanner({ api, ws }: { api: ApiClient; ws: string }
     finally { setPending(false); }
   };
 
+  const readCurrentPlan = async () => {
+    const result = state?.run?.status === "complete"
+      ? await mpRequest<MpPlannerState>("/plans/refresh", "POST", { expectedRunId: state.run.id })
+      : await mpRequest<MpPlannerState>("/plans/run", "POST");
+    if (!mounted.current) return;
+    setState(result);
+    if (result.currentSlot) {
+      setScope(result.currentSlot.name);
+      setDate(result.currentSlot.tradeDate);
+    }
+  };
+
   const selectedDate = date || state?.currentSlot?.tradeDate
     || state?.tradingDays[state.tradingDays.length - 1]?.tradeDate || "";
   const plan = state?.plans.find((p) => p.tradeDate === selectedDate && p.scope === scope);
@@ -113,15 +125,17 @@ export function MarketProfilePlanner({ api, ws }: { api: ApiClient; ws: string }
             onClick={() => void action(() => mpRequest("/settings", "PUT", { enabled: !state?.settings.enabled }))}>
             {state?.settings.enabled ? "Tắt plan + alert" : "Bật plan + alert"}
           </button>
-          <button type="button" disabled={pending || !state?.settings.enabled || !state.currentSlot
-            || Boolean(state.run && !["waiting", "failed"].includes(state.run.status))}
-            onClick={() => void action(() => mpRequest("/plans/run", "POST"))}>
-            {state?.run?.status === "failed" ? "Thử lại phiên này" : "Tạo plan phiên hiện tại"}
+          <button type="button" disabled={pending || !state?.settings.enabled || !state.settings.available || !state.currentSlot
+            || Boolean(state.run && !["waiting", "failed", "complete"].includes(state.run.status))}
+            onClick={() => void action(readCurrentPlan)}>
+            {state?.run?.status === "failed" ? "Thử lại phiên này"
+              : state?.run?.status === "complete" ? "Đọc lại phiên hiện tại"
+                : ["running", "retry_pending"].includes(state?.run?.status ?? "") ? "Đang đọc plan…" : "Tạo plan phiên hiện tại"}
           </button>
         </div>
-        <p className="mp-planner-muted">UTC+7: Á 07:00–12:00 · Âu 12:30–22:00 · Mỹ 20:00–04:00 hôm sau. Đọc ở đầu mỗi phiên; đầu Á tạo thêm plan ngày.</p>
+        <p className="mp-planner-muted">UTC+7: Á 07:00–12:00 · Âu 12:30–22:00 · Mỹ 20:00–04:00 hôm sau. Đọc ở đầu mỗi phiên; đầu Á tạo thêm plan ngày. Có thể đọc lại giữa phiên bằng dữ liệu mới nhất.</p>
         <p className="mp-planner-muted">Plan ngày là bối cảnh. Alert theo plan phiên mới nhất, tối đa 2 vùng ưu tiên; có thể không đặt khi chưa rõ.</p>
-        {state?.settings.llm?.model && <p className="mp-planner-muted">{state.settings.llm.model} · Reasoning {state.settings.llm.reasoningEffort === "xhigh" ? "Extra High" : state.settings.llm.reasoningEffort}</p>}
+        {state?.settings.llm?.model && <p className="mp-planner-muted">{state.settings.llm.model}{state.settings.llm.reasoningEffort && <> · Reasoning {state.settings.llm.reasoningEffort === "xhigh" ? "Extra High" : state.settings.llm.reasoningEffort}</>}</p>}
         {state?.currentSlot && <p className="mp-planner-muted">Phiên {SCOPE_LABELS[state.currentSlot.name]}: {clock(state.currentSlot.start)} – {clock(state.currentSlot.end)} (UTC+7)</p>}
         {(state?.activeSlots?.length ?? 0) > 1 && <p className="mp-planner-muted">Âu và Mỹ cùng đang mở. Khi plan Mỹ sẵn sàng, alert chuyển sang plan Mỹ.</p>}
         {state && !state.settings.available && <p role="status">Chưa cấu hình LLM cho backend.</p>}
@@ -138,7 +152,7 @@ export function MarketProfilePlanner({ api, ws }: { api: ApiClient; ws: string }
         </div>
         {!plan && <p className="mp-planner-muted">Chưa có plan {SCOPE_LABELS[scope]} cho ngày này. Bật planner để tạo tự động ở đầu phiên.</p>}
         {plan && <article className="mp-plan" aria-label={`Plan ${SCOPE_LABELS[scope]}`}>
-          <div className="mp-plan-time">Bối cảnh lúc {clock(plan.asOf)}{plan.createdLate ? " · Tạo bù giữa phiên" : ""}
+          <div className="mp-plan-time">Bối cảnh lúc {clock(plan.asOf)}{plan.refreshed ? " · Đọc lại giữa phiên" : plan.createdLate ? " · Tạo bù giữa phiên" : ""}
             <br />{plan.expired ? "Đã hết hạn" : "Hiệu lực đến"} {clock(plan.expiresAt)}</div>
           {plan.legacySchedule && <p className="mp-planner-warning">Bản này dùng lịch phiên cũ. Alert đã ngừng; xem plan mới theo UTC+7.</p>}
           <p className="mp-plan-summary">{plan.summary}</p>

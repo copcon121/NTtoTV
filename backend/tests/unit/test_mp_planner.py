@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -23,7 +24,7 @@ from app.pipeline import Pipeline
 from app.rest.auth import get_current_user
 from app.rest.alerts import get_cache as get_alert_cache
 from app.storage.cache_store import CacheStore
-from app.storage.records import BarRecord
+from app.storage.records import AlertEventRecord, BarRecord
 from app.registry.registry import ChartClient, WebSocketRegistry
 
 
@@ -257,7 +258,9 @@ def test_same_price_daily_session_share_one_alert_and_fire_once_across_restart(s
     assert reloaded.evaluate(MarketContext("GC", "GC", AT + 4, last_price=level + 1)) == []
     assert reloaded.evaluate(MarketContext("GC", "GC", AT + 5, last_price=level - 1)) == []
     assert cache.read_alert(rec.id).params["mpFiredAt"] == AT + 2
-    assert len(cache.read_alert_events(rec.id, "user-a")) == 1
+    assert cache.read_alert_events(rec.id, "user-a") == []
+    assert cache.read_alert(rec.id).params["mpDeletedAt"] == AT + 2
+    assert next(p for p in planner.response("user-a")["plans"] if p["scope"] == "eu")["alerts"] == []
 
 
 def test_expiration_and_profile_disable_preserve_manual_alerts(setup):
@@ -274,6 +277,66 @@ def test_expiration_and_profile_disable_preserve_manual_alerts(setup):
     assert not engine.evaluate(MarketContext("GC", "GC", expired, last_price=mp.params["level"]))
     assert not cache.read_alert(mp.id).enabled
     assert cache.read_alert("manual") is not None
+
+
+@pytest.mark.parametrize("state", ["fired", "deleted", "paused"])
+def test_reconciliation_clears_legacy_mp_history_including_paused_profiles(setup, state):
+    planner, cache, store, client, engine = setup
+    asyncio.run(planner.run_current(AT))
+    rec = cache.read_alerts(profile_id="user-a")[0]
+    if state == "paused":
+        planner.subscribe("user-a", False)
+    else:
+        rec.enabled = False
+        rec.params["mpFiredAt" if state == "fired" else "mpDeletedAt"] = AT + 1
+        engine.upsert(Alert.from_record(rec))
+    engine.upsert(Alert("manual", "GC", "price_crosses_level", {"level": 110}, profile_id="user-a"))
+    for alert_id in (rec.id, "manual"):
+        cache.insert_alert_event(AlertEventRecord(
+            alert_id=alert_id, profile_id="user-a", symbol="GC", contract="GC",
+            time=AT + 2, price=110, message="Legacy event",
+        ))
+    # No LLM call or enabled subscription is required to clean old sessions.
+    planner.sync_alerts(ts("2026-10-27T13:00:00"))
+    assert cache.read_alert_events(rec.id, "user-a") == []
+    assert cache.read_alert(rec.id).params["mpDeletedAt"]
+    assert not cache.read_alert(rec.id).enabled
+    assert cache.read_alert("manual").enabled
+    assert len(cache.read_alert_events("manual", "user-a")) == 1
+    assert len(client.calls) == 1
+
+
+def test_price_engine_retires_eu_alert_at_us_open_without_waiting_for_scheduler(setup):
+    planner, cache, _, _, engine = setup
+    asyncio.run(planner.run_current(AT))
+    rec = cache.read_alerts(profile_id="user-a")[0]
+    handoff = ts("2026-10-27T13:00:00")
+    assert rec.params["mpExpiresAt"] == handoff
+    assert engine.evaluate(MarketContext("GC", "GC", handoff - 1,
+                                         last_price=rec.params["level"] - 1)) == []
+    assert engine.evaluate(MarketContext("GC", "GC", handoff,
+                                         last_price=rec.params["level"])) == []
+    assert cache.read_alert(rec.id).params["mpDeletedAt"] == handoff
+
+
+def test_session_handoff_removes_old_alerts_before_new_llm_read(setup, monkeypatch):
+    planner, cache, _, client, _ = setup
+    asyncio.run(planner.run_current(AT))
+    old = cache.read_alerts(profile_id="user-a")[0]
+    at = ts("2026-10-27T13:00:00")
+    cache.upsert_bar(bar(at - 60_000))
+    monkeypatch.setattr("app.market_profile.planner.now_ms", lambda: at)
+    original = client.analyze_plan
+
+    def inspect_during_read(snapshot):
+        retired = cache.read_alert(old.id)
+        assert not retired.enabled and retired.params["mpDeletedAt"]
+        return original(snapshot)
+
+    client.analyze_plan = inspect_during_read
+    assert asyncio.run(planner.run_current(at))["status"] == "complete"
+    armed = [a for a in cache.read_alerts(profile_id="user-a") if a.enabled]
+    assert len(armed) == 1 and armed[0].id != old.id
 
 
 def test_llm_failure_is_not_retried_and_creates_no_alerts(setup):
@@ -421,6 +484,7 @@ def test_us_handoff_keeps_eu_context_and_never_accumulates_armed_alerts(setup, m
     planner, cache, store, client, _ = setup
     asyncio.run(planner.run_current(AT))
     eu = next(p for p in store.plans() if p["scope"] == "eu")
+    old_id = cache.read_alerts(profile_id="user-a")[0].id
     at = ts("2026-10-27T13:05:00")
     cache.upsert_bar(bar(at - 60_000))
     monkeypatch.setattr("app.market_profile.planner.now_ms", lambda: at)
@@ -434,16 +498,16 @@ def test_us_handoff_keeps_eu_context_and_never_accumulates_armed_alerts(setup, m
     client.fail = failed
     asyncio.run(planner.run_current(at))
     active = planner._alert_plans(at)
-    assert next(iter(active.values()))["scope"] == ("eu" if failed else "us")
-    assert len([a for a in cache.read_alerts(profile_id="user-a") if a.enabled]) == 1
+    assert ([p["scope"] for p in active.values()]) == ([] if failed else ["us"])
+    assert len([a for a in cache.read_alerts(profile_id="user-a") if a.enabled]) == (0 if failed else 1)
     response = planner.response("user-a")
     old = next(p for p in response["plans"] if p["id"] == eu["id"])
     assert not old["expired"]  # EU remains open to 22:00, independent of US.
-    assert old["alerts"][0]["status"] == ("armed" if failed else "superseded")
-    if not failed:
-        old_id = old["alerts"][0]["alertId"]
-        with pytest.raises(ValueError, match="superseded"):
-            planner.toggle_alert("user-a", old_id, True)
+    assert old["alerts"] == []
+    assert cache.read_alert(old_id).params["mpDeletedAt"]
+    assert cache.read_alert_events(old_id, "user-a") == []
+    with pytest.raises(ValueError, match="removed"):
+        planner.toggle_alert("user-a", old_id, True)
 
 
 def test_correcting_reports_preserves_fired_alerts_and_archives_old_prose(setup):
@@ -476,8 +540,9 @@ def test_correcting_reports_preserves_fired_alerts_and_archives_old_prose(setup)
     assert len(cache.read_alerts(profile_id="user-a")) == 1
     assert not alert.enabled
     assert alert.params["mpFiredAt"] == AT + 2
-    assert "Updated explanation" in alert.params["mpMessage"]
-    assert len(cache.read_alert_events(rec.id, "user-a")) == 1
+    assert alert.params["mpDeletedAt"] == AT + 2
+    assert cache.read_alert_events(rec.id, "user-a") == []
+    assert next(p for p in planner.response("user-a")["plans"] if p["scope"] == "eu")["alerts"] == []
 
 
 @pytest.mark.parametrize("mutation", ["scope", "level", "price"])
@@ -515,13 +580,13 @@ def test_missing_linked_alert_is_restored_disabled_without_repeating_llm(setup):
     assert len(client.calls) == 1
     assert len(store.links("user-a")) == 1
     assert engine.evaluate(MarketContext("GC", "GC", AT + 2, last_price=restored.params["level"])) == []
-    planner.toggle_alert("user-a", previous.id, True)
-    assert cache.read_alert(previous.id).enabled
+    with pytest.raises(ValueError, match="removed"):
+        planner.toggle_alert("user-a", previous.id, True)
 
 
 @pytest.mark.parametrize("state", ["armed", "fired", "paused"])
 @pytest.mark.parametrize("live_engine", [True, False])
-def test_chart_delete_hides_mp_alert_without_recreation_or_losing_history(setup, state, live_engine):
+def test_chart_delete_removes_mp_alert_and_history_without_recreation(setup, state, live_engine):
     planner, cache, store, client, engine = setup
     asyncio.run(planner.run_current(AT))
     managed = cache.read_alerts(profile_id="user-a")[0]
@@ -559,25 +624,19 @@ def test_chart_delete_hides_mp_alert_without_recreation_or_losing_history(setup,
         recreated = MpPlanner(cache, store, client, reloaded)
         recreated.sync_alerts(AT + 3)
         response = recreated.response("user-a")
-        item = next(p for p in response["plans"] if p["scope"] == "eu")["alerts"][0]
-        assert item["status"] == "deleted" and not item["enabled"]
-        assert item["alertId"] == managed.id
+        assert next(p for p in response["plans"] if p["scope"] == "eu")["alerts"] == []
         assert len(cache.read_alerts(profile_id="user-a")) == 2
         assert [a["id"] for a in http.get("/api/alerts?profileId=user-a").json()["alerts"]] == ["manual"]
         assert reloaded.evaluate(MarketContext("GC", "GC", AT + 4, last_price=level - 1)) == []
         assert reloaded.evaluate(MarketContext("GC", "GC", AT + 5, last_price=level)) == []
-        assert cache.read_alert_events(managed.id, "user-a") == events
+        assert cache.read_alert_events(managed.id, "user-a") == []
         assert len(client.calls) == 1
         assert len(store.links("user-a")) == 1
         assert http.delete("/api/alerts/manual?profileId=user-a").status_code == 204
         assert cache.read_alert("manual") is None
 
-        # Only an explicit action on the current MP plan restores visibility.
-        recreated.toggle_alert("user-a", managed.id, True)
-        restored = cache.read_alert(managed.id)
-        assert restored.enabled and "mpDeletedAt" not in restored.params
-        visible = http.get("/api/alerts?profileId=user-a").json()["alerts"]
-        assert [a["id"] for a in visible] == [managed.id]
+        with pytest.raises(ValueError, match="removed"):
+            recreated.toggle_alert("user-a", managed.id, True)
 
 
 def test_error_text_is_actionable_and_does_not_expose_provider_body():
@@ -640,3 +699,162 @@ def test_alert_registration_can_recover_without_repeating_llm(setup, monkeypatch
     assert len(cache.read_alerts(profile_id="user-a")) == 1
     asyncio.run(planner.run_current(AT))
     assert len(client.calls) == 1
+
+
+def test_explicit_refresh_reads_current_data_and_preserves_the_daily_plan(setup, monkeypatch):
+    planner, cache, store, client, _ = setup
+    asyncio.run(planner.run_current(AT))
+    previous = store.plans()
+    daily = next(p for p in previous if p["scope"] == "daily")
+    old_session = next(p for p in previous if p["scope"] == "eu")
+    slot = current_slot(AT)
+    later = AT + 120_000
+    cache.upsert_bar(bar(later - 60_000, close=101.8))
+    monkeypatch.setattr("app.market_profile.planner.now_ms", lambda: later)
+
+    assert planner.refresh_current(slot["id"])
+    queued = planner.response("user-a")["run"]
+    assert queued["status"] == "retry_pending" and ":refresh:" in queued["id"]
+    assert len(client.calls) == 1 and store.plans() == previous
+    asyncio.run(planner.run_current(later))
+    refreshed = next(p for p in store.plans() if p["scope"] == "eu")
+    assert refreshed["id"] != old_session["id"] and refreshed["refreshed"]
+    assert refreshed["asOf"] == later and refreshed["expiresAt"] == old_session["expiresAt"]
+    assert client.calls[-1]["requestedScopes"] == ["eu"]
+    assert client.calls[-1]["asOf"] == later
+    assert next(p for p in store.plans() if p["scope"] == "daily") == daily
+    assert old_session in store.plans()
+    assert planner.response("user-a")["run"]["status"] == "complete"
+
+    # Polling, stale-tab submissions and scheduler ticks never start another read.
+    assert not planner.refresh_current(slot["id"])
+    asyncio.run(planner.run_current(later))
+    assert len(client.calls) == 2
+
+
+def test_simultaneous_refresh_clicks_queue_one_request(setup):
+    planner, _, store, client, _ = setup
+    asyncio.run(planner.run_current(AT))
+    slot = current_slot(AT)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        queued = list(pool.map(lambda _: store.queue_refresh(slot, slot["id"], AT + 1), range(8)))
+    assert sum(queued) == 1
+    assert len(store._rows("SELECT id FROM mp_runs")) == 2
+    asyncio.run(planner.run_current(AT))
+    assert len(client.calls) == 2
+
+
+@pytest.mark.parametrize("state", ["armed", "fired", "disabled", "deleted"])
+def test_refresh_preserves_same_session_alert_state(setup, monkeypatch, state):
+    planner, cache, store, _, engine = setup
+    asyncio.run(planner.run_current(AT))
+    original = cache.read_alerts(profile_id="user-a")[0]
+    if state == "fired":
+        level = original.params["level"]
+        engine.evaluate(MarketContext("GC", "GC", AT + 1, last_price=level - 1))
+        engine.evaluate(MarketContext("GC", "GC", AT + 2, last_price=level))
+    elif state == "disabled":
+        engine.set_enabled(original.id, False)
+    elif state == "deleted":
+        original.enabled = False
+        original.params["mpDeletedAt"] = AT + 1
+        engine.upsert(Alert.from_record(original))
+    events = cache.read_alert_events(original.id, "user-a")
+    later = AT + 60_000
+    cache.upsert_bar(bar(later - 60_000))
+    monkeypatch.setattr("app.market_profile.planner.now_ms", lambda: later)
+    assert planner.refresh_current(current_slot(AT)["id"])
+    asyncio.run(planner.run_current(later))
+    response = planner.response("user-a")
+    new_plan = next(p for p in response["plans"] if p["scope"] == "eu")
+    if state in ("fired", "deleted"):
+        assert new_plan["alerts"] == []
+    else:
+        assert new_plan["alerts"][0]["alertId"] == original.id
+        assert new_plan["alerts"][0]["status"] == state
+    assert len(cache.read_alerts(profile_id="user-a")) == 1
+    assert cache.read_alert_events(original.id, "user-a") == events
+
+
+def test_refresh_moves_to_new_levels_without_accumulating_old_alerts(setup, monkeypatch):
+    planner, cache, store, client, _ = setup
+    asyncio.run(planner.run_current(AT))
+    old = cache.read_alerts(profile_id="user-a")[0]
+    original_analyze = client.analyze_plan
+
+    def changed_levels(snapshot):
+        result = {"plans": original_analyze(snapshot)}
+        ref = next(ref for ref, level in snapshot["levels"].items() if level["price"] != old.params["level"])
+        result["plans"][0]["alerts"][0] = {"levelRef": ref, "reason": "Updated observation level", "scenario": "Wait for a new reaction"}
+        return validate_plans(result, snapshot)
+
+    client.analyze_plan = changed_levels
+    later = AT + 60_000
+    cache.upsert_bar(bar(later - 60_000))
+    monkeypatch.setattr("app.market_profile.planner.now_ms", lambda: later)
+    assert planner.refresh_current(current_slot(AT)["id"])
+    asyncio.run(planner.run_current(later))
+    assert not cache.read_alert(old.id).enabled
+    assert len([a for a in cache.read_alerts(profile_id="user-a") if a.enabled]) == 1
+    old_plan = next(p for p in planner.response("user-a")["plans"] if p["scope"] == "eu" and not p["refreshed"])
+    assert old_plan["alerts"] == []
+    assert cache.read_alert(old.id).params["mpDeletedAt"]
+
+
+def test_failed_refresh_keeps_old_plan_and_retries_only_when_requested(setup, monkeypatch):
+    planner, cache, store, client, _ = setup
+    asyncio.run(planner.run_current(AT))
+    original = store.plans()
+    old_alert = cache.read_alerts(profile_id="user-a")[0]
+    later = AT + 60_000
+    cache.upsert_bar(bar(later - 60_000))
+    monkeypatch.setattr("app.market_profile.planner.now_ms", lambda: later)
+    assert planner.refresh_current(current_slot(AT)["id"])
+    client.fail = True
+    asyncio.run(planner.run_current(later))
+    assert store.plans() == original and cache.read_alert(old_alert.id).enabled
+    assert planner.response("user-a")["run"]["status"] == "failed"
+    asyncio.run(planner.run_current(later))
+    assert len(client.calls) == 2
+    assert planner.retry_failed_current()
+    client.fail = False
+    asyncio.run(planner.run_current(later))
+    assert planner.response("user-a")["run"]["status"] == "complete"
+    assert len(client.calls) == 3
+
+
+def test_refresh_queue_survives_restart_and_reports_waiting_for_fresh_tape(setup, monkeypatch):
+    planner, cache, store, client, engine = setup
+    asyncio.run(planner.run_current(AT))
+    assert planner.refresh_current(current_slot(AT)["id"])
+    later = AT + 300_000
+    monkeypatch.setattr("app.market_profile.planner.now_ms", lambda: later)
+    recreated = MpPlanner(cache, store, client, engine)
+    asyncio.run(recreated.run_current(later))
+    waiting = recreated.response("user-a")["run"]
+    assert waiting["status"] == "waiting" and waiting["error"]
+    assert len(client.calls) == 1
+    cache.upsert_bar(bar(later - 60_000))
+    asyncio.run(recreated.run_current(later))
+    assert recreated.response("user-a")["run"]["status"] == "complete"
+    assert len(client.calls) == 2
+
+
+def test_refresh_endpoint_requires_auth_and_only_queues_for_enabled_profiles(setup):
+    planner, _, store, client, _ = setup
+    asyncio.run(planner.run_current(AT))
+    app = create_app(lifespan=False)
+    app.state.mp_planner = planner
+    slot_id = current_slot(AT)["id"]
+    with TestClient(app) as http:
+        assert http.post("/api/mp/plans/refresh", json={"expectedRunId": slot_id}).status_code == 401
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser("user-b", "B")
+        assert http.post("/api/mp/plans/refresh", json={"expectedRunId": slot_id, "profileId": "user-a"}).status_code == 409
+        app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser("user-a", "A")
+        for body in ({}, {"expectedRunId": True}, {"expectedRunId": ""}):
+            assert http.post("/api/mp/plans/refresh", json=body).status_code == 400
+        result = http.post("/api/mp/plans/refresh", json={"expectedRunId": slot_id})
+        assert result.status_code == 202
+        assert result.json()["run"]["status"] == "retry_pending"
+        assert http.post("/api/mp/plans/refresh", json={"expectedRunId": slot_id}).json()["run"]["id"] == result.json()["run"]["id"]
+        assert len(client.calls) == 1

@@ -469,6 +469,18 @@ class AlertEngine:
 
     # -- evaluation -----------------------------------------------------------
 
+    def retire_mp_alert(self, alert_id: str, at: int, *, fired: bool = False) -> None:
+        """Remove an MP alert from chart/history while keeping its consumed state."""
+        if self._store is not None:
+            self._store.alerts.retire_mp_alert(alert_id, at, fired=fired)
+        alert = self._alerts.get(alert_id)
+        if alert is not None and alert.params.get("source") == "mp_plan":
+            alert.enabled = False
+            alert.params.setdefault("mpDeletedAt", at)
+            alert.params.pop("mpPaused", None)
+            if fired:
+                alert.params["mpFiredAt"] = at
+
     def evaluate(self, ctx: MarketContext) -> list[AlertEvent]:
         """Evaluate all enabled alerts for ``ctx`` and return emitted events.
 
@@ -481,8 +493,7 @@ class AlertEngine:
             if not alert.enabled:  # Req 16.4, 17.1
                 continue
             if alert.params.get("source") == "mp_plan" and ctx.time >= alert.params.get("mpExpiresAt", 0):
-                alert.enabled = False
-                self._persist_enabled(alert)
+                self.retire_mp_alert(alert.id, ctx.time)
                 continue
             if alert.symbol != ctx.symbol:
                 continue
@@ -496,6 +507,7 @@ class AlertEngine:
                 events.extend(alert_events)
                 if alert.params.get("source") == "mp_plan":
                     alert.params["mpFiredAt"] = ctx.time
+                    alert.params["mpDeletedAt"] = ctx.time
                 if not _is_repeat_alert(alert):
                     one_shot_fired_alerts.append(alert)
 
@@ -1883,19 +1895,9 @@ class AlertEngine:
         )
 
     def _persist_mp_event(self, event: AlertEvent, alert: Alert) -> None:
-        """Atomically retain the event and disarm its managed one-shot alert."""
-        import json
-
-        def write(conn):
-            conn.execute(
-                "INSERT INTO alert_events (alert_id,profile_id,symbol,contract,time,price,message) VALUES (?,?,?,?,?,?,?)",
-                (event.alert_id, event.profile_id, event.symbol, event.contract,
-                 event.time, event.price, event.message),
-            )
-            conn.execute("UPDATE alerts SET enabled=0,params=?,updated_at=? WHERE id=?", (
-                json.dumps(alert.params, ensure_ascii=False), event.time, alert.id,
-            ))
-        self._store.writer.write(write)
+        # The event still reaches websocket/Telegram/push delivery. It is not
+        # retained in history after this managed one-shot has been consumed.
+        self.retire_mp_alert(alert.id, event.time, fired=True)
 
     def _persist_enabled(self, alert: Alert) -> None:
         if self._store is None:

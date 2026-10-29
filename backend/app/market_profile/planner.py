@@ -9,7 +9,7 @@ import logging
 from ..engines.alert_engine import Alert, AlertEngine
 from ..models.timestamp import now_ms
 from ..storage.cache_store import CacheStore
-from .calendar import PLANNER_VERSION, active_slots, current_slot, trading_days
+from .calendar import PLANNER_VERSION, active_slots, current_slot, session_windows, trading_days
 from .llm import MpLlmClient
 from .snapshot import build_snapshot
 from .store import MpStore
@@ -71,19 +71,34 @@ class MpPlanner:
 
     def retry_failed_current(self) -> bool:
         slot = current_slot(now_ms())
-        return bool(slot and self.store.queue_retry(slot["id"]))
+        run = self.store.latest_run(slot["id"]) if slot else None
+        return bool(run and self.store.queue_retry(run["id"]))
+
+    def refresh_current(self, expected_run_id: str) -> bool:
+        if not self.client.enabled:
+            raise ValueError("Analyst LLM is not configured")
+        at = now_ms()
+        slot = current_slot(at)
+        if slot is None:
+            raise ValueError("Outside a GC trading session")
+        return self.store.queue_refresh(slot, expected_run_id, at)
 
     async def run_current(self, at: int | None = None) -> dict:
         at = now_ms() if at is None else at
+        # Session handoff must not wait for data availability or an LLM reply.
+        self.sync_alerts(at)
         slot = current_slot(at)
         if slot is None:
             return {"status": "closed", "error": "Outside a GC trading session"}
-        existing = self.store.run(slot["id"])
+        existing = self.store.latest_run(slot["id"])
         if existing and existing["status"] != "retry_pending":
             self._waiting = None
             return existing
         if not self.client.enabled:
             return {"status": "unavailable", "error": "Analyst LLM is not configured"}
+        if existing:
+            slot = {**slot, "id": existing["id"]}
+        refreshed = ":refresh:" in slot["id"]
         prior = self.store.plans(limit=8)
         # Snapshot construction performs only cache reads; never block ingestion.
         snapshot = await asyncio.to_thread(build_snapshot, self.cache, at, prior)
@@ -97,7 +112,7 @@ class MpPlanner:
             return self._waiting
         self._waiting = None
         today = [p for p in self.store.plans(slot["dayStart"]) if p.get("plannerVersion") == PLANNER_VERSION]
-        scopes = (["daily"] if not any(p["scope"] == "daily" for p in today) else []) + [slot["name"]]
+        scopes = (["daily"] if not refreshed and not any(p["scope"] == "daily" for p in today) else []) + [slot["name"]]
         snapshot["requestedScopes"] = scopes
         if not self.store.claim(slot, at):
             return self.store.run(slot["id"]) or {"status": "running"}
@@ -109,6 +124,7 @@ class MpPlanner:
                 "dayStart": slot["dayStart"], "tradeDate": slot["tradeDate"],
                 "asOf": at, "createdAt": finished, "scheduledAt": slot["start"],
                 "createdLate": at - slot["start"] > 120_000,
+                "refreshed": refreshed,
                 "expiresAt": slot["dayEnd"] if p["scope"] == "daily" else slot["end"],
                 "dataQuality": snapshot["dataQuality"], "allowedToAutoTrade": False,
                 "plannerVersion": PLANNER_VERSION,
@@ -130,22 +146,29 @@ class MpPlanner:
         return self.store.run(slot["id"]) or {"status": "failed"}
 
     def _alert_plans(self, at: int, plans: list[dict] | None = None) -> dict[str, dict]:
+        slot = current_slot(at)
+        if slot is None:
+            return {}
         valid = [p for p in (self.store.plans() if plans is None else plans)
-                 if p.get("plannerVersion") == PLANNER_VERSION and p["scope"] != "daily"
+                 if p.get("plannerVersion") == PLANNER_VERSION and p["scope"] == slot["name"]
+                 and p["tradeDate"] == slot["tradeDate"] and p["scheduledAt"] == slot["start"]
                  and p["asOf"] <= at < p["expiresAt"]]
-        # Keep EU context valid through 22:00, but hand alert ownership to US
-        # only after a valid US report exists. A failed read leaves EU intact.
         latest = max(valid, key=lambda p: (p["scheduledAt"], p["asOf"]), default=None)
         return {latest["id"]: latest} if latest else {}
 
     def sync_alerts(self, at: int | None = None) -> None:
         at = now_ms() if at is None else at
         plans = self._alert_plans(at)
-        for profile in self.store.enabled_profiles():
+        enabled_profiles = set(self.store.enabled_profiles())
+        # Paused profiles also need old/fired alerts and history cleaned up.
+        profiles = enabled_profiles | {a.profile_id for a in self.cache.read_alerts(profile_id=None)
+                                       if a.params.get("source") == "mp_plan"}
+        for profile in profiles:
             existing = {a.id: a for a in self.cache.read_alerts(profile_id=profile) if a.id.startswith("mp_")}
             links = self.store.links(profile)
             linked = {(x["plan_id"], x["level_ref"]): x["alert_id"] for x in links}
-            for plan in plans.values():
+            for plan in (plans.values() if profile in enabled_profiles else []):
+                expires = _alert_expiry(plan)
                 for item in plan["alerts"]:
                     key = (plan["id"], item["levelRef"])
                     if key in linked:
@@ -159,7 +182,7 @@ class MpPlanner:
                             if rec is None:
                                 self.alerts.upsert(Alert(alert_id, "GC", "price_crosses_level", {
                                     "level": item["price"], "source": "mp_plan", "repeat": False,
-                                    "mpExpiresAt": plan["expiresAt"], "mpRecoveredMissing": True,
+                                    "mpExpiresAt": expires, "mpRecoveredMissing": True,
                                     "mpDeletedAt": at,
                                 }, enabled=False, profile_id=profile))
                                 rec = self.cache.read_alert(alert_id, profile)
@@ -168,9 +191,21 @@ class MpPlanner:
                     tick = round(item["price"] * 10)
                     # Only an armed, unexpired alert can be shared with a new plan.
                     # Already-fired daily alerts are not resurrected by reconciliation.
-                    candidate = next((a for a in existing.values() if a.enabled
-                                      and float(a.params.get("mpExpiresAt", 0)) > at
-                                      and round(float(a.params["level"]) * 10) == tick), None)
+                    candidate = None
+                    if plan.get("refreshed"):
+                        # A new read is not a rearm action. Preserve fired,
+                        # disabled and deleted alerts at the same session price.
+                        slot_id = plan["runId"].split(":refresh:", 1)[0]
+                        prior_ids = {link["alert_id"] for link in links
+                                     if link["plan_id"].startswith(f"{slot_id}:")
+                                     and link["plan_id"] != plan["id"]}
+                        candidate = next((a for a in existing.values() if a.id in prior_ids
+                                          and float(a.params.get("mpExpiresAt", 0)) > at
+                                          and round(float(a.params["level"]) * 10) == tick), None)
+                    if candidate is None:
+                        candidate = next((a for a in existing.values() if a.enabled
+                                          and float(a.params.get("mpExpiresAt", 0)) > at
+                                          and round(float(a.params["level"]) * 10) == tick), None)
                     if candidate is None:
                         digest = hashlib.sha256(f"{profile}:{plan['runId']}:{tick}".encode()).hexdigest()[:24]
                         alert_id = f"mp_{digest}"
@@ -178,7 +213,7 @@ class MpPlanner:
                         if rec is None:
                             self.alerts.upsert(Alert(alert_id, "GC", "price_crosses_level", {
                                 "level": tick / 10, "source": "mp_plan", "repeat": False,
-                                "mpExpiresAt": plan["expiresAt"],
+                                "mpExpiresAt": expires,
                             }, profile_id=profile))
                             rec = self.cache.read_alert(alert_id, profile)
                         existing[alert_id] = rec
@@ -190,15 +225,15 @@ class MpPlanner:
                                   "alert_id": alert_id, "reason": item["reason"]})
             for alert_id, rec in existing.items():
                 refs = [x for x in links if x["alert_id"] == alert_id and x["plan_id"] in plans]
-                if not refs:
-                    if rec.enabled:
-                        self.alerts.set_enabled(alert_id, False)
+                if (not refs or rec.params.get("mpFiredAt") or rec.params.get("mpDeletedAt")
+                        or rec.params.get("mpExpiresAt", 0) <= at):
+                    self.alerts.retire_mp_alert(alert_id, at)
                     continue
                 latest_ref = max(refs, key=lambda x: plans[x["plan_id"]]["asOf"])
                 plan = plans[latest_ref["plan_id"]]
                 item = next(x for x in plan["alerts"] if x["levelRef"] == latest_ref["level_ref"])
                 params = {**rec.params,
-                          "mpExpiresAt": max(plans[x["plan_id"]]["expiresAt"] for x in refs),
+                          "mpExpiresAt": max(_alert_expiry(plans[x["plan_id"]]) for x in refs),
                           "mpMessage": f"GC chạm {item['label']} tại {rec.params['level']:.1f}. "
                                        f"Plan {SCOPE_NAMES[plan['scope']]}: {item['reason']} "
                                        f"{item['scenario']}\nhttps://gcflowpy.xyz/mp?planId={plan['id']}"}
@@ -226,30 +261,31 @@ class MpPlanner:
                                   else "deleted" if rec.params.get("mpDeletedAt")
                                   else "armed" if rec.enabled else "fired" if rec.params.get("mpFiredAt")
                                   else "disabled")
+            # Retain the plan's prose, but consumed/previous-session alerts no
+            # longer appear in either the chart list or the plan history.
+            plan["alerts"] = [item for item in plan["alerts"]
+                              if item["status"] in ("armed", "disabled", "pending")]
         slot = current_slot(at)
+        run = self.store.latest_run(slot["id"]) if slot else None
+        if slot and self._waiting and self._waiting["id"] == (run["id"] if run else slot["id"]):
+            run = {**(run or {}), **self._waiting}
         return {"plans": plans, "settings": self.settings(profile), "currentSlot": slot,
                 "activeSlots": active_slots(at),
-                "run": ((self.store.run(slot["id"]) or (
-                    self._waiting if self._waiting and self._waiting["id"] == slot["id"] else None
-                )) if slot else None),
+                "run": run,
                 "serverTime": at, "tradingDays": trading_days(at, 20)}
 
     def toggle_alert(self, profile: str, alert_id: str, enabled: bool) -> None:
         rec = self.cache.read_alert(alert_id, profile)
         if rec is None or not alert_id.startswith("mp_"):
             raise ValueError("MP alert not found")
+        if enabled and (rec.params.get("mpFiredAt") or rec.params.get("mpDeletedAt")):
+            raise ValueError("MP alert has already been removed")
         if enabled and (not self.store.enabled(profile) or rec.params.get("mpExpiresAt", 0) <= now_ms()):
             raise ValueError("Planner is disabled or the alert has expired")
         if enabled and not any(link["alert_id"] == alert_id and link["plan_id"] in self._alert_plans(now_ms())
                                for link in self.store.links(profile)):
             raise ValueError("Alerts belong to the latest session plan; this plan has been superseded")
-        if enabled and rec.params.get("mpDeletedAt"):
-            rec.params.pop("mpDeletedAt", None)
-            rec.params.pop("mpPaused", None)
-            rec.enabled = True
-            self.alerts.upsert(Alert.from_record(rec))
-        else:
-            self.alerts.set_enabled(alert_id, enabled)
+        self.alerts.set_enabled(alert_id, enabled)
 
     async def _loop(self) -> None:
         while True:
@@ -262,6 +298,12 @@ class MpPlanner:
             except Exception as exc:
                 logger.warning("MP planner loop failed (%s)", type(exc).__name__)
             await asyncio.sleep(10)
+
+
+def _alert_expiry(plan: dict) -> int:
+    windows = session_windows({"tradeDate": plan["tradeDate"], "start": plan["dayStart"],
+                               "end": plan["expiresAt"]})
+    return min([plan["expiresAt"]] + [w["start"] for w in windows if w["start"] > plan["scheduledAt"]])
 
 
 def _analysis_error_message(error: Exception) -> str:

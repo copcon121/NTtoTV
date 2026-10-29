@@ -17,7 +17,7 @@ vi.mock("../socket/ChartSocket", () => ({ ChartSocket: class {
 const data = (): MpPlannerState => ({
   settings: { enabled: true, available: true, profileId: "u1", reason: null },
   currentSlot: { id: "2026-10-27:eu", name: "eu", tradeDate: "2026-10-27", start: 1793080800000, end: 1793104199999 },
-  run: { status: "complete", error: null }, serverTime: 1793100000000,
+  run: { id: "2026-10-27:eu", status: "complete", error: null }, serverTime: 1793100000000,
   tradingDays: [{ start: 1793052000000, end: 1793134799999, tradeDate: "2026-10-27" }],
   plans: [{
     id: "2026-10-27:asia:daily", scope: "daily", tradeDate: "2026-10-27", asOf: 1793052000000,
@@ -71,7 +71,7 @@ describe("MP planning panel", () => {
   });
 
   it("lets the user explicitly retry a failed slot", async () => {
-    const failed = data(); failed.plans = []; failed.run = { status: "failed", error: "Previous request failed" };
+    const failed = data(); failed.plans = []; failed.run = { id: "2026-10-27:eu", status: "failed", error: "Previous request failed" };
     vi.mocked(mpRequest).mockResolvedValue(failed);
     render(<MarketProfilePlanner api={api} ws="ws://localhost/ws/chart" />);
     const retry = await screen.findByRole("button", { name: "Thử lại phiên này" });
@@ -80,9 +80,38 @@ describe("MP planning panel", () => {
     await waitFor(() => expect(mpRequest).toHaveBeenCalledWith("/plans/run", "POST"));
   });
 
-  it("does not allow a second request for an already completed slot", async () => {
+  it("lets the user reread a completed session with its latest revision token", async () => {
     render(<MarketProfilePlanner api={api} ws="ws://localhost/ws/chart" />);
-    expect(await screen.findByRole("button", { name: "Tạo plan phiên hiện tại" })).toBeDisabled();
+    const refresh = await screen.findByRole("button", { name: "Đọc lại phiên hiện tại" });
+    expect(refresh).toBeEnabled();
+    fireEvent.click(refresh);
+    await waitFor(() => expect(mpRequest).toHaveBeenCalledWith("/plans/refresh", "POST", {
+      expectedRunId: "2026-10-27:eu",
+    }));
+    expect(mpRequest).not.toHaveBeenCalledWith("/plans/run", "POST");
+  });
+
+  it.each(["running", "retry_pending"])("disables another read while the session is %s", async (status) => {
+    const busy = data(); busy.run!.status = status;
+    vi.mocked(mpRequest).mockResolvedValue(busy);
+    render(<MarketProfilePlanner api={api} ws="ws://localhost/ws/chart" />);
+    expect(await screen.findByRole("button", { name: "Đang đọc plan…" })).toBeDisabled();
+    expect(vi.mocked(mpRequest).mock.calls.every((call) => call[0] === "/plans")).toBe(true);
+  });
+
+  it("shows the queued refresh and switches to the current session", async () => {
+    let current = data();
+    vi.mocked(mpRequest).mockImplementation(async (path) => {
+      if (path === "/plans/refresh") current = {
+        ...current, run: { id: "2026-10-27:eu:refresh:1", status: "retry_pending", error: null },
+      };
+      return current as never;
+    });
+    render(<MarketProfilePlanner api={api} ws="ws://localhost/ws/chart" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Đọc lại phiên hiện tại" }));
+    expect(await screen.findByText("Đã nhận yêu cầu chạy lại, đang chuẩn bị bối cảnh…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Đang đọc plan…" })).toBeDisabled();
+    expect(screen.getByRole("tab", { name: "Âu" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("keeps expired plans readable and prevents rearming expired alerts", async () => {

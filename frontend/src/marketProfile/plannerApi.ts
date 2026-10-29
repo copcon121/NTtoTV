@@ -20,6 +20,7 @@ export interface MpPlan {
   createdAt: number;
   expiresAt: number;
   createdLate: boolean;
+  refreshed?: boolean;
   expired: boolean;
   legacySchedule?: boolean;
   llm?: { model?: string; reasoningEffort?: string };
@@ -38,7 +39,7 @@ export interface MpPlannerState {
     llm?: { model?: string; reasoningEffort?: string } };
   currentSlot: { id: string; name: PlanScope; tradeDate: string; start: number; end: number } | null;
   activeSlots?: { name: PlanScope; start: number; end: number }[];
-  run: { status: string; error: string | null } | null;
+  run: { id: string; status: string; error: string | null } | null;
   tradingDays: { start: number; end: number; tradeDate: string }[];
   serverTime: number;
 }

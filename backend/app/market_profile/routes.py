@@ -55,6 +55,24 @@ async def run(user: AuthenticatedUser = Depends(get_current_user),
     return planner.response(user.id)
 
 
+@router.post("/plans/refresh", status_code=202)
+async def refresh(request: Request, user: AuthenticatedUser = Depends(get_current_user),
+                  planner: MpPlanner = Depends(get_planner)) -> dict:
+    if not planner.store.enabled(user.id):
+        raise conflict("Enable the MP planner for your profile first")
+    try:
+        body = await request.json()
+        if (not isinstance(body, dict) or not isinstance(body.get("expectedRunId"), str)
+                or not body["expectedRunId"].strip()):
+            raise ValueError("expectedRunId must be a non-empty string")
+        planner.refresh_current(body["expectedRunId"])
+    except ValueError as exc:
+        raise bad_request(str(exc))
+    # The existing worker consumes the durable queue; the browser need not
+    # keep a long HTTP request open while Muse generates the replacement.
+    return planner.response(user.id)
+
+
 @router.patch("/alerts/{alert_id}")
 async def toggle(alert_id: str, request: Request,
                  user: AuthenticatedUser = Depends(get_current_user),

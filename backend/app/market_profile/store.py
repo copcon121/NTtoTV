@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from ..analyst.store import AnalystStore
 
@@ -83,6 +84,29 @@ class MpStore:
         )
         return cur.rowcount == 1
 
+    def latest_run(self, slot_id: str) -> dict | None:
+        rows = self._rows(
+            "SELECT id,status,error,created_at,updated_at FROM mp_runs "
+            "WHERE id=? OR id LIKE ? ORDER BY rowid DESC LIMIT 1",
+            (slot_id, f"{slot_id}:refresh:%"),
+        )
+        return rows[0] if rows else None
+
+    def queue_refresh(self, slot: dict, expected_run_id: str, now: int) -> bool:
+        # Compare and insert in one statement: stale tabs and simultaneous
+        # clicks cannot queue multiple billable reads of the same revision.
+        run_id = f"{slot['id']}:refresh:{uuid.uuid4().hex}"
+        cur = self.writer.execute(
+            "INSERT INTO mp_runs(id,day_start,slot,status,snapshot,error,created_at,updated_at) "
+            "SELECT ?,?,?,'retry_pending',NULL,NULL,?,? "
+            "WHERE (SELECT id FROM mp_runs WHERE id=? OR id LIKE ? "
+            "ORDER BY rowid DESC LIMIT 1)=? "
+            "AND EXISTS(SELECT 1 FROM mp_runs WHERE id=? AND status='complete')",
+            (run_id, slot["dayStart"], slot["name"], now, now,
+             slot["id"], f"{slot['id']}:refresh:%", expected_run_id, expected_run_id),
+        )
+        return cur.rowcount == 1
+
     def recover_interrupted(self, now: int) -> None:
         self.writer.execute("UPDATE mp_runs SET status='failed',error=?,updated_at=? WHERE status='running'", (
             "Backend restarted during analysis; this slot will not be requested again automatically.", now,
@@ -110,7 +134,7 @@ class MpStore:
         if day_start is not None:
             sql += " WHERE day_start=?"
             args = (day_start,)
-        sql += " ORDER BY as_of DESC, scope LIMIT ?"
+        sql += " ORDER BY as_of DESC, scope, rowid DESC LIMIT ?"
         return [json.loads(r["payload"]) for r in self._rows(sql, (*args, limit))]
 
     def repair_reports(self, run_id: str, reports: list[dict], now: int) -> None:

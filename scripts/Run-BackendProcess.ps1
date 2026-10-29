@@ -26,7 +26,9 @@ $env:NTTOTV_MP_PLANNER_ENABLED = "1"
 # retain old inherited values after the Windows User configuration is changed.
 foreach ($settingName in @(
     "NTTOTV_OPENAI_API_KEY", "NTTOTV_OPENAI_BASE_URL", "OPENAI_BASE_URL",
-    "NTTOTV_LLM_MODEL", "NTTOTV_LLM_REASONING_EFFORT"
+    "NTTOTV_LLM_MODEL", "NTTOTV_LLM_REASONING_EFFORT",
+    "NTTOTV_MP_LLM_PROVIDER", "NTTOTV_MP_LLM_API_KEY",
+    "NTTOTV_MP_LLM_BASE_URL", "NTTOTV_MP_LLM_MODEL"
 )) {
     $settingValue = [Environment]::GetEnvironmentVariable($settingName, "User")
     if ($settingValue -and (

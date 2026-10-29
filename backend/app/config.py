@@ -268,6 +268,19 @@ class Settings:
     mp_planner_enabled: bool = field(
         default_factory=lambda: os.getenv("NTTOTV_MP_PLANNER_ENABLED", "0") == "1"
     )
+    # MP can use the local Muse gateway without changing the other analysts.
+    mp_llm_provider: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_MP_LLM_PROVIDER", "openai")
+    )
+    mp_llm_api_key: str | None = field(
+        default_factory=lambda: os.getenv("NTTOTV_MP_LLM_API_KEY")
+    )
+    mp_llm_base_url: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_MP_LLM_BASE_URL", "http://127.0.0.1:18610/v1")
+    )
+    mp_llm_model: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_MP_LLM_MODEL", "muse-chat")
+    )
     analyst_db_name: str = field(
         default_factory=lambda: os.getenv("NTTOTV_ANALYST_DB_NAME", "analyst.sqlite")
     )

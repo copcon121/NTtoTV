@@ -18,7 +18,15 @@ exchange GC daily profile calendar retains DST. Planner run IDs include
 `utc7-v2` so old schedule reports remain readable without blocking the new slots.
 The first available slot creates the daily plan and that session's plan in one
 request. Later slots create one session plan. A late start creates only the
-current slot and labels the actual snapshot time. Refresh never invokes the LLM.
+current slot and labels the actual snapshot time. Reloading the page never
+invokes the LLM.
+
+After a completed session read, **Doc lai phien hien tai** explicitly queues a
+new session plan using the latest available snapshot. It leaves the daily
+context and previous session revisions in history. The UI shows the new context
+time and switches to the current session tab. While queued/running, the button
+is disabled. The request returns immediately and the durable worker processes it.
+Stale tabs and simultaneous clicks queue at most one read of the same revision.
 
 Inputs include five completed TPO/volume profiles, the developing profile,
 twenty closed daily candles where available, observed session ranges/initial
@@ -43,18 +51,19 @@ new `mp_*` tables in `analyst.sqlite` using its existing single writer.
 ## Alerts
 
 Managed alert IDs start with `mp_`; definitions live in the existing alert store.
-Only the latest valid session plan owns alerting, so a profile has at most two
-planner observation levels. Earlier plans remain readable during overlapping
-sessions. If the new read fails, the previous valid session's alerts continue
-until their original expiry. Identical active levels can be shared at handoff. Each
-fires once, with the event and disarming committed together. Reconciliation
-does not rearm fired alerts. The user can explicitly rearm an unexpired alert.
+Only the current session's latest valid plan owns alerting, so a profile has at
+most two planner observation levels. Fired alerts disappear from the chart,
+alert list, and history; websocket/Telegram/push notifications still deliver
+once. A hidden disabled record prevents refreshes and restarts from recreating
+consumed alerts. Removed alerts cannot be rearmed.
 
-Session alerts expire at their own session's end or are superseded by the next
-valid session plan. Old schedule alerts are disabled while retaining history.
-The price engine enforces
-expiry even if the scheduler is busy. Disabling the planner pauses its armed
-alerts without modifying manual alerts or deleting event history.
+At each new session, all previous-session alerts and their history are removed
+before requesting the new plan, including when fresh data is missing or the
+new read fails. EU prose stays readable until 22:00, but its alerts end at the
+20:00 US handoff. The price engine enforces expiry while the scheduler is busy.
+Cleanup includes paused profiles and legacy fired/deleted alerts. Disabling
+the planner pauses current armed alerts. Manual alerts and their history are
+preserved. An open chart reconciles managed alerts every five seconds.
 
 Telegram delivery for MP alerts always runs on the backend, including with an
 open browser; frontend handlers do not send them again. The MP panel receives
@@ -78,6 +87,39 @@ allows 300 seconds and 24,000 total output/reasoning tokens per request while
 instructing the model to keep the visible report short. The model/effort used
 are recorded on each plan and shown in the panel.
 
+The Windows MP planner can instead use the local muse2api gateway. Start
+`muse2api`, import a real muse.ai account, then run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Set-MpLlmProvider.ps1 -Provider muse -Restart
+```
+
+This stores `NTTOTV_MP_LLM_PROVIDER=muse`, `NTTOTV_MP_LLM_BASE_URL`,
+`NTTOTV_MP_LLM_MODEL=muse-chat`, and `NTTOTV_MP_LLM_API_KEY` in the Windows User
+environment. The key is read from the sibling `muse2api\data\api_key` file;
+`-MuseKeyFile` and `-MuseBaseUrl` can override those installation locations.
+The other analysts retain their existing OpenAI/9router configuration.
+
+Muse requests use `/v1/chat/completions` with the full plan schema and snapshot
+in a single prompt because the gateway does not enforce Structured Outputs.
+The backend still validates scopes, narrative text, alert limits and catalog
+references before saving a plan or creating alerts. A complete JSON code fence
+is accepted; prose and invalid JSON are rejected. Muse controls its underlying
+model and reasoning; OpenAI model-name aliases do not select that actual model.
+Keep muse2api running for scheduled plans. There is no automatic provider
+fallback or retry that could duplicate a request after a timeout.
+
+For a real-account verification without saving chart plans or arming alerts,
+run `python -m scripts.verify_mp_muse` from `backend` with its virtual
+environment. This reads public chart history, makes one Muse request, validates
+the result, and writes a preview under `_run_logs/mp-muse/`.
+
+To switch MP back to the preserved OpenAI/9router settings:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Set-MpLlmProvider.ps1 -Provider openai -Restart
+```
+
 An ambiguous provider timeout or backend interruption keeps the slot claimed;
 it is not automatically retried. The **Thử lại phiên này** button explicitly
 queues one retry of a failed slot; switching the planner off and back on does
@@ -85,10 +127,18 @@ the same. Completed/running slots remain protected from duplicate requests.
 Reports from earlier slots retain their original expiry. A provider failure
 never creates fresh alerts. Failed slots remain retryable after a restart.
 
+If a manual reread fails within the same session, its previous valid plan and
+alerts remain active until session handoff/expiry. A successful reread supersedes the previous session
+revision. Same-session alerts at the same price retain their armed, fired,
+disabled or deleted state; rereading alone never rearms them. New selected
+prices use the normal alert registration path and obsolete levels are removed.
+
 - `GET /api/mp/sessions?count=5`: public GC day boundaries, also used by the chart.
 - `GET /api/mp/plans[?dayStart=...]`: authenticated reports, settings and alert state.
 - `PUT /api/mp/settings`: authenticated `{ "enabled": true|false }` for the user's profile.
 - `POST /api/mp/plans/run`: authenticated, idempotent catch-up for the current slot.
+- `POST /api/mp/plans/refresh`: authenticated `{ "expectedRunId": "..." }`, queues
+  an explicit reread of the currently completed revision; returns status 202.
 - `PATCH /api/mp/alerts/{id}`: authenticated `{ "enabled": true|false }` for an owned MP alert.
 
 Deployment: build `frontend/dist`, restart through `scripts/Restart-Backend.ps1`,

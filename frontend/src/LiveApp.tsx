@@ -408,10 +408,12 @@ const MGANN_SWEEP_ALERT_TYPES = new Set<Alert["type"]>([
 ]);
 
 /** Map configured alerts to the price lines the chart should draw. */
-function toAlertLines(alerts: readonly Alert[]): AlertLine[] {
+export function toAlertLines(alerts: readonly Alert[], at = Date.now()): AlertLine[] {
   const lines: AlertLine[] = [];
   for (const alert of alerts) {
     if (alert.symbol !== SYMBOL || !LEVEL_ALERT_TYPES.has(alert.type)) continue;
+    if (alert.params.source === "mp_plan" && (alert.params.mpFiredAt || alert.params.mpDeletedAt
+      || Number(alert.params.mpExpiresAt ?? 0) <= at)) continue;
     const level = Number(alert.params.level);
     if (!Number.isFinite(level)) continue;
     lines.push({
@@ -2217,6 +2219,7 @@ export function LiveApp() {
   const [alertError, setAlertError] = useState("");
   const alertsRef = useRef(alerts);
   alertsRef.current = alerts;
+  const consumedMpAlerts = useRef(new Set<string>());
   const mgannBreakSettingsRef = useRef(mgannBreakSettings);
   mgannBreakSettingsRef.current = mgannBreakSettings;
   const [lastAlert, setLastAlert] = useState<AlertEventMessage | undefined>(undefined);
@@ -3218,7 +3221,10 @@ export function LiveApp() {
     });
     const offAlert = socket.on("alert_event", (msg) => {
       if ((msg.profileId ?? DEFAULT_PROFILE_ID) === profileIdRef.current) {
-        if (msg.alertType !== "price_crosses_level" || msg.alertId.startsWith("mp_")) {
+        if (msg.alertId.startsWith("mp_")) {
+          consumedMpAlerts.current.add(msg.alertId);
+          setAlerts((prev) => prev.filter((alert) => alert.id !== msg.alertId));
+        } else if (msg.alertType !== "price_crosses_level") {
           setAlerts((prev) =>
             prev.map((alert) =>
               alert.id === msg.alertId && alert.params.repeat !== true
@@ -3359,16 +3365,26 @@ export function LiveApp() {
     let cancelled = false;
     setLastAlert(undefined);
     setAlertSignalMarkers([]);
-    void (async () => {
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
       try {
         const a = await api.alerts(profileId);
-        if (!cancelled) setAlerts(a);
+        if (!cancelled) setAlerts(a.filter((alert) => !consumedMpAlerts.current.has(alert.id)));
       } catch {
         /* ignore */
+      } finally {
+        refreshing = false;
       }
-    })();
+    };
+    void refresh();
+    // Reconcile server-managed MP alerts even when this chart stays open
+    // across a session change or misses an alert event during reconnect.
+    const timer = window.setInterval(() => { void refresh(); }, 5000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [api, authUser, profileHydrated, profileId]);
 

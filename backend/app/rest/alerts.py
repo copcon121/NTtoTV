@@ -612,7 +612,10 @@ async def list_alerts(
     """Return the configured alerts. (Req 18.8)"""
     profile_id = _normalize_profile_id(profile_id)
     return {"alerts": [_alert_to_dict(a) for a in cache.read_alerts(profile_id=profile_id)
-                       if not a.params.get("mpDeletedAt")]}
+                       if not a.params.get("mpDeletedAt") and not (
+                           a.params.get("source") == "mp_plan" and (
+                               a.params.get("mpFiredAt") or a.params.get("mpExpiresAt", 0) <= now_ms()
+                           ))]}
 
 
 @router.post("/alerts", status_code=201)
@@ -722,16 +725,11 @@ async def delete_alert(
     profile_id = _normalize_profile_id(profile_id)
     existing = cache.read_alert(alert_id, profile_id)
     if existing is not None and existing.params.get("source") == "mp_plan":
-        # Keep a disabled tombstone so planner reconciliation cannot recreate
-        # the alert, while its plan links and event history remain readable.
-        existing.enabled = False
-        existing.params["mpDeletedAt"] = now_ms()
-        existing.params.pop("mpPaused", None)
-        existing.updated_at = now_ms()
-        cache.upsert_alert(existing)
         engine = _runtime_alert_engine(request)
         if engine is not None:
-            engine.upsert(Alert.from_record(existing))
+            engine.retire_mp_alert(alert_id, now_ms())
+        else:
+            cache.alerts.retire_mp_alert(alert_id, now_ms())
         return Response(status_code=204)
     removed = cache.delete_alert(alert_id, profile_id)
     if not removed:
