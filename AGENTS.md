@@ -698,6 +698,29 @@ Release loi thi atomic switch ve path previous release da xac minh:
 Khong xoa release cu trong task deploy. Khong copy SQLite dang co WAL; dung
 online backup workflow.
 
+### Optional Windows MT5 execution relay (2026-10-25)
+
+Oracle market data stays Rithmic. Manual execution optionally uses the existing
+two Windows profiles through a private SSH tunnel. `hieu` owns
+`C:\Program Files\MetaTrader 5\terminal64.exe`; `Hai` owns
+`C:\MT5Hai\terminal64.exe`. Windows retains sessions, profile payloads, MT5
+account bindings, broker credentials and order records. Oracle owner/Admin auth
+and Rithmic settings stay local; all security rules above still apply.
+
+Enable with `deploy/systemd/nttotv-windows-execution.conf` installed as the
+optional `30-windows-execution.conf` systemd drop-in. It sets only
+`NTTOTV_WINDOWS_EXECUTION_URL=http://127.0.0.1:18080`, without reading/changing
+the protected runtime env file. Windows task `NTtoTV Oracle MT5 private tunnel`
+forwards that loopback listener to Windows `127.0.0.1:8000` and reconnects.
+Manage it with `scripts/Start-OracleMt5Tunnel.ps1` and
+`scripts/Stop-OracleMt5Tunnel.ps1` in the Windows repository. See
+`WINDOWS-EXECUTION.md` for operations. `/api/execution` reports capabilities.
+The chart uses `nttotv_windows_session`, separate from Oracle owner/Admin auth.
+Terminal choices/connect are pinned to the correct user's terminal. The relay
+never retries uncertain trading mutations. Automatic-entry controls remain
+disabled; manual trailing executes on Windows. Windows/backend/both MT5
+terminals must stay online. Do not send a real order as a connectivity test.
+
 ### Cutover
 
 Chinh nguoi dung config/connect Rithmic trong Admin tru khi cho phep agent ro

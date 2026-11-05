@@ -172,3 +172,89 @@ def test_prune_to_settings_removes_legacy_threshold_history(tmp_path):
         ]
     finally:
         store.close()
+
+
+@pytest.mark.unit
+def test_heatmap_keeps_refill_reduction_and_terminal_samples_after_reopen(tmp_path):
+    path = tmp_path / "liquidity.sqlite"
+    store = LiquidityStore(path)
+    updates = [
+        line(sequence=1, time=1_000, action="start", size=500),
+        line(sequence=2, time=31_000, action="update", size=1200),
+        line(sequence=3, time=61_000, action="update", size=700),
+        line(sequence=4, time=91_000, action="end", size=0),
+    ]
+    for update in updates:
+        store.record(update)
+        store.record(update)  # replay is idempotent
+    store.close()
+    store = LiquidityStore(path)
+    try:
+        _, lines = store.read("GC", "GC", 40_000, 100_000)
+        assert lines[0]["samples"] == [
+            {"time": 31_000, "size": 1200, "active": True},
+            {"time": 61_000, "size": 700, "active": True},
+            {"time": 91_000, "size": 0, "active": False},
+        ]
+        # A narrower historical query must not return future size changes.
+        _, earlier = store.read("GC", "GC", 0, 40_000)
+        assert [sample["size"] for sample in earlier[0]["samples"]] == [500, 1200]
+        store.clear_history(["long_term"])
+        count = store._writer.connection.execute("SELECT COUNT(*) FROM liquidity_line_samples").fetchone()[0]
+        assert count == 0
+    finally:
+        store.close()
+
+
+@pytest.mark.unit
+def test_heatmap_retention_keeps_one_anchor_and_cascades_completed_lines(tmp_path):
+    store = LiquidityStore(tmp_path / "liquidity.sqlite")
+    try:
+        for index, time in enumerate([1000, 2000, 3000, 6000], start=1):
+            store.record(line(sequence=index, time=time, action="update", size=500 + index * 100))
+        store.record({**line(sequence=5, time=2000, action="end", size=0), "lineId": "old"})
+        store.purge_before(5000)
+        _, lines = store.read("GC", "GC", 5000, 10000)
+        assert len(lines) == 1
+        assert [sample["time"] for sample in lines[0]["samples"]] == [3000, 6000]
+        assert store._writer.connection.execute("SELECT COUNT(*) FROM liquidity_line_samples").fetchone()[0] == 2
+    finally:
+        store.close()
+
+
+@pytest.mark.unit
+def test_delayed_heatmap_sample_does_not_reopen_an_ended_line(tmp_path):
+    store = LiquidityStore(tmp_path / "liquidity.sqlite")
+    try:
+        store.record(line(sequence=2, time=3000, action="end", size=0))
+        store.record(line(sequence=1, time=2000, action="update", size=900))
+        _, lines = store.read("GC", "GC", 0, 10000)
+        assert lines[0]["active"] is False
+        assert lines[0]["endedAt"] == 3000
+        assert lines[0]["currentSize"] == 0
+        assert [sample["size"] for sample in lines[0]["samples"]] == [900, 0]
+    finally:
+        store.close()
+
+
+@pytest.mark.unit
+def test_heatmap_upgrade_preserves_legacy_line_history(tmp_path):
+    path = tmp_path / "liquidity.sqlite"
+    store = LiquidityStore(path)
+    store.record(line(sequence=1, time=1000, action="start", size=600))
+    # Emulate a database written by the previous release.
+    store._writer.connection.execute("DROP TABLE liquidity_line_samples")
+    store.close()
+
+    store = LiquidityStore(path)
+    try:
+        _, lines = store.read("GC", "GC", 0, 10000)
+        assert lines[0]["startedAt"] == 1000
+        assert lines[0]["currentSize"] == 600
+        assert lines[0]["samples"] == []
+        store.record(line(sequence=2, time=5000, action="update", size=900))
+        _, lines = store.read("GC", "GC", 0, 10000)
+        assert lines[0]["startedAt"] == 1000
+        assert lines[0]["samples"] == [{"time": 5000, "size": 900, "active": True}]
+    finally:
+        store.close()

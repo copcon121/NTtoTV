@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { AutoTradeSettings, Mt5Account } from "../api/client";
+import type { Mt5Account } from "../api/client";
 
 export interface MarketOrderSettings {
   volumeLots: number;
@@ -42,9 +42,6 @@ export interface MarketOrderBarProps {
   settings: MarketOrderSettings;
   onSettingsChange: (settings: MarketOrderSettings) => void;
   onMarketOrder: (side: "buy" | "sell") => void;
-  autoTradeSettings?: AutoTradeSettings;
-  autoTradePending?: boolean;
-  onAutoTradeSettingsChange?: (settings: AutoTradeSettings) => void;
   onOrderRowBreakEven?: (id: string) => void;
   onOrderRowSupertrendTrailing?: (id: string) => void;
   onOrderRowClose?: (id: string) => void;
@@ -72,9 +69,6 @@ export function MarketOrderBar({
   settings,
   onSettingsChange,
   onMarketOrder,
-  autoTradeSettings,
-  autoTradePending = false,
-  onAutoTradeSettingsChange,
   onOrderRowBreakEven,
   onOrderRowSupertrendTrailing,
   onOrderRowClose,
@@ -221,46 +215,6 @@ export function MarketOrderBar({
                 />
                 <span>ST @ 1R</span>
               </label>
-              {connected && autoTradeSettings && onAutoTradeSettingsChange && (
-                <span className="auto-trade-controls" aria-label="Automatic mGann trading">
-                  <label
-                    className={autoTradeSettings.longEnabled ? "auto-trade-toggle active long" : "auto-trade-toggle long"}
-                    title="Auto mGann Long: optimized detector; close 50% at +1R, keep the original SL, and take the remaining 50% at +3R"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={autoTradeSettings.longEnabled}
-                      disabled={autoTradePending}
-                      aria-label="Auto trade L"
-                      onChange={(event) =>
-                        onAutoTradeSettingsChange({
-                          ...autoTradeSettings,
-                          longEnabled: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <span>Auto L</span>
-                  </label>
-                  <label
-                    className={autoTradeSettings.shortEnabled ? "auto-trade-toggle active short" : "auto-trade-toggle short"}
-                    title="Auto mGann Short: optimized detector; close 50% at +1R, keep the original SL, and take the remaining 50% at +3R"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={autoTradeSettings.shortEnabled}
-                      disabled={autoTradePending}
-                      aria-label="Auto trade S"
-                      onChange={(event) =>
-                        onAutoTradeSettingsChange({
-                          ...autoTradeSettings,
-                          shortEnabled: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <span>Auto S</span>
-                  </label>
-                </span>
-              )}
             </div>
             <div className="market-order-actions">
               {connected ? (

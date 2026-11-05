@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
+import app.pipeline as pipeline_module
 
 from app.config import Settings
 from app.engines.contract_resolver import ContractResolver
 from app.models import NormalizedTrade, Side
-from app.models.timestamp import now_ms
 from app.pipeline import Pipeline
 from app.registry.registry import WebSocketRegistry
 from app.storage.cache_store import CacheStore
@@ -16,7 +17,10 @@ from app.storage.tick_store import TickStore
 
 
 @pytest.mark.integration
-def test_pipeline_has_one_authoritative_source_and_repairs_sequence_gaps(tmp_path) -> None:
+def test_pipeline_has_one_authoritative_source_and_repairs_sequence_gaps(tmp_path, monkeypatch) -> None:
+    # Keep simulated trades in an open GC session, including weekend test runs.
+    market_time = int(datetime(2026, 10, 23, 14, tzinfo=timezone.utc).timestamp() * 1000)
+    monkeypatch.setattr(pipeline_module, "now_ms", lambda: market_time)
     settings = Settings(
         data_dir=tmp_path,
         rithmic_enabled=True,
@@ -50,7 +54,7 @@ def test_pipeline_has_one_authoritative_source_and_repairs_sequence_gaps(tmp_pat
             }
         )
         await pipeline.on_rithmic_history_status(
-            {"state": "synced", "pendingRanges": [], "highWatermark": now_ms()}
+            {"state": "synced", "pendingRanges": [], "highWatermark": market_time}
         )
         await pipeline.maintenance_tick()
 
@@ -60,7 +64,7 @@ def test_pipeline_has_one_authoritative_source_and_repairs_sequence_gaps(tmp_pat
         assert set(status["sources"]) == {"rithmic"}
         assert pipeline.is_ready()
 
-        at = now_ms()
+        at = market_time
         first = NormalizedTrade(
             symbol="GC",
             contract="GC 12-26",

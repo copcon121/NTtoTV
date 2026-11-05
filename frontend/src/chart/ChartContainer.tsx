@@ -30,6 +30,7 @@ import {
 import { type BigTradeMarker } from "./indicatorReducer";
 import { type ChartSeriesPort, ChartSeriesController } from "./chartSeriesController";
 import { applyBarUpdate } from "./barReducer";
+import { DEFAULT_CHART_BACKGROUND } from "./theme";
 import { type EmaPoint, emaSeries, nextEma } from "./ema";
 import {
   DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -57,6 +58,7 @@ import {
   type PriceLineSelection,
   type SmcAiSignalMarker,
   type VisibleLogicalRangeInfo,
+  chartContrastPalette,
   LightweightChartsAdapter,
 } from "./lightweightChartsAdapter";
 import { type Bar } from "../cache/types";
@@ -566,9 +568,11 @@ export function filterBigTradeMarkers(
 
 function ChartTimezoneControl({
   offsetMinutes,
+  textColor,
   onChange,
 }: {
   offsetMinutes: number;
+  textColor: string;
   onChange?: (offsetMinutes: number) => void;
 }) {
   const normalizedOffset = normalizeTimezoneOffsetMinutes(offsetMinutes);
@@ -591,6 +595,7 @@ function ChartTimezoneControl({
   return (
     <div
       className="chart-timezone-control"
+      style={{ color: textColor }}
       aria-label={`Chart timezone: ${timezoneLabel}`}
       title={`Chart timezone: ${label}`}
       onPointerDown={(event) => event.stopPropagation()}
@@ -654,7 +659,7 @@ export function ChartContainer({
   smc,
   sweepReversal,
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
-  chartBackgroundColor = "#d3d3d3",
+  chartBackgroundColor = DEFAULT_CHART_BACKGROUND,
   timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES,
   onTimezoneOffsetChange,
   socket,
@@ -2036,6 +2041,7 @@ export function ChartContainer({
       )}
       <ChartTimezoneControl
         offsetMinutes={timezoneOffsetMinutes}
+        textColor={chartContrastPalette(chartBackgroundColor).text}
         onChange={onTimezoneOffsetChange}
       />
       {showFootprint &&

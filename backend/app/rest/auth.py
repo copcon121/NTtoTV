@@ -25,9 +25,21 @@ def _user_to_dict(user: AuthenticatedUser | Any) -> dict[str, Any]:
     }
 
 
-def current_user_optional(
+async def current_user_optional(
     request: Request, cache: CacheStore = Depends(get_cache)
 ) -> AuthenticatedUser | None:
+    remote_user = getattr(request.state, "execution_user", None)
+    if remote_user is not None:
+        return remote_user
+    bridge = getattr(request.app.state, "windows_execution", None)
+    if bridge is not None and not request.url.path.startswith("/api/admin/"):
+        from ..windows_execution import REMOTE_COOKIE
+        token = request.cookies.get(REMOTE_COOKIE)
+        if token:
+            try:
+                return await bridge.identity(token)
+            except (OSError, ValueError):
+                raise ApiError(503, "EXECUTION_UNAVAILABLE", "The private Windows connection is unavailable")
     return cache.users.read_session_user(request.cookies.get(SESSION_COOKIE))
 
 

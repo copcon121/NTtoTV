@@ -35,6 +35,7 @@ from .rest.signals import router as signals_router
 from .rest.smc_ai import router as smc_ai_router
 from .rest.trend_analyzer import router as trend_analyzer_router
 from .runtime import AppRuntime
+from .windows_execution import install_windows_execution
 
 
 @asynccontextmanager
@@ -82,6 +83,7 @@ def create_app(*, lifespan: bool = True) -> FastAPI:
     # Shared REST error envelope: all REST endpoints surface failures in one
     # consistent shape with status/code/field mapping (Req 18.12).
     install_error_handlers(app)
+    install_windows_execution(app)
 
     app.include_router(rest_router)
     app.include_router(auth_router)

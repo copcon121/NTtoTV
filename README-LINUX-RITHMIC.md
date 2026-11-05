@@ -3,7 +3,9 @@
 This branch is the deployable Ubuntu/ARM64 edition. Its only market-data source
 is Rithmic: Ticker Plant supplies live L1/L2/MBO and History Plant repairs
 minute bars, delta and footprint gaps. There is no runtime route for Bookmap,
-NinjaTrader, NT export import, MT5, or order placement.
+NinjaTrader or NT export import. MT5/order placement is disabled by default;
+the optional [Windows execution relay](WINDOWS-EXECUTION.md) reuses the two
+existing Windows profiles and terminals over a private SSH tunnel.
 
 ## Runtime
 

@@ -9,6 +9,7 @@ import { routeForPathname } from "./routes";
 import { registerServiceWorker } from "./webPush";
 import { RithmicAdminPage } from "./admin/RithmicAdminPage";
 import "./styles.css";
+import "./chart/theme.css";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {

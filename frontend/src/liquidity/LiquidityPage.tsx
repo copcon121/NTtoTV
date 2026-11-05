@@ -12,7 +12,15 @@ import {
 } from "react";
 
 import { buildHistoryUrl, type HistoryResponse } from "../cache/historyLoader";
+import type { VolumeDeltaPoint } from "../chart/indicatorReducer";
+import { useVolumeDelta } from "./useVolumeDelta";
+import { drawLiquidityCrosshair } from "./crosshair";
+import { LineOpacityControl } from "./LineOpacityControl";
 import { resolveEndpoints } from "../endpoints";
+import {
+  useLiquidityIndicators, LiquidityIndicatorControls, LiquidityIndicatorSettings,
+  drawLiquidityIndicators, VWAP_COLOR, type LiquidityIndicators,
+} from "./indicators";
 import { ChartSocket } from "../socket/ChartSocket";
 import type {
   Bar,
@@ -20,23 +28,24 @@ import type {
   LiquidityEventKind,
   LiquidityUpdateMessage,
   MarketExplorerSignal,
-  MarketExplorerUpdateMessage,
   Timeframe,
-  TrendAnalyzerMarker,
-  TrendAnalyzerPoint,
 } from "../socket/messages";
 import {
-  TREND_ANALYZER_STYLES,
-  mergeTrendMarkers,
-  mergeTrendPoints,
-  trendSeriesInRange,
-  type TrendAnalyzerHistoryResponse,
-} from "./trendAnalyzer";
+  DEFAULT_HEATMAP_SETTINGS,
+  drawLiquidityLevel,
+  heatmapLineEnd,
+  heatmapLineVisible,
+  knownLineSamples,
+  mergeSizeSamples,
+  normalizeHeatmapSettings,
+  type LiquidityHeatmapSettings,
+  type LiquiditySizeSample,
+} from "./heatmap";
 
 const SYMBOL = "GC";
 const CONTRACT = "GC";
 const RETENTION_MS = 24 * 60 * 60 * 1_000;
-const ACTIVE_LINE_STALE_MS = 90_000;
+const HEATMAP_SETTINGS_STORAGE_KEY = "gc-chart-platform.liquidity-heatmap";
 const MIN_VISIBLE_BARS = 30;
 const MAX_EVENTS = 20_000;
 const MAX_MARKET_VOLUME_SAMPLES = 20_000;
@@ -82,6 +91,7 @@ interface LiquidityLine {
   threshold: number;
   domDistance: number | null;
   active: boolean;
+  samples?: LiquiditySizeSample[];
 }
 
 interface LiquidityHistoryResponse {
@@ -99,8 +109,6 @@ interface Filters {
   longTerm: boolean;
   relative: boolean;
   absolute: boolean;
-  trend1: boolean;
-  trend2: boolean;
 }
 
 export interface LiquidityTrackerSettings {
@@ -188,18 +196,9 @@ export interface MarketExplorerSettings {
   absorption: AbsorptionSettings;
 }
 
-interface MarketVolumeSample {
-  time: number;
-  value: number;
-  buyVolume: number;
-  sellVolume: number;
-  price: number;
-}
-
 interface MarketExplorerHistoryResponse {
   symbol: string;
   contract: string;
-  samples: MarketVolumeSample[];
   signals: MarketExplorerSignal[];
 }
 
@@ -336,25 +335,32 @@ export function LiquidityPage() {
   const [bars, setBars] = useState<Bar[]>([]);
   const [events, setEvents] = useState<LiquidityEvent[]>([]);
   const [lines, setLines] = useState<Map<string, LiquidityLine>>(new Map());
-  const [marketVolumeSamples, setMarketVolumeSamples] = useState<MarketVolumeSample[]>([]);
   const [marketVolumeSignals, setMarketVolumeSignals] = useState<MarketExplorerSignal[]>([]);
-  const [trendPoints, setTrendPoints] = useState<TrendAnalyzerPoint[]>([]);
-  const [trendMarkers, setTrendMarkers] = useState<TrendAnalyzerMarker[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] = useState<"connected" | "disconnected">(
     "disconnected",
   );
   const [reloadKey, setReloadKey] = useState(0);
+  const { bars: volumeDelta, error: volumeDeltaError } = useVolumeDelta(
+    socket, endpoints.api, tf, tf === "1m" ? 60_000 : 300_000, reloadKey,
+  );
+  const indicators = useLiquidityIndicators(socket, endpoints.api, tf, reloadKey, bars);
   const [visibleBars, setVisibleBars] = useState(240);
   const [offsetBars, setOffsetBars] = useState(0);
   const [filters, setFilters] = useState<Filters>({
     longTerm: true,
     relative: true,
     absolute: true,
-    trend1: true,
-    trend2: true,
   });
+  const [heatmapSettings, setHeatmapSettings] = useState<LiquidityHeatmapSettings>(() => {
+    try {
+      return normalizeHeatmapSettings(JSON.parse(window.localStorage.getItem(HEATMAP_SETTINGS_STORAGE_KEY) ?? "null"));
+    } catch {
+      return { ...DEFAULT_HEATMAP_SETTINGS };
+    }
+  });
+  const [heatmapDraft, setHeatmapDraft] = useState<LiquidityHeatmapSettings>(heatmapSettings);
   const [clock, setClock] = useState(Date.now());
   const [trackerSettings, setTrackerSettings] = useState<LiquidityTrackerSettings>(
     DEFAULT_TRACKER_SETTINGS,
@@ -394,6 +400,37 @@ export function LiquidityPage() {
   }, []);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(HEATMAP_SETTINGS_STORAGE_KEY, JSON.stringify(heatmapSettings));
+    } catch {
+      /* Keep display settings usable when browser storage is restricted. */
+    }
+  }, [heatmapSettings]);
+
+  useEffect(() => {
+    const cutoff = clock - RETENTION_MS;
+    setLines((current) => {
+      let changed = false;
+      const next = new Map<string, LiquidityLine>();
+      for (const line of current.values()) {
+        if ((line.endedAt ?? line.lastAt) < cutoff) {
+          changed = true;
+          continue;
+        }
+        const samples = line.samples;
+        const firstRetained = samples?.findIndex((sample) => sample.time >= cutoff) ?? -1;
+        if (samples && firstRetained > 1) {
+          changed = true;
+          next.set(line.lineId, { ...line, samples: samples.slice(firstRetained - 1) });
+        } else {
+          next.set(line.lineId, line);
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [clock]);
+
+  useEffect(() => {
     const offOpen = socket.onOpen(() => setConnection("connected"));
     const offClose = socket.onClose(() => setConnection("disconnected"));
     socket.connect();
@@ -410,7 +447,6 @@ export function LiquidityPage() {
     socket.subscribe(SYMBOL, ["bar_update"], tf);
     socket.subscribe(SYMBOL, ["liquidity_update"]);
     socket.subscribe(SYMBOL, ["market_explorer_update"]);
-    socket.subscribe(SYMBOL, ["trend_analyzer_update"]);
     const offBar = socket.on("bar_update", (message) => {
       if (message.symbol !== SYMBOL || message.contract !== CONTRACT || message.tf !== tf) {
         return;
@@ -436,9 +472,6 @@ export function LiquidityPage() {
     const offMarketExplorer = socket.on("market_explorer_update", (message) => {
       if (message.symbol !== SYMBOL || message.contract !== CONTRACT) return;
       const cutoff = Date.now() - RETENTION_MS;
-      setMarketVolumeSamples((current) =>
-        mergeMarketVolumeSamples(current, [marketVolumeSampleFromUpdate(message)], cutoff),
-      );
       if (message.signals.length > 0) {
         setMarketVolumeSignals((current) =>
           mergeMarketVolumeSignals(current, message.signals, cutoff),
@@ -450,21 +483,13 @@ export function LiquidityPage() {
         );
       }
     });
-    const offTrendAnalyzer = socket.on("trend_analyzer_update", (message) => {
-      if (message.symbol !== SYMBOL || message.contract !== CONTRACT) return;
-      const cutoff = Date.now() - RETENTION_MS;
-      setTrendPoints((current) => mergeTrendPoints(current, message.points, cutoff));
-      setTrendMarkers((current) => mergeTrendMarkers(current, message.markers, cutoff));
-    });
     return () => {
       offBar();
       offLiquidity();
       offMarketExplorer();
-      offTrendAnalyzer();
       socket.unsubscribe(SYMBOL, ["bar_update"], tf);
       socket.unsubscribe(SYMBOL, ["liquidity_update"]);
       socket.unsubscribe(SYMBOL, ["market_explorer_update"]);
-      socket.unsubscribe(SYMBOL, ["trend_analyzer_update"]);
     };
   }, [socket, tf]);
 
@@ -494,13 +519,6 @@ export function LiquidityPage() {
       to: String(to),
       limit: String(MAX_MARKET_VOLUME_SAMPLES),
     });
-    const trendAnalyzerParams = new URLSearchParams({
-      symbol: SYMBOL,
-      contract: CONTRACT,
-      from: String(from),
-      to: String(to),
-      limit: "50000",
-    });
 
     Promise.all([
       fetch(historyUrl, { signal: controller.signal }).then(readJson<HistoryResponse>),
@@ -510,11 +528,8 @@ export function LiquidityPage() {
       fetch(`${endpoints.api}/market-explorer?${marketExplorerParams}`, {
         signal: controller.signal,
       }).then(readJson<MarketExplorerHistoryResponse>),
-      fetch(`${endpoints.api}/trend-analyzer?${trendAnalyzerParams}`, {
-        signal: controller.signal,
-      }).then(readJson<TrendAnalyzerHistoryResponse>),
     ])
-      .then(([history, liquidity, marketExplorer, trendAnalyzer]) => {
+      .then(([history, liquidity, marketExplorer]) => {
         if (sequence !== requestSequence.current) return;
         const timeframeMs = tf === "1m" ? 60_000 : 300_000;
         const liveBucketTime = to - to % timeframeMs;
@@ -523,17 +538,8 @@ export function LiquidityPage() {
         );
         setEvents((current) => mergeEvents(liquidity.events, current, from));
         setLines((current) => mergeHistoryLines(liquidity.lines, current));
-        setMarketVolumeSamples((current) =>
-          mergeMarketVolumeSamples(marketExplorer.samples, current, from),
-        );
         setMarketVolumeSignals((current) =>
           mergeMarketVolumeSignals(marketExplorer.signals, current, from),
-        );
-        setTrendPoints((current) =>
-          mergeTrendPoints(trendAnalyzer.points, current, from),
-        );
-        setTrendMarkers((current) =>
-          mergeTrendMarkers(trendAnalyzer.markers, current, from),
         );
       })
       .catch((cause: unknown) => {
@@ -596,6 +602,8 @@ export function LiquidityPage() {
   );
 
   const openSettings = () => {
+    indicators.beginSettings();
+    setHeatmapDraft({ ...heatmapSettings });
     setSettingsDraft({ ...trackerSettings });
     setMarketExplorerDraft(cloneMarketExplorerSettings(marketExplorerSettings));
     setSettingsError(null);
@@ -605,12 +613,6 @@ export function LiquidityPage() {
   const updateSettingNumber = (field: NumericTrackerSetting, value: number) => {
     if (!Number.isFinite(value)) return;
     setSettingsDraft((current) => ({ ...current, [field]: Math.round(value) }));
-  };
-  const updateMarketExplorerSignal = (patch: Partial<MarketExplorerSignalSettings>) => {
-    setMarketExplorerDraft((current) => ({
-      ...current,
-      signal: { ...current.signal, ...patch },
-    }));
   };
   const saveSettings = async () => {
     const validationError =
@@ -645,7 +647,9 @@ export function LiquidityPage() {
       if (refilteredKinds.size > 0) setReloadKey((current) => current + 1);
       setMarketExplorerSettings(marketExplorerPayload.settings);
       setMarketExplorerDraft(cloneMarketExplorerSettings(marketExplorerPayload.settings));
+      setHeatmapSettings(normalizeHeatmapSettings(heatmapDraft));
       setSettingsNotice("Saved and applied to Rithmic");
+      indicators.applySettings();
     } catch (cause) {
       setSettingsError(cause instanceof Error ? cause.message : "Save failed");
     } finally {
@@ -663,7 +667,7 @@ export function LiquidityPage() {
         </nav>
         <div className="liquidity-title">
           <span>GC Liquidity + Market Explorer</span>
-          <span>TTW TrendAnalyzerPro + MV Stop, Volume Spike and Absorption</span>
+          <span>Liquidity heatmap + Volume Delta, Volume Spike and Absorption</span>
         </div>
         <div className="liquidity-segmented" aria-label="Timeframe">
           {(["1m", "5m"] as const).map((value) => (
@@ -678,6 +682,11 @@ export function LiquidityPage() {
           ))}
         </div>
         <div className="liquidity-filters" aria-label="Liquidity layers">
+          <LineOpacityControl
+            value={heatmapSettings.opacity}
+            onChange={(opacity) => setHeatmapSettings((current) => ({ ...current, opacity }))}
+          />
+          <LiquidityIndicatorControls indicators={indicators} />
           <FilterToggle
             label="Long-term"
             checked={filters.longTerm}
@@ -693,16 +702,6 @@ export function LiquidityPage() {
             checked={filters.absolute}
             onChange={(checked) => setFilters((value) => ({ ...value, absolute: checked }))}
           />
-          <FilterToggle
-            label="Trend #1"
-            checked={filters.trend1}
-            onChange={(checked) => setFilters((value) => ({ ...value, trend1: checked }))}
-          />
-          <FilterToggle
-            label="Trend #2"
-            checked={filters.trend2}
-            onChange={(checked) => setFilters((value) => ({ ...value, trend2: checked }))}
-          />
         </div>
         <div className="liquidity-actions">
           <button type="button" title="Zoom out" onClick={() => zoom(1.25)}>−</button>
@@ -715,7 +714,7 @@ export function LiquidityPage() {
         </div>
         <div className={`liquidity-connection is-${connection}`}>
           <span aria-hidden="true" />
-          {loading ? "Loading" : error ?? connection}
+          {loading ? "Loading" : error ?? volumeDeltaError ?? connection}
         </div>
       </header>
 
@@ -744,6 +743,36 @@ export function LiquidityPage() {
             </header>
 
             <div className="liquidity-settings-groups">
+              <LiquidityIndicatorSettings indicators={indicators} />
+              <fieldset className="liquidity-settings-group">
+                <legend>Liquidity Heatmap</legend>
+                <div className="liquidity-settings-fields">
+                  <SettingNumber
+                    label="Minimum lifetime (seconds)"
+                    disabled={false}
+                    help="Hide liquidity that disappears before this age. Default 60 seconds removes brief flashes; 0 disables the age filter. Tiny lines under 3 pixels are also hidden."
+                    value={heatmapDraft.minDurationSeconds}
+                    min={0} max={600}
+                    onChange={(value) => setHeatmapDraft((current) => normalizeHeatmapSettings({ ...current, minDurationSeconds: value }))}
+                  />
+                  <SettingNumber
+                    label="Full intensity (x trigger)"
+                    disabled={false}
+                    help="Size reaching this multiple of the line trigger gets the strongest color. Added size brightens only the new segment; reduced size dims it."
+                    value={heatmapDraft.saturationMultiple}
+                    min={2} max={20}
+                    onChange={(value) => setHeatmapDraft((current) => normalizeHeatmapSettings({ ...current, saturationMultiple: value }))}
+                  />
+                  <SettingNumber
+                    label="Contrast"
+                    disabled={false}
+                    help="Higher values dim smaller levels more strongly. Color uses a stable volume scale across timeframes and zoom levels."
+                    value={heatmapDraft.contrast}
+                    min={0.3} max={3} step={0.1}
+                    onChange={(value) => setHeatmapDraft((current) => normalizeHeatmapSettings({ ...current, contrast: value }))}
+                  />
+                </div>
+              </fieldset>
               <LiquiditySettingsGroup
                 title="Relative Liquidity Change"
                 help="So sánh size hiện tại với lần cập nhật trước tại cùng mức giá để đánh dấu thanh khoản được thêm hoặc rút. Khi giá giao dịch đúng tại một Short/Long-term line rồi line biến mất, phần size bị rút cũng hiện bằng marker Relative âm."
@@ -871,10 +900,6 @@ export function LiquidityPage() {
               </LiquiditySettingsGroup>
               <MarketExplorerSettingsEditor
                 settings={marketExplorerDraft}
-                onLineChange={(patch) =>
-                  setMarketExplorerDraft((current) => ({ ...current, ...patch }))
-                }
-                onSignalChange={updateMarketExplorerSignal}
                 onVolumeSpikeChange={(patch) =>
                   setMarketExplorerDraft((current) => ({
                     ...current,
@@ -897,7 +922,9 @@ export function LiquidityPage() {
               <button
                 type="button"
                 onClick={() => {
+                  setHeatmapDraft({ ...DEFAULT_HEATMAP_SETTINGS });
                   setSettingsDraft({ ...DEFAULT_TRACKER_SETTINGS });
+                  indicators.resetDraft();
                   setMarketExplorerDraft(cloneMarketExplorerSettings());
                   setSettingsError(null);
                   setSettingsNotice(null);
@@ -915,14 +942,14 @@ export function LiquidityPage() {
       ) : null}
 
       <LiquidityCanvas
+        indicators={indicators}
         bars={bars}
         events={configuredEvents}
         lines={configuredLines}
-        marketVolumeSamples={marketVolumeSamples}
+        volumeDelta={volumeDelta}
         marketVolumeSignals={marketVolumeSignals}
         marketExplorerSettings={marketExplorerSettings}
-        trendPoints={trendPoints}
-        trendMarkers={trendMarkers}
+        heatmapSettings={heatmapSettings}
         trackerSettings={trackerSettings}
         tf={tf}
         filters={filters}
@@ -937,18 +964,22 @@ export function LiquidityPage() {
       />
 
       <footer className="liquidity-legend">
-        <span><i className="is-bid-line" /> long-term bid</span>
-        <span><i className="is-ask-line" /> long-term ask</span>
+        <span><i style={{ background: VWAP_COLOR }} /> session VWAP</span>
+        <span><i style={{ background: "#1e90ff" }} /> BigTrade buy</span>
+        <span><i style={{ background: "#dc143c" }} /> BigTrade sell</span>
+        <span><i className="is-bid-line" /> heatmap bid</span>
+        <span><i className="is-ask-line" /> heatmap ask</span>
+        <span><i style={{ background: "linear-gradient(90deg, #22a0ff, #23e0d5, #ffdf50, #ff8e38)" }} /> added liquidity</span>
+        <span><i style={{ background: "#9c7ee8" }} /> reduced liquidity</span>
+        <span>Solid = resting; dashed = ended; thicker / brighter = more volume</span>
+        <span>Brighter = more resting size; hide levels &lt; {heatmapSettings.minDurationSeconds}s</span>
         <span><i className="is-relative-bid" /> relative bid ±volume</span>
         <span><i className="is-relative-ask" /> relative ask ±volume</span>
         <span><i className="is-absolute" /> absolute threshold</span>
-        <span><i style={{ background: marketExplorerSettings.buyLineColor }} /> MV Stop buy</span>
-        <span><i style={{ background: marketExplorerSettings.sellLineColor }} /> MV Stop sell</span>
+        <span><i style={{ background: "#00d68f" }} /> Volume Delta +</span>
+        <span><i style={{ background: "#ff5267" }} /> Volume Delta -</span>
         <span><i style={{ background: marketExplorerSettings.volumeSpike.buyColor }} /> Volume Spike</span>
         <span><i style={{ background: marketExplorerSettings.absorption.sellColor }} /> Absorption</span>
-        <span><i style={{ background: TREND_ANALYZER_STYLES[1].buy }} /> Trend #1 buy/sell</span>
-        <span><i style={{ background: TREND_ANALYZER_STYLES[2].buy }} /> Trend #2 buy/sell</span>
-        <span>TA: 5m x 15, multiplier 3.0, switch 3 ticks</span>
         <span>No raw full-depth data is stored</span>
       </footer>
       {marketExplorerToast ? (
@@ -959,14 +990,14 @@ export function LiquidityPage() {
 }
 
 function LiquidityCanvas({
+  indicators,
   bars,
   events,
   lines,
-  marketVolumeSamples,
+  volumeDelta,
   marketVolumeSignals,
   marketExplorerSettings,
-  trendPoints,
-  trendMarkers,
+  heatmapSettings,
   trackerSettings,
   tf,
   filters,
@@ -977,14 +1008,14 @@ function LiquidityCanvas({
   onVisibleBarsChange,
   onZoom,
 }: {
+  indicators: LiquidityIndicators;
   bars: Bar[];
   events: LiquidityEvent[];
   lines: LiquidityLine[];
-  marketVolumeSamples: MarketVolumeSample[];
+  volumeDelta: readonly VolumeDeltaPoint[];
   marketVolumeSignals: MarketExplorerSignal[];
   marketExplorerSettings: MarketExplorerSettings;
-  trendPoints: TrendAnalyzerPoint[];
-  trendMarkers: TrendAnalyzerMarker[];
+  heatmapSettings: LiquidityHeatmapSettings;
   trackerSettings: LiquidityTrackerSettings;
   tf: LiquidityTimeframe;
   filters: Filters;
@@ -1033,14 +1064,14 @@ function LiquidityCanvas({
     const canvas = canvasRef.current;
     if (!canvas || size.width <= 0 || size.height <= 0) return;
     drawLiquidityChart(canvas, size, {
+      indicators,
       bars,
       events,
       lines,
-      marketVolumeSamples,
+      volumeDelta,
       marketVolumeSignals,
       marketExplorerSettings,
-      trendPoints,
-      trendMarkers,
+      heatmapSettings,
       trackerSettings,
       tf,
       filters,
@@ -1048,20 +1079,20 @@ function LiquidityCanvas({
       offsetBars: safeOffset,
       priceScale,
       pricePanPx,
-      now,
+      now: Math.max(now, Date.now()),
       hover,
     });
   }, [
+    indicators,
     bars,
     events,
     filters,
     hover,
     lines,
     marketExplorerSettings,
-    trendMarkers,
-    trendPoints,
+    heatmapSettings,
     trackerSettings,
-    marketVolumeSamples,
+    volumeDelta,
     marketVolumeSignals,
     now,
     pricePanPx,
@@ -1315,120 +1346,18 @@ function drawTtwVolumeSpikeSignal(
   context.restore();
 }
 
-function drawTrendAnalyzerLines(
-  context: CanvasRenderingContext2D,
-  points: TrendAnalyzerPoint[],
-  filters: Filters,
-  timeFrom: number,
-  timeTo: number,
-  xAt: (time: number) => number,
-  yAt: (price: number) => number,
-) {
-  context.save();
-  context.lineWidth = 2;
-  context.lineJoin = "miter";
-  context.setLineDash([]);
-  // Draw #2 first so #1 keeps top-layer precedence.
-  for (const instance of [2, 1] as const) {
-    if (instance === 1 ? !filters.trend1 : !filters.trend2) continue;
-    for (const side of ["buy", "sell"] as const) {
-      const series = trendSeriesInRange(points, instance, side, timeFrom, timeTo);
-      if (series.length === 0) continue;
-      context.strokeStyle = TREND_ANALYZER_STYLES[instance][side];
-      context.beginPath();
-      let drawing = false;
-      let previousPrice: number | null = null;
-      for (const point of series) {
-        if (point.price === null) {
-          drawing = false;
-          previousPrice = null;
-          continue;
-        }
-        const x = xAt(Math.max(timeFrom, point.time));
-        const y = yAt(point.price);
-        if (!drawing || previousPrice === null) {
-          context.moveTo(x, y);
-          drawing = true;
-        } else {
-          context.lineTo(x, yAt(previousPrice));
-          context.lineTo(x, y);
-        }
-        previousPrice = point.price;
-      }
-      if (drawing && previousPrice !== null) {
-        context.lineTo(xAt(timeTo), yAt(previousPrice));
-      }
-      context.stroke();
-    }
-  }
-  context.restore();
-}
-
-function drawTrendAnalyzerMarkers(
-  context: CanvasRenderingContext2D,
-  markers: TrendAnalyzerMarker[],
-  xAt: (time: number) => number,
-  yAt: (price: number) => number,
-) {
-  context.save();
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  for (const instance of [2, 1] as const) {
-    for (const marker of markers) {
-      if (marker.instance !== instance) continue;
-      const color = TREND_ANALYZER_STYLES[instance][marker.side];
-      const x = xAt(marker.time);
-      const lineY = yAt(marker.linePrice);
-      context.fillStyle = color;
-      context.strokeStyle = "rgba(5, 9, 12, 0.9)";
-      context.lineWidth = 1;
-      if (marker.kind === "new_candle") {
-        context.beginPath();
-        context.arc(x, lineY, 2.5, 0, Math.PI * 2);
-        context.fill();
-        continue;
-      }
-
-      const isBuy = marker.side === "buy";
-      const centerY = lineY + (isBuy ? 9 : -9);
-      const size = 7;
-      context.beginPath();
-      if (isBuy) {
-        context.moveTo(x, centerY - size);
-        context.lineTo(x + size, centerY + size);
-        context.lineTo(x - size, centerY + size);
-      } else {
-        context.moveTo(x, centerY + size);
-        context.lineTo(x + size, centerY - size);
-        context.lineTo(x - size, centerY - size);
-      }
-      context.closePath();
-      context.fill();
-      context.stroke();
-      context.font = "600 10px Segoe UI, sans-serif";
-      context.fillStyle = color;
-      context.fillText(
-        marker.marketPrice.toFixed(1),
-        x,
-        centerY + (isBuy ? size + 9 : -size - 9),
-      );
-    }
-  }
-  context.restore();
-}
-
 function drawLiquidityChart(
   canvas: HTMLCanvasElement,
   size: CanvasSize,
   data: {
+    indicators: LiquidityIndicators;
     bars: Bar[];
     events: LiquidityEvent[];
     lines: LiquidityLine[];
-    marketVolumeSamples: MarketVolumeSample[];
+    volumeDelta: readonly VolumeDeltaPoint[];
     marketVolumeSignals: MarketExplorerSignal[];
     marketExplorerSettings: MarketExplorerSettings;
-    trendPoints: TrendAnalyzerPoint[];
-    trendMarkers: TrendAnalyzerMarker[];
+    heatmapSettings: LiquidityHeatmapSettings;
     trackerSettings: LiquidityTrackerSettings;
     tf: LiquidityTimeframe;
     filters: Filters;
@@ -1455,9 +1384,7 @@ function drawLiquidityChart(
   const bottom = TIME_AXIS_HEIGHT;
   const plotWidth = Math.max(1, size.width - left - right);
   const plotHeight = Math.max(1, size.height - top - bottom);
-  const stopPaneHeight = data.marketExplorerSettings.lineEnabled
-    ? clamp(plotHeight * 0.24, 88, 170)
-    : 0;
+  const stopPaneHeight = clamp(plotHeight * 0.24, 88, 170);
   const paneGap = stopPaneHeight > 0 ? 10 : 0;
   const pricePlotHeight = Math.max(1, plotHeight - stopPaneHeight - paneGap);
   const stopPaneTop = top + pricePlotHeight + paneGap;
@@ -1485,51 +1412,20 @@ function drawLiquidityChart(
           : data.filters.longTerm),
   );
   const lineItems = data.lines.filter((line) => {
-    const fresh = line.active && data.now - line.lastAt <= ACTIVE_LINE_STALE_MS;
-    const effectiveEnd = fresh ? timeTo : (line.endedAt ?? line.lastAt);
-    return line.startedAt <= timeTo && effectiveEnd >= timeFrom;
+    const effectiveEnd = heatmapLineEnd(line, data.now);
+    return line.startedAt <= timeTo && effectiveEnd >= timeFrom &&
+      heatmapLineVisible(line, data.heatmapSettings, data.now, plotWidth / (timeTo - timeFrom));
   });
-  const rawMarketVolumeSamples = data.marketVolumeSamples.filter(
-    (sample) => sample.time >= timeFrom && sample.time <= timeTo,
+  const visibleVolumeDelta = data.volumeDelta.filter(
+    (bar) => bar.time >= timeFrom && bar.time < timeTo,
   );
-  const marketVolumeStride = Math.max(
-    1,
-    Math.ceil(rawMarketVolumeSamples.length / Math.max(1, plotWidth * 2)),
-  );
-  const marketVolumeSamples = rawMarketVolumeSamples.filter(
-    (_sample, index) =>
-      index % marketVolumeStride === 0 || index === rawMarketVolumeSamples.length - 1,
-  );
+  const volumeExtent = Math.max(1, ...visibleVolumeDelta.map((bar) => Math.abs(bar.delta))) * 1.12;
   const marketVolumeSignals = data.marketVolumeSignals.filter(
-    (signal) => signal.time >= timeFrom && signal.time <= timeTo,
-  );
-  const trendEnabled = (instance: 1 | 2) =>
-    instance === 1 ? data.filters.trend1 : data.filters.trend2;
-  const visibleTrendPoints = ([1, 2] as const).flatMap((instance) =>
-    trendEnabled(instance)
-      ? (["buy", "sell"] as const).flatMap((side) =>
-          trendSeriesInRange(data.trendPoints, instance, side, timeFrom, timeTo),
-        )
-      : [],
-  );
-  const visibleTrendMarkers = data.trendMarkers.filter(
-    (marker) =>
-      trendEnabled(marker.instance) &&
-      marker.time >= timeFrom &&
-      marker.time <= timeTo,
+    (signal) => signal.kind !== "market_volume_stop" && signal.time >= timeFrom && signal.time <= timeTo,
   );
   const prices = visible.flatMap((bar) => [bar.low, bar.high]);
-  if (markerEvents.length > 0) {
-    prices.push(...markerEvents.map((event) => event.price));
-  }
-  if (data.filters.longTerm) prices.push(...lineItems.map((line) => line.price));
-  prices.push(...marketVolumeSignals.map((signal) => signal.price));
-  prices.push(
-    ...visibleTrendPoints.flatMap((point) =>
-      point.price === null ? [] : [point.price],
-    ),
-    ...visibleTrendMarkers.map((marker) => marker.linePrice),
-  );
+  // Fit visible candles. Distant depth levels and other overlays are clipped
+  // to this price viewport instead of compressing the candle chart.
   if (showCurrentPrice && currentPrice !== undefined) prices.push(currentPrice);
   const dataMin = Math.min(...prices);
   const dataMax = Math.max(...prices);
@@ -1583,26 +1479,21 @@ function drawLiquidityChart(
 
   if (data.filters.longTerm) {
     for (const line of lineItems) {
-      const fresh = line.active && data.now - line.lastAt <= ACTIVE_LINE_STALE_MS;
-      const effectiveEnd = fresh ? timeTo : (line.endedAt ?? line.lastAt);
-      const x1 = xAt(Math.max(timeFrom, line.startedAt));
-      const x2 = xAt(Math.min(timeTo, effectiveEnd));
-      if (x2 < left || x1 > left + plotWidth) continue;
+      if (line.price < priceMin || line.price > priceMax) continue;
       const y = yAt(line.price);
-      const color = line.side === "bid" ? "0, 214, 143" : "255, 82, 103";
-      context.strokeStyle = `rgba(${color}, ${fresh ? 0.9 : 0.36})`;
-      context.lineWidth = 1 + Math.min(4, line.peakSize / Math.max(1, line.threshold));
-      context.setLineDash(fresh ? [] : [5, 4]);
-      context.beginPath();
-      context.moveTo(x1, y);
-      context.lineTo(x2, y);
-      context.stroke();
-      if (fresh && x2 > left + plotWidth - 120) {
-        context.setLineDash([]);
-        context.fillStyle = `rgb(${color})`;
+      const labelX = drawLiquidityLevel(context, line, {
+        from: timeFrom, to: timeTo, now: data.now,
+        pixelsPerMs: plotWidth / (timeTo - timeFrom),
+        showLive: showCurrentPrice, y, xAt,
+        settings: data.heatmapSettings,
+      });
+      if (labelX !== null && labelX > left + plotWidth - 120) {
+        const labelOpacity = Math.min(1, data.heatmapSettings.opacity);
+        context.fillStyle = line.side === "bid"
+          ? `rgba(0, 214, 143, ${labelOpacity})` : `rgba(255, 82, 103, ${labelOpacity})`;
         context.textAlign = "right";
         const label = liquidityLineLabel(line, data.trackerSettings, data.now);
-        context.fillText(label, x2 - 5, y - 8);
+        context.fillText(label, labelX - 5, y - 8);
       }
     }
   }
@@ -1631,6 +1522,11 @@ function drawLiquidityChart(
     );
   }
 
+  drawLiquidityIndicators(context, data.indicators, {
+    from: timeFrom, to: timeTo, tfMs, right: left + plotWidth,
+    top, bottom: top + pricePlotHeight, current: showCurrentPrice, xAt, yAt,
+  });
+
   if (
     showCurrentPrice &&
     currentPrice !== undefined &&
@@ -1647,17 +1543,6 @@ function drawLiquidityChart(
     context.stroke();
     context.setLineDash([]);
   }
-
-  drawTrendAnalyzerLines(
-    context,
-    data.trendPoints,
-    data.filters,
-    timeFrom,
-    timeTo,
-    xAt,
-    yAt,
-  );
-  drawTrendAnalyzerMarkers(context, visibleTrendMarkers, xAt, yAt);
 
   for (const signal of marketVolumeSignals) {
     const style = marketExplorerSignalStyle(data.marketExplorerSettings, signal);
@@ -1771,37 +1656,6 @@ function drawLiquidityChart(
     }
   }
 
-  if (
-    data.hover &&
-    data.hover.x >= left &&
-    data.hover.x <= left + plotWidth &&
-    data.hover.y >= top &&
-    data.hover.y <= top + pricePlotHeight
-  ) {
-    const hoverTime = timeFrom + ((data.hover.x - left) / plotWidth) * (timeTo - timeFrom);
-    const hoverPrice = priceFromChartY(
-      data.hover.y,
-      top,
-      pricePlotHeight,
-      priceMin,
-      priceMax,
-    );
-    context.strokeStyle = "rgba(190, 205, 220, 0.55)";
-    context.lineWidth = 1;
-    context.setLineDash([3, 3]);
-    context.beginPath();
-    context.moveTo(data.hover.x, top);
-    context.lineTo(data.hover.x, top + pricePlotHeight);
-    context.moveTo(left, data.hover.y);
-    context.lineTo(left + plotWidth, data.hover.y);
-    context.stroke();
-    context.setLineDash([]);
-    context.fillStyle = "#dbe7f3";
-    context.textAlign = "right";
-    context.fillText(hoverPrice.toFixed(1), left + plotWidth - 5, data.hover.y - 8);
-    context.textAlign = "center";
-    context.fillText(formatDateTime(hoverTime), data.hover.x, top + 9);
-  }
   context.restore();
 
   if (
@@ -1835,16 +1689,6 @@ function drawLiquidityChart(
     context.lineTo(left + plotWidth, stopPaneTop - paneGap / 2 + 0.5);
     context.stroke();
 
-    const configuredThreshold = Math.max(
-      1,
-      data.marketExplorerSettings.signal.askLevel,
-      data.marketExplorerSettings.signal.bidLevel,
-    );
-    const observed = Math.max(
-      configuredThreshold,
-      ...rawMarketVolumeSamples.map((sample) => Math.abs(sample.value)),
-    );
-    const volumeExtent = observed * 1.12;
     const stopY = (value: number) =>
       stopPaneTop + ((volumeExtent - value) / (volumeExtent * 2)) * stopPaneHeight;
     const zeroY = stopY(0);
@@ -1860,18 +1704,13 @@ function drawLiquidityChart(
     context.beginPath();
     context.rect(left, stopPaneTop, plotWidth, stopPaneHeight);
     context.clip();
-    context.lineWidth = 2;
-    for (let index = 1; index < marketVolumeSamples.length; index += 1) {
-      const previous = marketVolumeSamples[index - 1];
-      const current = marketVolumeSamples[index];
-      context.strokeStyle =
-        current.value >= 0
-          ? data.marketExplorerSettings.buyLineColor
-          : data.marketExplorerSettings.sellLineColor;
-      context.beginPath();
-      context.moveTo(xAt(previous.time), stopY(previous.value));
-      context.lineTo(xAt(current.time), stopY(current.value));
-      context.stroke();
+    for (const bar of visibleVolumeDelta) {
+      if (bar.delta === 0) continue;
+      const x = xAt(bar.time + tfMs / 2);
+      const y = stopY(bar.delta);
+      context.fillStyle = bar.delta > 0 ? "#00d68f" : "#ff5267";
+      context.fillRect(x - candleWidth / 2, Math.min(y, zeroY), candleWidth,
+        Math.max(1, Math.abs(zeroY - y)));
     }
     context.restore();
 
@@ -1879,7 +1718,7 @@ function drawLiquidityChart(
     context.textAlign = "left";
     context.fillStyle = "#c7d2dc";
     context.fillText(
-      `MV Stop (${data.marketExplorerSettings.halftimeSeconds}s)`,
+      `Volume Delta (${data.tf})`,
       left + 7,
       stopPaneTop + 11,
     );
@@ -1894,33 +1733,14 @@ function drawLiquidityChart(
       stopPaneTop + stopPaneHeight - 6,
     );
 
-    if (
-      data.hover &&
-      data.hover.x >= left &&
-      data.hover.x <= left + plotWidth &&
-      data.hover.y >= stopPaneTop &&
-      data.hover.y <= stopPaneTop + stopPaneHeight
-    ) {
-      const hoverVolume =
-        volumeExtent - ((data.hover.y - stopPaneTop) / stopPaneHeight) * volumeExtent * 2;
-      context.strokeStyle = "rgba(190, 205, 220, 0.55)";
-      context.setLineDash([3, 3]);
-      context.beginPath();
-      context.moveTo(data.hover.x, stopPaneTop);
-      context.lineTo(data.hover.x, stopPaneTop + stopPaneHeight);
-      context.moveTo(left, data.hover.y);
-      context.lineTo(left + plotWidth, data.hover.y);
-      context.stroke();
-      context.setLineDash([]);
-      context.fillStyle = "#dbe7f3";
-      context.textAlign = "right";
-      context.fillText(
-        formatCompactVolume(hoverVolume),
-        left + plotWidth - 5,
-        data.hover.y - 8,
-      );
-    }
   }
+  drawLiquidityCrosshair(context, data.hover, {
+    left, width: plotWidth, top, priceHeight: pricePlotHeight,
+    deltaTop: stopPaneTop, deltaHeight: stopPaneHeight,
+    from: timeFrom, to: timeTo, tfMs, priceMin, priceMax,
+    deltaExtent: volumeExtent,
+  }, visibleVolumeDelta, formatDateTime, formatCompactVolume);
+
 }
 
 /**
@@ -2086,127 +1906,17 @@ function FilterToggle({
 
 function MarketExplorerSettingsEditor({
   settings,
-  onLineChange,
-  onSignalChange,
   onVolumeSpikeChange,
   onAbsorptionChange,
 }: {
   settings: MarketExplorerSettings;
-  onLineChange: (patch: Partial<MarketExplorerSettings>) => void;
-  onSignalChange: (patch: Partial<MarketExplorerSignalSettings>) => void;
   onVolumeSpikeChange: (patch: Partial<VolumeSpikeSettings>) => void;
   onAbsorptionChange: (patch: Partial<AbsorptionSettings>) => void;
 }) {
-  const signal = settings.signal;
   const spike = settings.volumeSpike;
   const absorption = settings.absorption;
   return (
     <>
-      <fieldset className="liquidity-settings-group market-explorer-settings-group">
-        <legend>Market Volume Stop Line</legend>
-        <div className="liquidity-settings-enable-row">
-          <label className="liquidity-settings-enable">
-            <input
-              type="checkbox"
-              checked={settings.lineEnabled}
-              onChange={(event) => onLineChange({ lineEnabled: event.currentTarget.checked })}
-            />
-            Enable
-          </label>
-          <SettingHelp
-            label="Market Volume Stop Line"
-            text="Buy aggressor volume minus sell aggressor volume, exponentially decayed with the selected half-life."
-          />
-        </div>
-        <div className={settings.lineEnabled ? "liquidity-settings-fields" : "liquidity-settings-fields is-disabled"}>
-          <SettingNumber
-            label="Halftime (seconds)"
-            help="TTW half-life. After this many seconds, an old trade contributes half of its original volume."
-            value={settings.halftimeSeconds}
-            min={1}
-            max={3_600}
-            disabled={!settings.lineEnabled}
-            onChange={(halftimeSeconds) => onLineChange({ halftimeSeconds })}
-          />
-          <MarketExplorerColorField
-            label="Ask / buy line"
-            value={settings.buyLineColor}
-            disabled={!settings.lineEnabled}
-            onChange={(buyLineColor) => onLineChange({ buyLineColor })}
-          />
-          <MarketExplorerColorField
-            label="Bid / sell line"
-            value={settings.sellLineColor}
-            disabled={!settings.lineEnabled}
-            onChange={(sellLineColor) => onLineChange({ sellLineColor })}
-          />
-        </div>
-      </fieldset>
-
-      <fieldset className="liquidity-settings-group market-explorer-settings-group">
-        <legend>Market Volume Stop Signal 1</legend>
-        <MarketExplorerEnableRow
-          checked={signal.enabled}
-          label="Market Volume Stop Signal 1"
-          help="Standard marks the running extreme after a 10% fallback. Immediately marks the threshold crossing."
-          onChange={(enabled) => onSignalChange({ enabled })}
-        />
-        <div className={signal.enabled ? "liquidity-settings-fields" : "liquidity-settings-fields is-disabled"}>
-          <SettingNumber
-            label="Signal Level Ask"
-            help="Positive buy-aggressor imbalance threshold."
-            value={signal.askLevel}
-            min={1}
-            max={10_000_000}
-            disabled={!signal.enabled}
-            onChange={(askLevel) => onSignalChange({ askLevel })}
-          />
-          <SettingNumber
-            label="Signal Level Bid"
-            help="Absolute negative sell-aggressor imbalance threshold."
-            value={signal.bidLevel}
-            min={1}
-            max={10_000_000}
-            disabled={!signal.enabled}
-            onChange={(bidLevel) => onSignalChange({ bidLevel })}
-          />
-          <MarketExplorerSelectField
-            label="Display mode"
-            value={signal.displayMode}
-            disabled={!signal.enabled}
-            options={[["standard", "Standard"], ["immediately", "Immediately"]]}
-            onChange={(displayMode) =>
-              onSignalChange({ displayMode: displayMode as MarketExplorerDisplayMode })
-            }
-          />
-          <SettingNumber
-            label="Pullback Duration [mins]"
-            help="Suppress repeated signals inside this time window."
-            value={signal.pullbackDurationMinutes}
-            min={0}
-            max={1_440}
-            disabled={!signal.enabled}
-            onChange={(pullbackDurationMinutes) => onSignalChange({ pullbackDurationMinutes })}
-          />
-          <SettingNumber
-            label="Pullback Price Change [ticks/cents]"
-            help="Adverse price change required to release duplicate suppression."
-            value={signal.pullbackPriceChangeTicks}
-            min={0}
-            max={100_000}
-            disabled={!signal.enabled}
-            onChange={(pullbackPriceChangeTicks) => onSignalChange({ pullbackPriceChangeTicks })}
-          />
-          <MarketExplorerAppearanceFields
-            buyLabel="Buy Market Volume Stop 1"
-            sellLabel="Sell Market Volume Stop 1"
-            settings={signal}
-            disabled={!signal.enabled}
-            onChange={onSignalChange}
-          />
-        </div>
-      </fieldset>
-
       <fieldset className="liquidity-settings-group market-explorer-settings-group">
         <legend>Volume Spike Signal</legend>
         <MarketExplorerEnableRow
@@ -2531,32 +2241,6 @@ export function mergeHistoryBars(
   return [...merged.values()].sort((a, b) => a.time - b.time);
 }
 
-function marketVolumeSampleFromUpdate(
-  message: MarketExplorerUpdateMessage,
-): MarketVolumeSample {
-  return {
-    time: message.time,
-    value: message.value,
-    buyVolume: message.buyVolume,
-    sellVolume: message.sellVolume,
-    price: message.price,
-  };
-}
-
-function mergeMarketVolumeSamples(
-  first: MarketVolumeSample[],
-  second: MarketVolumeSample[],
-  cutoff: number,
-): MarketVolumeSample[] {
-  const merged = new Map<number, MarketVolumeSample>();
-  for (const sample of [...first, ...second]) {
-    if (sample.time >= cutoff) merged.set(sample.time, sample);
-  }
-  return [...merged.values()]
-    .sort((left, right) => left.time - right.time)
-    .slice(-MAX_MARKET_VOLUME_SAMPLES);
-}
-
 function mergeMarketVolumeSignals(
   first: MarketExplorerSignal[],
   second: MarketExplorerSignal[],
@@ -2577,6 +2261,7 @@ function notifyMarketVolumeSignals(
   showToast: (message: string) => void,
 ) {
   for (const signal of signals) {
+    if (signal.kind === "market_volume_stop") continue;
     const config = marketExplorerSignalStyle(settings, signal);
     if (!config.enabled) continue;
     const bullish = signal.kind === "absorption"
@@ -2646,7 +2331,7 @@ function mergeEvents(
     .slice(-MAX_EVENTS);
 }
 
-function mergeHistoryLines(
+export function mergeHistoryLines(
   history: LiquidityLine[],
   current: Map<string, LiquidityLine>,
 ): Map<string, LiquidityLine> {
@@ -2654,7 +2339,14 @@ function mergeHistoryLines(
   for (const line of history) merged.set(line.lineId, line);
   for (const line of current.values()) {
     const existing = merged.get(line.lineId);
-    if (!existing || line.lastAt >= existing.lastAt) merged.set(line.lineId, line);
+    if (!existing) {
+      merged.set(line.lineId, line);
+    } else {
+      merged.set(line.lineId, {
+        ...(line.lastAt >= existing.lastAt ? line : existing),
+        samples: mergeSizeSamples(knownLineSamples(existing), knownLineSamples(line)),
+      });
+    }
   }
   return merged;
 }
@@ -2666,6 +2358,13 @@ export function mergeLiveLine(
   if (!message.lineId) return current;
   const next = new Map(current);
   const existing = next.get(message.lineId);
+  const samples = mergeSizeSamples(existing ? knownLineSamples(existing) : [], [{
+    time: message.time, size: message.size, active: message.action !== "end",
+  }]);
+  if (existing && existing.lastAt > message.time) {
+    next.set(message.lineId, { ...existing, samples });
+    return next;
+  }
   const active = message.action !== "end";
   next.set(message.lineId, {
     lineId: message.lineId,
@@ -2679,6 +2378,7 @@ export function mergeLiveLine(
     threshold: message.threshold,
     domDistance: message.domDistance,
     active,
+    samples,
   });
   return next;
 }

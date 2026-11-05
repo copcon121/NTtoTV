@@ -95,6 +95,7 @@ import {
 } from "./WaveDeltaMboxPrimitive";
 import { SessionVolumeProfilePrimitive } from "./SessionVolumeProfilePrimitive";
 import { type Bar } from "../cache/types";
+import { DEFAULT_CHART_BACKGROUND } from "./theme";
 import type { FvgSignalUpdateMessage } from "../socket/messages";
 import { type FootprintViewport } from "../footprint/footprintModel";
 import type {
@@ -426,7 +427,7 @@ const DEFAULT_DELTA_COLORS: DeltaColors = {
 };
 
 const MZ_FOOTPRINT_COLORS = {
-  chartBg: "#d3d3d3",
+  chartBg: DEFAULT_CHART_BACKGROUND,
   candleUp: "#ffffff",
   candleDown: "#666666",
   candleWick: "#6f6f6f",

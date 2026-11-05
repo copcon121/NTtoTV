@@ -12,6 +12,16 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe("ApiClient auth, MT5, and user profile", () => {
+  it("keeps execution disabled when the relay capability cannot be loaded", async () => {
+    const api = new ApiClient({ fetchFn: vi.fn(async () => jsonResponse({}, { status: 503 })) });
+    await expect(api.execution()).resolves.toEqual({ enabled: false, profiles: [] });
+  });
+
+  it("loads the two allowed Windows execution profiles", async () => {
+    const api = new ApiClient({ fetchFn: vi.fn(async () => jsonResponse({ enabled: true, profiles: ["hieu", "hai"] })) });
+    await expect(api.execution()).resolves.toEqual({ enabled: true, profiles: ["hieu", "hai"] });
+  });
+
   it("registers a user through /auth/register", async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({ user: { id: "user_1", username: "alice" } }),
@@ -141,48 +151,6 @@ describe("ApiClient auth, MT5, and user profile", () => {
       5,
       "/api/mt5/orders/8",
       expect.objectContaining({ method: "DELETE", credentials: "same-origin" }),
-    );
-  });
-
-  it("loads and saves automatic mGann trading switches", async () => {
-    const settings = {
-      longEnabled: true,
-      shortEnabled: false,
-      volumeLots: 0.2,
-      updatedAt: 10,
-    };
-    const fetchFn = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ settings }))
-      .mockResolvedValueOnce(jsonResponse({ settings: { ...settings, shortEnabled: true } }));
-    const api = new ApiClient({ fetchFn });
-
-    await expect(api.autoTradeSettings()).resolves.toEqual(settings);
-    await expect(
-      api.updateAutoTradeSettings({
-        longEnabled: true,
-        shortEnabled: true,
-        volumeLots: 0.2,
-      }),
-    ).resolves.toMatchObject({ shortEnabled: true });
-
-    expect(fetchFn).toHaveBeenNthCalledWith(
-      1,
-      "/api/auto-trade",
-      expect.objectContaining({ credentials: "same-origin" }),
-    );
-    expect(fetchFn).toHaveBeenNthCalledWith(
-      2,
-      "/api/auto-trade",
-      expect.objectContaining({
-        method: "PUT",
-        credentials: "same-origin",
-        body: JSON.stringify({
-          longEnabled: true,
-          shortEnabled: true,
-          volumeLots: 0.2,
-        }),
-      }),
     );
   });
 

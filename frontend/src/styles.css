@@ -1,6 +1,18 @@
 /* GC Chart Platform — global layout styles for the TradingView-like shell. */
 
 :root {
+  --workspace-bg: #0b0f14;
+  --workspace-panel: #111821;
+  --workspace-control: #18212c;
+  --workspace-hover: #223040;
+  --workspace-border: #263341;
+  --workspace-control-border: #314151;
+  --workspace-hover-border: #587087;
+  --workspace-text: #dbe7f3;
+  --workspace-control-text: #c9d6e3;
+  --workspace-muted: #8d9aaa;
+  --workspace-accent: #00d68f;
+  --workspace-accent-ink: #06130f;
   --bg: #101010;
   --panel: #181818;
   --border: #303030;
@@ -2380,8 +2392,8 @@ body {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
-  color: #dbe7f3;
-  background: #0b0f14;
+  color: var(--workspace-text);
+  background: var(--workspace-bg);
 }
 
 .liquidity-toolbar {
@@ -2395,8 +2407,8 @@ body {
   padding: calc(8px + var(--standalone-safe-top))
     calc(12px + var(--standalone-safe-right)) 8px
     calc(12px + var(--standalone-safe-left));
-  background: #111821;
-  border-bottom: 1px solid #263341;
+  background: var(--workspace-panel);
+  border-bottom: 1px solid var(--workspace-border);
 }
 
 .liquidity-nav,
@@ -2415,26 +2427,26 @@ body {
   justify-content: center;
   min-height: 30px;
   padding: 4px 9px;
-  color: #c9d6e3;
+  color: var(--workspace-control-text);
   font: inherit;
   text-decoration: none;
   cursor: pointer;
-  background: #18212c;
-  border: 1px solid #314151;
+  background: var(--workspace-control);
+  border: 1px solid var(--workspace-control-border);
   border-radius: 4px;
 }
 
 .liquidity-nav a:hover,
 .liquidity-toolbar button:hover {
   color: #ffffff;
-  border-color: #587087;
+  border-color: var(--workspace-hover-border);
 }
 
 .liquidity-segmented button[aria-pressed="true"] {
-  color: #06130f;
+  color: var(--workspace-accent-ink);
   font-weight: 700;
-  background: #00d68f;
-  border-color: #00d68f;
+  background: var(--workspace-accent);
+  border-color: var(--workspace-accent);
 }
 
 .liquidity-title {
@@ -2602,6 +2614,13 @@ body {
   padding: 0 6px;
   color: #edf5fc;
   font-weight: 700;
+}
+
+.liquidity-settings-description {
+  margin: 0 0 12px;
+  color: #aebdca;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .liquidity-settings-label-with-help {

@@ -9,6 +9,7 @@ import {
   longTermTouchMatchesSettings,
   longTermTouchBubbleRadius,
   mergeLiveLine,
+  mergeHistoryLines,
   mergeHistoryBars,
   panOffsetFromDrag,
   pricePanFromChartDrag,
@@ -22,6 +23,33 @@ import {
 } from "./LiquidityPage";
 
 describe("liquidity bar reconciliation", () => {
+  it("merges REST heatmap history with newer socket samples without reopening an ended level", () => {
+    const history = {
+      lineId: "bid:4200", side: "bid" as const, price: 4200,
+      startedAt: 1000, lastAt: 3000, endedAt: 3000, active: false,
+      currentSize: 0, peakSize: 1200, threshold: 500, domDistance: 20,
+      samples: [
+        { time: 1000, size: 500, active: true },
+        { time: 2000, size: 1200, active: true },
+        { time: 3000, size: 0, active: false },
+      ],
+    };
+    const live = { ...history, lastAt: 2000, endedAt: null, active: true,
+      currentSize: 1200, samples: [history.samples[1]] };
+    const merged = mergeHistoryLines([history], new Map([[live.lineId, live]]));
+    expect(merged.get(history.lineId)?.active).toBe(false);
+    expect(merged.get(history.lineId)?.samples).toEqual(history.samples);
+    const delayed = mergeLiveLine(merged, {
+      type: "liquidity_update", symbol: "GC", contract: "GC", sequence: 10,
+      time: 1500, eventKind: "long_term", action: "update", side: "bid",
+      price: 4200, size: 700, previousSize: 500, change: 200,
+      threshold: 500, domDistance: 20, strength: 1.4,
+      lineId: history.lineId, lineStartTime: 1000, snapshot: false,
+    });
+    expect(delayed.get(history.lineId)?.active).toBe(false);
+    expect(delayed.get(history.lineId)?.samples?.map((sample) => sample.size)).toEqual([500, 700, 1200, 0]);
+  });
+
   it("repairs a stale closed bar from REST while preserving the live websocket bar", () => {
     const staleClosed = {
       time: 60_000,

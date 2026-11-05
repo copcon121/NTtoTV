@@ -143,6 +143,9 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
     assert body["events"][1]["lineStartTime"] == -14_100_000
     assert body["lines"][0]["lineId"] == "ask:42050:300000"
     assert body["lines"][0]["active"] is True
+    assert body["lines"][0]["samples"] == [
+        {"time": 330_000, "size": 650, "active": True}
+    ]
     assert bad.status_code == 400
     assert bad.json()["error"]["field"] == "tf"
 

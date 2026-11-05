@@ -98,8 +98,7 @@ describe("MarketOrderBar", () => {
     expect(onMarketOrder).toHaveBeenNthCalledWith(2, "buy");
   });
 
-  it("offers independent Auto L and Auto S toggles using the configured lots", () => {
-    const onAutoTradeSettingsChange = vi.fn();
+  it("keeps manual order and exit controls without Auto L or Auto S", () => {
     render(
       <MarketOrderBar
         account={{
@@ -115,40 +114,16 @@ describe("MarketOrderBar", () => {
         settings={settings}
         onSettingsChange={vi.fn()}
         onMarketOrder={vi.fn()}
-        autoTradeSettings={{
-          longEnabled: false,
-          shortEnabled: false,
-          volumeLots: 0.1,
-          updatedAt: 1,
-        }}
-        onAutoTradeSettingsChange={onAutoTradeSettingsChange}
       />,
     );
 
-    expect(screen.queryByText(/BOS\/CHoCH/)).not.toBeInTheDocument();
-    expect(screen.getByText("Auto L").closest("label")).toHaveAttribute(
-      "title",
-      expect.stringContaining("close 50% at +1R"),
-    );
-    expect(screen.getByText("Auto S").closest("label")).toHaveAttribute(
-      "title",
-      expect.stringContaining("remaining 50% at +3R"),
-    );
-    fireEvent.click(screen.getByLabelText("Auto trade L"));
-    fireEvent.click(screen.getByLabelText("Auto trade S"));
-
-    expect(onAutoTradeSettingsChange).toHaveBeenNthCalledWith(1, {
-      longEnabled: true,
-      shortEnabled: false,
-      volumeLots: 0.1,
-      updatedAt: 1,
-    });
-    expect(onAutoTradeSettingsChange).toHaveBeenNthCalledWith(2, {
-      longEnabled: false,
-      shortEnabled: true,
-      volumeLots: 0.1,
-      updatedAt: 1,
-    });
+    expect(screen.queryByLabelText("Auto trade L")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Auto trade S")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "SELL" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "BUY" })).toBeEnabled();
+    expect(screen.getByLabelText("Sizing mode")).toBeInTheDocument();
+    expect(screen.getByLabelText("Take profit 50% at 1R")).toBeInTheDocument();
+    expect(screen.getByLabelText("Auto SuperTrend trailing after 1R")).toBeInTheDocument();
   });
 
   it("toggles automatic 50% take profit at 1R", () => {
