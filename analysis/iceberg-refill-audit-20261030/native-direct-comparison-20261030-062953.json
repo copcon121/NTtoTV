@@ -1,0 +1,4991 @@
+{
+  "capturedAtUtcPlus7": "2026-10-30T06:29:53.626775+07:00",
+  "currentDirectSession": "091979cda0254d28aed6235a1a9f0bcf",
+  "captureFiles": [
+    "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-2026-10-29T23-20-08.452568800Z-da356a1d.jsonl",
+    "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl"
+  ],
+  "captureMetadata": [
+    {
+      "kind": "capture_start",
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "tickSize": 0.1,
+      "receivedAt": 1793316008478,
+      "lookbackMinutes": 30,
+      "maxEvents": 50000,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-2026-10-29T23-20-08.452568800Z-da356a1d.jsonl",
+        "line": 1,
+        "capture": null
+      }
+    },
+    {
+      "kind": "status",
+      "state": "provider_unavailable_or_unlicensed",
+      "receivedAt": 1793316009166,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-2026-10-29T23-20-08.452568800Z-da356a1d.jsonl",
+        "line": 2,
+        "capture": null
+      }
+    },
+    {
+      "kind": "status",
+      "state": "connecting_to_published_provider",
+      "receivedAt": 1793316011307,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-2026-10-29T23-20-08.452568800Z-da356a1d.jsonl",
+        "line": 3,
+        "capture": null
+      }
+    },
+    {
+      "kind": "connection",
+      "connected": true,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-2026-10-29T23-20-08.452568800Z-da356a1d.jsonl",
+        "line": 4,
+        "capture": null
+      }
+    },
+    {
+      "kind": "status",
+      "state": "provider_connected",
+      "receivedAt": 1793316013392,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-2026-10-29T23-20-08.452568800Z-da356a1d.jsonl",
+        "line": 5,
+        "capture": null
+      }
+    },
+    {
+      "kind": "live_connection",
+      "generator": "GCZ6.COMEX@RITHMIC",
+      "connected": true,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-2026-10-29T23-20-08.452568800Z-da356a1d.jsonl",
+        "line": 6,
+        "capture": null
+      }
+    },
+    {
+      "kind": "snapshot",
+      "generator": "GCZ6.COMEX@RITHMIC",
+      "fromNanos": 1793314213416000000,
+      "toNanos": 1793316013416000000,
+      "returnedEvents": 90,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-2026-10-29T23-20-08.452568800Z-da356a1d.jsonl",
+        "line": 7,
+        "capture": null
+      }
+    },
+    {
+      "kind": "unsupported_event_class",
+      "class": "velox.indicators.sionchart.broadcasting.implementations.StopEvent",
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-2026-10-29T23-20-08.452568800Z-da356a1d.jsonl",
+        "line": 8,
+        "capture": null
+      }
+    },
+    {
+      "kind": "unsupported_event_class",
+      "class": "velox.indicators.sionchart.broadcasting.implementations.IcebergEvent",
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-2026-10-29T23-20-08.452568800Z-da356a1d.jsonl",
+        "line": 9,
+        "capture": null
+      }
+    },
+    {
+      "kind": "capture_end",
+      "written": 8,
+      "queueOverflow": 0,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-2026-10-29T23-20-08.452568800Z-da356a1d.jsonl",
+        "line": 10,
+        "capture": null
+      }
+    },
+    {
+      "kind": "capture_start",
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "tickSize": 0.1,
+      "receivedAt": 1793316550008,
+      "lookbackMinutes": 90,
+      "maxEvents": 50000,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+        "line": 1,
+        "capture": null
+      }
+    },
+    {
+      "kind": "status",
+      "state": "provider_unavailable_or_unlicensed",
+      "receivedAt": 1793316550131,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+        "line": 2,
+        "capture": null
+      }
+    },
+    {
+      "kind": "status",
+      "state": "connecting_to_published_provider",
+      "receivedAt": 1793316552249,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+        "line": 3,
+        "capture": null
+      }
+    },
+    {
+      "kind": "connection",
+      "connected": true,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+        "line": 4,
+        "capture": null
+      }
+    },
+    {
+      "kind": "status",
+      "state": "provider_connected",
+      "receivedAt": 1793316554307,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+        "line": 5,
+        "capture": null
+      }
+    },
+    {
+      "kind": "live_connection",
+      "generator": "GCZ6.COMEX@RITHMIC",
+      "connected": true,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+        "line": 6,
+        "capture": null
+      }
+    },
+    {
+      "kind": "snapshot",
+      "generator": "GCZ6.COMEX@RITHMIC",
+      "fromNanos": 1793311154307000000,
+      "toNanos": 1793316554307000000,
+      "returnedEvents": 135,
+      "provenance": {
+        "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+        "line": 7,
+        "capture": null
+      }
+    }
+  ],
+  "knownRestartAnnotations": [
+    "2026-10-30T05:50:50+07:00",
+    "2026-10-30T06:11:00+07:00"
+  ],
+  "rawWindow": {
+    "fromUtcPlus7": "2026-10-30T05:48:00.475000+07:00",
+    "toUtcPlus7": "2026-10-30T06:29:53.626000+07:00",
+    "readOnlyShards": [
+      "C:\\Users\\Administrator\\Desktop\\NTtoTV\\backend\\data\\ticks\\GC\\GC_12-26\\2026-10-29.sqlite"
+    ]
+  },
+  "summary": {
+    "canonicalNativeEvents": 106,
+    "nativeOrders": 34,
+    "nativeOrdersMatchedCurrentDirectICE": 1,
+    "nativeOrdersWithPassiveRawTrades": 32
+  },
+  "orders": [
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816405947134",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T05:49:00.475000+07:00",
+      "nativeDetectionPrices": [
+        4036.3
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405947134",
+          "eventType": "DETECTION",
+          "timeNanos": 1793314140475692500,
+          "priceLevel": 40363,
+          "side": "sell",
+          "eventSize": 2,
+          "time": 1793314140475,
+          "price": 4036.3,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 8,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405947134",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793314140475712200,
+          "priceLevel": 40363,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793314140475,
+          "price": 4036.3,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 9,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "c370e8beb40afc90af5410262051151ca72d0c06f849661447d2d7fd8cc93a83",
+          "sequence": 60321,
+          "time": 1793314140318,
+          "received_at": 1793314140499,
+          "price": 4036.3,
+          "volume": 2,
+          "side": "buy",
+          "passive_order_id": "7816405947134",
+          "aggressor_order_id": "7816405947526",
+          "source_time_nanos": 1793314140318870019
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816405948466",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T05:49:28.953000+07:00",
+      "nativeDetectionPrices": [
+        4036.6
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405948466",
+          "eventType": "DETECTION",
+          "timeNanos": 1793314168953989800,
+          "priceLevel": 40366,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314168953,
+          "price": 4036.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 10,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405948466",
+          "eventType": "TRADE",
+          "timeNanos": 1793314168955902900,
+          "priceLevel": 40366,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314168955,
+          "price": 4036.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 11,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405948466",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793314168955930700,
+          "priceLevel": 40366,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793314168955,
+          "price": 4036.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 12,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "628cc8573726cf97c3a530afda8c069556063ec2703510960a0d9a9fe443e869",
+          "sequence": 60332,
+          "time": 1793314168803,
+          "received_at": 1793314168911,
+          "price": 4036.6000000000004,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405948466",
+          "aggressor_order_id": "7816405948467",
+          "source_time_nanos": 1793314168803689245
+        },
+        {
+          "event_key": "d4d57755093e287c6c37e849738c22bbb0e6e105f0151fd9640b7546885e324d",
+          "sequence": 60335,
+          "time": 1793314168804,
+          "received_at": 1793314169021,
+          "price": 4036.6000000000004,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405948466",
+          "aggressor_order_id": "7816405948477",
+          "source_time_nanos": 1793314168804017357
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793314168955902900,
+          "nativePrice": 4036.6,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816405956569",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T05:52:04.804000+07:00",
+      "nativeDetectionPrices": [
+        4036.7
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405956569",
+          "eventType": "DETECTION",
+          "timeNanos": 1793314324804231300,
+          "priceLevel": 40367,
+          "side": "sell",
+          "eventSize": 2,
+          "time": 1793314324804,
+          "price": 4036.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 13,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405956569",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793314324804250300,
+          "priceLevel": 40367,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793314324804,
+          "price": 4036.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 14,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "c5520cd45900fade87e68fe64a7b827e65e1e5f39ae892345bd474657989d875",
+          "sequence": 49,
+          "time": 1793314324643,
+          "received_at": 1793314324873,
+          "price": 4036.7000000000003,
+          "volume": 2,
+          "side": "buy",
+          "passive_order_id": "7816405956569",
+          "aggressor_order_id": "7816405958246",
+          "source_time_nanos": 1793314324643805017
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816405956568",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T05:52:26.676000+07:00",
+      "nativeDetectionPrices": [
+        4036.6
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        4
+      ],
+      "nativeMaxObservedTotal": 4,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "MOVEMENT": 2,
+        "TRADE": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 2,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405956568",
+          "eventType": "DETECTION",
+          "timeNanos": 1793314346676783300,
+          "priceLevel": 40366,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314346676,
+          "price": 4036.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 15,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405956568",
+          "eventType": "MOVEMENT",
+          "timeNanos": 1793314346694099500,
+          "priceLevel": 40365,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793314346694,
+          "price": 4036.5,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 16,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405956568",
+          "eventType": "MOVEMENT",
+          "timeNanos": 1793314346696634000,
+          "priceLevel": 40364,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793314346696,
+          "price": 4036.4,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 17,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405956568",
+          "eventType": "TRADE",
+          "timeNanos": 1793314349899964500,
+          "priceLevel": 40364,
+          "side": "buy",
+          "eventSize": 3,
+          "time": 1793314349899,
+          "price": 4036.4,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 18,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405956568",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793314349900067900,
+          "priceLevel": 40364,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793314349900,
+          "price": 4036.4,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 19,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 4,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "ed9df51470541a96bcf7c57c0c562c97d8936b863b72953de49f2e2194b711ba",
+          "sequence": 59,
+          "time": 1793314346515,
+          "received_at": 1793314346732,
+          "price": 4036.6000000000004,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405956568",
+          "aggressor_order_id": "7816405959272",
+          "source_time_nanos": 1793314346515608993
+        },
+        {
+          "event_key": "09188fe0f0ca7edaf5a7097a6eb90fa5797699c8e8d69a4184e4288a34224233",
+          "sequence": 61,
+          "time": 1793314349745,
+          "received_at": 1793314349989,
+          "price": 4036.4,
+          "volume": 3,
+          "side": "sell",
+          "passive_order_id": "7816405956568",
+          "aggressor_order_id": "7816405959567",
+          "source_time_nanos": 1793314349745321029
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793314349899964500,
+          "nativePrice": 4036.4,
+          "nativeEventSize": 3,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816405992131",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:01:45.058000+07:00",
+      "nativeDetectionPrices": [
+        4032.4
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405992131",
+          "eventType": "DETECTION",
+          "timeNanos": 1793314905058365900,
+          "priceLevel": 40324,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793314905058,
+          "price": 4032.4,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 20,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405992131",
+          "eventType": "TRADE",
+          "timeNanos": 1793314905068471300,
+          "priceLevel": 40324,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793314905068,
+          "price": 4032.4,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 21,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405992131",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793314905068888300,
+          "priceLevel": 40324,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793314905068,
+          "price": 4032.4,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 22,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "69008e2d0ffa7943ff3e31fdac02bde710835611b050afd21a1ffe99a32782e7",
+          "sequence": 304,
+          "time": 1793314904933,
+          "received_at": 1793314905123,
+          "price": 4032.4,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816405992131",
+          "aggressor_order_id": "7816405992513",
+          "source_time_nanos": 1793314904933073369
+        },
+        {
+          "event_key": "4f753328eb9819dbb66a9875de2e2d1284014d796d25874c25b002ccb344298e",
+          "sequence": 305,
+          "time": 1793314904933,
+          "received_at": 1793314905131,
+          "price": 4032.4,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816405992131",
+          "aggressor_order_id": "7816405992530",
+          "source_time_nanos": 1793314904933726875
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793314905068471300,
+          "nativePrice": 4032.4,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816405992130",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:01:46.215000+07:00",
+      "nativeDetectionPrices": [
+        4032.1
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        3,
+        4
+      ],
+      "nativeMaxObservedTotal": 4,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "MOVEMENT": 2,
+        "TRADE": 2,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 2,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405992130",
+          "eventType": "DETECTION",
+          "timeNanos": 1793314906215024200,
+          "priceLevel": 40321,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314906215,
+          "price": 4032.1,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 23,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405992130",
+          "eventType": "MOVEMENT",
+          "timeNanos": 1793314906235645600,
+          "priceLevel": 40320,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793314906235,
+          "price": 4032.0,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 24,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405992130",
+          "eventType": "MOVEMENT",
+          "timeNanos": 1793314906263519400,
+          "priceLevel": 40319,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793314906263,
+          "price": 4031.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 25,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405992130",
+          "eventType": "TRADE",
+          "timeNanos": 1793314907600597200,
+          "priceLevel": 40319,
+          "side": "buy",
+          "eventSize": 2,
+          "time": 1793314907600,
+          "price": 4031.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 26,
+              "capture": "snapshot",
+              "totalSize": 3
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405992130",
+          "eventType": "TRADE",
+          "timeNanos": 1793314907600609900,
+          "priceLevel": 40319,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314907600,
+          "price": 4031.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 27,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405992130",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793314907600618200,
+          "priceLevel": 40319,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793314907600,
+          "price": 4031.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 28,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 4,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "ede4aef0fb871ffe39a1cdcdbb6b45cf68abcdcc71cb0cc442720fed75b704e0",
+          "sequence": 310,
+          "time": 1793314906099,
+          "received_at": 1793314906214,
+          "price": 4032.1000000000004,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405992130",
+          "aggressor_order_id": "7816405992669",
+          "source_time_nanos": 1793314906099200033
+        },
+        {
+          "event_key": "8a2ea45747aae6c44fe9a443ee08994c90b64fa6834c922db929cb629a776f7d",
+          "sequence": 313,
+          "time": 1793314907471,
+          "received_at": 1793314907732,
+          "price": 4031.9,
+          "volume": 2,
+          "side": "sell",
+          "passive_order_id": "7816405992130",
+          "aggressor_order_id": "7816405992834",
+          "source_time_nanos": 1793314907471977715
+        },
+        {
+          "event_key": "5301b4efef6d02c1625ab2f4ea92495376cb12139798d650eaaca5a78059a7d5",
+          "sequence": 314,
+          "time": 1793314907471,
+          "received_at": 1793314907739,
+          "price": 4031.9,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405992130",
+          "aggressor_order_id": "7816405971314",
+          "source_time_nanos": 1793314907471977715
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793314907600597200,
+          "nativePrice": 4031.9,
+          "nativeEventSize": 2,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        },
+        {
+          "nativeTimeNanos": 1793314907600609900,
+          "nativePrice": 4031.9,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816405994280",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:02:09.767000+07:00",
+      "nativeDetectionPrices": [
+        4031.7
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 1,
+        "CANCELLATION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405994280",
+          "eventType": "DETECTION",
+          "timeNanos": 1793314929767211300,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314929767,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 29,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405994280",
+          "eventType": "TRADE",
+          "timeNanos": 1793314929771869200,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314929771,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 30,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405994280",
+          "eventType": "CANCELLATION",
+          "timeNanos": 1793314929793150500,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793314929793,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 31,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "3270e88888df6b5b41a37c90bd574395fdc5a9c37ae8f40e217a332effebd83a",
+          "sequence": 325,
+          "time": 1793314929645,
+          "received_at": 1793314929882,
+          "price": 4031.7000000000003,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405994280",
+          "aggressor_order_id": "7816405994426",
+          "source_time_nanos": 1793314929645906763
+        },
+        {
+          "event_key": "ad31e9b2798d2211dfceb66694ad71d7816d72836322892572ce671d943ed9b7",
+          "sequence": 326,
+          "time": 1793314929646,
+          "received_at": 1793314929889,
+          "price": 4031.7000000000003,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405994280",
+          "aggressor_order_id": "7816405994445",
+          "source_time_nanos": 1793314929646252787
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793314929771869200,
+          "nativePrice": 4031.7,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816405995096",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:02:27.802000+07:00",
+      "nativeDetectionPrices": [
+        4031.7
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "nativeMaxObservedTotal": 4,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 3,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995096",
+          "eventType": "DETECTION",
+          "timeNanos": 1793314947802624600,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314947802,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 32,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995096",
+          "eventType": "TRADE",
+          "timeNanos": 1793314947802797500,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314947802,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 33,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995096",
+          "eventType": "TRADE",
+          "timeNanos": 1793314947802932600,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314947802,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 34,
+              "capture": "snapshot",
+              "totalSize": 3
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995096",
+          "eventType": "TRADE",
+          "timeNanos": 1793314947802962400,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314947802,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 35,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995096",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793314947802970000,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793314947802,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 36,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 4,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "865f7c22b5c30f8dcc387d9426dfc456a767f7bfe52414f80627b1ceade9cc9d",
+          "sequence": 338,
+          "time": 1793314947663,
+          "received_at": 1793314947794,
+          "price": 4031.7000000000003,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405995096",
+          "aggressor_order_id": "7816405995780",
+          "source_time_nanos": 1793314947663337785
+        },
+        {
+          "event_key": "f01564896777df2fa8e01662ff91af07c30c0b3c81ea05cecb9c87d09a090b54",
+          "sequence": 339,
+          "time": 1793314947663,
+          "received_at": 1793314947881,
+          "price": 4031.7000000000003,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405995096",
+          "aggressor_order_id": "7816405995781",
+          "source_time_nanos": 1793314947663339533
+        },
+        {
+          "event_key": "ae06e5bd5bb6f7b1469b43c207578ccbe4dcebb75b75a111203d81a5605da966",
+          "sequence": 340,
+          "time": 1793314947663,
+          "received_at": 1793314947885,
+          "price": 4031.7000000000003,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405995096",
+          "aggressor_order_id": "7816405995782",
+          "source_time_nanos": 1793314947663371635
+        },
+        {
+          "event_key": "70b4676cfc6d18bd6c2c3b752290e02e0d67e072927aeed4b8128d4f50ce9695",
+          "sequence": 341,
+          "time": 1793314947663,
+          "received_at": 1793314947896,
+          "price": 4031.7000000000003,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405995096",
+          "aggressor_order_id": "7816405995784",
+          "source_time_nanos": 1793314947663432245
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793314947802797500,
+          "nativePrice": 4031.7,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        },
+        {
+          "nativeTimeNanos": 1793314947802932600,
+          "nativePrice": 4031.7,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        },
+        {
+          "nativeTimeNanos": 1793314947802962400,
+          "nativePrice": 4031.7,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816405995863",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:02:39.160000+07:00",
+      "nativeDetectionPrices": [
+        4031.5
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "MOVEMENT": 2,
+        "TRADE": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 2,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995863",
+          "eventType": "DETECTION",
+          "timeNanos": 1793314959160671200,
+          "priceLevel": 40315,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793314959160,
+          "price": 4031.5,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 37,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995863",
+          "eventType": "MOVEMENT",
+          "timeNanos": 1793314959169660800,
+          "priceLevel": 40316,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793314959169,
+          "price": 4031.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 38,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995863",
+          "eventType": "MOVEMENT",
+          "timeNanos": 1793314959187713700,
+          "priceLevel": 40317,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793314959187,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 39,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995863",
+          "eventType": "TRADE",
+          "timeNanos": 1793314964169371700,
+          "priceLevel": 40317,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793314964169,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 40,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995863",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793314964169460200,
+          "priceLevel": 40317,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793314964169,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 41,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "97e89f7da7798a0dea8f13573821a62a88aa8a716644533c29f215684c53123f",
+          "sequence": 347,
+          "time": 1793314959034,
+          "received_at": 1793314959168,
+          "price": 4031.5,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816405995863",
+          "aggressor_order_id": "7816405996474",
+          "source_time_nanos": 1793314959034053249
+        },
+        {
+          "event_key": "b4fc5804ef23f63cef53cf817a05a319f30efe040cc600fe4e7979711cbd6158",
+          "sequence": 350,
+          "time": 1793314964050,
+          "received_at": 1793314965578,
+          "price": 4031.7000000000003,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816405995863",
+          "aggressor_order_id": "7816405996941",
+          "source_time_nanos": 1793314964050473439
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793314964169371700,
+          "nativePrice": 4031.7,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816405995862",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:02:56.609000+07:00",
+      "nativeDetectionPrices": [
+        4031.7
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        3,
+        5
+      ],
+      "nativeMaxObservedTotal": 5,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 2,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995862",
+          "eventType": "DETECTION",
+          "timeNanos": 1793314976609433700,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793314976609,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 42,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995862",
+          "eventType": "TRADE",
+          "timeNanos": 1793314976612783900,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 2,
+          "time": 1793314976612,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 43,
+              "capture": "snapshot",
+              "totalSize": 3
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995862",
+          "eventType": "TRADE",
+          "timeNanos": 1793314976612827600,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 2,
+          "time": 1793314976612,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 44,
+              "capture": "snapshot",
+              "totalSize": 5
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816405995862",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793314976612839700,
+          "priceLevel": 40317,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793314976612,
+          "price": 4031.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 45,
+              "capture": "snapshot",
+              "totalSize": 5
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 5,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "3363f48afdcde2855c646b90cf35262e7ca07a0971fa3f42abf15307be2da79f",
+          "sequence": 357,
+          "time": 1793314976481,
+          "received_at": 1793314976719,
+          "price": 4031.7000000000003,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816405995862",
+          "aggressor_order_id": "7816405998087",
+          "source_time_nanos": 1793314976481274821
+        },
+        {
+          "event_key": "7d27bfdf43cfc5818339b9ce417a37c5f2873d8b27a24f11d7fb8fa8f5cacef6",
+          "sequence": 360,
+          "time": 1793314976481,
+          "received_at": 1793314976750,
+          "price": 4031.7000000000003,
+          "volume": 2,
+          "side": "sell",
+          "passive_order_id": "7816405995862",
+          "aggressor_order_id": "7816405998112",
+          "source_time_nanos": 1793314976481663969
+        },
+        {
+          "event_key": "84a37804f560db7469979ce5399ef7fe3651d84abcd86e8c6104e39793e76cba",
+          "sequence": 361,
+          "time": 1793314976481,
+          "received_at": 1793314976755,
+          "price": 4031.7000000000003,
+          "volume": 2,
+          "side": "sell",
+          "passive_order_id": "7816405995862",
+          "aggressor_order_id": "7816405998119",
+          "source_time_nanos": 1793314976481703669
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793314976612783900,
+          "nativePrice": 4031.7,
+          "nativeEventSize": 2,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        },
+        {
+          "nativeTimeNanos": 1793314976612827600,
+          "nativePrice": 4031.7,
+          "nativeEventSize": 2,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406004492",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:03:33.885000+07:00",
+      "nativeDetectionPrices": [
+        4028.5
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "MOVEMENT": 2,
+        "TRADE": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 2,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406004492",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315013885618000,
+          "priceLevel": 40285,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793315013885,
+          "price": 4028.5,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 46,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406004492",
+          "eventType": "MOVEMENT",
+          "timeNanos": 1793315013889476600,
+          "priceLevel": 40284,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793315013889,
+          "price": 4028.4,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 47,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406004492",
+          "eventType": "MOVEMENT",
+          "timeNanos": 1793315014145506400,
+          "priceLevel": 40283,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793315014145,
+          "price": 4028.3,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 48,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406004492",
+          "eventType": "TRADE",
+          "timeNanos": 1793315014805722700,
+          "priceLevel": 40283,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793315014805,
+          "price": 4028.3,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 49,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406004492",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793315014807987000,
+          "priceLevel": 40283,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793315014807,
+          "price": 4028.3,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 50,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "48cd41db620620959620f6146fbdf2de4cd30cb6bd94d2480805b277fd0d09e7",
+          "sequence": 463,
+          "time": 1793315013790,
+          "received_at": 1793315013928,
+          "price": 4028.5,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406004492",
+          "aggressor_order_id": "7816406004503",
+          "source_time_nanos": 1793315013790346055
+        },
+        {
+          "event_key": "8e238e514d62a8bdb65cde29f3f13f6aeb50c6115a5f1e19039ff617fea11f14",
+          "sequence": 467,
+          "time": 1793315014451,
+          "received_at": 1793315014667,
+          "price": 4028.3,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406004492",
+          "aggressor_order_id": "7816406004559",
+          "source_time_nanos": 1793315014451310503
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793315014805722700,
+          "nativePrice": 4028.3,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406004493",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:03:36.422000+07:00",
+      "nativeDetectionPrices": [
+        4028.8
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406004493",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315016422396400,
+          "priceLevel": 40288,
+          "side": "sell",
+          "eventSize": 2,
+          "time": 1793315016422,
+          "price": 4028.8,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 51,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406004493",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793315016422416200,
+          "priceLevel": 40288,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793315016422,
+          "price": 4028.8,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 52,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "eb7657d3bce4434afdd43e594f1a3266975257cf3aabb4e7e3191c8662e8d759",
+          "sequence": 475,
+          "time": 1793315016348,
+          "received_at": 1793315016566,
+          "price": 4028.8,
+          "volume": 2,
+          "side": "buy",
+          "passive_order_id": "7816406004493",
+          "aggressor_order_id": "7816406004883",
+          "source_time_nanos": 1793315016348475391
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [
+        {
+          "type": "iceberg_update",
+          "symbol": "GC",
+          "contract": "GC",
+          "source": "rithmic",
+          "sourceContract": "GC 12-26",
+          "sessionId": "4faaa61248ab4dc1be6213ad35d9d028",
+          "orderId": "7816406004493",
+          "side": "sell",
+          "price": 4028.8,
+          "time": 1793315043304,
+          "firstSeenTime": 1793315013655,
+          "detectedTime": 1793315016348,
+          "lastTradeTime": 1793315016348,
+          "endTime": 1793315043304,
+          "executedVolume": 2,
+          "displayedSize": 0,
+          "refillCount": 0,
+          "status": "invalidated",
+          "detectionReason": "overfill",
+          "sequence": 3,
+          "method": "native"
+        }
+      ],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406004730",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:03:37.941000+07:00",
+      "nativeDetectionPrices": [
+        4028.5
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406004730",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315017941631800,
+          "priceLevel": 40285,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793315017941,
+          "price": 4028.5,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 53,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406004730",
+          "eventType": "TRADE",
+          "timeNanos": 1793315017947709800,
+          "priceLevel": 40285,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793315017947,
+          "price": 4028.5,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 54,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406004730",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793315017947722900,
+          "priceLevel": 40285,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793315017947,
+          "price": 4028.5,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 55,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "19f23232d3b4b28dcd8a6a0fe00daf78722dbd80f724c57a643da9c3a18b5a67",
+          "sequence": 481,
+          "time": 1793315017869,
+          "received_at": 1793315018036,
+          "price": 4028.5,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406004730",
+          "aggressor_order_id": "7816406005071",
+          "source_time_nanos": 1793315017869827559
+        },
+        {
+          "event_key": "ccdc178fca1ed1bf877f0ddd139c1690655b8fdc37cd07e60643fccfb37ce155",
+          "sequence": 482,
+          "time": 1793315017870,
+          "received_at": 1793315018042,
+          "price": 4028.5,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406004730",
+          "aggressor_order_id": "7816406005084",
+          "source_time_nanos": 1793315017870281311
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793315017947709800,
+          "nativePrice": 4028.5,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406005149",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:03:42.445000+07:00",
+      "nativeDetectionPrices": [
+        4028.6
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406005149",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315022445248200,
+          "priceLevel": 40286,
+          "side": "buy",
+          "eventSize": 2,
+          "time": 1793315022445,
+          "price": 4028.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 56,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406005149",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793315022445396800,
+          "priceLevel": 40286,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793315022445,
+          "price": 4028.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 57,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "e1d7646b6d9ed11078f9b2e416098e6d617cc250cb75500a6bfe51bf5a025453",
+          "sequence": 488,
+          "time": 1793315022260,
+          "received_at": 1793315022451,
+          "price": 4028.6000000000004,
+          "volume": 2,
+          "side": "sell",
+          "passive_order_id": "7816406005149",
+          "aggressor_order_id": "7816406005361",
+          "source_time_nanos": 1793315022260412797
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406005005",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:03:47.787000+07:00",
+      "nativeDetectionPrices": [
+        4028.8
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406005005",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315027787767300,
+          "priceLevel": 40288,
+          "side": "sell",
+          "eventSize": 2,
+          "time": 1793315027787,
+          "price": 4028.8,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 58,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406005005",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793315027787788800,
+          "priceLevel": 40288,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793315027787,
+          "price": 4028.8,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 59,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "0fa32c546bcec798afeb8237cb5c7fe6bfafa2a407b2c4b7773ad711b5573710",
+          "sequence": 496,
+          "time": 1793315027721,
+          "received_at": 1793315029214,
+          "price": 4028.8,
+          "volume": 2,
+          "side": "buy",
+          "passive_order_id": "7816406005005",
+          "aggressor_order_id": "7816406005587",
+          "source_time_nanos": 1793315027721223149
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [
+        {
+          "type": "iceberg_update",
+          "symbol": "GC",
+          "contract": "GC",
+          "source": "rithmic",
+          "sourceContract": "GC 12-26",
+          "sessionId": "4faaa61248ab4dc1be6213ad35d9d028",
+          "orderId": "7816406005005",
+          "side": "sell",
+          "price": 4028.8,
+          "time": 1793315043304,
+          "firstSeenTime": 1793315027235,
+          "detectedTime": 1793315027721,
+          "lastTradeTime": 1793315027721,
+          "endTime": 1793315043304,
+          "executedVolume": 2,
+          "displayedSize": 0,
+          "refillCount": 0,
+          "status": "invalidated",
+          "detectionReason": "overfill",
+          "sequence": 4,
+          "method": "native"
+        }
+      ],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406005638",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:04:03.398000+07:00",
+      "nativeDetectionPrices": [
+        4029.1
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        3,
+        4
+      ],
+      "nativeMaxObservedTotal": 4,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406005638",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315043398917600,
+          "priceLevel": 40291,
+          "side": "sell",
+          "eventSize": 3,
+          "time": 1793315043398,
+          "price": 4029.1,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 60,
+              "capture": "snapshot",
+              "totalSize": 3
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406005638",
+          "eventType": "TRADE",
+          "timeNanos": 1793315043401407200,
+          "priceLevel": 40291,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793315043401,
+          "price": 4029.1,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 61,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406005638",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793315043401429000,
+          "priceLevel": 40291,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793315043401,
+          "price": 4029.1,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 62,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 4,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "42c3f024123e52028cdc054ddecdc771655e47fe520d2909e11ebe988676f2dc",
+          "sequence": 506,
+          "time": 1793315043305,
+          "received_at": 1793315043518,
+          "price": 4029.1000000000004,
+          "volume": 3,
+          "side": "buy",
+          "passive_order_id": "7816406005638",
+          "aggressor_order_id": "7816406006655",
+          "source_time_nanos": 1793315043305204839
+        },
+        {
+          "event_key": "f26f3478856c9e5f7f73df98272fbc876e7cf045df404370aadafb4c17974f4d",
+          "sequence": 507,
+          "time": 1793315043305,
+          "received_at": 1793315043599,
+          "price": 4029.1000000000004,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816406005638",
+          "aggressor_order_id": "7816406006669",
+          "source_time_nanos": 1793315043305716991
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793315043401407200,
+          "nativePrice": 4029.1,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406016094",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:07:09.640000+07:00",
+      "nativeDetectionPrices": [
+        4029.0
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1
+      ],
+      "nativeMaxObservedTotal": 1,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "CANCELLATION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406016094",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315229640165300,
+          "priceLevel": 40290,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793315229640,
+          "price": 4029.0,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 63,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406016094",
+          "eventType": "CANCELLATION",
+          "timeNanos": 1793315229656723000,
+          "priceLevel": 40290,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793315229656,
+          "price": 4029.0,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 64,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 1,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "05f7aebc37e1e3877556577198922af5ea9c6cf54956e48914d4e5f9105267a8",
+          "sequence": 619,
+          "time": 1793315229555,
+          "received_at": 1793315229737,
+          "price": 4029.0,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406016094",
+          "aggressor_order_id": "7816406017163",
+          "source_time_nanos": 1793315229555204139
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406033455",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:10:56.937000+07:00",
+      "nativeDetectionPrices": [
+        4025.1
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406033455",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315456937880800,
+          "priceLevel": 40251,
+          "side": "buy",
+          "eventSize": 2,
+          "time": 1793315456937,
+          "price": 4025.1,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 65,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406033455",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793315456937913500,
+          "priceLevel": 40251,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793315456937,
+          "price": 4025.1,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 66,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "9170fe9c76ebcaca57659477b8c41142e54e2cec8edbe9c9cf286d244059c9f3",
+          "sequence": 772,
+          "time": 1793315456787,
+          "received_at": 1793315456993,
+          "price": 4025.1000000000004,
+          "volume": 2,
+          "side": "sell",
+          "passive_order_id": "7816406033455",
+          "aggressor_order_id": "7816406033459",
+          "source_time_nanos": 1793315456787703827
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406033457",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:10:57.940000+07:00",
+      "nativeDetectionPrices": [
+        4024.6
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406033457",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315457940420600,
+          "priceLevel": 40246,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793315457940,
+          "price": 4024.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 67,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406033457",
+          "eventType": "TRADE",
+          "timeNanos": 1793315457954586800,
+          "priceLevel": 40246,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793315457954,
+          "price": 4024.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 68,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406033457",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793315457954598700,
+          "priceLevel": 40246,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793315457954,
+          "price": 4024.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 69,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "18935fcae46cde12dcbe7639ec0c90ef028b0647882a96f1e554373463b1383a",
+          "sequence": 783,
+          "time": 1793315457863,
+          "received_at": 1793315458092,
+          "price": 4024.6000000000004,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816406033457",
+          "aggressor_order_id": "7816406034027",
+          "source_time_nanos": 1793315457863192989
+        },
+        {
+          "event_key": "76a7ac131c8c97eda4911cf5e1603a0600d4c0ad375c17f75212540d45e2d3a0",
+          "sequence": 784,
+          "time": 1793315457863,
+          "received_at": 1793315458102,
+          "price": 4024.6000000000004,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816406033457",
+          "aggressor_order_id": "7816406034059",
+          "source_time_nanos": 1793315457863746855
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793315457954586800,
+          "nativePrice": 4024.6,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406033630",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:10:58.661000+07:00",
+      "nativeDetectionPrices": [
+        4024.4
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406033630",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315458661969800,
+          "priceLevel": 40244,
+          "side": "buy",
+          "eventSize": 2,
+          "time": 1793315458661,
+          "price": 4024.4,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 70,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406033630",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793315458662081400,
+          "priceLevel": 40244,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793315458662,
+          "price": 4024.4,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 71,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 0,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406034551",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:11:00.299000+07:00",
+      "nativeDetectionPrices": [
+        4024.2
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406034551",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315460299353200,
+          "priceLevel": 40242,
+          "side": "buy",
+          "eventSize": 2,
+          "time": 1793315460299,
+          "price": 4024.2,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 72,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406034551",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793315460299415500,
+          "priceLevel": 40242,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793315460299,
+          "price": 4024.2,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 73,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 0,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406034188",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:11:10.552000+07:00",
+      "nativeDetectionPrices": [
+        4024.7
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406034188",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315470552670400,
+          "priceLevel": 40247,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793315470552,
+          "price": 4024.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 74,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406034188",
+          "eventType": "TRADE",
+          "timeNanos": 1793315470553588800,
+          "priceLevel": 40247,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793315470553,
+          "price": 4024.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 75,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406034188",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793315470553607500,
+          "priceLevel": 40247,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793315470553,
+          "price": 4024.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 76,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "9c38d48af4f12a8d81b6cb5b4cdf075012bd3f2b12254a5528b515b03b0ba7ac",
+          "sequence": 2,
+          "time": 1793315470476,
+          "received_at": 1793315470595,
+          "price": 4024.7000000000003,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816406034188",
+          "aggressor_order_id": "7816406036113",
+          "source_time_nanos": 1793315470476476871
+        },
+        {
+          "event_key": "c12210546f4f6b1700d784a844906c5acd5a57a32ffe2b9119e779018a3beac5",
+          "sequence": 3,
+          "time": 1793315470476,
+          "received_at": 1793315470612,
+          "price": 4024.7000000000003,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816406034188",
+          "aggressor_order_id": "7816406036120",
+          "source_time_nanos": 1793315470476504765
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793315470553588800,
+          "nativePrice": 4024.7,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [
+        {
+          "type": "iceberg_update",
+          "symbol": "GC",
+          "contract": "GC",
+          "source": "rithmic",
+          "sourceContract": "GC 12-26",
+          "sessionId": "091979cda0254d28aed6235a1a9f0bcf",
+          "orderId": "7816406034188",
+          "side": "sell",
+          "price": 4024.7000000000003,
+          "time": 1793315497480,
+          "firstSeenTime": 1793315465867,
+          "detectedTime": 1793315470476,
+          "lastTradeTime": 1793315470476,
+          "endTime": 1793315497480,
+          "executedVolume": 2,
+          "displayedSize": 0,
+          "refillCount": 0,
+          "status": "invalidated",
+          "detectionReason": "overfill",
+          "sequence": 2,
+          "method": "native"
+        }
+      ],
+      "directCurrentSessionMatched": true
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406036170",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:11:37.725000+07:00",
+      "nativeDetectionPrices": [
+        4024.9
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2,
+        3
+      ],
+      "nativeMaxObservedTotal": 3,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 2,
+        "MOVEMENT": 1,
+        "CANCELLATION": 1
+      },
+      "nativeMovementCount": 1,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406036170",
+          "eventType": "DETECTION",
+          "timeNanos": 1793315497725213800,
+          "priceLevel": 40249,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793315497725,
+          "price": 4024.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 77,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406036170",
+          "eventType": "TRADE",
+          "timeNanos": 1793315497725307700,
+          "priceLevel": 40249,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793315497725,
+          "price": 4024.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 78,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406036170",
+          "eventType": "TRADE",
+          "timeNanos": 1793315497856211000,
+          "priceLevel": 40249,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793315497856,
+          "price": 4024.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 79,
+              "capture": "snapshot",
+              "totalSize": 3
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406036170",
+          "eventType": "MOVEMENT",
+          "timeNanos": 1793315497899265500,
+          "priceLevel": 40250,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793315497899,
+          "price": 4025.0,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 80,
+              "capture": "snapshot",
+              "totalSize": 3
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406036170",
+          "eventType": "CANCELLATION",
+          "timeNanos": 1793315497901501000,
+          "priceLevel": 40250,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793315497901,
+          "price": 4025.0,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 81,
+              "capture": "snapshot",
+              "totalSize": 3
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 3,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "2c5840e6e17cb9c15143cb32da7fab3cfc21521a2db448a6b413423d55c5f074",
+          "sequence": 10,
+          "time": 1793315497481,
+          "received_at": 1793315497618,
+          "price": 4024.9,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816406036170",
+          "aggressor_order_id": "7816406037319",
+          "source_time_nanos": 1793315497481570599
+        },
+        {
+          "event_key": "1cd8259bb2a9f0433b276fc5ee547aedb0e4c8133fa0abf9bfd3713531fd9ee9",
+          "sequence": 11,
+          "time": 1793315497481,
+          "received_at": 1793315497620,
+          "price": 4024.9,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816406036170",
+          "aggressor_order_id": "7816406037334",
+          "source_time_nanos": 1793315497481838309
+        },
+        {
+          "event_key": "640fac5e34fcf68c08a529e7146576760a2902b9f4186063103bf1ba4a4daa7c",
+          "sequence": 12,
+          "time": 1793315497482,
+          "received_at": 1793315497622,
+          "price": 4024.9,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816406036170",
+          "aggressor_order_id": "7816406037353",
+          "source_time_nanos": 1793315497482133055
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793315497725307700,
+          "nativePrice": 4024.9,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        },
+        {
+          "nativeTimeNanos": 1793315497856211000,
+          "nativePrice": 4024.9,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406060418",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:20:27.775000+07:00",
+      "nativeDetectionPrices": [
+        4024.9
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406060418",
+          "eventType": "DETECTION",
+          "timeNanos": 1793316027775612700,
+          "priceLevel": 40249,
+          "side": "sell",
+          "eventSize": 2,
+          "time": 1793316027775,
+          "price": 4024.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 82,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406060418",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793316027775658700,
+          "priceLevel": 40249,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793316027775,
+          "price": 4024.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 83,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "1feeaaac3c2f8e8bc8d3c2df0d2a8393e209f649cbbebb40ba5fc78ae4bd6569",
+          "sequence": 183,
+          "time": 1793316027676,
+          "received_at": 1793316027863,
+          "price": 4024.9,
+          "volume": 2,
+          "side": "buy",
+          "passive_order_id": "7816406060418",
+          "aggressor_order_id": "7816406061950",
+          "source_time_nanos": 1793316027676459779
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406062125",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:20:47.504000+07:00",
+      "nativeDetectionPrices": [
+        4024.8
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406062125",
+          "eventType": "DETECTION",
+          "timeNanos": 1793316047504655200,
+          "priceLevel": 40248,
+          "side": "sell",
+          "eventSize": 2,
+          "time": 1793316047504,
+          "price": 4024.8,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 84,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406062125",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793316047504667000,
+          "priceLevel": 40248,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793316047504,
+          "price": 4024.8,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 85,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "9d9871406d7528ff389e137c272006515d4cf10c5284cfc7213104da601014a5",
+          "sequence": 191,
+          "time": 1793316047406,
+          "received_at": 1793316047743,
+          "price": 4024.8,
+          "volume": 2,
+          "side": "buy",
+          "passive_order_id": "7816406062125",
+          "aggressor_order_id": "7816406062729",
+          "source_time_nanos": 1793316047406109561
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406060417",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:20:58.460000+07:00",
+      "nativeDetectionPrices": [
+        4024.6
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        4
+      ],
+      "nativeMaxObservedTotal": 4,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406060417",
+          "eventType": "DETECTION",
+          "timeNanos": 1793316058460018600,
+          "priceLevel": 40246,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793316058460,
+          "price": 4024.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 86,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406060417",
+          "eventType": "TRADE",
+          "timeNanos": 1793316058460090500,
+          "priceLevel": 40246,
+          "side": "buy",
+          "eventSize": 3,
+          "time": 1793316058460,
+          "price": 4024.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 87,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406060417",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793316058460100800,
+          "priceLevel": 40246,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793316058460,
+          "price": 4024.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 88,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 4,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "464b7ddb6d1f43449a4030e5db8ac5a5f0e3e500bb91f476d8f44d970731a075",
+          "sequence": 195,
+          "time": 1793316058360,
+          "received_at": 1793316058657,
+          "price": 4024.6000000000004,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406060417",
+          "aggressor_order_id": "7816406063201",
+          "source_time_nanos": 1793316058360440511
+        },
+        {
+          "event_key": "99d3f6cef64e1bc09d01dffa667a860fdd845a23944cc2576391d313c90c62a9",
+          "sequence": 196,
+          "time": 1793316058360,
+          "received_at": 1793316058688,
+          "price": 4024.6000000000004,
+          "volume": 3,
+          "side": "sell",
+          "passive_order_id": "7816406060417",
+          "aggressor_order_id": "7816406063202",
+          "source_time_nanos": 1793316058360441353
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793316058460090500,
+          "nativePrice": 4024.6,
+          "nativeEventSize": 3,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406063385",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:22:04.157000+07:00",
+      "nativeDetectionPrices": [
+        4024.6
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 1,
+        "CANCELLATION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406063385",
+          "eventType": "DETECTION",
+          "timeNanos": 1793316124157220700,
+          "priceLevel": 40246,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793316124157,
+          "price": 4024.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 89,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406063385",
+          "eventType": "TRADE",
+          "timeNanos": 1793316124157860300,
+          "priceLevel": 40246,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793316124157,
+          "price": 4024.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 90,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406063385",
+          "eventType": "CANCELLATION",
+          "timeNanos": 1793316124194206000,
+          "priceLevel": 40246,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793316124194,
+          "price": 4024.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 91,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "7557f990e27ce7d759f0f10a6fc6039ad61e96f6e9df80d8ca7be66e3cc2b694",
+          "sequence": 209,
+          "time": 1793316124038,
+          "received_at": 1793316124179,
+          "price": 4024.6000000000004,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406063385",
+          "aggressor_order_id": "7816406065862",
+          "source_time_nanos": 1793316124038225019
+        },
+        {
+          "event_key": "b2d50d7eb57c0c3e07878d762987abc5e3b1216b25beebe7b2d3af47efef411f",
+          "sequence": 210,
+          "time": 1793316124040,
+          "received_at": 1793316124278,
+          "price": 4024.6000000000004,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406063385",
+          "aggressor_order_id": "7816406065928",
+          "source_time_nanos": 1793316124040453195
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793316124157860300,
+          "nativePrice": 4024.6,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406067799",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:23:04.158000+07:00",
+      "nativeDetectionPrices": [
+        4025.7
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406067799",
+          "eventType": "DETECTION",
+          "timeNanos": 1793316184158336300,
+          "priceLevel": 40257,
+          "side": "sell",
+          "eventSize": 2,
+          "time": 1793316184158,
+          "price": 4025.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 92,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406067799",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793316184158488800,
+          "priceLevel": 40257,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793316184158,
+          "price": 4025.7,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 93,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "e39eac28d8639b12574053fd9e666c1b4e41a74585c30307c058b9f335b676fd",
+          "sequence": 228,
+          "time": 1793316184069,
+          "received_at": 1793316184260,
+          "price": 4025.7000000000003,
+          "volume": 2,
+          "side": "buy",
+          "passive_order_id": "7816406067799",
+          "aggressor_order_id": "7816406067814",
+          "source_time_nanos": 1793316184069816391
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406068029",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:23:05.445000+07:00",
+      "nativeDetectionPrices": [
+        4025.9
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406068029",
+          "eventType": "DETECTION",
+          "timeNanos": 1793316185445905500,
+          "priceLevel": 40259,
+          "side": "sell",
+          "eventSize": 2,
+          "time": 1793316185445,
+          "price": 4025.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 94,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406068029",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793316185446005100,
+          "priceLevel": 40259,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793316185446,
+          "price": 4025.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 95,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "5c9c90214d86fc305df09333782302f36cb61d65c02fe6d3645c5512e419ffc1",
+          "sequence": 240,
+          "time": 1793316185342,
+          "received_at": 1793316185521,
+          "price": 4025.9,
+          "volume": 2,
+          "side": "buy",
+          "passive_order_id": "7816406068029",
+          "aggressor_order_id": "7816406068120",
+          "source_time_nanos": 1793316185342127803
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406067798",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:23:05.709000+07:00",
+      "nativeDetectionPrices": [
+        4026.2
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        4,
+        5
+      ],
+      "nativeMaxObservedTotal": 5,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 2,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406067798",
+          "eventType": "DETECTION",
+          "timeNanos": 1793316185709414900,
+          "priceLevel": 40262,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793316185709,
+          "price": 4026.2,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 96,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406067798",
+          "eventType": "TRADE",
+          "timeNanos": 1793316185709622400,
+          "priceLevel": 40262,
+          "side": "buy",
+          "eventSize": 3,
+          "time": 1793316185709,
+          "price": 4026.2,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 97,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406067798",
+          "eventType": "TRADE",
+          "timeNanos": 1793316185709824400,
+          "priceLevel": 40262,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793316185709,
+          "price": 4026.2,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 98,
+              "capture": "snapshot",
+              "totalSize": 5
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406067798",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793316185709839300,
+          "priceLevel": 40262,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793316185709,
+          "price": 4026.2,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 99,
+              "capture": "snapshot",
+              "totalSize": 5
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 5,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "6c01e1e046ec0ac5d739e56883ec46c48128ce8aefddbe5dcdb8086105ddc6f2",
+          "sequence": 249,
+          "time": 1793316185606,
+          "received_at": 1793316185890,
+          "price": 4026.2000000000003,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406067798",
+          "aggressor_order_id": "7816406068455",
+          "source_time_nanos": 1793316185606214523
+        },
+        {
+          "event_key": "d542fe280433fc3688a18b1c6bcc7eacf6debfaae9fd14ee3ba6c69dc1caf7fd",
+          "sequence": 250,
+          "time": 1793316185606,
+          "received_at": 1793316185895,
+          "price": 4026.2000000000003,
+          "volume": 3,
+          "side": "sell",
+          "passive_order_id": "7816406067798",
+          "aggressor_order_id": "7816406068476",
+          "source_time_nanos": 1793316185606563181
+        },
+        {
+          "event_key": "cac772028593e86657d39af570f66918d3fe1d62e2ea5c8bff1f264e624bdad1",
+          "sequence": 251,
+          "time": 1793316185606,
+          "received_at": 1793316185902,
+          "price": 4026.2000000000003,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406067798",
+          "aggressor_order_id": "7816406068491",
+          "source_time_nanos": 1793316185606581227
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793316185709622400,
+          "nativePrice": 4026.2,
+          "nativeEventSize": 3,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        },
+        {
+          "nativeTimeNanos": 1793316185709824400,
+          "nativePrice": 4026.2,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406068573",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:23:05.851000+07:00",
+      "nativeDetectionPrices": [
+        4025.9
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2,
+        3
+      ],
+      "nativeMaxObservedTotal": 3,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 2,
+        "CANCELLATION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406068573",
+          "eventType": "DETECTION",
+          "timeNanos": 1793316185851388800,
+          "priceLevel": 40259,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793316185851,
+          "price": 4025.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 100,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406068573",
+          "eventType": "TRADE",
+          "timeNanos": 1793316185851609900,
+          "priceLevel": 40259,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793316185851,
+          "price": 4025.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 101,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406068573",
+          "eventType": "TRADE",
+          "timeNanos": 1793316185855955600,
+          "priceLevel": 40259,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793316185855,
+          "price": 4025.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 102,
+              "capture": "snapshot",
+              "totalSize": 3
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406068573",
+          "eventType": "CANCELLATION",
+          "timeNanos": 1793316185868722500,
+          "priceLevel": 40259,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793316185868,
+          "price": 4025.9,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 103,
+              "capture": "snapshot",
+              "totalSize": 3
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 3,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "79d9bb618e4004894ad60eba275b52f31813336bc34cfa9bf16ace782e2eba9a",
+          "sequence": 254,
+          "time": 1793316185749,
+          "received_at": 1793316185977,
+          "price": 4025.9,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406068573",
+          "aggressor_order_id": "7816406068617",
+          "source_time_nanos": 1793316185749135447
+        },
+        {
+          "event_key": "b922006a7e14a7665daf7cb7bea33836961eb9b1ccaa271fa1a23830829a206c",
+          "sequence": 255,
+          "time": 1793316185749,
+          "received_at": 1793316185987,
+          "price": 4025.9,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406068573",
+          "aggressor_order_id": "7816406068628",
+          "source_time_nanos": 1793316185749545573
+        },
+        {
+          "event_key": "0ff9dc3e231e1761958a0a25b76cb6a34264e07639a35b51d205461b922019c6",
+          "sequence": 256,
+          "time": 1793316185749,
+          "received_at": 1793316185998,
+          "price": 4025.9,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406068573",
+          "aggressor_order_id": "7816406068633",
+          "source_time_nanos": 1793316185749881545
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793316185851609900,
+          "nativePrice": 4025.9,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        },
+        {
+          "nativeTimeNanos": 1793316185855955600,
+          "nativePrice": 4025.9,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406069336",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:23:17.155000+07:00",
+      "nativeDetectionPrices": [
+        4026.3
+      ],
+      "nativeSide": [
+        "sell"
+      ],
+      "nativeObservedTotals": [
+        1,
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 1,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406069336",
+          "eventType": "DETECTION",
+          "timeNanos": 1793316197155001000,
+          "priceLevel": 40263,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793316197155,
+          "price": 4026.3,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 104,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406069336",
+          "eventType": "TRADE",
+          "timeNanos": 1793316197155034300,
+          "priceLevel": 40263,
+          "side": "sell",
+          "eventSize": 1,
+          "time": 1793316197155,
+          "price": 4026.3,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 105,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406069336",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793316197155039200,
+          "priceLevel": 40263,
+          "side": "sell",
+          "eventSize": 0,
+          "time": 1793316197155,
+          "price": 4026.3,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 106,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "05c41b1a4390e7f63c7b2c0566fe97e72f8ea9bb68dfeebb216ebd65f51d86bc",
+          "sequence": 304,
+          "time": 1793316196948,
+          "received_at": 1793316197119,
+          "price": 4026.3,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816406069336",
+          "aggressor_order_id": "7816406070063",
+          "source_time_nanos": 1793316196948319535
+        },
+        {
+          "event_key": "eb899dd5433fc58a213bbc397b168f5ea4e8ec7531a2a24eb84512ed571acb65",
+          "sequence": 305,
+          "time": 1793316196948,
+          "received_at": 1793316197130,
+          "price": 4026.3,
+          "volume": 1,
+          "side": "buy",
+          "passive_order_id": "7816406069336",
+          "aggressor_order_id": "7816406070076",
+          "source_time_nanos": 1793316196948584965
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793316197155034300,
+          "nativePrice": 4026.3,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406069334",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:24:02.813000+07:00",
+      "nativeDetectionPrices": [
+        4025.6
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        1,
+        3,
+        4,
+        5
+      ],
+      "nativeMaxObservedTotal": 5,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "TRADE": 3,
+        "EXECUTION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406069334",
+          "eventType": "DETECTION",
+          "timeNanos": 1793316242813839600,
+          "priceLevel": 40256,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793316242813,
+          "price": 4025.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 107,
+              "capture": "snapshot",
+              "totalSize": 1
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406069334",
+          "eventType": "TRADE",
+          "timeNanos": 1793316242813864800,
+          "priceLevel": 40256,
+          "side": "buy",
+          "eventSize": 2,
+          "time": 1793316242813,
+          "price": 4025.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 108,
+              "capture": "snapshot",
+              "totalSize": 3
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406069334",
+          "eventType": "TRADE",
+          "timeNanos": 1793316242813910300,
+          "priceLevel": 40256,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793316242813,
+          "price": 4025.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 109,
+              "capture": "snapshot",
+              "totalSize": 4
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406069334",
+          "eventType": "TRADE",
+          "timeNanos": 1793316242815473300,
+          "priceLevel": 40256,
+          "side": "buy",
+          "eventSize": 1,
+          "time": 1793316242815,
+          "price": 4025.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 110,
+              "capture": "snapshot",
+              "totalSize": 5
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406069334",
+          "eventType": "EXECUTION",
+          "timeNanos": 1793316242815499500,
+          "priceLevel": 40256,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793316242815,
+          "price": 4025.6,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 111,
+              "capture": "snapshot",
+              "totalSize": 5
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 5,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "8f854fbc391cf48991991fa7b6c9fe5f02a60194a9f26d75d68cb51528a18d32",
+          "sequence": 318,
+          "time": 1793316242722,
+          "received_at": 1793316242840,
+          "price": 4025.6000000000004,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406069334",
+          "aggressor_order_id": "7816406071798",
+          "source_time_nanos": 1793316242722246775
+        },
+        {
+          "event_key": "9b09ca5614de2c1d5aeaf0b9846a3c7d14b3ff376911df310f6de6d75ddc4c74",
+          "sequence": 319,
+          "time": 1793316242722,
+          "received_at": 1793316242989,
+          "price": 4025.6000000000004,
+          "volume": 2,
+          "side": "sell",
+          "passive_order_id": "7816406069334",
+          "aggressor_order_id": "7816406071800",
+          "source_time_nanos": 1793316242722248675
+        },
+        {
+          "event_key": "c33c51d3a0ac409b38f6e3d29942917925f2f58d6f3d94952eaa09d726a35dfd",
+          "sequence": 320,
+          "time": 1793316242722,
+          "received_at": 1793316242993,
+          "price": 4025.6000000000004,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406069334",
+          "aggressor_order_id": "7816406071801",
+          "source_time_nanos": 1793316242722248853
+        },
+        {
+          "event_key": "dc35a308f5d725156f2e06ab788fddf27c9e2627413cc45a756dde324edc4042",
+          "sequence": 321,
+          "time": 1793316242722,
+          "received_at": 1793316242995,
+          "price": 4025.6000000000004,
+          "volume": 1,
+          "side": "sell",
+          "passive_order_id": "7816406069334",
+          "aggressor_order_id": "7816406071808",
+          "source_time_nanos": 1793316242722542805
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [
+        {
+          "nativeTimeNanos": 1793316242813864800,
+          "nativePrice": 4025.6,
+          "nativeEventSize": 2,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        },
+        {
+          "nativeTimeNanos": 1793316242813910300,
+          "nativePrice": 4025.6,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        },
+        {
+          "nativeTimeNanos": 1793316242815473300,
+          "nativePrice": 4025.6,
+          "nativeEventSize": 1,
+          "nearbyRawCountWithin10ms": 0,
+          "nearbyRawQuantityWithin10ms": 0,
+          "note": "Temporal candidates; aggregation/split semantics are not assumed identical."
+        }
+      ],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    },
+    {
+      "alias": "GCZ6.COMEX@RITHMIC",
+      "orderId": "7816406076839",
+      "firstDetectionTimeUtcPlus7": "2026-10-30T06:27:30.493000+07:00",
+      "nativeDetectionPrices": [
+        4027.2
+      ],
+      "nativeSide": [
+        "buy"
+      ],
+      "nativeObservedTotals": [
+        2
+      ],
+      "nativeMaxObservedTotal": 2,
+      "nativeEventTypes": {
+        "DETECTION": 1,
+        "CANCELLATION": 1
+      },
+      "nativeMovementCount": 0,
+      "nativeTimeline": [
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406076839",
+          "eventType": "DETECTION",
+          "timeNanos": 1793316450493722700,
+          "priceLevel": 40272,
+          "side": "buy",
+          "eventSize": 2,
+          "time": 1793316450493,
+          "price": 4027.2,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 112,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        },
+        {
+          "generator": "GCZ6.COMEX@RITHMIC",
+          "alias": "GCZ6.COMEX@RITHMIC",
+          "orderId": "7816406076839",
+          "eventType": "CANCELLATION",
+          "timeNanos": 1793316450497729400,
+          "priceLevel": 40272,
+          "side": "buy",
+          "eventSize": 0,
+          "time": 1793316450497,
+          "price": 4027.2,
+          "observations": [
+            {
+              "file": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\bookmap-si-capture\\si2-v2-2026-10-29T23-29-09.995687Z-8d7348a2.jsonl",
+              "line": 113,
+              "capture": "snapshot",
+              "totalSize": 2
+            }
+          ],
+          "canonicalOccurrences": 1,
+          "ambiguousIdenticalEventsWithinCapture": false,
+          "captureKinds": [
+            "snapshot"
+          ]
+        }
+      ],
+      "rawPassiveQuantity": 2,
+      "rawAggressiveQuantity": 0,
+      "rawPassiveTrades": [
+        {
+          "event_key": "527c17b45b266a1194bdf5bb31b50835e827c233fc0aa2864ac56cebca2ed9b0",
+          "sequence": 370,
+          "time": 1793316450380,
+          "received_at": 1793316450548,
+          "price": 4027.2000000000003,
+          "volume": 2,
+          "side": "sell",
+          "passive_order_id": "7816406076839",
+          "aggressor_order_id": "7816406078830",
+          "source_time_nanos": 1793316450380710341
+        }
+      ],
+      "rawAggressiveTrades": [],
+      "nativeTradeTemporalCandidates": [],
+      "directIcebergStates": [],
+      "directCurrentSessionMatched": false
+    }
+  ],
+  "parseLimitations": [],
+  "limitations": [
+    "No raw MBO history: missing ICE causes and refill lifecycles cannot be reconstructed from trades alone.",
+    "Snapshot totalSize may be latest/final order quantity; never treat it as quantity known at the event timestamp.",
+    "The native public event API has no unique event ID; identical events within one capture are flagged ambiguous.",
+    "Native and direct starts/snapshots differ. A missing current-session ICE is not automatically a detector error.",
+    "Screen aggregation of native icons is not inferred from individual public events."
+  ]
+}

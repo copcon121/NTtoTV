@@ -1,0 +1,10 @@
+{"kind":"capture_start","alias":"GCZ6.COMEX@RITHMIC","tickSize":0.1,"receivedAt":1793316008478,"lookbackMinutes":30,"maxEvents":50000}
+{"kind":"status","state":"provider_unavailable_or_unlicensed","receivedAt":1793316009166}
+{"kind":"status","state":"connecting_to_published_provider","receivedAt":1793316011307}
+{"kind":"connection","connected":true}
+{"kind":"status","state":"provider_connected","receivedAt":1793316013392}
+{"kind":"live_connection","generator":"GCZ6.COMEX@RITHMIC","connected":true}
+{"kind":"snapshot","generator":"GCZ6.COMEX@RITHMIC","fromNanos":1793314213416000000,"toNanos":1793316013416000000,"returnedEvents":90}
+{"kind":"unsupported_event_class","class":"velox.indicators.sionchart.broadcasting.implementations.StopEvent"}
+{"kind":"unsupported_event_class","class":"velox.indicators.sionchart.broadcasting.implementations.IcebergEvent"}
+{"kind":"capture_end","written":8,"queueOverflow":0}

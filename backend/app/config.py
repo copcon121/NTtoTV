@@ -70,6 +70,10 @@ class Settings:
             "NTTOTV_MARKET_DATA_PREFERRED_SOURCE", "nt"
         ).strip().lower()
     )
+    # Isolate the direct feed: disable BM/NT ingress and all automatic fallback.
+    market_data_rithmic_only: bool = field(
+        default_factory=lambda: os.getenv("NTTOTV_MARKET_DATA_RITHMIC_ONLY", "0") == "1"
+    )
     market_data_cold_start_grace_ms: int = field(
         default_factory=lambda: int(
             os.getenv("NTTOTV_MARKET_DATA_COLD_START_GRACE_MS", "5000")

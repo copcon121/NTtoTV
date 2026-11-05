@@ -6,6 +6,7 @@ import {
   findReplayBarIndex,
   replayBarsThrough,
   replayCursorBeforeSelection,
+  replayCursorAtTime,
   timedMapThrough,
   timedValuesBefore,
 } from "./barReplay";
@@ -50,5 +51,13 @@ describe("bar replay helpers", () => {
     expect(barReplayDelayMs(5)).toBe(200);
     expect(barReplayDelayMs(10)).toBe(100);
     expect(barReplayDelayMs(20)).toBe(50);
+  });
+
+  it("maps the clock to closed candles without leaking a larger candle's future", () => {
+    const m5 = [0, 300_000, 600_000, 900_000].map((time) => ({ ...bars[0], time }));
+    expect(replayCursorAtTime(m5, 660_000, 300_000)).toBe(1);
+    expect(replayCursorAtTime(m5, 600_000, 300_000)).toBe(1);
+    expect(replayCursorAtTime(m5, 299_999, 300_000)).toBe(-1);
+    expect(replayCursorAtTime([], 600_000, 300_000)).toBe(-1);
   });
 });

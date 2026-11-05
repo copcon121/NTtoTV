@@ -1318,6 +1318,43 @@ describe("DrawingManager fixed range delta profile", () => {
     container.remove();
   });
 
+  it.each(["volume", "delta"] as const)("shares edited row ticks across modes and reloads from %s", (mode) => {
+    const { clickHandlers, container, manager } = makeHarness();
+    manager.startDrawing("fixed_range_delta_profile", { fixedRangeProfileMode: mode });
+    clickHandlers[0]({ point: { x: 20, y: 40 }, paneIndex: 0 });
+    clickHandlers[0]({ point: { x: 80, y: 90 }, paneIndex: 0 });
+    const onChange = vi.fn();
+    manager.onStateChange(onChange);
+
+    doubleClick(container, 50, 65);
+    const input = container.querySelector<HTMLInputElement>('input[data-row-ticks="true"]')!;
+    expect(input.value).toBe(mode === "delta" ? "2" : "1");
+    input.value = "5";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.arrayContaining([
+      expect.objectContaining({ options: expect.objectContaining({ fixedRangeProfileRowTicks: 5 }) }),
+    ]));
+    expect(container.querySelector(".drawing-profile-context-row-ticks-hint"))
+      .toHaveTextContent("0.5 price / row (Volume & Delta)");
+
+    for (const invalid of ["", "0", "-1", "1.5"]) {
+      input.value = invalid;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(manager.exportState()[0].options?.fixedRangeProfileRowTicks).toBe(5);
+    }
+    const otherMode = mode === "volume" ? "delta" : "volume";
+    container.querySelector<HTMLButtonElement>(`[data-mode="${otherMode}"]`)!.click();
+    const saved = JSON.parse(JSON.stringify(manager.exportState()));
+    expect(saved[0].options.fixedRangeProfileMode).toBe(otherMode);
+    expect(saved[0].options.fixedRangeProfileRowTicks).toBe(5);
+    manager.loadState(saved);
+    doubleClick(container, 50, 65);
+    expect(container.querySelector<HTMLInputElement>('input[data-row-ticks="true"]')?.value).toBe("5");
+
+    manager.dispose();
+    container.remove();
+  });
+
   it("toggles fixed-range delta profile extend right from the double-click settings", () => {
     const { clickHandlers, container, manager } = makeHarness();
     manager.startDrawing("fixed_range_delta_profile", {

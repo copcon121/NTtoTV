@@ -43,12 +43,14 @@ def _pipeline(
     preferred="bookmap",
     rithmic_shadow=True,
     rithmic_qualify_ms=65_000,
+    rithmic_only=False,
 ):
     settings = Settings(
         data_dir=tmp_path,
         supported_symbols=(_SYMBOL,),
         gc_candidate_contracts=(_SOURCE,),
         market_data_preferred_source=preferred,
+        market_data_rithmic_only=rithmic_only,
         bookmap_qualify_ms=2_000,
         bookmap_stale_ms=5_000,
         bookmap_recover_ms=10_000,
@@ -73,6 +75,44 @@ def _pipeline(
         symbol=_SYMBOL,
     )
     return pipeline, cache, ticks, captured
+
+
+@pytest.mark.unit
+def test_rithmic_only_waits_for_qualification_and_never_falls_back(tmp_path):
+    pipeline, cache, ticks, _ = _pipeline(
+        tmp_path, rithmic_only=True, rithmic_shadow=False,
+    )
+    try:
+        assert pipeline._active_feed is None
+        assert pipeline._preferred_source == "rithmic"
+        now = _BASE
+        for state in pipeline._feed_states.values():
+            state.connected = True
+            state.last_heartbeat_at = now
+            state.healthy_since = now - 120_000
+            state.contract = _SOURCE
+            state.bar_ready = True
+        rithmic = pipeline._feed_states["rithmic"]
+        rithmic.healthy_since = now - 64_999
+        asyncio.run(pipeline._evaluate_source_selection(now))
+        assert pipeline._active_feed is None
+
+        rithmic.healthy_since = now - 65_000
+        asyncio.run(pipeline._evaluate_source_selection(now))
+        assert pipeline._active_feed == "rithmic"
+        assert not pipeline._feed_eligible("bookmap", now)
+        assert not pipeline._feed_eligible("nt", now)
+
+        rithmic.connected = False
+        asyncio.run(pipeline._evaluate_source_selection(now))
+        assert pipeline._active_feed is None
+
+        rithmic.connected = True
+        asyncio.run(pipeline._evaluate_source_selection(now))
+        assert pipeline._active_feed == "rithmic"
+    finally:
+        ticks.close()
+        cache.close()
 
 
 @pytest.mark.unit
@@ -293,7 +333,8 @@ def test_bookmap_fails_over_to_rithmic_then_nt_and_recovers(tmp_path):
 
 
 @pytest.mark.unit
-def test_active_rithmic_flushes_idle_big_trade_with_rithmic_source(tmp_path):
+def test_active_rithmic_timer_preserves_delayed_big_trade_with_rithmic_source(tmp_path):
+    from dataclasses import replace
     pipeline, cache, ticks, captured = _pipeline(
         tmp_path,
         rithmic_shadow=False,
@@ -308,14 +349,12 @@ def test_active_rithmic_flushes_idle_big_trade_with_rithmic_source(tmp_path):
         state.healthy_since = current - 1_000
         state.contract = _SOURCE
         state.bar_ready = True
-        engine = pipeline._source_big_trades["rithmic"]
-        emitted = engine.on_trade(
-            NormalizedTrade(
+        first = NormalizedTrade(
                 symbol=_SYMBOL,
                 contract=_SYMBOL,
                 time=_BASE,
                 price=2400.1,
-                volume=30,
+                volume=1,
                 bid=2400.0,
                 ask=2400.1,
                 best_bid=2400.0,
@@ -325,11 +364,22 @@ def test_active_rithmic_flushes_idle_big_trade_with_rithmic_source(tmp_path):
                 side=Side.BUY,
                 aggressor_order_id="rithmic-order",
                 received_at=current - 1_000,
-            )
         )
-        assert emitted == []
 
-        asyncio.run(pipeline.maintenance_tick())
+        async def run():
+            await pipeline._run_trade_engines(first, source="rithmic")
+            await pipeline.maintenance_tick()
+            assert cache.read_big_trades(_SYMBOL, _SYMBOL) == []
+            await pipeline._run_trade_engines(replace(
+                first, sequence=2, volume=29, received_at=current,
+            ), source="rithmic")
+            await pipeline.maintenance_tick()
+            await pipeline._run_trade_engines(replace(
+                first, sequence=3, time=_BASE + 101, volume=1,
+                aggressor_order_id="next-rithmic-order", received_at=current + 1,
+            ), source="rithmic")
+
+        asyncio.run(run())
 
         big_trade_events = [
             event.payload
@@ -338,6 +388,7 @@ def test_active_rithmic_flushes_idle_big_trade_with_rithmic_source(tmp_path):
         ]
         assert len(big_trade_events) == 1
         assert big_trade_events[0]["source"] == "rithmic"
+        assert big_trade_events[0]["volume"] == 30
     finally:
         ticks.close()
         cache.close()

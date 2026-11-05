@@ -17,6 +17,7 @@ from app.rithmic.protocol import (
     TIME_BAR_REPLAY_RESPONSE,
     field_string,
     field_varint,
+    parse_fields,
     template_id,
 )
 from app.storage.cache_store import CacheStore
@@ -271,6 +272,7 @@ def test_audit_fills_an_internal_gap_even_when_recent_cache_exists(tmp_path, mon
         return _reports(gap // 1000) if start <= gap <= end else ([], [])
 
     service._request_chunk = request
+    service._request_second_bars = AsyncMock(return_value={})
     try:
         asyncio.run(service._sync_once(object()))
         assert requests[0][0] <= last_closed - 24 * 3_600_000
@@ -428,5 +430,107 @@ def test_profile_audit_reuses_complete_ladders_and_repairs_internal_damage(tmp_p
         cache.writer.execute("UPDATE bars SET source='bookmap' WHERE timeframe='1m' AND time=?", (start,))
         cache.writer.execute("DELETE FROM footprint_levels WHERE timeframe='1m' AND time=?", (start,))
         assert ranges() == []
+    finally:
+        cache.close()
+
+
+@pytest.mark.parametrize("timeframe,interval", [("15s", 15_000), ("30s", 30_000)])
+def test_second_bar_repair_preserves_sources_live_buckets_and_delta_extrema(tmp_path, timeframe, interval):
+    service, cache = _service(tmp_path)
+    start = 1_800_000_000_000
+    messages = [{"marker": (start + (i + 1) * interval) // 1000,
+                 "open": 2000, "high": 2001, "low": 1999, "close": 2000.5,
+                 "volume": 32, "bidVolume": 10, "askVolume": 20} for i in range(5)]
+    live = start + 4 * interval
+    cache.upsert_bars([_bar(start, "bookmap", 999, tf=timeframe),
+        _bar(start + interval, "nt", 888, tf=timeframe),
+        _bar(start + 2 * interval, volume=32, tf=timeframe),
+        _bar(live, volume=77, tf=timeframe, closed=False)])
+    cache.upsert_volume_delta(VolumeDeltaRecord("GC", "GC", timeframe, start + 2 * interval,
+        32, 10, 20, -10, 7, -17, 5, -10))
+    try:
+        assert service._persist_chunk(messages, [], live - interval, timeframe=timeframe) == (2, 0)
+        rows = cache.read_bars("GC", "GC", timeframe)
+        assert [row.volume for row in rows] == [999, 888, 32, 32, 77]
+        assert [row.time for row in rows] == [start + i * interval for i in range(5)]
+        assert rows[3].source == "rithmic_history" and rows[3].closed
+        assert not rows[4].closed
+        deltas = cache.read_volume_delta("GC", "GC", timeframe)
+        assert deltas[0].delta_high == 7 and deltas[0].delta_low == -17
+        assert (deltas[1].volume, deltas[1].buy_volume, deltas[1].sell_volume) == (32, 10, 20)
+        assert cache.read_footprint_bars("GC", "GC", "30s") == []
+        assert cache.read_bars("GC", "GC", "1m") == []
+        service.config.physical_contract = "GC 02-27"
+        assert service._persist_chunk(messages[2:4], [], live - interval, timeframe=timeframe) == (0, 0)
+    finally:
+        cache.close()
+
+
+def test_second_bar_requests_include_final_closed_bucket_and_exclude_outside_range(tmp_path):
+    service, cache = _service(tmp_path)
+    start = 1_800_000_000_000
+    requests = []
+
+    async def collect(ws, payload, template, tag):
+        fields = parse_fields(payload)
+        period = fields[119112][0][1]
+        assert fields[119200][0][1] == 1
+        assert fields[153002][0][1] == start // 1000
+        assert fields[153003][0][1] == (start + 60_000) // 1000 + 1
+        requests.append(period)
+        return [{"marker": start // 1000 + offset} for offset in (0, period, 60, 60 + period)]
+
+    service._collect = collect
+    try:
+        result = asyncio.run(service._request_second_bars(object(), start, start + 59_999))
+        assert requests == [15, 30]
+        assert [row["marker"] for row in result["15s"]] == [start // 1000 + 15, start // 1000 + 60]
+        assert [row["marker"] for row in result["30s"]] == [start // 1000 + 30, start // 1000 + 60]
+    finally:
+        cache.close()
+
+
+def test_audit_repairs_second_history_when_minute_and_latest_live_bars_exist(tmp_path, monkeypatch):
+    service, cache = _service(tmp_path)
+    now = 1_800_000_300_000
+    last_closed = now // 60_000 * 60_000 - 60_000
+    gap = last_closed - 3_600_000
+    monkeypatch.setattr("app.rithmic.history_sync.now_ms", lambda: now)
+    cache.upsert_bars([_bar(last_closed), _bar(last_closed, tf="15s"), _bar(last_closed, tf="30s")])
+
+    async def minutes(ws, start, end):
+        return ([], [])
+
+    async def collect(ws, payload, template, tag):
+        fields = parse_fields(payload)
+        start, end = fields[153002][0][1], fields[153003][0][1]
+        period = fields[119112][0][1]
+        if not start <= gap // 1000 < end:
+            return []
+        return [{"marker": gap // 1000 + period, "open": 2000, "high": 2001,
+                 "low": 1999, "close": 2000.5, "volume": 30, "bidVolume": 10, "askVolume": 20}]
+
+    service._request_chunk = minutes
+    service._collect = collect
+    try:
+        asyncio.run(service._sync_once(object()))
+        for timeframe in ("15s", "30s"):
+            assert cache.read_bars("GC", "GC", timeframe, gap, gap)[0].volume == 30
+            assert cache.read_volume_delta("GC", "GC", timeframe, gap, gap)[0].delta == -10
+        assert service.synchronized and service.status_dict()["lastSuccessAt"] == now
+    finally:
+        cache.close()
+
+
+def test_failed_second_history_does_not_report_a_successful_repair(tmp_path):
+    service, cache = _service(tmp_path)
+    service._request_chunk = AsyncMock(return_value=([], []))
+    service._request_second_bars = AsyncMock(side_effect=RithmicProbeError("second replay failed"))
+    try:
+        with pytest.raises(RithmicProbeError, match="second replay failed"):
+            asyncio.run(service._sync_once(object()))
+        status = service.status_dict()
+        assert status["lastSuccessAt"] is None and status["highWatermark"] is None
+        assert status["pendingRanges"] and not service.synchronized
     finally:
         cache.close()

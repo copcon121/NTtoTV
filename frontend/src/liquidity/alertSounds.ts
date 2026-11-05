@@ -22,7 +22,7 @@ export const DEFAULT_ALERT_SOUNDS: LiquidityAlertSounds = {
 };
 const EVENT_NAMES: Record<LiquiditySoundEvent, string> = {
   iceberg: "Iceberg", bigTrade: "Big trade", longTerm: "Long term liquidity",
-  volumeSpike: "Volume spike", absorption: "Absorption", volumeStop: "Market volume stop",
+  volumeSpike: "Volume spike", absorption: "Absorption", volumeStop: "SI Stops",
 };
 
 export function normalizeAlertSounds(input: unknown): LiquidityAlertSounds {

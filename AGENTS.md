@@ -17,6 +17,18 @@ He thong gom 3 phan:
 - `nt-addon/`: C#/.NET + NinjaScript bridge cho NinjaTrader 8, subscribe Level
   1 trade/quote GC va forward sang backend.
 
+Current Windows workflow (user clarification 2026-10-29): live market data now
+comes directly from Rithmic. Bookmap SI 2.08 is a logic reference for LQ ICE/
+SI Stops, not a required live connection. Older Bookmap-primary sections below
+describe the existing arbitration/fallback architecture and historical setup.
+
+Windows source isolation (user instruction 2026-10-30): use Rithmic ONLY.
+`scripts/Run-BackendProcess.ps1` sets `NTTOTV_MARKET_DATA_RITHMIC_ONLY=1`:
+BM/NT websocket ingress and NT native-bar HTTP ingress are disabled, and source
+arbitration cannot fall back to BM/NT. Keep Bookmap running independently with
+Rithmic GC/SI 2 for the next ICE comparison; do not reconnect its NTtoTV bridge
+or the NT source unless the user requests it.
+
 Symbol hien tai la `GC`. Frontend chart dung logical chart contract `GC`, khong
 con contract selector tren UI. NT source contract thuc te co the la
 `GC 12-26`, `GC 10-26`, etc.; backend normalize derived chart/cache ve key
@@ -157,6 +169,15 @@ Networking rule:
   run `cd frontend; npm run build` so `frontend/dist` is updated. Then verify
   `https://gcflowpy.xyz/` references the new `/assets/index-*.js` bundle; a
   source-only change will not show up on the domain.
+
+User deployment preference:
+
+- For requested changes affecting the website, update `https://gcflowpy.xyz/`
+  immediately as part of completing the task. Do not ask for deployment
+  confirmation again unless the user explicitly restricts the task to local work.
+- Preserve current production changes when integrating from a worker worktree;
+  never overwrite newer source or deploy an older worktree build wholesale.
+  Build the integrated frontend and verify the public bundle and changed behavior.
 
 ## NT AddOn Layout
 
@@ -491,6 +512,32 @@ Backend-specific:
 
 Frontend-specific:
 
+- Shared UI theme decision (2026-10-29): LQ is the visual reference for Chart,
+  MP and FP. Use its dark surfaces and turquoise accent consistently for
+  settings, primary actions, checked controls, focus rings and active selections.
+  Canonical tokens live in `frontend/src/styles.css`: `--gc-accent: #35d6b0`,
+  `--gc-accent-ink: #061b16`, `--gc-background: #0b0f14`, `--gc-panel: #111a23`,
+  `--gc-control: #0d141b`, `--gc-text: #dbe7f3`, `--gc-muted: #9eacbb`,
+  `--gc-border: #334657`. Reuse these tokens in future Chart/MP/FP theme work;
+  do not create a separate blue/green settings palette for each page. Preserve
+  meaningful buy/sell and indicator colors and user chart-color preferences.
+  This task applies the reference to LQ; the Chart/MP/FP migration is subsequent
+  work, not an instruction to rewrite unrelated pages during every UI change.
+  All LQ settings groups, including ICE and BigTrade, use the same panel surface,
+  border and turquoise controls. Keep current Buy/Sell chart colors unchanged
+  (user clarification 2026-10-29). Each settings option needs a Vietnamese `?`
+  explanation of its meaning, units and filter order where relevant. Reuse
+  `frontend/src/liquidity/SettingHelp.tsx`: hover, keyboard focus and mobile tap;
+  hints stay accessible for disabled inputs and fit outside scrolling panels.
+- LQ SI Stops replace legacy Market Volume Stop markers/settings/alerts. They
+  use direct Rithmic trades plus accepted MBO/MBP boundaries, publish completed
+  inferred chains only, and persist compact history for 48 hours. See
+  `SI-STOPS.md`; Bookmap SI 2.08 is an algorithm reference, not a data dependency.
+  Use one SI Stops settings group. Default display minimum is 50 contracts per
+  chain with Auto off; settings v2 migrates the initial saved zero-minimum
+  preset once. Filter chains before visual grouping. Marker quantity is the
+  group's total contracts; chain count and trade-print count are separate.
+
 - Keep REST and websocket same-origin through Vite proxy.
 - Keep mobile toolbar responsive; prior issue was toolbar controls covering the
   menu on mobile, fixed by two-row mobile layout in `styles.css`.
@@ -581,8 +628,10 @@ After the latest fixes:
   gaps trigger repair, and the trailing 24 hours are audited every 300 seconds.
   Closed M1 bars/delta/footprint and larger rollups are repaired under the source
   lock; Bookmap/NT rows and live bars are preserved. `/api/market-data/status`
-  exposes `historySync`, and chart/LQ refresh after success. Minute replay does
-  not reconstruct 15s/30s or MBO/icebergs. See `RITHMIC-HISTORY.md`.
+  exposes `historySync`, and chart/LQ refresh after success. Native second-bar
+  replay also repairs 15s/30s candles and final delta independently of M1
+  coverage; it does not reconstruct their footprint ladders or MBO/icebergs.
+  See `RITHMIC-HISTORY.md`.
   It becomes selectable only after a 65-second continuous warm-up, and falls
   back to NT on disconnect/staleness. Credentials are DPAPI-encrypted outside
   the repository; do not put them in source, logs, or runtime-state JSON.

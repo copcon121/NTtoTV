@@ -1,0 +1,2 @@
+Summary for C:\Program Files\Bookmap\lib\rithmic-adapter.jar
+Decompiled with CFR 0.152

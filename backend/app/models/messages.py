@@ -133,6 +133,7 @@ class EventType(str, Enum):
     TDU_SIGNAL_UPDATE = "tdu_signal_update"
     LIQUIDITY_UPDATE = "liquidity_update"
     ICEBERG_UPDATE = "iceberg_update"
+    SI_STOP = "si_stop"
     MARKET_EXPLORER_UPDATE = "market_explorer_update"
     TREND_ANALYZER_UPDATE = "trend_analyzer_update"
     BIG_TRADE = "big_trade"
@@ -598,6 +599,7 @@ class VolumeDeltaUpdate:
     open_delta: int
     close_delta: int
     cumulative_delta: int | None = None
+    source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -617,6 +619,8 @@ class VolumeDeltaUpdate:
         }
         if self.cumulative_delta is not None:
             out["cumulativeDelta"] = self.cumulative_delta
+        if self.source is not None:
+            out["source"] = self.source
         return out
 
     @classmethod
@@ -637,6 +641,7 @@ class VolumeDeltaUpdate:
             open_delta=int(data["openDelta"]),
             close_delta=int(data["closeDelta"]),
             cumulative_delta=None if raw_cum is None else int(raw_cum),
+            source=data.get("source"),
         )
 
 
@@ -851,6 +856,7 @@ class TduSignalUpdate:
     momentum_direction: int
     momentum_level: int
     delta_divergence: int
+    momentum_samples: list[tuple[int, float, int]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -862,6 +868,8 @@ class TduSignalUpdate:
             "momentumDirection": self.momentum_direction,
             "momentumLevel": self.momentum_level,
             "deltaDivergence": self.delta_divergence,
+            **({"momentumSamples": [list(sample) for sample in self.momentum_samples]}
+               if self.momentum_samples is not None else {}),
         }
 
     @classmethod
@@ -875,6 +883,10 @@ class TduSignalUpdate:
             momentum_direction=int(data["momentumDirection"]),
             momentum_level=int(data["momentumLevel"]),
             delta_divergence=int(data["deltaDivergence"]),
+            momentum_samples=(
+                [tuple(sample) for sample in data["momentumSamples"]]
+                if data.get("momentumSamples") is not None else None
+            ),
         )
 
 

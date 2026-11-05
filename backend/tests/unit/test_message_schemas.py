@@ -696,6 +696,18 @@ def test_tdu_signal_update_round_trips_with_camel_case_wire_fields():
     assert EventType.TDU_SIGNAL_UPDATE.value == "tdu_signal_update"
 
 
+@pytest.mark.unit
+def test_tdu_momentum_samples_round_trip_without_nonfinite_json():
+    import json
+
+    update = TduSignalUpdate(symbol="GC", contract="GC", tf="1m", time=1730313600000,
+                            momentum_direction=1, momentum_level=3, delta_divergence=0,
+                            momentum_samples=[(30, 8.0, -1), (10, 0.0, 1)])
+    wire = json.loads(json.dumps(update.to_dict(), allow_nan=False))
+    assert wire["momentumSamples"] == [[30, 8.0, -1], [10, 0.0, 1]]
+    assert TduSignalUpdate.from_dict(wire) == update
+
+
 # ===========================================================================
 # /ws/chart backend -> client: big_trade (Req 5.2, 15.4, 15.5)
 # ===========================================================================

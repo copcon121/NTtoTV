@@ -45,6 +45,45 @@ def service_and_sink():
     return RithmicMarketDataService(config, sink), sink
 
 
+@pytest.mark.parametrize("flags", [
+    {"presenceBits": 0}, {"presenceBits": 8}, {"presenceBits": 16},
+    {"presenceBits": 1, "clearBits": 1}, {"clearBits": 1},
+])
+def test_statistics_and_trade_clear_frames_cannot_count_as_iceberg_executions(flags):
+    service, sink = service_and_sink()
+
+    async def scenario():
+        await snapshot(service)
+        await trade(service)
+        await service._dispatch({
+            "type": "trade", "price": 2700.1, "size": 10, "aggressor": "buy",
+            "exchangeOrderId": "ask-1", "timeMs": 102, **flags,
+        })
+        assert len(sink.trades) == 1
+        assert sink.events == []
+        await change(service, time=103)
+        assert sink.events[-1]["executedVolume"] == 10
+        assert sink.events[-1]["refillCount"] == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("presence", [None, 1, 9, 31])
+def test_valid_last_trade_presence_keeps_order_ids_and_one_execution(presence):
+    service, _ = service_and_sink()
+    payload = {
+        "price": 2700.1, "size": 10, "aggressor": "buy", "timeMs": 101,
+        "exchangeOrderId": "ask-1", "aggressorExchangeOrderId": "taker-1",
+    }
+    if presence is not None:
+        payload["presenceBits"] = presence
+    result = service._normalize_trade(payload)
+    assert result is not None
+    assert result.passive_order_id == "ask-1"
+    assert result.aggressor_order_id == "taker-1"
+    assert result.volume == 10
+
+
 async def snapshot(service, *, sequence=100, size=10):
     await service._begin_mbo_snapshot()
     await service._dispatch({

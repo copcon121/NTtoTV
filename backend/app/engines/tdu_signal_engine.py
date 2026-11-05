@@ -41,6 +41,9 @@ class _BarState:
     momentum_direction: int = 0
     momentum_level: int = 0
     delta_divergence: int = 0
+    # Chronological strength frontier: (completed volume, sigma, direction).
+    # A later stronger sample dominates earlier weaker ones for any threshold.
+    momentum_samples: list[tuple[int, float, int]] | None = None
 
 
 def _population_stddev(values: list[int]) -> float:
@@ -82,20 +85,27 @@ class TduSignalEngine:
         # The original tests the bucket boundary before adding the triggering
         # trade.  Its direction therefore reads the chart-bar delta from the
         # preceding tick; a newly-opened chart bar reads zero and resolves buy.
-        level = self._roll_momentum_bucket(trade)
-        if level:
+        sample = self._roll_momentum_bucket(trade)
+        if sample is not None:
+            level, volume, sigma = sample
             for tf, state in zip(self.timeframes, states):
                 direction = 1 if state.delta >= 0 else -1
-                old_level = state.momentum_level
-                old_direction = state.momentum_direction
-                state.momentum_level = max(state.momentum_level, level)
-                state.momentum_direction = direction
-                if (
-                    state.momentum_level != old_level
-                    or state.momentum_direction != old_direction
-                ):
-                    update = self._update(trade, tf, state)
-                    changed[(tf, state.time)] = update
+                if level:
+                    state.momentum_level = max(state.momentum_level, level)
+                    state.momentum_direction = direction
+                if state.momentum_samples is None:
+                    state.momentum_samples = []
+                strength = math.inf if sigma == 0 else volume / sigma
+                while state.momentum_samples:
+                    previous_volume, previous_sigma, _ = state.momentum_samples[-1]
+                    previous = math.inf if previous_sigma == 0 else previous_volume / previous_sigma
+                    if previous > strength:
+                        break
+                    state.momentum_samples.pop()
+                state.momentum_samples.append((volume, sigma, direction))
+                # Include below-default samples so each browser can use lower
+                # thresholds without changing the shared market-data engine.
+                changed[(tf, state.time)] = self._update(trade, tf, state)
 
         buy_volume, sell_volume = self._bid_ask_volume(trade)
         for tf, state in zip(self.timeframes, states):
@@ -117,7 +127,7 @@ class TduSignalEngine:
             state = self._bars.get((contract, tf))
             if state is None:
                 continue
-            if state.momentum_level == 0 and state.delta_divergence == 0:
+            if state.momentum_level == 0 and state.delta_divergence == 0 and not state.momentum_samples:
                 continue
             updates.append(
                 TduSignalUpdate(
@@ -128,6 +138,7 @@ class TduSignalEngine:
                     momentum_direction=state.momentum_direction,
                     momentum_level=state.momentum_level,
                     delta_divergence=state.delta_divergence,
+                    momentum_samples=None if state.momentum_samples is None else list(state.momentum_samples),
                 )
             )
         return updates
@@ -146,6 +157,7 @@ class TduSignalEngine:
         momentum_direction: int = 0,
         momentum_level: int = 0,
         delta_divergence: int | None = None,
+        momentum_samples: list[tuple[int, float, int]] | None = None,
     ) -> None:
         state = _BarState(
             time=time,
@@ -156,6 +168,7 @@ class TduSignalEngine:
             delta=delta,
             momentum_direction=momentum_direction,
             momentum_level=momentum_level,
+            momentum_samples=None if momentum_samples is None else list(momentum_samples),
         )
         state.delta_divergence = (
             self._candle_color_divergence(state)
@@ -185,7 +198,7 @@ class TduSignalEngine:
             self._bars[key] = state
         return state
 
-    def _roll_momentum_bucket(self, trade: NormalizedTrade) -> int:
+    def _roll_momentum_bucket(self, trade: NormalizedTrade) -> tuple[int, int, float] | None:
         bucket = self._bucket_by_contract.get(trade.contract)
         volumes = self._volumes_by_contract.setdefault(trade.contract, [])
         if bucket is None:
@@ -193,12 +206,13 @@ class TduSignalEngine:
             self._bucket_by_contract[trade.contract] = bucket
             volumes.append(0)
 
-        level = 0
+        result = None
         if trade.time - bucket.start >= self.bucket_ms:
             if len(volumes) >= self.stddev_period:
                 window = volumes[-self.stddev_period :]
                 sigma = _population_stddev(window)
                 completed = float(window[-1])
+                level = 0
                 # Original defaults are (2 + multiplier) * sigma, where the
                 # multipliers are 2/3/4, hence thresholds of 4/5/6 sigma.
                 if completed >= 6.0 * sigma:
@@ -207,6 +221,7 @@ class TduSignalEngine:
                     level = 2
                 elif completed >= 4.0 * sigma:
                     level = 1
+                result = (level, window[-1], sigma)
             bucket = _MomentumBucket(start=trade.time)
             self._bucket_by_contract[trade.contract] = bucket
             volumes.append(0)
@@ -218,7 +233,7 @@ class TduSignalEngine:
 
         bucket.volume += trade.volume
         volumes[-1] = bucket.volume
-        return level
+        return result
 
     @staticmethod
     def _bid_ask_volume(trade: NormalizedTrade) -> tuple[int, int]:
@@ -254,4 +269,5 @@ class TduSignalEngine:
             momentum_direction=state.momentum_direction,
             momentum_level=state.momentum_level,
             delta_divergence=state.delta_divergence,
+            momentum_samples=None if state.momentum_samples is None else list(state.momentum_samples),
         )

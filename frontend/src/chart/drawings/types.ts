@@ -163,6 +163,8 @@ export interface DrawingOptions {
   fibTrendLineColor?: string;
   /** For fixed range profile: bid/ask split or total volume rows. */
   fixedRangeProfileMode?: FixedRangeProfileMode;
+  /** GC ticks per row, shared by volume and delta modes; positive integer. */
+  fixedRangeProfileRowTicks?: number;
   /** For fixed range profile: keep the right edge pinned to the latest bar. */
   fixedRangeProfileExtendRight?: boolean;
   /** For fixed range profile: fit the vertical frame to the loaded price ladder. */

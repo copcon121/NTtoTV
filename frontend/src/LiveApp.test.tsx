@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -28,10 +28,12 @@ import {
   seriesDataKey,
   supertrendTrailingActivationError,
   toAlertLines,
+  toOrderControls,
   visibleDrawingsForTimeframe,
 } from "./LiveApp";
 import type { SupertrendTrailing } from "./api/client";
-import type { TradingOrder } from "./socket/messages";
+import type { TradingOrder, TradingPosition } from "./socket/messages";
+import { useBrokerChartPositions } from "./orders/brokerChartLevels";
 import {
   DEFAULT_EMA_SETTINGS,
   DEFAULT_FOOTPRINT_SETTINGS,
@@ -44,6 +46,98 @@ import type { Alert } from "./alerts/types";
 
 afterEach(() => {
   cleanup();
+});
+
+describe("order stop and target money", () => {
+  const symbol = {
+    symbol: "XAUUSDm", digits: 2, tickSize: 0.01, pipValue: 1,
+    minLot: 0.01, maxLot: 100, lotStep: 0.01, stopsLevel: 0.1,
+  };
+  const order: TradingOrder = {
+    id: "ord_1", userId: "u1", accountId: "a1", source: "market_bar",
+    symbolInternal: "GC", contractInternal: "GC", symbolBroker: "XAUUSDm",
+    side: "sell", kind: "market", volumeLots: 0.1, gcAnchored: true,
+    takeProfit1rEnabled: false, autoSupertrendAfter1rEnabled: false,
+    status: "filled", idempotencyKey: "test", version: 1,
+    fillPriceGcEstimate: 3925, fillPriceBroker: 3900,
+    slGc: 3918.7, slBroker: 3896, tpGc: 3910, tpBroker: 3887.3,
+    brokerPositionTicket: 7, createdAt: 1, updatedAt: 1,
+  };
+  const position: TradingPosition = {
+    brokerPositionTicket: 7, side: "sell", volumeLots: 0.05,
+    entryBroker: 3900, entryGcEstimate: 3922.7,
+    slGc: 3918.7, slBroker: 3896, tpGc: 3910, tpBroker: 3887.3,
+    profit: 106.1, updatedAt: 1,
+  };
+
+  it("uses broker fill and exit prices with the remaining position volume", () => {
+    const controls = toOrderControls(
+      [order], 3904.8, symbol, { positions: [position], orders: [] },
+      new Set(), new Set(),
+    );
+    expect(controls.find((c) => c.level === "entry")?.pnlValue).toBe(106.1);
+    expect(controls.find((c) => c.level === "sl")?.pnlValue).toBeCloseTo(20);
+    expect(controls.find((c) => c.level === "tp")?.pnlValue).toBeCloseTo(63.5);
+  });
+
+  it("keeps a profitable stop positive and a losing stop negative for both sides", () => {
+    for (const side of ["buy", "sell"] as const) {
+      const direction = side === "buy" ? 1 : -1;
+      const controls = toOrderControls(
+        [{ ...order, side, slBroker: 3900 + direction * 2 }],
+        undefined, symbol, { positions: [], orders: [] }, new Set(), new Set(),
+      );
+      expect(controls.find((c) => c.level === "sl")?.pnlValue).toBeCloseTo(20);
+      const losing = toOrderControls(
+        [{ ...order, side, slBroker: 3900 - direction * 2 }],
+        undefined, symbol, { positions: [], orders: [] }, new Set(), new Set(),
+      );
+      expect(losing.find((c) => c.level === "sl")?.pnlValue).toBeCloseTo(-20);
+    }
+  });
+
+  it("does not show old stop money while a new broker stop is unconfirmed", () => {
+    const controls = toOrderControls(
+      [{ ...order, slGc: 3917, slBroker: undefined }], undefined, symbol,
+      { positions: [position], orders: [] }, new Set(), new Set(),
+    );
+    const stop = controls.find((c) => c.level === "sl");
+    expect(stop?.price).toBe(3917);
+    expect(stop?.pnlValue).toBeUndefined();
+    expect(stop?.pnlText).toBeUndefined();
+  });
+
+  it("keeps broker projections and pending edits consistent with stop money", () => {
+    const brokerPosition = { ...position, slBroker: 3897, tpBroker: 3888 };
+    const projected = projectBrokerAnchoredOrders([order], [brokerPosition]);
+    const controls = toOrderControls(projected, undefined, symbol,
+      { positions: [brokerPosition], orders: [] }, new Set(), new Set());
+    expect(controls.find((c) => c.level === "sl")?.pnlValue).toBeCloseTo(15);
+    expect(controls.find((c) => c.level === "tp")?.pnlValue).toBeCloseTo(60);
+
+    const pending = projectBrokerAnchoredOrders([order], [brokerPosition],
+      new Map([[order.id, { slGc: 3917 }]]));
+    const pendingControls = toOrderControls(pending, undefined, symbol,
+      { positions: [brokerPosition], orders: [] }, new Set(), new Set());
+    expect(pendingControls.find((c) => c.level === "sl")?.price).toBe(3917);
+    expect(pendingControls.find((c) => c.level === "sl")?.pnlValue).toBeUndefined();
+    expect(pendingControls.find((c) => c.level === "tp")?.pnlValue).toBeCloseTo(60);
+  });
+
+  it("uses unrounded broker prices for manual MT5 positions and pending orders", () => {
+    const controls = toOrderControls([], undefined, symbol, {
+      positions: [{ ...position, slBroker: 3896.047 }],
+      orders: [{
+        brokerOrderTicket: 8, symbolBroker: "XAUUSDm", side: "buy", kind: "limit",
+        volumeLots: 0.1, entryBroker: 3900.03, entryGc: 3922.7,
+        slBroker: 3897.01, slGc: 3919.7, updatedAt: 1,
+      }],
+    }, new Set(), new Set());
+    expect(controls.find((c) => c.orderId === "mt5pos:7" && c.level === "sl")?.pnlValue)
+      .toBeCloseTo(19.765);
+    expect(controls.find((c) => c.orderId === "mt5order:8" && c.level === "sl")?.pnlValue)
+      .toBeCloseTo(-30.2);
+  });
 });
 
 const profilePayload: ChartProfilePayload = {
@@ -97,6 +191,41 @@ describe("resolveEndpoints", () => {
 });
 
 describe("broker-fixed market bracket display", () => {
+  it("keeps chart levels after 50% close and receives TP edits from MT5", () => {
+    const position: TradingPosition = {
+      brokerPositionTicket: 7, side: "buy", symbolBroker: "XAUUSDm",
+      volumeLots: 0.1, profit: 65.4, entryBroker: 3915, entryGcEstimate: 3940,
+      slBroker: 3910.4, slGc: 3935.4, tpBroker: 3952.5, tpGc: 3977.5, updatedAt: 1,
+    };
+    const order = { id: "partial", source: "market_bar", kind: "market",
+      gcAnchored: false, side: "buy", status: "filled", symbolInternal: "GC",
+      volumeLots: 0.1, brokerPositionTicket: 7, fillPriceBroker: 3915,
+      fillPriceGcEstimate: 3940, slBroker: 3910.4, slGc: 3935.4,
+      tpBroker: 3952.5, tpGc: 3977.5 } as TradingOrder;
+    const symbol = { symbol: "XAUUSDm", digits: 2, tickSize: 0.01, pipValue: 1,
+      minLot: 0.01, maxLot: 100, lotStep: 0.01, stopsLevel: 0.1 };
+    const { result, rerender } = renderHook(({ incoming, saved }) => {
+      const positions = useBrokerChartPositions([incoming], [saved], "mock-account");
+      return toOrderControls(projectBrokerAnchoredOrders([saved], positions),
+        undefined, symbol, { positions, orders: [] }, new Set(), new Set());
+    }, { initialProps: { incoming: position, saved: order } });
+    const half = { ...position, volumeLots: 0.05, profit: 32.7,
+      entryGcEstimate: 3929.4, slGc: 3924.8, tpGc: 3966.9, updatedAt: 2 };
+    rerender({ incoming: half, saved: { ...order, volumeLots: 0.05 } });
+    expect(result.current.find((c) => c.level === "entry")?.price).toBe(3940);
+    expect(result.current.find((c) => c.level === "sl")?.price).toBe(3935.4);
+    expect(result.current.find((c) => c.level === "tp")?.price).toBe(3977.5);
+    expect(result.current.find((c) => c.level === "sl")?.pnlValue).toBeCloseTo(-23);
+    expect(result.current.find((c) => c.level === "tp")?.pnlValue).toBeCloseTo(187.5);
+
+    const moved = { ...half, tpBroker: 3942.5, tpGc: 3956.9, updatedAt: 3 };
+    rerender({ incoming: moved, saved: { ...order, source: "chart_bracket", gcAnchored: true } });
+    expect(result.current.find((c) => c.level === "entry")?.price).toBe(3940);
+    expect(result.current.find((c) => c.level === "sl")?.price).toBe(3935.4);
+    expect(result.current.find((c) => c.level === "tp")?.price).toBe(3956.9);
+    expect(result.current.find((c) => c.level === "tp")?.pnlValue).toBeCloseTo(137.5);
+  });
+
   it("keeps pending SL/TP edits above stale broker and profit snapshots", () => {
     const order = {
       id: "ord_drag", source: "market_bar", kind: "market", gcAnchored: false,

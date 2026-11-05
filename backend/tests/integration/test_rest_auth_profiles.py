@@ -98,6 +98,18 @@ def test_session_cookie_uses_configured_ttl(
 
 
 @pytest.mark.integration
+def test_auth_rejection_logs_cookie_presence_without_credentials(app_client: TestClient, caplog):
+    with caplog.at_level("WARNING", logger="app.rest.auth"):
+        assert app_client.put("/api/me/profile", json={"payload": {}}).status_code == 401
+        assert "session_cookie=missing cookie_count=0" in caplog.text
+        caplog.clear()
+        app_client.cookies.set("nttotv_session", "invalid-session-example")
+        assert app_client.put("/api/me/profile", json={"payload": {}}).status_code == 401
+        assert "session_cookie=invalid cookie_count=1" in caplog.text
+        assert "invalid-session-example" not in caplog.text
+
+
+@pytest.mark.integration
 def test_register_requires_invite_code_when_configured(
     app_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

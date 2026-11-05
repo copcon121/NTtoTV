@@ -14,40 +14,62 @@ function row(patch: Partial<NativeIcebergState> = {}): NativeIcebergState {
 }
 
 describe("liquidity iceberg lifetimes", () => {
-  it("keeps an active order in view after its detection candle scrolls away", () => {
+  it("stops an active trace at its last observation as the clock advances", () => {
     const active = row();
-    expect(visibleIcebergs([active], 180_000, 240_000, 220_000)).toEqual([active]);
-    expect(icebergEndTime(active, 220_000)).toBe(220_000);
+    expect(visibleIcebergs([active], 115_000, 240_000, 220_000)).toEqual([active]);
+    expect(visibleIcebergs([active], 180_000, 240_000, 220_000)).toEqual([]);
+    expect(visibleIcebergs([active], 180_000, 600_000, 500_000)).toEqual([]);
+    expect(icebergEndTime(active)).toBe(120_000);
   });
 
-  it("clips terminal history and excludes detections beyond the observed time", () => {
-    const ended = row({ status: "executed", endTime: 150_000 });
-    const future = row({ detectedTime: 250_000 });
-    expect(visibleIcebergs([ended, future], 180_000, 300_000, 220_000)).toEqual([]);
-    expect(visibleIcebergs([ended], 140_000, 160_000, 220_000)).toEqual([ended]);
-    expect(icebergEndTime(ended, 220_000)).toBe(150_000);
+  it("advances an exhausted trace only when a new event is observed", () => {
+    const exhausted = row({ displayedSize: 0 });
+    expect(icebergEndTime(exhausted)).toBe(120_000);
+    const refilled = { ...exhausted, time: 200_000, displayedSize: 5, refillCount: 2 };
+    expect(icebergEndTime(refilled)).toBe(200_000);
+    expect(exhausted.status).toBe("active");
+    expect(exhausted.executedVolume).toBe(12);
   });
 
-  it("draws passive executed quantity on the price pane and skips off-screen prices", () => {
-    const ctx = {
-      save: vi.fn(), restore: vi.fn(), setLineDash: vi.fn(), beginPath: vi.fn(),
-      moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), fillRect: vi.fn(),
-      strokeRect: vi.fn(), fillText: vi.fn(), measureText: () => ({ width: 14 }),
-      quadraticCurveTo: vi.fn(), closePath: vi.fn(), fill: vi.fn(),
-    };
-    drawNativeIcebergs(ctx as unknown as CanvasRenderingContext2D,
-      [row(), row({ orderId: "outside", price: 2900 })], {
-        from: 100_000, to: 240_000, now: 220_000,
-        timeframeMs: 10_000,
-        left: 10, right: 500, top: 10, bottom: 300,
-        xAt: (time) => (time - 100_000) / 1000 + 10,
-        yAt: (price) => price === 2800 ? 100 : -10,
-      });
-    expect(ctx.fillText).toHaveBeenCalledTimes(1);
-    expect(ctx.fillText.mock.calls[0][0]).toBe("12");
-    expect(ctx.moveTo).toHaveBeenCalledWith(20, 100);
-    expect(ctx.lineTo).toHaveBeenCalledWith(130, 100);
+  it("uses detection as the lower bound and preserves observed timestamps", () => {
+    expect(icebergEndTime(row({ time: 100_000 }))).toBe(110_000);
+    expect(icebergEndTime(row({ time: 250_000 }))).toBe(250_000);
   });
+
+  it.each(["executed", "canceled", "invalidated"] as const)(
+    "clips %s history and excludes detections beyond the observed time", (status) => {
+      const ended = row({ status, endTime: 150_000 });
+      const future = row({ detectedTime: 250_000 });
+      expect(visibleIcebergs([ended, future], 180_000, 300_000, 220_000)).toEqual([]);
+      expect(visibleIcebergs([ended], 140_000, 160_000, 220_000)).toEqual([ended]);
+      expect(icebergEndTime(ended)).toBe(150_000);
+      expect(icebergEndTime({ ...ended, endTime: null })).toBe(120_000);
+    },
+  );
+
+  it.each([115_000, 220_000, 500_000])(
+    "preserves the observed trace and badge at clock %i, skipping off-screen prices", (now) => {
+      const ctx = {
+        save: vi.fn(), restore: vi.fn(), setLineDash: vi.fn(), beginPath: vi.fn(),
+        moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), fillRect: vi.fn(),
+        strokeRect: vi.fn(), fillText: vi.fn(), measureText: () => ({ width: 14 }),
+        quadraticCurveTo: vi.fn(), closePath: vi.fn(), fill: vi.fn(),
+      };
+      drawNativeIcebergs(ctx as unknown as CanvasRenderingContext2D,
+        [row(), row({ orderId: "outside", price: 2900 })], {
+          from: 100_000, to: 240_000, now,
+          timeframeMs: 10_000,
+          left: 10, right: 500, top: 10, bottom: 300,
+          xAt: (time) => (time - 100_000) / 1000 + 10,
+          yAt: (price) => price === 2800 ? 100 : -10,
+        });
+      expect(ctx.fillText).toHaveBeenCalledTimes(1);
+      expect(ctx.fillText.mock.calls[0][0]).toBe("12");
+      expect(ctx.moveTo).toHaveBeenCalledWith(20, 100);
+      expect(ctx.lineTo).toHaveBeenCalledWith(30, 100);
+      expect(ctx.lineTo).not.toHaveBeenCalledWith(130, 100);
+    },
+  );
 
   it("combines nearby same-side totals visually while preserving distinct order identities", () => {
     const rows = [row(), row({ orderId: "order-2", executedVolume: 8 }),
@@ -136,8 +158,9 @@ describe("liquidity iceberg lifetimes", () => {
       left: 10, right: 1000, top: 10, bottom: 300,
       xAt: (time: number) => (time - 180_000) / 1000 + 10, yAt: () => 100,
     };
-    expect(visibleIcebergs([row()], view.from, view.to, view.now)).toHaveLength(1);
-    expect(layoutIcebergBadges([row()], view, () => 14)).toEqual([]);
+    const observed = row({ time: 200_000, lastTradeTime: 200_000 });
+    expect(visibleIcebergs([observed], view.from, view.to, view.now)).toHaveLength(1);
+    expect(layoutIcebergBadges([observed], view, () => 14)).toEqual([]);
   });
 
   it("keeps same-price ICE from separate candles separate when zoomed out", () => {

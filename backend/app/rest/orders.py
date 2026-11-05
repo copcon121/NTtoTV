@@ -38,6 +38,7 @@ from .auth import get_current_user
 from .contract_state import ContractStateStore
 from .errors import ApiError, bad_request, conflict, not_found
 from .routes import get_contract_state
+from .trading import run_trading_operation
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 logger = logging.getLogger(__name__)
@@ -105,6 +106,18 @@ async def create_order(
     state: ContractStateStore = Depends(get_contract_state),
 ) -> dict[str, Any]:
     body = await _json_body(request)
+    return await run_trading_operation(
+        request, user.id, _create_order, request, user, cache, state, body
+    )
+
+
+def _create_order(
+    request: Request,
+    user: AuthenticatedUser,
+    cache: CacheStore,
+    state: ContractStateStore,
+    body: dict[str, Any],
+) -> dict[str, Any]:
     account = cache.users.read_mt5_account(user.id)
     if account is None:
         raise not_found("MT5 account is not connected", field="account")
@@ -386,12 +399,29 @@ async def patch_order(
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
     body = await _json_body(request)
+    return await run_trading_operation(
+        request, user.id, _patch_order, order_id, request, user, cache, body
+    )
+
+
+def _patch_order(
+    order_id: str,
+    request: Request,
+    user: AuthenticatedUser,
+    cache: CacheStore,
+    body: dict[str, Any],
+) -> dict[str, Any]:
     order = cache.orders.read(order_id, user.id)
     if order is None:
         raise not_found(f"Unknown order {order_id!r}", field="orderId")
     expected = body.get("expectedVersion")
     if expected is not None and int(expected) != order.version:
         raise conflict("Order version conflict", field="expectedVersion")
+    break_even = _optional_bool(body, "breakEven", False)
+    if break_even and any(field in body for field in ("entryGc", "slGc", "tpGc")):
+        raise bad_request("Break-even cannot be combined with price edits", field="breakEven")
+    if break_even and (order.broker_position_ticket is None or order.status not in {OrderStatus.FILLED, OrderStatus.SYNC_ERROR}):
+        raise conflict("Break-even requires an open broker position", field="breakEven")
     candidate = replace(order)
     if "entryGc" in body:
         if order.status is OrderStatus.FILLED:
@@ -416,17 +446,44 @@ async def patch_order(
         except Exception as exc:
             raise conflict(f"MT5 tick lookup failed: {exc}", field="symbolBroker")
         basis.update_broker_mid((tick.bid + tick.ask) / 2, tick.time)
+        if break_even:
+            position = next((row for row in mt5.positions(user.id, account.id)
+                if int(row.get("ticket") or 0) == order.broker_position_ticket
+                and row.get("symbol", account.symbol_broker) == account.symbol_broker
+                and row.get("side") == order.side.value
+                and float(row.get("volumeLots") or 0) > 0), None)
+            if position is None:
+                raise conflict("Open broker position was not found; break-even was not sent", field="breakEven")
+            entry = _required_number(position, "entryBroker")
+            if entry <= 0:
+                raise conflict("Broker entry is unavailable", field="breakEven")
+            stop = symbol_map.round_price(entry)
+            gap = tick.bid - stop if order.side is OrderSide.BUY else stop - tick.ask
+            if gap + 1e-9 < symbol_info.stops_level:
+                raise bad_request("Break-even is inside the current broker stops level", field="breakEven")
+            candidate.sl_broker = stop
+            candidate.sl_gc = (
+                order.fill_price_gc_estimate
+                if order.fill_price_broker == entry and order.fill_price_gc_estimate is not None
+                else basis.from_broker(stop, symbol_map).price
+            )
+            candidate.volume_lots = float(position["volumeLots"])
+            live_tp = _optional_number(position, "tpBroker") or None
+            if live_tp != candidate.tp_broker:
+                candidate.tp_gc = None if live_tp is None else basis.from_broker(live_tp, symbol_map).price
+            candidate.tp_broker = live_tp
         entry_broker = None if "entryGc" not in body or candidate.entry_gc is None else basis.to_broker(candidate.entry_gc, symbol_map)
         sl_broker = None if "slGc" not in body or candidate.sl_gc is None else basis.to_broker(candidate.sl_gc, symbol_map)
         tp_broker = None if "tpGc" not in body or candidate.tp_gc is None else basis.to_broker(candidate.tp_gc, symbol_map)
         if any(c is not None and c.stale for c in (entry_broker, sl_broker, tp_broker)):
             raise conflict("GC/XAU basis is stale; trading is paused", field="basis")
-        _guard_stops(
-            entry_broker.price if entry_broker else candidate.entry_broker,
-            sl_broker.price if sl_broker else None,
-            tp_broker.price if tp_broker else None,
-            symbol_info.stops_level,
-        )
+        if not break_even:
+            _guard_stops(
+                entry_broker.price if entry_broker else candidate.entry_broker,
+                sl_broker.price if sl_broker else None,
+                tp_broker.price if tp_broker else None,
+                symbol_info.stops_level,
+            )
         if entry_broker is not None:
             candidate.entry_broker = entry_broker.price
         if "slGc" in body:
@@ -489,6 +546,17 @@ async def cancel_order(
     user: AuthenticatedUser = Depends(get_current_user),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
+    return await run_trading_operation(
+        request, user.id, _cancel_order, order_id, request, user, cache
+    )
+
+
+def _cancel_order(
+    order_id: str,
+    request: Request,
+    user: AuthenticatedUser,
+    cache: CacheStore,
+) -> dict[str, Any]:
     order = cache.orders.read(order_id, user.id)
     if order is None:
         raise not_found(f"Unknown order {order_id!r}", field="orderId")
@@ -520,6 +588,18 @@ async def close_order(
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
     body = await _optional_json_body(request)
+    return await run_trading_operation(
+        request, user.id, _close_order, order_id, request, user, cache, body
+    )
+
+
+def _close_order(
+    order_id: str,
+    request: Request,
+    user: AuthenticatedUser,
+    cache: CacheStore,
+    body: dict[str, Any],
+) -> dict[str, Any]:
     close_volume = _optional_number(body, "volumeLots") if "volumeLots" in body else None
     if close_volume is not None and close_volume <= 0:
         raise bad_request("Close volume must be greater than zero", field="volumeLots")
@@ -860,14 +940,17 @@ def _enqueue_order_update(request: Request, order: OrderRecord) -> None:
     if runtime is None:
         return
     try:
-        runtime.registry.enqueue(
-            OutboundEvent(
-                event_type=EventType.ORDER_UPDATE,
-                symbol=order.symbol_internal,
-                payload={"type": "order_update", "symbol": order.symbol_internal, "order": order_to_dict(order)},
-                key=order.id,
-                user_id=order.user_id,
-            )
+        event = OutboundEvent(
+            event_type=EventType.ORDER_UPDATE,
+            symbol=order.symbol_internal,
+            payload={"type": "order_update", "symbol": order.symbol_internal, "order": order_to_dict(order)},
+            key=order.id,
+            user_id=order.user_id,
         )
+        loop = getattr(request.state, "trading_loop", None)
+        if loop is not None:
+            loop.call_soon_threadsafe(runtime.registry.enqueue, event)
+        else:
+            runtime.registry.enqueue(event)
     except Exception:
         return

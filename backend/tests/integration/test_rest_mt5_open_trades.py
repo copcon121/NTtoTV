@@ -216,3 +216,22 @@ def test_mt5_open_trades_requires_auth(client):
     c, _backend = client
     resp = c.get("/api/mt5/open-trades")
     assert resp.status_code == 401
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("side", ["buy", "sell"])
+@pytest.mark.parametrize("tp", [None, 2370.125])
+def test_manual_position_be_uses_exact_broker_entry_after_basis_change(client, side, tp):
+    c, backend = client
+    _login_and_connect(c)
+    row = backend.positions_by_ticket[7001]
+    row.update(side=side, volumeLots=0.05, tpBroker=tp)
+    backend.symbol_tick = lambda _u, _a, symbol: Mt5Tick(
+        symbol=symbol, bid=2360 if side == "buy" else 2340,
+        ask=2360.2 if side == "buy" else 2340.2, time=now_ms())
+    c.app.state.basis_engine.update_gc(2390, now_ms())
+    response = c.patch("/api/mt5/positions/7001", json={"breakEven": True})
+    assert response.status_code == 200
+    assert backend.modified_orders[-1].sl_broker == pytest.approx(row["entryBroker"])
+    assert backend.modified_orders[-1].tp_broker == tp
+    assert row["volumeLots"] == 0.05

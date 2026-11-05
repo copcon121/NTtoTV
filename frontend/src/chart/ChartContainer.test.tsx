@@ -34,6 +34,7 @@ import type {
 } from "../socket/messages";
 import type { SmcWorkerRequest, SmcWorkerResponse } from "./smcWorker";
 import type { GcPushMomentumSettings } from "./gcPushMomentum";
+import { DEFAULT_TDU_SETTINGS } from "./tduSettings";
 import type {
   SupertrendOverlay,
   SupertrendPoint,
@@ -399,6 +400,18 @@ function deltaUpdate(
 }
 
 describe("ChartContainer", () => {
+  it("applies zoom visibility changes to the existing chart port", () => {
+    const port = new FakePort();
+    const setDenseOverlayMinSpacing = vi.fn();
+    const factory: ChartPortFactory = () => Object.assign(port, { setDenseOverlayMinSpacing });
+    const props = { symbol: "GC", contract: "GC", timeframe: "1m" as const, bars: [bar(10)], portFactory: factory };
+    const { rerender } = render(<ChartContainer {...props} />);
+    expect(setDenseOverlayMinSpacing).toHaveBeenLastCalledWith(6);
+    rerender(<ChartContainer {...props} denseOverlayMinSpacing={0} />);
+    expect(setDenseOverlayMinSpacing).toHaveBeenLastCalledWith(0);
+    expect(port.disposed).toBeFalsy();
+  });
+
   it("bulk-loads initial history once via the port", () => {
     const port = new FakePort();
     const factory: ChartPortFactory = () => port;
@@ -623,6 +636,17 @@ describe("ChartContainer", () => {
     );
 
     expect(port.setVolumeDeltaVisibleCalls).toEqual([true, false]);
+  });
+
+  it("passes TDU settings to the chart port on initial render and changes", () => {
+    const port = new FakePort();
+    const setTduSettings = vi.fn();
+    const factory: ChartPortFactory = () => Object.assign(port, { setTduSettings });
+    const props = { symbol: "GC", contract: "GC", timeframe: "1m" as const, portFactory: factory };
+    const { rerender } = render(<ChartContainer {...props} />);
+    expect(setTduSettings).toHaveBeenLastCalledWith(DEFAULT_TDU_SETTINGS);
+    rerender(<ChartContainer {...props} tduSettings={{ showLevel1: false, minBodyPercent: 45 }} />);
+    expect(setTduSettings).toHaveBeenLastCalledWith({ ...DEFAULT_TDU_SETTINGS, showLevel1: false, minBodyPercent: 45 });
   });
 
   it("configures and toggles the GC Push Momentum pane", () => {
@@ -1613,6 +1637,39 @@ describe("ChartContainer", () => {
     expect(onOrderDragBatchCommit).toHaveBeenCalledWith(updates);
   });
 
+  it("keeps nearby stop labels at their prices and hides offscreen targets", () => {
+    let offset = 0;
+    const port = Object.assign(new FakePort(), {
+      priceToCoordinate: (price: number) => price + offset,
+      createFootprintViewport: () => ({
+        priceToY: (price: number) => price + offset, width: 800, height: 400,
+      }),
+    });
+    const { container } = render(
+      <ChartContainer
+        symbol="GC" contract="GC" timeframe="1m" bars={[bar(10)]}
+        portFactory={() => port}
+        orderControls={[
+          { id: "entry", orderId: "o1", level: "entry", side: "sell", title: "ENTRY", price: 100 },
+          { id: "sl", orderId: "o1", level: "sl", side: "sell", title: "SL", price: 105 },
+          { id: "tp", orderId: "o1", level: "tp", side: "sell", title: "TP", price: 450 },
+        ]}
+      />,
+    );
+    const entry = container.querySelector<HTMLElement>(".order-action-chip.entry")!;
+    const stop = container.querySelector<HTMLElement>(".order-action-chip.sl")!;
+    expect(entry.style.top).toBe("100px");
+    expect(stop.style.top).toBe("105px");
+    expect(stop.style.right).not.toBe(entry.style.right);
+    expect(container.querySelector(".order-action-chip.tp")).toBeNull();
+
+    offset = -60;
+    fireEvent(window, new Event("resize"));
+    expect(entry.style.top).toBe("40px");
+    expect(stop.style.top).toBe("45px");
+    expect(container.querySelector<HTMLElement>(".order-action-chip.tp")?.style.top).toBe("390px");
+  });
+
   it("requests more history only after user navigation reaches the oldest bars", () => {
     const port = new FakePort();
     const factory: ChartPortFactory = () => port;
@@ -1712,6 +1769,50 @@ describe("ChartContainer", () => {
 
     fireEvent.wheel(host);
     expect(onChartNavigate).toHaveBeenCalledTimes(2);
+  });
+
+  it("bulk-loads replay history after switching from D1 through an empty loading state", () => {
+    const port = new FakePort();
+    const factory: ChartPortFactory = () => port;
+    const dailyBars = [bar(86_400_000), bar(172_800_000)];
+    const minuteBars = Array.from({ length: 200 }, (_, index) => bar(180_000_000 + index * 60_000));
+    const deltas: VolumeDeltaDatum[] = minuteBars.map(({ time }) => ({
+      time, delta: 5, deltaHigh: 5, deltaLow: 0, openDelta: 0, closeDelta: 5,
+    }));
+    const fvg: FvgSignalUpdateMessage = {
+      type: "fvg_signal_update", symbol: "GC", contract: "GC", tf: "1m",
+      time: minuteBars[20].time, direction: 1, level: 1, pulse: 1,
+      top: 2, bottom: 1, breakoutRatio: 1, phase: "confirmed",
+    };
+    const view = (timeframe: "1D" | "1m", loaded: boolean, count = minuteBars.length) => (
+      <ChartContainer
+        symbol="GC" contract="GC" timeframe={timeframe}
+        bars={timeframe === "1D" ? dailyBars : loaded ? minuteBars.slice(0, count) : []}
+        volumeDelta={timeframe === "1m" && loaded ? deltas.slice(0, count) : []}
+        fvgSignals={new Map(timeframe === "1m" && loaded ? [[fvg.time, fvg]] : [])}
+        suspendRealtime portFactory={factory}
+      />
+    );
+    const { rerender } = render(view("1D", true));
+    rerender(view("1m", false));
+    rerender(view("1m", true));
+    expect(port.setBarsCalls).toHaveLength(3);
+    expect(port.setBarsCalls).toEqual([dailyBars, [], minuteBars]);
+    expect(port.updateBarCalls).toHaveLength(0);
+    expect(port.setVolumeDeltaCalls[port.setVolumeDeltaCalls.length - 1]).toEqual(deltas);
+    expect(port.updateVolumeDeltaCalls).toHaveLength(0);
+    expect(port.updateFvgSignalCalls).toHaveLength(0);
+    expect(port.setFvgSignalsCalls[port.setFvgSignalsCalls.length - 1]).toEqual([fvg]);
+
+    // A cached replay snapshot also hydrates in bulk after returning through loading.
+    rerender(view("1D", true));
+    rerender(view("1m", false));
+    rerender(view("1m", true, minuteBars.length - 1));
+    const bulkLoads = port.setBarsCalls.length;
+    rerender(view("1m", true));
+    expect(port.setBarsCalls).toHaveLength(bulkLoads);
+    expect(port.updateBarCalls).toEqual([minuteBars[minuteBars.length - 1]]);
+    expect(port.updateVolumeDeltaCalls).toEqual([deltas[deltas.length - 1]]);
   });
 
   it("reveals replay bars and overlays incrementally without bulk repainting", () => {

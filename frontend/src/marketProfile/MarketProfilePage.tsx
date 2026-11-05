@@ -15,7 +15,8 @@ import type { DeltaProfileData, DeltaProfileRow, DeltaProfileSource } from "../o
 import type { Timeframe } from "../socket/messages";
 import { MarketProfilePlanner } from "./MarketProfilePlanner";
 import { mpRequest } from "./plannerApi";
-import { profileSessionWindow, type ExchangeDay, type ProfileSessionMode } from "./profileSessions";
+import { profileSessionWindows, type ExchangeDay, type ProfileSessionMode } from "./profileSessions";
+import { useCurrentPrice } from "./useCurrentPrice";
 
 const SYMBOL = "GC";
 const CHART_CONTRACT = SYMBOL;
@@ -30,7 +31,6 @@ const PROFILE_WIDTH_FRACTION = 0.32;
 const PROFILE_ROW_TICKS = 5;
 const GC_TICK_SIZE = 0.1;
 const PROFILE_PRICE_STEP = PROFILE_ROW_TICKS * GC_TICK_SIZE;
-const PRICE_AXIS_LABEL_STEP = 5;
 const TPO_BRACKET_MS = 30 * 60 * 1000;
 const TPO_VALUE_AREA_PCT = 70;
 const TPO_POC_COLOR = "#ff00d4";
@@ -48,6 +48,7 @@ const Y_SCALE_SENSITIVITY = 0.003;
 type MarketProfileTimeframe = Extract<Timeframe, "5m" | "15m">;
 type ProfileMode = "volume" | "delta" | "tpo";
 type PriceDisplayMode = "bar" | "line";
+type ProfileSessionSelection = ProfileSessionMode | "both";
 type MarketProfileDrawingTool = "rectangle";
 
 interface TpoRow {
@@ -70,6 +71,7 @@ interface TpoProfile {
 interface MarketProfileDay {
   start: number;
   end: number;
+  closeTime?: number;
   bars: Bar[];
   profile: DeltaProfileData | null;
   tpo: TpoProfile | null;
@@ -170,14 +172,15 @@ const MARKET_PROFILE_DRAWING_TOOLS: readonly {
 export function MarketProfilePage() {
   const endpoints = useMemo(() => resolveEndpoints(), []);
   const api = useMemo(() => new ApiClient({ basePath: endpoints.api }), [endpoints.api]);
+  const livePrice = useCurrentPrice(endpoints.api, endpoints.ws);
   const [tf, setTf] = useState<MarketProfileTimeframe>("15m");
   const [profileMode, setProfileMode] = useState<ProfileMode>("volume");
-  const [sessionMode, setSessionMode] = useState<ProfileSessionMode>("full");
+  const [sessionMode, setSessionMode] = useState<ProfileSessionSelection>("full");
   const [priceDisplayMode, setPriceDisplayMode] = useState<PriceDisplayMode>("line");
   const [dayCount, setDayCount] = useState(DEFAULT_DAYS);
   const [dayInput, setDayInput] = useState(String(DEFAULT_DAYS));
   const [reloadKey, setReloadKey] = useState(0);
-  const [state, setState] = useState<MarketProfileState | null>(null);
+  const [states, setStates] = useState<Partial<Record<ProfileSessionMode, MarketProfileState>>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeDrawingTool, setActiveDrawingTool] =
@@ -191,57 +194,58 @@ export function MarketProfilePage() {
     async function load() {
       setLoading(true);
       setError(null);
-      setState(null);
+      setStates({});
       try {
         const response = await mpRequest<{ sessions: ExchangeDay[] }>(`/sessions?count=${dayCount}`);
         if (response.sessions.length === 0) throw new Error("No trading sessions available");
-        const windows = response.sessions.map((day) => profileSessionWindow(day, sessionMode));
-        const from = windows[0].start;
-        const to = Math.min(now, windows[windows.length - 1].end);
+        const modes: ProfileSessionMode[] = sessionMode === "both" ? ["full", "us-comex"] : [sessionMode];
         const source: DeltaProfileSource =
           profileMode === "delta" ? "footprint_cache" : "minute_bars";
-        const days = await Promise.all(
-          windows.map(async ({ start, end }): Promise<MarketProfileDay> => {
-            // Keep today's empty US slot visible before 19:00 without issuing
-            // reversed/future history or profile requests.
-            if (start > now) return { start, end, bars: [], profile: null, tpo: null };
-            const range = { from: start, to: Math.min(end, now), basePath: endpoints.api };
-            // Fetch each session separately so the 5000-bar limit cannot drop
-            // older sessions, especially for the 1m TPO input.
-            const [history, tpoHistory, profile] = await Promise.all([
-              loadHistoryBars({ ...range, tf }),
-              profileMode === "tpo" ? loadHistoryBars({ ...range, tf: "1m" }) : Promise.resolve([]),
-              api.deltaProfile({
-                symbol: SYMBOL,
-                contract: CHART_CONTRACT,
-                from: range.from,
-                to: range.to,
-                rowTicks: PROFILE_ROW_TICKS,
-                valueAreaPct: 70,
-                source,
+        const entries = await Promise.all(
+          modes.map(async (mode) => {
+            const windows = profileSessionWindows(response.sessions, mode, now);
+            if (windows.length === 0) throw new Error("No trading sessions available");
+            const from = windows[0].start;
+            const to = Math.min(now, windows[windows.length - 1].end);
+            const days = await Promise.all(
+              windows.map(async ({ start, end, closeTime }): Promise<MarketProfileDay> => {
+                if (start > now) return { start, end, closeTime, bars: [], profile: null, tpo: null };
+                const range = { from: start, to: Math.min(end, now), basePath: endpoints.api };
+                // Fetch each session separately so the 5000-bar limit cannot drop
+                // older sessions, especially for the 1m TPO input.
+                const [history, tpoHistory, profile] = await Promise.all([
+                  loadHistoryBars({ ...range, tf }),
+                  profileMode === "tpo" ? loadHistoryBars({ ...range, tf: "1m" }) : Promise.resolve([]),
+                  api.deltaProfile({
+                    symbol: SYMBOL,
+                    contract: CHART_CONTRACT,
+                    from: range.from,
+                    to: range.to,
+                    rowTicks: PROFILE_ROW_TICKS,
+                    valueAreaPct: 70,
+                    source,
+                  }),
+                ]);
+                const inSession = (bar: Bar) => bar.time >= start && bar.time <= range.to;
+                return {
+                  start,
+                  end,
+                  closeTime,
+                  bars: history.filter(inSession),
+                  profile,
+                  tpo: buildTpoProfile(tpoHistory.filter(inSession), start, end),
+                };
               }),
-            ]);
-            const inSession = (bar: Bar) => bar.time >= start && bar.time <= range.to;
-            return {
-              start,
-              end,
-              bars: history.filter(inSession),
-              profile,
-              tpo: buildTpoProfile(tpoHistory.filter(inSession), start, end),
-            };
+            );
+            return [mode, { bars: days.flatMap((day) => day.bars), from, to, days }] as const;
           }),
         );
         if (cancelled) return;
-        setState({
-          bars: days.flatMap((day) => day.bars),
-          from,
-          to,
-          days,
-        });
+        setStates(Object.fromEntries(entries));
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Market profile load failed");
-          setState(null);
+          setStates({});
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -261,15 +265,23 @@ export function MarketProfilePage() {
     setDayInput(String(next));
   };
 
+  const visibleSessions: ProfileSessionMode[] = sessionMode === "both" ? ["full", "us-comex"] : [sessionMode];
+  const loadedStates = Object.values(states);
+  const latestBar = useMemo(() => Object.values(states).flatMap((state) => state.bars).reduce<Bar | null>(
+    (latest, bar) => isFiniteNumber(bar.close) && (!latest || bar.time > latest.time) ? bar : latest,
+    null,
+  ), [states]);
+  const currentPrice = livePrice && (!latestBar || livePrice.time >= latestBar.time)
+    ? livePrice.price : latestBar?.close ?? null;
   const status = loading
     ? "Loading"
     : error
       ? error
-      : state
-        ? `${state.bars.length} ${tf} bars - ${formatProfileMode(profileMode)}`
+      : loadedStates.length > 0
+        ? `${loadedStates.reduce((count, state) => count + state.bars.length, 0)} ${tf} bars - ${formatProfileMode(profileMode)}`
           + ` - ${PROFILE_ROW_TICKS} ticks/profile row`
-          + (sessionMode === "us-comex" && state.days[state.days.length - 1]?.start > Date.now()
-            ? " - US profile starts at 19:00 UTC+7" : "")
+          + (sessionMode === "us-comex" ? " - Full 24h profiles, US close 04:00 UTC+7" : "")
+          + (sessionMode === "both" ? " - MP Asia + MP Comex" : "")
         : "No data";
 
   return (
@@ -286,7 +298,7 @@ export function MarketProfilePage() {
         </a>
         <div className="market-profile-title">
           <span>GC Market Profile</span>
-          <span>{sessionMode === "full" ? "Daily" : "19:00-04:00 UTC+7"}</span>
+          <span>{sessionMode === "full" ? "Daily" : sessionMode === "both" ? "MP Asia + MP Comex" : "24h 20:00-20:00 / US Close 04:00 UTC+7"}</span>
         </div>
         <div className="market-profile-segmented" role="group" aria-label="Profile session">
           <button
@@ -294,15 +306,23 @@ export function MarketProfilePage() {
             aria-pressed={sessionMode === "full"}
             onClick={() => setSessionMode("full")}
           >
-            Full Session
+            MP Asia
           </button>
           <button
             type="button"
             aria-pressed={sessionMode === "us-comex"}
-            title="US COMEX profile: 19:00-04:00 UTC+7, including the hour before the US window"
+            title="Full 24h profile from 20:00 to next-day 20:00; US close at 04:00 Vietnam time (UTC+7)"
             onClick={() => setSessionMode("us-comex")}
           >
-            US COMEX
+            MP Comex
+          </button>
+          <button
+            type="button"
+            aria-pressed={sessionMode === "both"}
+            title="Show MP Asia and MP Comex side by side"
+            onClick={() => setSessionMode("both")}
+          >
+            Show both
           </button>
         </div>
         <form className="market-profile-form" onSubmit={submitDays}>
@@ -415,17 +435,36 @@ export function MarketProfilePage() {
         </div>
       </header>
       <div className="market-profile-workspace">
-      <main className="market-profile-chart">
-        <MarketProfileCanvas
-          data={state}
-          profileMode={profileMode}
-          priceDisplayMode={priceDisplayMode}
-          activeTool={activeDrawingTool}
-          clearDrawingsSignal={clearDrawingsSignal}
-          onToolDeselect={() => setActiveDrawingTool(null)}
-        />
-      </main>
-      <MarketProfilePlanner api={api} ws={endpoints.ws} />
+        <main className="market-profile-chart">
+          <div className={`market-profile-panels${sessionMode === "both" ? " is-split" : ""}`}>
+            {visibleSessions.map((mode) => (
+              <section
+                key={mode}
+                className="market-profile-pane"
+                aria-label={mode === "full" ? "MP Asia" : "MP Comex"}
+              >
+                {sessionMode === "both" && (
+                  <div className="market-profile-pane-title">
+                    {mode === "full" ? "MP Asia" : "MP Comex"}
+                  </div>
+                )}
+                <div className="market-profile-pane-chart">
+                  <MarketProfileCanvas
+                    data={states[mode] ?? null}
+                    currentPrice={currentPrice}
+                    tf={tf}
+                    profileMode={profileMode}
+                    priceDisplayMode={priceDisplayMode}
+                    activeTool={activeDrawingTool}
+                    clearDrawingsSignal={clearDrawingsSignal}
+                    onToolDeselect={() => setActiveDrawingTool(null)}
+                  />
+                </div>
+              </section>
+            ))}
+          </div>
+        </main>
+        <MarketProfilePlanner api={api} ws={endpoints.ws} />
       </div>
     </div>
   );
@@ -433,6 +472,8 @@ export function MarketProfilePage() {
 
 function MarketProfileCanvas({
   data,
+  currentPrice,
+  tf,
   profileMode,
   priceDisplayMode,
   activeTool,
@@ -440,6 +481,8 @@ function MarketProfileCanvas({
   onToolDeselect,
 }: {
   data: MarketProfileState | null;
+  currentPrice: number | null;
+  tf: MarketProfileTimeframe;
   profileMode: ProfileMode;
   priceDisplayMode: PriceDisplayMode;
   activeTool: MarketProfileDrawingTool | null;
@@ -473,9 +516,12 @@ function MarketProfileCanvas({
       drawings,
       drawingPreview,
       crosshair,
+      tf === "5m" ? 300_000 : 900_000,
+      currentPrice,
     );
   }, [
     crosshair,
+    currentPrice,
     data,
     drawingPreview,
     drawings,
@@ -483,6 +529,7 @@ function MarketProfileCanvas({
     priceDisplayMode,
     size.height,
     size.width,
+    tf,
     view,
   ]);
 
@@ -522,6 +569,8 @@ function MarketProfileCanvas({
         size.width,
         size.height,
         view,
+        false,
+        currentPrice,
       );
       if (!point) {
         event.preventDefault();
@@ -595,6 +644,7 @@ function MarketProfileCanvas({
         size.height,
         view,
         true,
+        currentPrice,
       );
       if (!point) return;
       placement.current = point;
@@ -798,6 +848,8 @@ function drawMarketProfile(
   drawings: readonly MarketProfileDrawing[] = [],
   drawingPreview: MarketProfileDrawing | null = null,
   crosshair: MarketProfileCrosshair | null = null,
+  timeframeMs = 900_000,
+  currentPrice: number | null = null,
 ): void {
   ctx.clearRect(0, 0, width, height);
   const tpoStyle = profileMode === "tpo";
@@ -813,7 +865,7 @@ function drawMarketProfile(
     return;
   }
 
-  const bounds = priceBounds(data);
+  const bounds = priceBounds(data, currentPrice);
   if (!bounds) {
     drawEmptyState(ctx, width, height);
     return;
@@ -835,8 +887,17 @@ function drawMarketProfile(
       plotHeight *
       view.yScale +
     view.yOffset;
+  const positionAtX = (x: number) =>
+    ((x - plot.left - view.xOffset) / (plotWidth * view.xScale)) * xDomain;
+  const timeAtX = (x: number) => sessionTimeAtPosition(data.days, positionAtX(x));
+  const priceAtY = (y: number) =>
+    bounds.max -
+    ((y - plot.top - view.yOffset) / (plotHeight * view.yScale)) *
+      (bounds.max - bounds.min);
+  const timeTicks = Math.max(1, Math.min(6, Math.floor(plotWidth / 110)));
+  const priceTicks = Math.max(1, Math.min(5, Math.floor(plotHeight / 60)));
 
-  drawGrid(ctx, plot, bounds, data.days, xForTime, yForPrice, tpoStyle);
+  drawGrid(ctx, plot, data.days, xForTime, timeTicks, priceTicks, tpoStyle);
   ctx.save();
   ctx.beginPath();
   ctx.rect(plot.left, plot.top, plotWidth, plotHeight);
@@ -844,7 +905,7 @@ function drawMarketProfile(
   drawSessionProfiles(ctx, data.days, profileMode, xForTime, yForPrice, plot);
   if (!tpoStyle) {
     if (priceDisplayMode === "bar") {
-      drawOhlcBars(ctx, data.bars, xForTime, yForPrice, plot);
+      drawCandlesticks(ctx, data.bars, xForTime, yForPrice, plot, timeframeMs);
     } else {
       drawLine(ctx, data.bars, xForTime, yForPrice, plot);
     }
@@ -858,48 +919,113 @@ function drawMarketProfile(
     yForPrice,
     tpoStyle,
   );
-  drawMarketProfileCrosshair(ctx, crosshair, plot, tpoStyle);
   ctx.restore();
-  drawAxes(ctx, plot, bounds, data.days, xForTime, yForPrice, tpoStyle);
+  drawAxes(ctx, plot, timeAtX, priceAtY, timeTicks, priceTicks, tpoStyle);
+  if (crosshair) {
+    const position = positionAtX(crosshair.x);
+    if (position >= 0 && position <= data.days.length) {
+      const day = data.days[Math.min(data.days.length - 1, Math.floor(position))];
+      const rawTime = timeAtX(crosshair.x);
+      const time = Math.max(day.start, Math.floor(rawTime / timeframeMs) * timeframeMs);
+      const x = xForTime(Math.min(day.end, time + timeframeMs / 2));
+      drawMarketProfileCrosshair(
+        ctx,
+        { x: clampNumber(x, plot.left, plot.right), y: crosshair.y },
+        plot,
+        time,
+        priceAtY(crosshair.y),
+        tpoStyle,
+      );
+    }
+  }
+  drawCurrentPrice(ctx, currentPrice, plot, yForPrice);
+}
+
+function drawCurrentPrice(
+  ctx: CanvasRenderingContext2D,
+  price: number | null,
+  plot: { left: number; top: number; right: number; bottom: number },
+  yForPrice: (price: number) => number,
+): void {
+  if (!isFiniteNumber(price)) return;
+  const actualY = yForPrice(price);
+  const y = clampNumber(actualY, plot.top + 10, plot.bottom - 10);
+  ctx.save();
+  ctx.strokeStyle = "#48bbff";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([5, 4]);
+  if (actualY >= plot.top && actualY <= plot.bottom) {
+    ctx.beginPath();
+    ctx.moveTo(plot.left, actualY);
+    ctx.lineTo(plot.right, actualY);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#48bbff";
+  ctx.fillRect(plot.right, y - 10, PRICE_AXIS_WIDTH, 20);
+  ctx.fillStyle = "#07131d";
+  ctx.font = "700 11px Segoe UI, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(price.toFixed(1), plot.right + 7, y);
+  if (actualY < plot.top || actualY > plot.bottom) {
+    const tipY = actualY < plot.top ? y - 6 : y + 6;
+    const baseY = actualY < plot.top ? y - 1 : y + 1;
+    ctx.beginPath();
+    ctx.moveTo(plot.right + PRICE_AXIS_WIDTH - 12, tipY);
+    ctx.lineTo(plot.right + PRICE_AXIS_WIDTH - 16, baseY);
+    ctx.lineTo(plot.right + PRICE_AXIS_WIDTH - 8, baseY);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function drawGrid(
   ctx: CanvasRenderingContext2D,
   plot: { left: number; top: number; right: number; bottom: number },
-  bounds: { min: number; max: number; step: number },
   days: readonly MarketProfileDay[],
   xForTime: (time: number) => number,
-  yForPrice: (price: number) => number,
+  timeTicks: number,
+  priceTicks: number,
   dark = false,
 ): void {
   ctx.save();
-  ctx.strokeStyle = dark ? "rgba(255, 255, 255, 0.09)" : "rgba(0, 0, 0, 0.12)";
+  ctx.strokeStyle = dark ? "#1d2732" : "#e0e5eb";
   ctx.lineWidth = 1;
-  ctx.setLineDash(dark ? [1, 6] : [2, 4]);
-  const firstPrice = Math.ceil(bounds.min / PRICE_AXIS_LABEL_STEP) * PRICE_AXIS_LABEL_STEP;
-  const lastPrice = Math.floor(bounds.max / PRICE_AXIS_LABEL_STEP) * PRICE_AXIS_LABEL_STEP;
-  for (let price = lastPrice; price >= firstPrice; price -= PRICE_AXIS_LABEL_STEP) {
-    const y = yForPrice(price);
-    if (y < plot.top - 20 || y > plot.bottom + 20) continue;
+  ctx.setLineDash([]);
+  for (let index = 0; index <= priceTicks; index++) {
+    const y = Math.round(plot.top + ((plot.bottom - plot.top) * index) / priceTicks) + 0.5;
     ctx.beginPath();
     ctx.moveTo(plot.left, y);
     ctx.lineTo(plot.right, y);
     ctx.stroke();
   }
-  if (!dark) {
-    ctx.setLineDash([5, 6]);
-    for (const day of days) {
-      const x = xForTime(day.start);
-      if (x < plot.left - 40 || x > plot.right + 40) continue;
-      ctx.beginPath();
-      ctx.moveTo(x, plot.top);
-      ctx.lineTo(x, plot.bottom);
-      ctx.stroke();
-    }
+  ctx.strokeStyle = dark ? "#151e27" : "#edf0f4";
+  for (let index = 0; index <= timeTicks; index++) {
+    const x = Math.round(plot.left + ((plot.right - plot.left) * index) / timeTicks) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x, plot.top);
+    ctx.lineTo(x, plot.bottom);
+    ctx.stroke();
+  }
+  ctx.setLineDash([3, 5]);
+  ctx.strokeStyle = dark ? "rgba(255, 77, 109, 0.5)" : "rgba(220, 38, 38, 0.35)";
+  ctx.fillStyle = dark ? "#ff8299" : "#b91c1c";
+  ctx.font = "10px Segoe UI, Arial";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  for (const day of days) {
+    if (day.closeTime === undefined) continue;
+    const x = xForTime(day.closeTime);
+    if (x < plot.left || x > plot.right) continue;
+    ctx.beginPath();
+    ctx.moveTo(x, plot.top);
+    ctx.lineTo(x, plot.bottom);
+    ctx.stroke();
+    ctx.fillText("US Close 04:00", Math.min(x + 4, plot.right - 80), plot.top + 4);
   }
   ctx.setLineDash([]);
-  ctx.strokeStyle = dark ? "rgba(255, 255, 255, 0.5)" : "#d0d0d0";
-  ctx.strokeRect(plot.left, plot.top, plot.right - plot.left, plot.bottom - plot.top);
   ctx.restore();
 }
 
@@ -943,12 +1069,13 @@ function drawLine(
   ctx.restore();
 }
 
-function drawOhlcBars(
+function drawCandlesticks(
   ctx: CanvasRenderingContext2D,
   bars: readonly Bar[],
   xForTime: (time: number) => number,
   yForPrice: (price: number) => number,
   plot: { left: number; right: number },
+  timeframeMs: number,
 ): void {
   const visibleBars = bars.filter(
     (bar) =>
@@ -959,40 +1086,27 @@ function drawOhlcBars(
   );
   if (visibleBars.length === 0) return;
 
-  const xValues = visibleBars.map((bar) => xForTime(bar.time));
-  let minimumGap = Infinity;
-  for (let index = 1; index < xValues.length; index++) {
-    const gap = xValues[index] - xValues[index - 1];
-    if (gap > 0.1 && gap < minimumGap) minimumGap = gap;
-  }
-  const tickWidth = clampNumber(
-    Number.isFinite(minimumGap) ? minimumGap * 0.38 : 3,
-    1,
-    5,
-  );
-
   ctx.save();
-  ctx.lineWidth = minimumGap >= 5 ? 1.5 : 1;
-  ctx.lineCap = "square";
-  for (let index = 0; index < visibleBars.length; index++) {
-    const bar = visibleBars[index];
-    const x = xValues[index];
-    if (x < plot.left - tickWidth || x > plot.right + tickWidth) continue;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([]);
+  for (const bar of visibleBars) {
+    const x = xForTime(bar.time + timeframeMs / 2);
+    const candleSlot = xForTime(bar.time + timeframeMs) - xForTime(bar.time);
+    const candleWidth = clampNumber(candleSlot * 0.62, 1, 10);
+    if (x < plot.left - candleWidth || x > plot.right + candleWidth) continue;
 
     const highY = yForPrice(Math.max(bar.high, bar.low));
     const lowY = yForPrice(Math.min(bar.high, bar.low));
-    const openY = yForPrice(bar.open);
-    const closeY = yForPrice(bar.close);
-    ctx.strokeStyle =
-      bar.close > bar.open ? "#059669" : bar.close < bar.open ? "#dc2626" : "#64748b";
+    const bodyTop = yForPrice(Math.max(bar.open, bar.close));
+    const bodyBottom = yForPrice(Math.min(bar.open, bar.close));
+    const color = bar.close >= bar.open ? "#9aa6b2" : "#536170";
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
     ctx.beginPath();
     ctx.moveTo(x, highY);
     ctx.lineTo(x, lowY);
-    ctx.moveTo(x - tickWidth, openY);
-    ctx.lineTo(x, openY);
-    ctx.moveTo(x, closeY);
-    ctx.lineTo(x + tickWidth, closeY);
     ctx.stroke();
+    ctx.fillRect(x - candleWidth / 2, bodyTop, candleWidth, Math.max(1, bodyBottom - bodyTop));
   }
   ctx.restore();
 }
@@ -1275,7 +1389,7 @@ function drawOpenMarkers(
 ): void {
   ctx.save();
   for (const day of days) {
-    const open = day.bars[0]?.open;
+    const open = day.bars.find((bar) => bar.time === day.start)?.open;
     if (isFiniteNumber(open)) {
       const x = xForTime(day.start);
       const y = yForPrice(open);
@@ -1348,6 +1462,8 @@ function drawMarketProfileCrosshair(
   ctx: CanvasRenderingContext2D,
   crosshair: MarketProfileCrosshair | null,
   plot: { left: number; top: number; right: number; bottom: number },
+  time: number,
+  price: number,
   dark = false,
 ): void {
   if (!crosshair) return;
@@ -1361,25 +1477,44 @@ function drawMarketProfileCrosshair(
   }
 
   ctx.save();
-  ctx.strokeStyle = dark ? "rgba(255, 255, 255, 0.42)" : "rgba(0, 0, 0, 0.32)";
+  ctx.strokeStyle = dark ? "rgba(190, 205, 220, 0.65)" : "rgba(75, 95, 115, 0.65)";
   ctx.lineWidth = 1;
-  ctx.setLineDash([5, 5]);
+  ctx.setLineDash([3, 3]);
   ctx.beginPath();
   ctx.moveTo(plot.left, crosshair.y);
   ctx.lineTo(plot.right, crosshair.y);
   ctx.moveTo(crosshair.x, plot.top);
   ctx.lineTo(crosshair.x, plot.bottom);
   ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font = "11px Segoe UI, sans-serif";
+  ctx.textBaseline = "middle";
+
+  const label = crosshairTimeFormatter.format(new Date(time));
+  const labelWidth = Math.min(plot.right - plot.left, ctx.measureText(label).width + 12);
+  const labelLeft = clampNumber(
+    crosshair.x - labelWidth / 2,
+    plot.left,
+    plot.right - labelWidth,
+  );
+  ctx.fillStyle = "#344352";
+  ctx.fillRect(labelLeft, plot.bottom + 5, labelWidth, 20);
+  ctx.fillRect(plot.right, crosshair.y - 9, PRICE_AXIS_WIDTH, 18);
+  ctx.fillStyle = "#edf4fa";
+  ctx.textAlign = "center";
+  ctx.fillText(label, labelLeft + labelWidth / 2, plot.bottom + 15);
+  ctx.textAlign = "left";
+  ctx.fillText(price.toFixed(1), plot.right + 6, crosshair.y);
   ctx.restore();
 }
 
 function drawAxes(
   ctx: CanvasRenderingContext2D,
   plot: { left: number; top: number; right: number; bottom: number },
-  bounds: { min: number; max: number; step: number },
-  days: readonly MarketProfileDay[],
-  xForTime: (time: number) => number,
-  yForPrice: (price: number) => number,
+  timeAtX: (x: number) => number,
+  priceAtY: (y: number) => number,
+  timeTicks: number,
+  priceTicks: number,
   dark = false,
 ): void {
   ctx.save();
@@ -1387,7 +1522,7 @@ function drawAxes(
   ctx.fillRect(plot.right, 0, PRICE_AXIS_WIDTH, ctx.canvas.height);
   ctx.fillRect(0, plot.bottom, ctx.canvas.width, TIME_AXIS_HEIGHT);
 
-  ctx.strokeStyle = dark ? "#e5e7eb" : "#b8b8b8";
+  ctx.strokeStyle = dark ? "#1d2732" : "#e0e5eb";
   ctx.beginPath();
   ctx.moveTo(plot.right, plot.top);
   ctx.lineTo(plot.right, plot.bottom);
@@ -1395,25 +1530,23 @@ function drawAxes(
   ctx.lineTo(plot.right, plot.bottom);
   ctx.stroke();
 
-  ctx.fillStyle = dark ? "#ffffff" : "#666666";
-  ctx.font = "11px Segoe UI, Arial";
+  ctx.fillStyle = dark ? "#8d9aaa" : "#666666";
+  ctx.font = "11px Segoe UI, sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  const firstPrice = Math.ceil(bounds.min / PRICE_AXIS_LABEL_STEP) * PRICE_AXIS_LABEL_STEP;
-  const lastPrice = Math.floor(bounds.max / PRICE_AXIS_LABEL_STEP) * PRICE_AXIS_LABEL_STEP;
-  for (let price = lastPrice; price >= firstPrice; price -= PRICE_AXIS_LABEL_STEP) {
-    const y = yForPrice(price);
-    if (y < plot.top - 14 || y > plot.bottom + 14) continue;
-    ctx.fillText(formatPrice(price, PRICE_AXIS_LABEL_STEP), plot.right + 8, y);
+  for (let index = 0; index <= priceTicks; index++) {
+    const y = plot.top + ((plot.bottom - plot.top) * index) / priceTicks;
+    ctx.fillText(priceAtY(y).toFixed(1), plot.right + 7, y);
   }
 
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  ctx.fillStyle = dark ? "#ffffff" : "#666666";
-  for (const day of days) {
-    const x = xForTime(day.start + (day.end - day.start + 1) / 2);
-    if (x < plot.left - 40 || x > plot.right + 40) continue;
-    ctx.fillText(formatSessionDate(day.start), x, plot.bottom + 9);
+  ctx.fillStyle = "#718093";
+  const timeFormatter = plot.right - plot.left < 220 ? axisDateFormatter : axisTimeFormatter;
+  for (let index = 0; index <= timeTicks; index++) {
+    const x = plot.left + ((plot.right - plot.left) * index) / timeTicks;
+    const time = timeAtX(x);
+    if (!Number.isFinite(time)) continue;
+    ctx.textAlign = index === 0 ? "left" : index === timeTicks ? "right" : "center";
+    ctx.fillText(timeFormatter.format(new Date(time)), x, plot.bottom + 17);
   }
   ctx.restore();
 }
@@ -1447,9 +1580,10 @@ function marketProfileDrawingPointFromLocal(
   height: number,
   view: MarketProfileView,
   clampToPlot = false,
+  currentPrice: number | null = null,
 ): MarketProfileDrawingPoint | null {
   if (!data || data.days.length === 0) return null;
-  const bounds = priceBounds(data);
+  const bounds = priceBounds(data, currentPrice);
   if (!bounds) return null;
   const plot = marketProfilePlot(width, height);
   const insidePlot =
@@ -1714,8 +1848,9 @@ function formatProfileMode(mode: ProfileMode): string {
   return "TPO";
 }
 
-function priceBounds(data: MarketProfileState): { min: number; max: number; step: number } | null {
+function priceBounds(data: MarketProfileState, currentPrice: number | null = null): { min: number; max: number; step: number } | null {
   const prices = [
+    currentPrice,
     ...data.bars.flatMap((bar) => [bar.high, bar.low, bar.close, bar.open]),
     ...data.days.flatMap((day) =>
       day.profile
@@ -1763,9 +1898,9 @@ function inferProfileStep(rows: readonly DeltaProfileRow[]): number {
   return inferPriceStep(rows.map((row) => row.price));
 }
 
-function sessionCloseMarker(day: MarketProfileDay): { time: number; price: number } | null {
+export function sessionCloseMarker(day: MarketProfileDay): { time: number; price: number } | null {
   if (day.bars.length === 0) return null;
-  const closeTime = day.end + 1;
+  const closeTime = day.closeTime ?? day.end + 1;
   const bars = day.bars
     .filter((bar) => bar.time < closeTime && isFiniteNumber(bar.close))
     .sort((a, b) => a.time - b.time);
@@ -1808,13 +1943,35 @@ function compressedSessionPosition(
   return days.length;
 }
 
-function formatSessionDate(time: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    timeZone: "Asia/Bangkok",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(time));
+function sessionTimeAtPosition(days: readonly MarketProfileDay[], position: number): number {
+  if (days.length === 0 || position < 0 || position > days.length) return NaN;
+  const index = Math.min(days.length - 1, Math.floor(position));
+  const day = days[index];
+  return Math.min(day.end, day.start + (position - index) * (day.end - day.start + 1));
 }
+
+const axisDateFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Bangkok",
+  day: "2-digit",
+  month: "2-digit",
+});
+const axisTimeFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Bangkok",
+  day: "2-digit",
+  month: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+const crosshairTimeFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Bangkok",
+  day: "2-digit",
+  month: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
 
 function formatPrice(price: number, step: number): string {
   const decimals = step < 1 ? Math.min(4, Math.max(1, Math.ceil(Math.abs(Math.log10(step))))) : 0;

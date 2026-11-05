@@ -1,6 +1,6 @@
 """Rithmic History Plant synchronization for bars and order flow.
 
-The worker intentionally requests only time bars and minute volume profiles.
+The worker requests native 15s/30s/1m time bars and minute volume profiles.
 It never downloads or stores historical raw ticks or depth.  A two-minute
 overlap makes startup and reconnect repair idempotent while the cache's keyed
 upserts make the last complete History Plant response authoritative.
@@ -412,7 +412,16 @@ class RithmicHistoryService:
             before = self._accounted_bytes
             try:
                 bars, profiles = await self._request_chunk(websocket, cursor, end)
-                persist = lambda: self._persist_chunk(bars, profiles, last_closed)
+                second_bars = await self._request_second_bars(websocket, cursor, end)
+
+                def persist():
+                    counts = self._persist_chunk(bars, profiles, last_closed)
+                    for timeframe, messages in second_bars.items():
+                        interval = TF_MS[timeframe]
+                        written = self._persist_chunk(messages, [],
+                            last_closed + _MINUTE_MS - interval, timeframe=timeframe)
+                        counts = (counts[0] + written[0], counts[1] + written[1])
+                    return counts
                 callback = getattr(self.sink, "persist_rithmic_history", None)
                 work = asyncio.create_task(callback(self.config.physical_contract, persist)
                     if callback is not None else asyncio.to_thread(persist))
@@ -494,6 +503,31 @@ class RithmicHistoryService:
                 tag,
             ))
         return time_bars, profiles
+
+    async def _request_second_bars(
+        self, websocket: Any, start_ms: int, finish_ms: int,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Audit subminute candles directly; minute OHLC cannot be split safely."""
+        result = {}
+        # The outer audit ranges cover whole minutes. Native markers identify
+        # bar closes, and finish_index is exclusive: include the final close.
+        finish_close = (finish_ms // _MINUTE_MS + 1) * _MINUTE_MS
+        for timeframe in ("15s", "30s"):
+            tag = f"nttotv-time-{timeframe}-{uuid.uuid4().hex}"
+            interval = TF_MS[timeframe]
+            messages = await self._collect(websocket, build_time_bar_replay_request(
+                symbol=self.config.wire_symbol,
+                exchange=self.config.exchange,
+                start_seconds=start_ms // 1000,
+                finish_seconds=finish_close // 1000 + 1,
+                period_seconds=interval // 1000,
+                resume_bars=True,
+                user_message=tag,
+            ), TIME_BAR_REPLAY_RESPONSE, tag)
+            result[timeframe] = [message for message in messages
+                if start_ms <= int(message["marker"]) * 1000 - interval
+                and int(message["marker"]) * 1000 <= finish_close]
+        return result
 
     async def _collect(
         self,
@@ -593,9 +627,11 @@ class RithmicHistoryService:
         time_messages: list[dict[str, Any]],
         profile_messages: list[dict[str, Any]],
         last_closed: int,
+        *, timeframe: str = "1m",
     ) -> tuple[int, int]:
+        interval = TF_MS[timeframe]
         profiles = {
-            int(message["marker"]) * 1000 - _MINUTE_MS: message
+            int(message["marker"]) * 1000 - interval: message
             for message in profile_messages
             if message.get("marker") is not None
         }
@@ -603,7 +639,7 @@ class RithmicHistoryService:
         deltas: list[VolumeDeltaRecord] = []
         footprint_bars: list[FootprintBarRecord] = []
         footprint_levels: list[FootprintLevelRecord] = []
-        footprint_engine = FootprintEngine()
+        footprint_engine = FootprintEngine(timeframe=timeframe) if profile_messages else None
 
         for message in sorted(
             time_messages, key=lambda item: int(item.get("marker") or 0)
@@ -612,9 +648,9 @@ class RithmicHistoryService:
             prices = (message.get("open"), message.get("high"), message.get("low"), message.get("close"))
             if marker is None or any(value is None for value in prices):
                 continue
-            # Rithmic minute-history markers identify the bar close.  NTtoTV
+            # Rithmic time-history markers identify the bar close. NTtoTV
             # cache keys identify the bar open, matching the realtime engines.
-            bar_time = int(marker) * 1000 - _MINUTE_MS
+            bar_time = int(marker) * 1000 - interval
             if bar_time > last_closed:
                 continue
             profile = profiles.get(bar_time, {})
@@ -633,7 +669,7 @@ class RithmicHistoryService:
                 BarRecord(
                     symbol=self.config.logical_symbol,
                     contract=self.config.logical_symbol,
-                    timeframe="1m",
+                    timeframe=timeframe,
                     time=bar_time,
                     open=float(message["open"]),
                     high=float(message["high"]),
@@ -648,7 +684,7 @@ class RithmicHistoryService:
                 VolumeDeltaRecord(
                     symbol=self.config.logical_symbol,
                     contract=self.config.logical_symbol,
-                    timeframe="1m",
+                    timeframe=timeframe,
                     time=bar_time,
                     volume=volume,
                     buy_volume=buy_volume,
@@ -663,6 +699,7 @@ class RithmicHistoryService:
             ladder = self._profile_ladder(profile)
             if not ladder:
                 continue
+            assert footprint_engine is not None
             footprint_engine.seed_bar(
                 self.config.logical_symbol,
                 symbol=self.config.logical_symbol,
@@ -717,7 +754,7 @@ class RithmicHistoryService:
             footprint_bars=footprint_bars,
             footprint_levels=footprint_levels,
         )
-        if bars and written[0]:
+        if timeframe == "1m" and bars and written[0]:
             self._rebuild_rollups(bars[0].time, bars[-1].time, last_closed)
         return written
 

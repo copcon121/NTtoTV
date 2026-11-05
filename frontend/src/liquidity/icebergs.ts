@@ -1,15 +1,17 @@
 import type { NativeIcebergState } from "../socket/messages";
 import { icebergPassesIndividualFilter, icebergStatusVisible, type IcebergFilterContext } from "./icebergFilters";
 
-export function icebergEndTime(row: NativeIcebergState, now: number): number {
-  return Math.max(row.detectedTime, row.status === "active" ? now : row.endTime ?? row.time);
+export function icebergEndTime(row: NativeIcebergState): number {
+  // Active describes the exchange identity, not proof of continuing activity.
+  // An exhausted tranche may remain active while awaiting a refill or DELETE.
+  return Math.max(row.detectedTime, row.endTime ?? row.time);
 }
 
 export function visibleIcebergs(
   rows: readonly NativeIcebergState[], from: number, to: number, now: number,
 ): NativeIcebergState[] {
   return rows.filter((row) => row.detectedTime <= Math.min(to, now) &&
-    icebergEndTime(row, now) >= from);
+    icebergEndTime(row) >= from);
 }
 
 export const ICEBERG_COLORS = { buy: "#35d6b0", sell: "#ff8a65" } as const;
@@ -133,7 +135,7 @@ function roundedBox(ctx: CanvasRenderingContext2D, x: number, y: number, width: 
   ctx.closePath();
 }
 
-/** Icon + total at the detection candle, with a separate thin order-lifetime trace. */
+/** Icon + total at the detection candle, with a thin trace of observed activity. */
 export function drawNativeIcebergs(
   ctx: CanvasRenderingContext2D, rows: readonly NativeIcebergState[], view: IcebergView,
 ): void {
@@ -147,7 +149,7 @@ export function drawNativeIcebergs(
     const y = view.yAt(row.price);
     if (y < view.top || y > view.bottom) continue;
     const start = view.xAt(Math.max(view.from, row.detectedTime));
-    const end = view.xAt(Math.min(view.to, icebergEndTime(row, view.now)));
+    const end = view.xAt(Math.min(view.to, icebergEndTime(row)));
     ctx.strokeStyle = ICEBERG_COLORS[row.side];
     ctx.globalAlpha = (row.status === "active" ? 0.75 : 0.3) * (group.filtered ? view.filter!.settings.filteredOpacity : 1);
     ctx.setLineDash(row.status === "invalidated" ? [3, 3] : []);

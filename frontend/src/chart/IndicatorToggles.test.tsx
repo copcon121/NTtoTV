@@ -14,6 +14,7 @@ import { DEFAULT_OUTSIDE_BAR_SETTINGS } from "./outsideBar";
 import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./smc";
 import { DEFAULT_GC_PUSH_MOMENTUM_SETTINGS } from "./gcPushMomentum";
 import { DEFAULT_XKONTROL_DISPLAY_SETTINGS } from "./xKontrol";
+import { DEFAULT_TDU_SETTINGS } from "./tduSettings";
 
 afterEach(() => {
   cleanup();
@@ -35,6 +36,84 @@ describe("IndicatorToggles", () => {
       onEmaChange={() => {}} onSmcChange={() => {}} />);
     open();
     expect(screen.queryByText(/Native Icebergs/i)).not.toBeInTheDocument();
+  });
+
+  it("lets users lower the zoom threshold or always show dense indicators", () => {
+    const onChange = vi.fn();
+    render(
+      <IndicatorToggles
+        footprint={false}
+        bigTrades
+        ema={EMA}
+        smc={SMC}
+        onFootprintChange={() => {}}
+        onBigTradesChange={() => {}}
+        onEmaChange={() => {}}
+        onSmcChange={() => {}}
+        onFootprintSettingsChange={() => {}}
+        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+        onDenseOverlayMinSpacingChange={onChange}
+      />,
+    );
+    open();
+    const input = screen.getByLabelText("Indicator minimum candle spacing");
+    expect((input as HTMLInputElement).value).toBe("6");
+    fireEvent.change(input, { target: { value: "3" } });
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenLastCalledWith(3);
+    fireEvent.change(input, { target: { value: "0" } });
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenLastCalledWith(0);
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.change(input, { target: { value: "2.5" } });
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenLastCalledWith(2.5);
+  });
+
+  it("configures all three TDU levels and the candle filter", () => {
+    const onSettings = vi.fn();
+    const props = {
+      footprint: false, bigTrades: false, ema: EMA, smc: SMC,
+      footprintSettings: DEFAULT_FOOTPRINT_SETTINGS,
+      onFootprintChange: vi.fn(), onBigTradesChange: vi.fn(),
+      onEmaChange: vi.fn(), onSmcChange: vi.fn(), onFootprintSettingsChange: vi.fn(),
+      onTduSettingsChange: onSettings,
+    };
+    const { rerender } = render(<IndicatorToggles {...props} />);
+    open();
+    fireEvent.click(screen.getByLabelText("TDU settings"));
+    const level1 = screen.getByLabelText("TDU Level 1 sigma threshold");
+    const level2 = screen.getByLabelText("TDU Level 2 sigma threshold");
+    const level3 = screen.getByLabelText("TDU Level 3 sigma threshold");
+    expect(level1).toHaveValue(4);
+    expect(level2).toHaveValue(5);
+    expect(level3).toHaveValue(6);
+    fireEvent.change(level1, { target: { value: "3" } });
+    fireEvent.change(level2, { target: { value: "4" } });
+    fireEvent.change(level3, { target: { value: "5" } });
+    fireEvent.blur(level3);
+    expect(onSettings).toHaveBeenLastCalledWith({ ...DEFAULT_TDU_SETTINGS, level1Sigma: 3, level2Sigma: 4, level3Sigma: 5 });
+    onSettings.mockClear();
+    fireEvent.change(level1, { target: { value: "9" } });
+    fireEvent.blur(level1);
+    expect(onSettings).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Level 1 < Level 2 < Level 3");
+    for (const level of [1, 2, 3]) {
+      expect(screen.getByLabelText(`TDU Level ${level}`)).toBeChecked();
+      fireEvent.click(screen.getByLabelText(`TDU Level ${level}`));
+      expect(onSettings).toHaveBeenLastCalledWith({ ...DEFAULT_TDU_SETTINGS, [`showLevel${level}`]: false });
+    }
+    fireEvent.change(screen.getByLabelText("TDU minimum body percent"), { target: { value: "50" } });
+    expect(onSettings).toHaveBeenLastCalledWith({ ...DEFAULT_TDU_SETTINGS, minBodyPercent: 50 });
+    fireEvent.click(screen.getByLabelText("TDU filter small-body candles"));
+    expect(onSettings).toHaveBeenLastCalledWith({ ...DEFAULT_TDU_SETTINGS, filterSmallBody: false });
+    rerender(<IndicatorToggles {...props} tduSettings={{ filterSmallBody: false, showLevel1: false }} />);
+    expect(screen.getByLabelText("TDU Level 1")).not.toBeChecked();
+    expect(screen.getByLabelText("TDU minimum body percent")).toBeDisabled();
+    rerender(<IndicatorToggles {...props} tduSettings={{ level1Sigma: 2, level2Sigma: 3, level3Sigma: 4 }} />);
+    expect(level1).toHaveValue(2);
+    expect(level2).toHaveValue(3);
+    expect(level3).toHaveValue(4);
   });
 
   it("configures the optional Orderflows Gaps swing filter", () => {
@@ -412,6 +491,7 @@ describe("IndicatorToggles", () => {
 
     open();
     expect(screen.getByLabelText("TDU Buy/Sell Momentum")).toBeDisabled();
+    expect(screen.getByLabelText("TDU settings")).toBeDisabled();
   });
 
   it("can disable MGannSwing independently", () => {
@@ -446,17 +526,20 @@ describe("IndicatorToggles", () => {
 
   it("edits Volume Profile display settings", () => {
     const onWidth = vi.fn();
+    const onRowTicks = vi.fn();
     const onDevelopingPoc = vi.fn();
     render(
       <IndicatorToggles
         dailyVolumeProfile
         dailyVolumeProfileWidth={84}
+        dailyVolumeProfileRowTicks={5}
         dailyVolumeProfileDevelopingPoc
         footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
         onDailyVolumeProfileWidthChange={onWidth}
+        onDailyVolumeProfileRowTicksChange={onRowTicks}
         onDailyVolumeProfileDevelopingPocChange={onDevelopingPoc}
         onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
@@ -469,6 +552,20 @@ describe("IndicatorToggles", () => {
 
     open();
     fireEvent.click(screen.getByLabelText("Volume Profile settings"));
+    expect(screen.getByLabelText("Volume Profile ticks per row")).toHaveValue(5);
+    expect(screen.getByText("0.5 price / row")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Volume Profile ticks per row"), {
+      target: { value: "10" },
+    });
+    expect(onRowTicks).toHaveBeenLastCalledWith(10);
+    for (const value of ["", "0", "-1", "1.5"]) {
+      fireEvent.change(screen.getByLabelText("Volume Profile ticks per row"), {
+        target: { value },
+      });
+    }
+    expect(onRowTicks).toHaveBeenCalledTimes(1);
+    fireEvent.blur(screen.getByLabelText("Volume Profile ticks per row"));
+    expect(screen.getByLabelText("Volume Profile ticks per row")).toHaveValue(5);
     fireEvent.change(screen.getByLabelText("Volume Profile width"), {
       target: { value: "96" },
     });

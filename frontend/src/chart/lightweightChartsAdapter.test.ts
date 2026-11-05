@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { type Bar } from "../cache/types";
 import type { FvgSignalUpdateMessage } from "../socket/messages";
 import {
   VOLUME_OVERLAY_PRICE_SCALE_ID,
+  LightweightChartsAdapter,
   VOLUME_OVERLAY_SCALE_MARGINS,
   VOLUME_DELTA_OVERLAY_PRICE_SCALE_ID,
   VOLUME_DELTA_OVERLAY_SCALE_MARGINS,
@@ -41,6 +42,36 @@ import type {
   GcPushMomentumEarlyDivergence,
 } from "./gcPushMomentumDivergence";
 import { DEFAULT_OUTSIDE_BAR_SETTINGS } from "./outsideBar";
+
+describe("order line updates during dragging", () => {
+  it("preserves the dragged stop while applying background updates to the other levels", () => {
+    const stopOptions = vi.fn();
+    const targetOptions = vi.fn();
+    const meta = new Map([
+      ["o1:slGc", { price: 3918.7, orderId: "o1", field: "slGc" }],
+      ["o1:tpGc", { price: 3910, orderId: "o1", field: "tpGc" }],
+    ]);
+    // Exercise the adapter's public update path with only its price-line port.
+    const adapter: LightweightChartsAdapter = Object.assign(
+      Object.create(LightweightChartsAdapter.prototype), {
+        orderLinesById: new Map([
+          ["o1:slGc", { applyOptions: stopOptions }],
+          ["o1:tpGc", { applyOptions: targetOptions }],
+        ]),
+        orderLineMeta: meta, pendingOrderLineCommits: new Map(),
+        priceLineDragHandles: new Map(),
+        draggingPriceLine: { kind: "order", id: "o1:slGc", pointerId: 1 },
+      },
+    );
+    adapter.setOrderLines([
+      { id: "o1:slGc", orderId: "o1", field: "slGc", price: 3923.4, side: "sell", status: "filled", title: "SL" },
+      { id: "o1:tpGc", orderId: "o1", field: "tpGc", price: 3908.4, side: "sell", status: "filled", title: "TP" },
+    ]);
+    expect(stopOptions).toHaveBeenLastCalledWith(expect.objectContaining({ price: 3918.7 }));
+    expect(targetOptions).toHaveBeenLastCalledWith(expect.objectContaining({ price: 3908.4 }));
+    expect(meta.get("o1:slGc")?.price).toBe(3918.7);
+  });
+});
 
 function bar(time: number, open: number, high: number, low: number, close: number): Bar {
   return { time, open, high, low, close, volume: 1 };

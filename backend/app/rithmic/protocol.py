@@ -285,22 +285,26 @@ def build_time_bar_replay_request(
     start_seconds: int,
     finish_seconds: int,
     period_minutes: int = 1,
+    period_seconds: int | None = None,
     max_count: int = 0,
     resume_bars: bool = False,
     user_message: str = "nttotv-history-time-bars",
 ) -> bytes:
-    """Request closed minute bars from the History Plant."""
+    """Request native minute or second bars from the History Plant."""
 
     if start_seconds < 0 or finish_seconds < start_seconds:
         raise ValueError("invalid history range")
     if period_minutes <= 0:
         raise ValueError("period_minutes must be positive")
+    if period_seconds is not None and period_seconds <= 0:
+        raise ValueError("period_seconds must be positive")
     fields = [
         field_string(132760, user_message),
         field_string(110100, symbol),
         field_string(110101, exchange),
-        field_varint(119200, 2),  # RequestTimeBarReplay.BarType.MINUTE_BAR
-        field_varint(119112, period_minutes),
+        # RequestTimeBarReplay.BarType: SECOND_BAR=1, MINUTE_BAR=2.
+        field_varint(119200, 1 if period_seconds is not None else 2),
+        field_varint(119112, period_seconds if period_seconds is not None else period_minutes),
         field_varint(153002, start_seconds),
         field_varint(153003, finish_seconds),
         field_varint(149253, 1),  # Direction.FIRST

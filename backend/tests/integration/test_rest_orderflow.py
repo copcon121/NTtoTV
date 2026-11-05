@@ -305,7 +305,8 @@ def test_fvg_signals_rejects_unsupported_timeframe(env):
 
 
 @pytest.mark.integration
-def test_tdu_signals_returns_chart_contract_rows(env):
+@pytest.mark.parametrize("samples", [None, [], [(30, 8.0, -1), (10, 0.0, 1)]])
+def test_tdu_signals_returns_chart_contract_rows(env, samples):
     client, cache = env
     cache.upsert_tdu_signal(
         TduSignalRecord(
@@ -316,6 +317,7 @@ def test_tdu_signals_returns_chart_contract_rows(env):
             momentum_direction=-1,
             momentum_level=2,
             delta_divergence=1,
+            momentum_samples=samples,
         )
     )
 
@@ -335,6 +337,7 @@ def test_tdu_signals_returns_chart_contract_rows(env):
                 "momentumDirection": -1,
                 "momentumLevel": 2,
                 "deltaDivergence": 1,
+                **({"momentumSamples": [list(sample) for sample in samples]} if samples is not None else {}),
             }
         ],
     }

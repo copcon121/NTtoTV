@@ -1566,6 +1566,21 @@ export class DrawingManager implements IDrawingManager {
       button.textContent = item.label;
       menu.appendChild(button);
     }
+    const rowTicksControl = document.createElement("label");
+    rowTicksControl.className = "drawing-profile-context-row-ticks";
+    const rowTicksLabel = document.createElement("span");
+    rowTicksLabel.textContent = "Ticks per row";
+    const rowTicksInput = document.createElement("input");
+    rowTicksInput.type = "number";
+    rowTicksInput.min = "1";
+    rowTicksInput.step = "1";
+    rowTicksInput.value = String(drawing.rowTicks);
+    rowTicksInput.dataset.rowTicks = "true";
+    const rowTicksHint = document.createElement("span");
+    rowTicksHint.className = "drawing-profile-context-row-ticks-hint";
+    rowTicksHint.textContent = `${(drawing.rowTicks * 0.1).toFixed(1)} price / row (Volume & Delta)`;
+    rowTicksControl.append(rowTicksLabel, rowTicksInput, rowTicksHint);
+    menu.appendChild(rowTicksControl);
     const developingPocButton = document.createElement("button");
     developingPocButton.type = "button";
     developingPocButton.className = "drawing-profile-context-item";
@@ -1607,7 +1622,7 @@ export class DrawingManager implements IDrawingManager {
 
     const paneSize = this._chart.paneSize(0);
     const menuWidth = 188;
-    const menuHeight = 236;
+    const menuHeight = 304;
     menu.style.left = `${clamp(point.x, 8, paneSize.width - menuWidth - 8)}px`;
     menu.style.top = `${clamp(point.y, 8, paneSize.height - menuHeight - 8)}px`;
     menu.style.maxHeight = `${Math.max(140, paneSize.height - 16)}px`;
@@ -1621,9 +1636,10 @@ export class DrawingManager implements IDrawingManager {
       event.stopPropagation();
     };
     this._onProfileMenuClick = (event: Event) => {
-      event.preventDefault();
       event.stopPropagation();
       const target = event.target;
+      if (target instanceof HTMLInputElement || target instanceof HTMLLabelElement) return;
+      event.preventDefault();
       if (!(target instanceof HTMLElement)) return;
       if (target.dataset.extendRight === "toggle") {
         const selectedId = this._profileMenuEl?.dataset.drawingId;
@@ -1654,7 +1670,10 @@ export class DrawingManager implements IDrawingManager {
       const selectedId = this._profileMenuEl?.dataset.drawingId;
       const selected = selectedId ? this._drawings.get(selectedId) : undefined;
       if (selected instanceof FixedRangeDeltaProfilePrimitive) {
-        selected.setOptions({ fixedRangeProfileMode: mode });
+        selected.setOptions({
+          fixedRangeProfileMode: mode,
+          fixedRangeProfileRowTicks: selected.rowTicks,
+        });
         this._notifyStateChange();
       }
       this._hideProfileContextMenu();
@@ -1666,6 +1685,14 @@ export class DrawingManager implements IDrawingManager {
       const selectedId = this._profileMenuEl?.dataset.drawingId;
       const selected = selectedId ? this._drawings.get(selectedId) : undefined;
       if (!(selected instanceof FixedRangeDeltaProfilePrimitive)) return;
+      if (target.dataset.rowTicks === "true") {
+        const rowTicks = target.valueAsNumber;
+        if (!Number.isSafeInteger(rowTicks) || rowTicks < 1) return;
+        selected.setOptions({ fixedRangeProfileRowTicks: rowTicks });
+        rowTicksHint.textContent = `${(rowTicks * 0.1).toFixed(1)} price / row (Volume & Delta)`;
+        this._notifyStateChange();
+        return;
+      }
       const value = Number(target.value) / 100;
       if (target.dataset.opacity === "valueAreaOpacity") {
         selected.setOptions({ fixedRangeProfileValueAreaOpacity: value });

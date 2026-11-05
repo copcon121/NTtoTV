@@ -1,4 +1,10 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  MAX_DENSE_OVERLAY_BAR_SPACING,
+  MIN_DENSE_OVERLAY_BAR_SPACING,
+  normalizeDenseOverlayMinSpacing,
+} from "./zoomVisibility";
+import { DEFAULT_TDU_SETTINGS, normalizeTduSettings, type TduSettings } from "./tduSettings";
 
 import {
   DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -30,6 +36,8 @@ import {
 } from "./bigTradeSessions";
 import {
   DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  DEFAULT_SESSION_VOLUME_PROFILE_ROW_TICKS,
+  normalizeSessionVolumeProfileRowTicks,
   MAX_SESSION_VOLUME_PROFILE_WIDTH_PX,
   MIN_SESSION_VOLUME_PROFILE_WIDTH_PX,
   normalizeSessionVolumeProfileWidth,
@@ -183,11 +191,14 @@ export function normalizeMgannBreakSignalLimit(value: unknown): number {
 export interface IndicatorTogglesProps {
   /** Temporary master visibility; individual indicator settings stay unchanged. */
   indicatorsVisible?: boolean;
+  denseOverlayMinSpacing?: number;
+  onDenseOverlayMinSpacingChange?: (value: number) => void;
   volumeDelta?: boolean;
   xKontrol?: boolean;
   xKontrolSettings?: Partial<XKontrolDisplaySettings>;
   gcPushMomentum?: boolean;
   tduSignals?: boolean;
+  tduSettings?: Partial<TduSettings>;
   gcPushMomentumSettings?: Partial<GcPushMomentumSettings>;
   mgannSwing?: boolean;
   mgannSwingSettings?: Partial<MgannSwingSettings>;
@@ -218,6 +229,7 @@ export interface IndicatorTogglesProps {
   onXKontrolSettingsChange?: (next: XKontrolDisplaySettings) => void;
   onGcPushMomentumChange?: (enabled: boolean) => void;
   onTduSignalsChange?: (enabled: boolean) => void;
+  onTduSettingsChange?: (next: TduSettings) => void;
   onGcPushMomentumSettingsChange?: (next: GcPushMomentumSettings) => void;
   onMgannSwingChange?: (enabled: boolean) => void;
   onMgannSwingSettingsChange?: (next: MgannSwingSettings) => void;
@@ -231,9 +243,11 @@ export interface IndicatorTogglesProps {
   onCreateMgannBreakAlert?: () => void;
   dailyVolumeProfile?: boolean;
   dailyVolumeProfileWidth?: number;
+  dailyVolumeProfileRowTicks?: number;
   dailyVolumeProfileDevelopingPoc?: boolean;
   onDailyVolumeProfileChange?: (enabled: boolean) => void;
   onDailyVolumeProfileWidthChange?: (widthPx: number) => void;
+  onDailyVolumeProfileRowTicksChange?: (ticks: number) => void;
   onDailyVolumeProfileDevelopingPocChange?: (enabled: boolean) => void;
   onBigTradesChange: (enabled: boolean) => void;
   onEmaChange: (next: EmaSettings) => void;
@@ -296,11 +310,14 @@ function IndicatorRow({
 
 export function IndicatorToggles({
   indicatorsVisible = true,
+  denseOverlayMinSpacing = MIN_DENSE_OVERLAY_BAR_SPACING,
+  onDenseOverlayMinSpacingChange = () => {},
   volumeDelta = false,
   xKontrol = false,
   xKontrolSettings = DEFAULT_XKONTROL_DISPLAY_SETTINGS,
   gcPushMomentum = false,
   tduSignals = true,
+  tduSettings = DEFAULT_TDU_SETTINGS,
   gcPushMomentumSettings = DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
   mgannSwing = false,
   mgannSwingSettings = DEFAULT_MGANN_SWING_SETTINGS,
@@ -314,6 +331,7 @@ export function IndicatorToggles({
   bigTrades,
   dailyVolumeProfile = false,
   dailyVolumeProfileWidth = DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  dailyVolumeProfileRowTicks = DEFAULT_SESSION_VOLUME_PROFILE_ROW_TICKS,
   dailyVolumeProfileDevelopingPoc = true,
   ema,
   supertrend = DEFAULT_SUPERTREND_SETTINGS,
@@ -333,6 +351,7 @@ export function IndicatorToggles({
   onXKontrolSettingsChange = () => {},
   onGcPushMomentumChange = () => {},
   onTduSignalsChange = () => {},
+  onTduSettingsChange = () => {},
   onGcPushMomentumSettingsChange = () => {},
   onMgannSwingChange = () => {},
   onMgannSwingSettingsChange = () => {},
@@ -346,6 +365,7 @@ export function IndicatorToggles({
   onCreateMgannBreakAlert = () => {},
   onDailyVolumeProfileChange = () => {},
   onDailyVolumeProfileWidthChange = () => {},
+  onDailyVolumeProfileRowTicksChange = () => {},
   onDailyVolumeProfileDevelopingPocChange = () => {},
   onBigTradesChange,
   onEmaChange,
@@ -360,6 +380,7 @@ export function IndicatorToggles({
   onBigTradeSettingsChange = () => {},
 }: IndicatorTogglesProps) {
   const outsideBarConfig = normalizeOutsideBarSettings(outsideBar);
+  const tduConfig = normalizeTduSettings(tduSettings);
   const supertrendConfig = normalizeSupertrendSettings(supertrend);
   const sweepConfig = normalizeSweepReversalSettings(sweepReversal);
   const mgannSwingConfig = normalizeMgannSwingSettings(mgannSwingSettings);
@@ -370,6 +391,12 @@ export function IndicatorToggles({
   const xKontrolConfig = normalizeXKontrolDisplaySettings(xKontrolSettings);
   const outsideBarDeltaFilter = outsideBarConfig.deltaFilter;
   const [open, setOpen] = useState(false);
+  const [denseOverlayMinSpacingDraft, setDenseOverlayMinSpacingDraft] = useState(
+    String(denseOverlayMinSpacing),
+  );
+  useEffect(() => {
+    setDenseOverlayMinSpacingDraft(String(denseOverlayMinSpacing));
+  }, [denseOverlayMinSpacing]);
   const [combinedSettingsOpen, setCombinedSettingsOpen] = useState(false);
   const [supertrendSettingsOpen, setSupertrendSettingsOpen] = useState(false);
   const [dailyVolumeProfileSettingsOpen, setDailyVolumeProfileSettingsOpen] =
@@ -378,6 +405,26 @@ export function IndicatorToggles({
   const [gcPushMomentumSettingsOpen, setGcPushMomentumSettingsOpen] =
     useState(false);
   const [xKontrolSettingsOpen, setXKontrolSettingsOpen] = useState(false);
+  const [tduSettingsOpen, setTduSettingsOpen] = useState(false);
+  const [tduSigmaDrafts, setTduSigmaDrafts] = useState([
+    String(tduConfig.level1Sigma), String(tduConfig.level2Sigma), String(tduConfig.level3Sigma),
+  ]);
+  const [tduSigmaError, setTduSigmaError] = useState("");
+  useEffect(() => {
+    setTduSigmaDrafts([String(tduConfig.level1Sigma), String(tduConfig.level2Sigma), String(tduConfig.level3Sigma)]);
+    setTduSigmaError("");
+  }, [tduConfig.level1Sigma, tduConfig.level2Sigma, tduConfig.level3Sigma]);
+  const commitTduSigma = () => {
+    const values = tduSigmaDrafts.map(Number);
+    if (tduSigmaDrafts.some((value) => value.trim() === "") ||
+        values.some((value) => !Number.isFinite(value) || value < 0.1 || value > 100) ||
+        values[0] >= values[1] || values[1] >= values[2]) {
+      setTduSigmaError("Use 0.1-100 and Level 1 < Level 2 < Level 3.");
+      return;
+    }
+    setTduSigmaError("");
+    onTduSettingsChange({ ...tduConfig, level1Sigma: values[0], level2Sigma: values[1], level3Sigma: values[2] });
+  };
   const [smcSettingsOpen, setSmcSettingsOpen] = useState(false);
   const [sweepSettingsOpen, setSweepSettingsOpen] = useState(false);
   const [fpSettingsOpen, setFpSettingsOpen] = useState(false);
@@ -408,6 +455,12 @@ export function IndicatorToggles({
     String(smc.fvgThresholdMultiplier),
   );
   const [vaPercentDraft, setVaPercentDraft] = useState(String(footprintSettings.vaPercent));
+  const [profileRowTicksDraft, setProfileRowTicksDraft] = useState(
+    String(normalizeSessionVolumeProfileRowTicks(dailyVolumeProfileRowTicks)),
+  );
+  useEffect(() => {
+    setProfileRowTicksDraft(String(normalizeSessionVolumeProfileRowTicks(dailyVolumeProfileRowTicks)));
+  }, [dailyVolumeProfileRowTicks]);
   const [imbMinVolDraft, setImbMinVolDraft] = useState(String(footprintSettings.imbalanceMinVolume));
   const [absPercentDraft, setAbsPercentDraft] = useState(String(footprintSettings.absorptionPercent));
   const [absDepthDraft, setAbsDepthDraft] = useState(String(footprintSettings.absorptionDepth));
@@ -1028,6 +1081,37 @@ export function IndicatorToggles({
       </button>
       {open && (
         <div className="indicator-menu" role="menu" aria-label="Indicator list">
+          <div className="ema-settings" aria-label="Indicator zoom visibility">
+            <label className="ema-setting-line">
+              <span className="ema-setting-label">Auto-hide below (px)</span>
+              <input
+                className="ema-length-input"
+                type="number"
+                min={0}
+                max={MAX_DENSE_OVERLAY_BAR_SPACING}
+                step={0.5}
+                value={denseOverlayMinSpacingDraft}
+                aria-label="Indicator minimum candle spacing"
+                onChange={(event) => {
+                  setDenseOverlayMinSpacingDraft(event.currentTarget.value);
+                }}
+                onBlur={() => {
+                  const next = denseOverlayMinSpacingDraft.trim() === ""
+                    ? denseOverlayMinSpacing
+                    : normalizeDenseOverlayMinSpacing(Number(denseOverlayMinSpacingDraft));
+                  setDenseOverlayMinSpacingDraft(String(next));
+                  onDenseOverlayMinSpacingChange(next);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
+              />
+            </label>
+            <div className="ema-setting-label">
+              TDU, mGann, Sweep Reversal, BigTrade. Default: 6 px.
+              Lower to show at smaller zoom; 0 = always show.
+            </div>
+          </div>
           <IndicatorRow
             label="Volume"
             checked
@@ -1282,7 +1366,94 @@ export function IndicatorToggles({
                 : "TDU 10-second volume momentum triangles and candle/delta divergence"
             }
             onChange={onTduSignalsChange}
+            trailing={
+              <button
+                type="button"
+                className="indicator-gear"
+                aria-label="TDU settings"
+                aria-expanded={tduSettingsOpen}
+                disabled={tduSignalsDisabled}
+                onClick={() => setTduSettingsOpen((value) => !value)}
+              >
+                {"\u2699"}
+              </button>
+            }
           />
+          {tduSettingsOpen && (
+            <div className="ema-settings" aria-label="TDU settings panel">
+              {([1, 2, 3] as const).map((level) => (
+                <label className="ema-setting-line" key={`sigma-${level}`}>
+                  <span className="ema-setting-label">Level {level} threshold</span>
+                  <input
+                    className="ema-length-input"
+                    type="number"
+                    min={0.1}
+                    max={100}
+                    step={0.1}
+                    aria-label={`TDU Level ${level} sigma threshold`}
+                    value={tduSigmaDrafts[level - 1]}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setTduSigmaDrafts((previous) => previous.map((draft, index) => index === level - 1 ? value : draft));
+                    }}
+                    onBlur={commitTduSigma}
+                    onKeyDown={(event) => { if (event.key === "Enter") commitTduSigma(); }}
+                  />
+                  <span>sigma</span>
+                </label>
+              ))}
+              {tduSigmaError && <p role="alert">{tduSigmaError}</p>}
+              <p>Lower thresholds give more signals. Uses 10-second volume / 15 buckets.</p>
+              <p>Older signals without bucket data appear only at default 4 / 5 / 6 thresholds.</p>
+              {([1, 2, 3] as const).map((level) => {
+                const key = `showLevel${level}` as const;
+                return (
+                  <label className="fp-toggle-label" key={level}>
+                    <input
+                      type="checkbox"
+                      aria-label={`TDU Level ${level}`}
+                      checked={tduConfig[key]}
+                      onChange={(event) => onTduSettingsChange({
+                        ...tduConfig, [key]: event.currentTarget.checked,
+                      })}
+                    />
+                    Level {level} - {level} {level === 1 ? "triangle" : "triangles"}
+                  </label>
+                );
+              })}
+              <label className="fp-toggle-label">
+                <input
+                  type="checkbox"
+                  aria-label="TDU filter small-body candles"
+                  checked={tduConfig.filterSmallBody}
+                  onChange={(event) => onTduSettingsChange({
+                    ...tduConfig, filterSmallBody: event.currentTarget.checked,
+                  })}
+                />
+                Filter doji / long-wick candles
+              </label>
+              <label className="ema-setting-line">
+                <span className="ema-setting-label">Hide when body &lt;=</span>
+                <input
+                  className="ema-length-input"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  aria-label="TDU minimum body percent"
+                  disabled={!tduConfig.filterSmallBody}
+                  value={tduConfig.minBodyPercent}
+                  onChange={(event) => {
+                    if (event.currentTarget.value === "") return;
+                    onTduSettingsChange(normalizeTduSettings({
+                      ...tduConfig, minBodyPercent: event.currentTarget.valueAsNumber,
+                    }));
+                  }}
+                />
+                <span>% of high-low</span>
+              </label>
+            </div>
+          )}
           <IndicatorRow
             label="Volume Profile"
             checked={dailyVolumeProfile}
@@ -1301,6 +1472,33 @@ export function IndicatorToggles({
           />
           {dailyVolumeProfileSettingsOpen && (
             <div className="ema-settings" aria-label="Volume Profile settings panel">
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Ticks per row</span>
+                <input
+                  type="number"
+                  className="ema-period-input"
+                  min={1}
+                  step={1}
+                  aria-label="Volume Profile ticks per row"
+                  value={profileRowTicksDraft}
+                  onChange={(event) => {
+                    setProfileRowTicksDraft(event.currentTarget.value);
+                    const ticks = event.currentTarget.valueAsNumber;
+                    if (Number.isSafeInteger(ticks) && ticks >= 1) {
+                      onDailyVolumeProfileRowTicksChange(ticks);
+                    }
+                  }}
+                  onBlur={() => setProfileRowTicksDraft(
+                    String(normalizeSessionVolumeProfileRowTicks(dailyVolumeProfileRowTicks)),
+                  )}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                  }}
+                />
+                <span className="profile-width-value">
+                  {(normalizeSessionVolumeProfileRowTicks(dailyVolumeProfileRowTicks) * 0.1).toFixed(1)} price / row
+                </span>
+              </div>
               <div className="ema-setting-line">
                 <span className="ema-setting-label">Width</span>
                 <div className="profile-width-control">

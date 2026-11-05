@@ -35,6 +35,7 @@ export type ChartEventType =
   | "tdu_signal_update"
   | "liquidity_update"
   | "iceberg_update"
+  | "si_stop"
   | "market_explorer_update"
   | "trend_analyzer_update"
   | "big_trade"
@@ -72,6 +73,32 @@ export interface NativeIcebergState {
   detectionReason: "overfill" | "refill";
   sequence: number;
   method: "native";
+}
+
+/** Completed inferred aggressive chain; side is aggressive BUY/SELL. */
+export interface SiStopChain {
+  type: "si_stop";
+  symbol: string;
+  contract: string;
+  source: "rithmic";
+  method: "aggressor_chain";
+  status: "completed";
+  sourceContract: string;
+  sessionId: string;
+  chainId: string;
+  sequence: number;
+  side: Side;
+  time: number;
+  startTime: number;
+  completedTime: number;
+  price: number;
+  firstPrice: number;
+  vwap: number;
+  executedVolume: number;
+  executionCount: number;
+  aggressorCount: number;
+  endReason: "mbo" | "depth";
+  throughPriceLevels: boolean;
 }
 
 export interface IcebergUpdateMessage extends NativeIcebergState {
@@ -225,6 +252,9 @@ export interface FvgSignalUpdateMessage {
   phase: FvgSignalPhase;
 }
 
+/** Completed 10-second volume, population standard deviation, prior delta direction. */
+export type TduMomentumSample = readonly [volume: number, sigma: number, direction: number];
+
 export interface TduSignalUpdateMessage {
   type: "tdu_signal_update";
   symbol: string;
@@ -234,6 +264,7 @@ export interface TduSignalUpdateMessage {
   momentumDirection: number;
   momentumLevel: number;
   deltaDivergence: number;
+  momentumSamples?: readonly TduMomentumSample[];
 }
 
 export type LiquidityEventKind =
@@ -544,6 +575,7 @@ export type InboundMessage =
   | TduSignalUpdateMessage
   | LiquidityUpdateMessage
   | IcebergUpdateMessage
+  | SiStopChain
   | MarketExplorerUpdateMessage
   | TrendAnalyzerUpdateMessage
   | BigTradeMessage

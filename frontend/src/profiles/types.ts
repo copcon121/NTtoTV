@@ -14,6 +14,7 @@ import type { SmcSettings } from "../chart/smc";
 import type { SweepReversalSettings } from "../chart/sweepReversal";
 import type { SupertrendSettings } from "../chart/supertrend";
 import type { Timeframe } from "../socket/messages";
+import type { TduSettings } from "../chart/tduSettings";
 
 export interface ProfileMarketOrderSettings {
   volumeLots: number;
@@ -50,6 +51,7 @@ export interface LiquidityChartProfileState {
   showNativeIcebergs?: boolean;
   nativeIcebergSessionMinVolumes?: import("../liquidity/icebergSessions").IcebergSessionMinVolumes;
   nativeIcebergFilters?: import("../liquidity/icebergFilters").IcebergFilterSettings;
+  siStops?: import("../liquidity/siStops").SiStopSettings;
   alertSounds?: import("../liquidity/alertSounds").LiquidityAlertSounds;
   bigTradeSettings: BigTradeSettings;
 }
@@ -70,6 +72,8 @@ export interface ChartProfilePayload {
   showGcPushMomentum?: boolean;
   /** Original TDU triangles and candle/delta divergence overlay. */
   showTduSignals?: boolean;
+  /** Optional triangle level visibility and candle-shape filter. */
+  tduSettings?: TduSettings;
   /** Optional volatility/threshold configuration for GC Push Momentum. */
   gcPushMomentum?: GcPushMomentumSettings;
   /** Optional for backwards compatibility with profiles saved before this toggle existed. */
@@ -78,6 +82,8 @@ export interface ChartProfilePayload {
   showDailyVolumeProfile?: boolean;
   /** Optional session volume profile histogram width in CSS pixels. */
   dailyVolumeProfileWidth?: number;
+  /** Optional positive GC ticks per row; legacy session profiles use 2. */
+  dailyVolumeProfileRowTicks?: number;
   /** Optional flag to show the session developing POC and value-area paths. */
   showDailyVolumeProfileDevelopingPoc?: boolean;
   /** Optional for backwards compatibility with profiles saved before MGannSwing existed. */

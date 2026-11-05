@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS tdu_signals (
     momentum_direction INTEGER NOT NULL,
     momentum_level     INTEGER NOT NULL,
     delta_divergence   INTEGER NOT NULL,
+    momentum_samples  TEXT,
     PRIMARY KEY (symbol, contract, timeframe, time)
 );
 
@@ -453,6 +454,12 @@ class CacheStore:
         self._migrate_big_trades()
         self._migrate_market_sources()
         self._migrate_orders()
+        self._migrate_tdu_samples()
+
+    def _migrate_tdu_samples(self) -> None:
+        columns = self._writer.connection.execute("PRAGMA table_info(tdu_signals)").fetchall()
+        if "momentum_samples" not in {row[1] for row in columns}:
+            self._writer.execute("ALTER TABLE tdu_signals ADD COLUMN momentum_samples TEXT")
 
     def _migrate_orders(self) -> None:
         """Add opt-in order-management fields to existing cache files."""

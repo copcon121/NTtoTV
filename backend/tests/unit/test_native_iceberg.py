@@ -71,6 +71,33 @@ def test_overfill_detects_without_predicting_hidden_reserve_and_finishes_execute
     assert d.on_trade(trade(100, sequence=2)) == []
 
 
+def test_metrics_distinguish_price_through_from_exchange_delete():
+    d = detector()
+    d.on_trade(trade(11))
+    d.on_trade(trade(price=2700.2, order_id="other", sequence=2, time=102))
+    metrics = d.metrics()["icebergDiagnostics"]
+    assert metrics["detected_overfill"] == 1
+    assert metrics["ended_trade_through"] == 1
+    assert metrics["trade_known"] == metrics["trade_unknown"] == 1
+    assert "ended_executed" not in metrics
+
+
+def test_timing_diagnostics_keep_nanoseconds_within_one_millisecond():
+    d = detector()
+    d.on_mbo_update({"sourceTimeNanos": 110_000_500, "updates": [{
+        "exchangeOrderId": "ask-1", "action": "change", "size": 6,
+    }]}, 110)
+    older = replace(trade(4, time=110), source_time_nanos=110_000_100)
+    d.on_trade(older)
+    assert d.metrics()["icebergDiagnostics"]["trade_matches_prior_size_reduction"] == 1
+    # Diagnostics describe evidence; they do not silently invent a feed order.
+    d.on_trade(replace(trade(3, time=111, sequence=2), source_time_nanos=111_000_000))
+    context = d.metrics()["icebergLastOverfill"]
+    assert context["lastMboNanos"] == 110_000_500
+    assert context["tradeNanos"] == 111_000_000
+    assert context["lateReductionObserved"] is True
+
+
 def test_partial_resize_does_not_confirm_an_iceberg():
     d = detector()
     assert d.on_trade(trade(6)) == []
@@ -94,6 +121,113 @@ def test_unknown_replacement_cannot_seed_a_candidate():
     d.seed_orders([], 100)
     assert update(d, size=10, side="sell", price=2700.1) == []
     assert d.on_trade(trade(100)) == []
+    assert d.metrics()["icebergTrackedOrders"] == 0
+
+
+def test_undetected_reprice_starts_fresh_accounting_and_can_observe_a_refill():
+    d = detector()
+    assert d.on_trade(trade(6)) == []
+    assert update(d, price=2700.2, size=5, time=102) == []
+    assert d.on_trade(trade(5, price=2700.2, time=103, sequence=2)) == []
+    [found] = update(d, price=2700.2, size=5, time=104)
+    assert found["price"] == 2700.2
+    assert found["firstSeenTime"] == 102
+    assert found["executedVolume"] == 5
+    assert found["refillCount"] == 1
+    assert found["detectionReason"] == "refill"
+    assert d.metrics()["icebergDiagnostics"]["candidate_repriced"] == 1
+
+
+def test_repeated_undetected_reprices_do_not_permanently_forget_the_order():
+    d = detector()
+    for at, price in enumerate([2700.2, 2700.3, 2700.2], start=102):
+        assert update(d, price=price, size=10, time=at) == []
+    assert d.metrics()["icebergTrackedOrders"] == 1
+    assert d.on_trade(trade(10, price=2700.2, time=105)) == []
+    [found] = update(d, price=2700.2, size=10, time=106)
+    assert found["executedVolume"] == 10
+    assert found["firstSeenTime"] == 104
+
+
+def test_exhausted_reprice_diagnostic_preserves_discarded_accounting_without_detecting():
+    d = detector()
+    assert d.on_trade(trade(10)) == []
+    assert d.on_mbo_update({"sourceTimeNanos": 102_000_900, "updates": [{
+        "exchangeOrderId": "ask-1", "action": "change", "side": "sell",
+        "price": 2700.2, "size": 5,
+    }]}, 102) == []
+    metrics = d.metrics()
+    assert metrics["icebergDiagnostics"]["exhausted_candidate_reprice"] == 1
+    [context] = metrics["icebergIdentityContexts"]
+    assert context == {
+        "kind": "candidate_reprice", "sessionId": d.session_id, "orderId": "ask-1",
+        "time": 102, "sourceTimeNanos": 102_000_900,
+        "oldSide": "sell", "oldPrice": 2700.1, "newSide": "sell", "newPrice": 2700.2,
+        "remainderBefore": 0, "executedVolume": 10, "refillCount": 0,
+        "detected": False, "detectedTime": None, "firstSeenTime": 100,
+        "lastTradeTime": 101, "lastMboTime": None, "lastMboNanos": None,
+    }
+    assert metrics["icebergDetectedOrders"] == 0
+    assert d.on_trade(trade(5, price=2700.2, time=103, sequence=2)) == []
+    [found] = update(d, price=2700.2, size=5, time=104)
+    assert found["executedVolume"] == 5 and found["refillCount"] == 1
+    assert found["firstSeenTime"] == 102
+
+
+def test_identity_contexts_are_bounded_copied_and_cleared_with_a_new_session():
+    d = detector()
+    for index in range(12):
+        assert update(d, price=2700.2 + index, size=5, time=102 + index) == []
+    contexts = d.metrics()["icebergIdentityContexts"]
+    assert len(contexts) == 10
+    assert [context["time"] for context in contexts] == list(range(104, 114))
+    assert {context["kind"] for context in contexts} == {"candidate_reprice"}
+    assert d.metrics()["icebergDiagnostics"].get("exhausted_candidate_reprice", 0) == 0
+    contexts[0]["executedVolume"] = 1000
+    assert d.metrics()["icebergIdentityContexts"][0]["executedVolume"] == 0
+    assert d.invalidate(200) == []
+    assert d.metrics()["icebergIdentityContexts"] == []
+
+
+def test_trade_mismatch_diagnostic_does_not_add_rejected_execution_to_detected_ice():
+    d = detector()
+    assert d.on_trade(trade(10)) == []
+    [found] = update(d, size=10)
+    bad = replace(trade(99, side=Side.SELL, time=103, sequence=2),
+                  source_time_nanos=103_000_800)
+    [ended] = d.on_trade(bad)
+    assert ended["status"] == "invalidated"
+    assert ended["executedVolume"] == found["executedVolume"] == 10
+    assert ended["refillCount"] == 1
+    [context] = d.metrics()["icebergIdentityContexts"]
+    assert context["kind"] == "trade_mismatch"
+    assert context["oldSide"] == "sell" and context["newSide"] == "buy"
+    assert context["oldPrice"] == context["newPrice"] == 2700.1
+    assert context["remainderBefore"] == context["executedVolume"] == 10
+    assert context["refillCount"] == 1 and context["detected"] is True
+    assert context["sourceTimeNanos"] == 103_000_800
+    assert context["lastMboTime"] == 102 and context["lastMboNanos"] == 102_000_000
+
+
+def test_detected_reprice_remains_historical_and_cannot_reanimate_on_change():
+    d = detector()
+    d.on_trade(trade(11))
+    [ended] = update(d, price=2700.2, size=10, time=102)
+    assert ended["status"] == "invalidated"
+    assert ended["price"] == 2700.1
+    assert ended["executedVolume"] == 11
+    assert update(d, price=2700.2, size=10, time=103) == []
+    assert d.on_trade(trade(11, price=2700.2, time=104, sequence=2)) == []
+
+
+@pytest.mark.parametrize("values", [
+    {"side": "buy", "price": 2700.2, "size": 10},
+    {"price": 2700.2}, {"price": 2700.2, "size": 0},
+    {"price": float("nan"), "size": 10},
+])
+def test_inconsistent_or_incomplete_reprice_cannot_seed_a_new_baseline(values):
+    d = detector()
+    assert update(d, **values) == []
     assert d.metrics()["icebergTrackedOrders"] == 0
 
 

@@ -22,6 +22,7 @@ precomputed data is retained indefinitely until an explicit delete. (Req 8.4)
 from __future__ import annotations
 
 import sqlite3
+import json
 from collections.abc import Callable, Iterable
 
 from ..models import ImbalanceSide, Side
@@ -124,12 +125,13 @@ ON CONFLICT(symbol, contract, timeframe, time) DO UPDATE SET
 _UPSERT_TDU_SIGNAL = """
 INSERT INTO tdu_signals
     (symbol, contract, timeframe, time, momentum_direction, momentum_level,
-     delta_divergence)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+     delta_divergence, momentum_samples)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(symbol, contract, timeframe, time) DO UPDATE SET
     momentum_direction=excluded.momentum_direction,
     momentum_level=excluded.momentum_level,
-    delta_divergence=excluded.delta_divergence
+    delta_divergence=excluded.delta_divergence,
+    momentum_samples=excluded.momentum_samples
 """
 
 _UPSERT_BIG_TRADE = """
@@ -609,7 +611,7 @@ class KeyedStore:
             table="tdu_signals",
             columns=(
                 "symbol, contract, timeframe, time, momentum_direction, "
-                "momentum_level, delta_divergence"
+                "momentum_level, delta_divergence, momentum_samples"
             ),
             symbol=symbol,
             contract=contract,
@@ -627,6 +629,10 @@ class KeyedStore:
                 momentum_direction=r["momentum_direction"],
                 momentum_level=r["momentum_level"],
                 delta_divergence=r["delta_divergence"],
+                momentum_samples=(
+                    [tuple(sample) for sample in json.loads(r["momentum_samples"])]
+                    if r["momentum_samples"] is not None else None
+                ),
             )
             for r in rows
         ]
@@ -913,6 +919,7 @@ def _tdu_signal_params(r: TduSignalRecord) -> tuple[object, ...]:
         r.momentum_direction,
         r.momentum_level,
         r.delta_divergence,
+        None if r.momentum_samples is None else json.dumps(r.momentum_samples, allow_nan=False),
     )
 
 

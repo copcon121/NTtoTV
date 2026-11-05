@@ -107,6 +107,7 @@ class _BarState:
     delta_high: int
     delta_low: int
     open_delta: int
+    source: str | None = None
 
 
 class VolumeDeltaEngine:
@@ -119,6 +120,7 @@ class VolumeDeltaEngine:
         mode: VolumeDeltaMode = VolumeDeltaMode.DELTA,
         min_trade_size: int = 0,
         zero_baseline: bool = False,
+        source: str | None = None,
     ) -> None:
         if timeframe not in _TF_MS:
             raise ValueError(f"unsupported timeframe: {timeframe!r}")
@@ -128,6 +130,7 @@ class VolumeDeltaEngine:
         self.mode = mode
         self.min_trade_size = min_trade_size
         self.zero_baseline = zero_baseline
+        self.source = source
 
         # Continuous classification state, keyed by contract.
         self._prev_price: dict[str, float] = {}
@@ -216,6 +219,7 @@ class VolumeDeltaEngine:
         self._last_side[t.contract] = side
 
         signed = t.volume if side is Side.BUY else -t.volume
+        trade_source = t.source or self.source
 
         if bar is None or bucket > bar.time:
             # Roll a completed bar into the cumulative sum before resetting.
@@ -232,6 +236,7 @@ class VolumeDeltaEngine:
                 delta_high=max(0, signed) if self.zero_baseline else signed,
                 delta_low=min(0, signed) if self.zero_baseline else signed,
                 open_delta=0 if self.zero_baseline else signed,
+                source=trade_source,
             )
             self._bar[t.contract] = bar
         else:
@@ -246,6 +251,8 @@ class VolumeDeltaEngine:
                 bar.delta_high = bar.running_delta
             if bar.running_delta < bar.delta_low:
                 bar.delta_low = bar.running_delta
+            if bar.source != trade_source:
+                bar.source = None
 
         return self._build_update(t, bar)
 
@@ -269,6 +276,7 @@ class VolumeDeltaEngine:
         open_delta: int,
         close_delta: int,
         last_price: float | None = None,
+        source: str | None = None,
     ) -> None:
         """Seed the current in-progress delta bar for ``contract``.
 
@@ -285,6 +293,7 @@ class VolumeDeltaEngine:
             delta_high=delta_high,
             delta_low=delta_low,
             open_delta=open_delta,
+            source=source,
         )
         if last_price is not None:
             self._prev_price[contract] = last_price
@@ -325,4 +334,5 @@ class VolumeDeltaEngine:
             open_delta=bar.open_delta,
             close_delta=bar.running_delta,
             cumulative_delta=cumulative,
+            source=bar.source,
         )

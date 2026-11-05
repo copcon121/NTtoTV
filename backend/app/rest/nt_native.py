@@ -157,6 +157,7 @@ async def ingest_native_bar(
         delta_low=delta_low,
         open_delta=open_delta,
         close_delta=close_delta,
+        source="nt",
     )
 
     pipeline = runtime.pipeline

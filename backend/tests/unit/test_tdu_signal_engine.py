@@ -100,3 +100,70 @@ def test_exchange_aggressor_side_is_used_when_bookmap_has_no_quote_snapshot():
     event = engine.on_trade(second)[-1]
 
     assert event.delta_divergence == -1
+
+
+@pytest.mark.unit
+def test_below_default_bucket_is_emitted_for_custom_lower_thresholds():
+    engine = TduSignalEngine(timeframes=("1m",), stddev_period=3)
+    for index, volume in enumerate((10, 20, 30)):
+        engine.on_trade(_trade(index * 10_000, volume=volume))
+    signal = engine.on_trade(_trade(30_000, volume=1))[0]
+    assert signal.momentum_level == 0
+    assert signal.momentum_samples == [(30, pytest.approx((200 / 3) ** 0.5), -1)]
+    assert engine.current_updates("GC", "GC")[0].momentum_samples == signal.momentum_samples
+
+
+@pytest.mark.unit
+def test_strength_frontier_preserves_highest_level_and_latest_qualifying_direction(monkeypatch):
+    engine = TduSignalEngine(timeframes=("1m",))
+    samples = iter(((3, 60, 10.0), (1, 40, 10.0), (0, 20, 10.0), (2, 50, 10.0)))
+    monkeypatch.setattr(engine, "_roll_momentum_bucket", lambda _: next(samples))
+    first = engine.on_trade(_trade(0, volume=10))[0]
+    for index in range(1, 4):
+        latest = engine.on_trade(_trade(index * 1_000, volume=10))[0]
+    assert latest.momentum_level == 3
+    assert latest.momentum_direction == -1
+    assert latest.momentum_samples == [(60, 10.0, 1), (50, 10.0, -1)]
+    assert first.momentum_samples == [(60, 10.0, 1)]  # Queued events remain immutable.
+
+
+@pytest.mark.unit
+def test_samples_survive_seed_and_clear_on_next_bar():
+    engine = TduSignalEngine(timeframes=("1m",))
+    samples = [(80, 10.0, -1)]
+    engine.seed_bar("GC", "1m", time=_BASE, open=100, high=101, low=99,
+                    close=100, delta=0, momentum_samples=samples)
+    samples.clear()
+    assert engine.current_updates("GC", "GC")[0].momentum_samples == [(80, 10.0, -1)]
+    engine.on_trade(_trade(60_000))
+    assert engine.current_updates("GC", "GC") == []
+
+
+@pytest.mark.unit
+def test_legacy_cache_migrates_samples_without_losing_old_signals(tmp_path):
+    import sqlite3
+    from dataclasses import replace
+    from app.storage.cache_store import CacheStore
+
+    db = tmp_path / "app.sqlite"
+    with sqlite3.connect(db) as conn:
+        conn.execute("""CREATE TABLE tdu_signals (
+            symbol TEXT, contract TEXT, timeframe TEXT, time INTEGER,
+            momentum_direction INTEGER, momentum_level INTEGER, delta_divergence INTEGER,
+            PRIMARY KEY(symbol, contract, timeframe, time))""")
+        conn.execute("INSERT INTO tdu_signals VALUES ('GC','GC','1m',?,1,3,0)", (_BASE,))
+    cache = CacheStore(db)
+    try:
+        old = cache.read_tdu_signals("GC", "GC", "1m")[0]
+        assert old.momentum_samples is None
+        assert old.momentum_level == 3
+        cache.upsert_tdu_signal(replace(old, momentum_samples=[(60, 10.0, -1)]))
+    finally:
+        cache.close()
+    reopened = CacheStore(db)
+    try:
+        restored = reopened.read_tdu_signals("GC", "GC", "1m")[0]
+        assert restored.momentum_samples == [(60, 10.0, -1)]
+        assert restored.momentum_level == 3
+    finally:
+        reopened.close()

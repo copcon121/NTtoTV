@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 from fastapi.testclient import TestClient
@@ -797,6 +799,117 @@ def test_market_order_lifecycle_with_fake_mt5(client: TestClient):
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize(
+    "action, broker_method",
+    [
+        ("create", "place_order"),
+        ("close", "close_position"),
+        ("patch", "modify_order"),
+        ("cancel", "cancel_order"),
+        ("mt5_close", "close_position"),
+        ("mt5_patch_position", "modify_order"),
+        ("mt5_patch_order", "modify_order"),
+        ("mt5_cancel", "cancel_order"),
+    ],
+)
+def test_slow_broker_does_not_block_health(
+    client: TestClient, monkeypatch, action: str, broker_method: str
+):
+    _login_and_connect(client)
+    pending = action in {"cancel", "mt5_patch_order", "mt5_cancel"}
+    payload = {
+        "source": "chart_bracket" if pending else "market_bar",
+        "side": "buy",
+        "kind": "limit" if pending else "market",
+        "volumeLots": 0.1,
+        "entryGc": 2349.0,
+        "slGc": 2346.0,
+        "tpGc": 2355.0,
+        "idempotencyKey": "slow-broker",
+    }
+    method, path, body = "POST", "/api/orders", payload
+    if action != "create":
+        created = client.post("/api/orders", json=payload)
+        assert created.status_code == 200
+        order = created.json()["order"]
+        app_path = f"/api/orders/{order['id']}"
+        position_path = f"/api/mt5/positions/{order['brokerPositionTicket']}"
+        pending_path = f"/api/mt5/orders/{order['brokerOrderTicket']}"
+        method, path, body = {
+            "close": ("POST", app_path + "/close", {}),
+            "patch": ("PATCH", app_path, {"slGc": 2346.5}),
+            "cancel": ("DELETE", app_path, None),
+            "mt5_close": ("POST", position_path + "/close", {}),
+            "mt5_patch_position": ("PATCH", position_path, {"slGc": 2346.5}),
+            "mt5_patch_order": ("PATCH", pending_path, {"slGc": 2346.5}),
+            "mt5_cancel": ("DELETE", pending_path, None),
+        }[action]
+
+    entered, release = Event(), Event()
+    backend = client.app.state.mt5_manager.backend
+    original = getattr(backend, broker_method)
+
+    def slow_broker(order):
+        entered.set()
+        assert release.wait(10), "Test did not release broker call"
+        return original(order)
+
+    monkeypatch.setattr(backend, broker_method, slow_broker)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        operation = pool.submit(client.request, method, path, json=body)
+        try:
+            assert entered.wait(5), "Request did not reach broker"
+            # This must complete while the broker operation is still blocked.
+            health = pool.submit(client.get, "/api/health")
+            assert health.result(timeout=2).status_code == 200
+        finally:
+            release.set()
+        assert operation.result(timeout=5).status_code == 200
+
+
+@pytest.mark.integration
+def test_concurrent_order_retries_wait_for_original_broker_result(
+    client: TestClient, monkeypatch
+):
+    _login_and_connect(client)
+    payload = {
+        "source": "market_bar",
+        "side": "buy",
+        "kind": "market",
+        "volumeLots": 0.1,
+        "idempotencyKey": "concurrent-retry",
+    }
+    backend = client.app.state.mt5_manager.backend
+    original = backend.place_order
+    entered, release = Event(), Event()
+    placed = []
+
+    def slow_place(order):
+        placed.append(order.id)
+        entered.set()
+        assert release.wait(10), "Test did not release broker call"
+        return original(order)
+
+    monkeypatch.setattr(backend, "place_order", slow_place)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(client.post, "/api/orders", json=payload)
+        try:
+            assert entered.wait(5)
+            retry = pool.submit(client.post, "/api/orders", json=payload)
+            assert client.get("/api/health").status_code == 200
+        finally:
+            release.set()
+        first_response = first.result(timeout=5)
+        retry_response = retry.result(timeout=5)
+    assert first_response.status_code == retry_response.status_code == 200
+    first_order = first_response.json()["order"]
+    assert retry_response.json()["order"] == first_order
+    assert first_order["status"] == "filled"
+    assert retry_response.json()["idempotent"] is True
+    assert placed == [first_order["id"]]
+
+
+@pytest.mark.integration
 def test_supertrend_trailing_arms_manual_order_and_rejects_auto_ls(client: TestClient):
     _login_and_connect(client)
     cache = client.app.state.contract_state._cache
@@ -934,6 +1047,77 @@ def test_close_order_accepts_partial_volume(client: TestClient):
     assert body["volumeLots"] == 0.05
     assert backend.closed_orders[-1].volume_lots == 0.05
     assert backend.positions_by_ticket[1]["volumeLots"] == 0.05
+
+
+class _BreakEvenBackend(_PositionTrackingBackend):
+    def __init__(self):
+        super().__init__()
+        self.bid = 3957.0
+        self.modified = []
+
+    def symbol_tick(self, user_id, account_id, symbol):
+        return Mt5Tick(symbol=symbol, bid=self.bid, ask=self.bid + 0.065, time=now_ms())
+
+    def place_order(self, order):
+        result = super().place_order(order)
+        result.fill_price = 3957.065
+        self.positions_by_ticket[1].update(entryBroker=result.fill_price,
+            slBroker=order.sl_broker, tpBroker=order.tp_broker)
+        return result
+
+    def modify_order(self, order):
+        self.modified.append((order.sl_broker, order.tp_broker, order.volume_lots))
+        self.positions_by_ticket[order.broker_position_ticket].update(
+            slBroker=order.sl_broker, tpBroker=order.tp_broker)
+        return Mt5OrderResult(True, order.status.value)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("side", ["buy", "sell"])
+@pytest.mark.parametrize("deleted_tp", [False, True])
+def test_partial_close_then_be_uses_broker_fill_and_preserves_current_tp(client, side, deleted_tp):
+    backend = _BreakEvenBackend()
+    client.app.state.mt5_manager = _Manager(backend)
+    _login_and_connect(client)
+    created = client.post("/api/orders", json={
+        "source": "market_bar", "side": side, "kind": "market",
+        "volumeLots": 0.1, "referenceGc": 3966.6, "slDistanceGc": 3,
+        "tpDistanceGc": 6, "gcAnchored": False, "idempotencyKey": "partial-be",
+    })
+    assert created.status_code == 200
+    order = created.json()["order"]
+    route = f"/api/orders/{order['id']}"
+    closed = client.post(route + "/close", json={"volumeLots": 0.05})
+    assert closed.status_code == 200
+    backend.bid = 3970 if side == "buy" else 3940
+    client.app.state.basis_engine.update_gc(3978, now_ms())
+    row = backend.positions_by_ticket[1]
+    live_tp = None if deleted_tp else (4000.125 if side == "buy" else 3918.42)
+    row["tpBroker"] = live_tp
+
+    # The old BE payload re-converts the fill's GC coordinate using today's
+    # basis, and therefore submits a different broker stop.
+    legacy = client.patch(route, json={"slGc": order["fillPriceGcEstimate"]})
+    assert legacy.status_code == 200
+    assert backend.modified[-1][0] != pytest.approx(row["entryBroker"])
+    row["tpBroker"] = live_tp
+
+    response = client.patch(route, json={"breakEven": True})
+    assert response.status_code == 200
+    assert backend.modified[-1] == (pytest.approx(3957.065), live_tp, 0.05)
+    saved = response.json()["order"]
+    assert saved["slBroker"] == pytest.approx(saved["fillPriceBroker"])
+    assert saved["slGc"] == saved["fillPriceGcEstimate"]
+    assert saved["tpBroker"] == live_tp
+    assert saved["volumeLots"] == 0.05
+    assert saved["fillPriceBroker"] == order["fillPriceBroker"]
+
+    count = len(backend.modified)
+    assert client.patch(route, json={"breakEven": True, "expectedVersion": order["version"]}).status_code == 409
+    assert client.patch(route, json={"breakEven": True, "slGc": 4000}).status_code == 400
+    backend.positions_by_ticket.clear()
+    assert client.patch(route, json={"breakEven": True}).status_code == 409
+    assert len(backend.modified) == count
 
 
 @pytest.mark.integration
@@ -1083,3 +1267,45 @@ def test_order_patch_refreshes_basis_from_current_broker_tick(client: TestClient
     assert updated["slGc"] == 2346.5
     assert updated["slBroker"] == pytest.approx(2346.55)
     assert client.app.state.basis_engine.snapshot().stale is False
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("kind", ["market", "limit"])
+@pytest.mark.parametrize("field", ["slGc", "tpGc"])
+def test_order_patch_preserves_other_broker_levels_after_basis_change(
+    client: TestClient, kind: str, field: str
+):
+    _login_and_connect(client)
+    created = client.post(
+        "/api/orders",
+        json={
+            "source": "chart_bracket",
+            "side": "buy",
+            "kind": kind,
+            "volumeLots": 0.1,
+            "entryGc": 2349.0,
+            "slGc": 2346.0,
+            "tpGc": 2355.0,
+            "gcAnchored": False,
+            "idempotencyKey": f"patch-preserve-{kind}-{field}",
+        },
+    )
+    assert created.status_code == 200
+    original = created.json()["order"]
+    client.app.state.basis_engine.update_gc(2374.05, now_ms())
+
+    level = 2370.0 if field == "slGc" else 2380.0
+    response = client.patch(f"/api/orders/{original['id']}", json={field: level})
+
+    assert response.status_code == 200
+    updated = response.json()["order"]
+    assert updated[field] == level
+    assert updated[field.replace("Gc", "Broker")] == pytest.approx(level - 24.0)
+    for untouched in {"entryGc", "slGc", "tpGc"} - {field}:
+        assert updated[untouched] == original[untouched]
+        broker_field = untouched.replace("Gc", "Broker")
+        assert updated[broker_field] == original[broker_field]
+
+    cleared = client.patch(f"/api/orders/{original['id']}", json={field: None})
+    assert cleared.status_code == 200
+    assert cleared.json()["order"][field.replace("Gc", "Broker")] is None

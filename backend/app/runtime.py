@@ -478,6 +478,10 @@ class AppRuntime:
             self._liquidity_store.purge_icebergs_before,
             int(datetime.now(timezone.utc).timestamp() * 1000) - ICEBERG_RETENTION_MS,
         )
+        await asyncio.to_thread(
+            self._liquidity_store.purge_si_stops_before,
+            int(datetime.now(timezone.utc).timestamp() * 1000) - ICEBERG_RETENTION_MS,
+        )
         if events or lines:
             logger.info(
                 "purged liquidity rows events=%s lines=%s", events, lines

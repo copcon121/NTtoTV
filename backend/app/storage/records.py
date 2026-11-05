@@ -154,6 +154,7 @@ class TduSignalRecord:
     momentum_direction: int
     momentum_level: int
     delta_divergence: int
+    momentum_samples: list[tuple[int, float, int]] | None = None
 
 
 @dataclass(slots=True)

@@ -264,12 +264,19 @@ export function collectMgannSwingPivots(bars: readonly Bar[]): MgannSwingPivot[]
     const candidate = bars[index];
     if (candidate === undefined) continue;
 
-    const left = bars.slice(index - length, index);
-    const right = bars.slice(index + 1, index + 1 + length);
-    const leftHigh = Math.max(...left.map((bar) => bar.high));
-    const rightHigh = Math.max(...right.map((bar) => bar.high));
-    const leftLow = Math.min(...left.map((bar) => bar.low));
-    const rightLow = Math.min(...right.map((bar) => bar.low));
+    let leftHigh = Number.NEGATIVE_INFINITY;
+    let rightHigh = Number.NEGATIVE_INFINITY;
+    let leftLow = Number.POSITIVE_INFINITY;
+    let rightLow = Number.POSITIVE_INFINITY;
+    // Scan the fixed Swing-5 window without allocating six arrays per bar.
+    for (let offset = 1; offset <= length; offset += 1) {
+      const left = bars[index - offset];
+      const right = bars[index + offset];
+      leftHigh = Math.max(leftHigh, left.high);
+      leftLow = Math.min(leftLow, left.low);
+      rightHigh = Math.max(rightHigh, right.high);
+      rightLow = Math.min(rightLow, right.low);
+    }
 
     const highPivot = candidate.high > leftHigh && candidate.high >= rightHigh;
     const lowPivot = candidate.low < leftLow && candidate.low <= rightLow;
@@ -313,24 +320,25 @@ function collectMgannSwingCalculationPivots(
     const candidate = bars[index];
     if (candidate === undefined) continue;
 
-    const left = bars.slice(index - length, index);
-    const right = bars.slice(index + 1, index + 1 + length);
-    const hasFullClosedRightSide =
-      right.length === length &&
-      (closedBarTimes === undefined ||
-        right.every((bar) => closedBarTimes.has(bar.time)));
+    let leftHigh = Number.NEGATIVE_INFINITY;
+    let rightHigh = Number.NEGATIVE_INFINITY;
+    let leftLow = Number.POSITIVE_INFINITY;
+    let rightLow = Number.POSITIVE_INFINITY;
+    let hasFullClosedRightSide = index + length < bars.length;
+    for (let offset = 1; offset <= length; offset += 1) {
+      const left = bars[index - offset];
+      const right = bars[index + offset];
+      leftHigh = Math.max(leftHigh, left.high);
+      leftLow = Math.min(leftLow, left.low);
+      if (right !== undefined) {
+        rightHigh = Math.max(rightHigh, right.high);
+        rightLow = Math.min(rightLow, right.low);
+        if (closedBarTimes !== undefined && !closedBarTimes.has(right.time)) {
+          hasFullClosedRightSide = false;
+        }
+      }
+    }
     if (!includeDeveloping && !hasFullClosedRightSide) continue;
-
-    const leftHigh = Math.max(...left.map((bar) => bar.high));
-    const rightHigh =
-      right.length > 0
-        ? Math.max(...right.map((bar) => bar.high))
-        : Number.NEGATIVE_INFINITY;
-    const leftLow = Math.min(...left.map((bar) => bar.low));
-    const rightLow =
-      right.length > 0
-        ? Math.min(...right.map((bar) => bar.low))
-        : Number.POSITIVE_INFINITY;
 
     const highPivot = candidate.high > leftHigh && candidate.high >= rightHigh;
     const lowPivot = candidate.low < leftLow && candidate.low <= rightLow;

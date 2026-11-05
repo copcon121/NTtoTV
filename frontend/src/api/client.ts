@@ -14,6 +14,7 @@ import {
   type WebPushSendResult,
 } from "../alerts/types";
 import type { AlertEventMessage } from "../socket/messages";
+import { notifyAuthSessionChanged, requestAuthSessionCheck } from "../auth/sessionSync";
 import {
   type ChartProfile,
   type ChartProfilePayload,
@@ -117,6 +118,7 @@ export interface TduSignalRestRow {
   momentumDirection: number;
   momentumLevel: number;
   deltaDivergence: number;
+  momentumSamples?: TduSignalUpdateMessage["momentumSamples"];
 }
 
 export interface BigTradeRestRow {
@@ -292,6 +294,7 @@ export interface Mt5OpenTrades {
 }
 
 export interface Mt5TradePatchInput {
+  breakEven?: boolean;
   entryGc?: number | null;
   slGc?: number | null;
   tpGc?: number | null;
@@ -381,7 +384,15 @@ export class ApiClient {
 
   constructor(options: ApiClientOptions = {}) {
     this.basePath = options.basePath ?? "/api";
-    this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
+    const fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
+    this.fetchFn = async (input, init) => {
+      const response = await fetchFn(input, init);
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (response.status === 401 && !/\/auth\/(login|register|me)(?:[?#]|$)/.test(url)) {
+        requestAuthSessionCheck();
+      }
+      return response;
+    };
   }
 
   async login(username: string, password: string): Promise<AuthUser> {
@@ -395,6 +406,7 @@ export class ApiClient {
       throw new Error(await this.errorMessage(res, "POST /auth/login"));
     }
     const body = (await res.json()) as { user: AuthUser };
+    notifyAuthSessionChanged();
     return body.user;
   }
 
@@ -413,12 +425,14 @@ export class ApiClient {
       throw new Error(await this.errorMessage(res, "POST /auth/register"));
     }
     const body = (await res.json()) as { user: AuthUser };
+    notifyAuthSessionChanged();
     return body.user;
   }
 
   async me(): Promise<AuthUser | undefined> {
     const res = await this.fetchFn(`${this.basePath}/auth/me`, {
       credentials: "same-origin",
+      cache: "no-store",
     });
     if (res.status === 401) return undefined;
     if (!res.ok) throw new Error(await this.errorMessage(res, "GET /auth/me"));
@@ -432,6 +446,7 @@ export class ApiClient {
       credentials: "same-origin",
     });
     if (!res.ok) throw new Error(await this.errorMessage(res, "POST /auth/logout"));
+    notifyAuthSessionChanged();
   }
 
   async connectMt5(input: Mt5ConnectInput): Promise<Mt5Account> {
@@ -475,7 +490,7 @@ export class ApiClient {
 
   async patchMt5Position(
     brokerPositionTicket: number,
-    input: Pick<Mt5TradePatchInput, "slGc" | "tpGc">,
+    input: Pick<Mt5TradePatchInput, "slGc" | "tpGc" | "breakEven">,
   ): Promise<TradingPosition> {
     const res = await this.fetchFn(
       `${this.basePath}/mt5/positions/${encodeURIComponent(String(brokerPositionTicket))}`,
@@ -613,7 +628,7 @@ export class ApiClient {
 
   async patchOrder(
     orderId: string,
-    input: { entryGc?: number; slGc?: number; tpGc?: number; expectedVersion?: number },
+    input: { entryGc?: number; slGc?: number; tpGc?: number; expectedVersion?: number; breakEven?: boolean },
   ): Promise<TradingOrder> {
     const res = await this.fetchFn(
       `${this.basePath}/orders/${encodeURIComponent(orderId)}`,
@@ -1172,6 +1187,7 @@ export class ApiClient {
       momentumDirection: signal.momentumDirection,
       momentumLevel: signal.momentumLevel,
       deltaDivergence: signal.deltaDivergence,
+      ...(signal.momentumSamples === undefined ? {} : { momentumSamples: signal.momentumSamples }),
     }));
   }
 

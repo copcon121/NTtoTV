@@ -19,6 +19,7 @@ from websockets.exceptions import ConnectionClosed
 
 from ..config import Settings
 from ..engines.native_iceberg import NativeIcebergDetector
+from ..engines.si_stops import SiStopEngine
 from ..models.canonical import NormalizedQuote, NormalizedTrade, Side
 from ..models.timestamp import now_ms
 from .book import RithmicBookState
@@ -65,6 +66,8 @@ class RithmicSink(Protocol):
     ) -> None: ...
 
     async def on_rithmic_icebergs(self, events: list[dict[str, Any]]) -> None: ...
+
+    async def on_rithmic_stops(self, events: list[dict[str, Any]]) -> None: ...
 
 
 def _host_mac() -> str:
@@ -138,9 +141,13 @@ class RithmicMarketDataService:
         self._icebergs = NativeIcebergDetector(
             symbol=config.logical_symbol, source_contract=config.contract
         )
+        self._stops = SiStopEngine(symbol=config.logical_symbol, source_contract=config.contract)
         self._task: asyncio.Task[None] | None = None
         self._stopping = asyncio.Event()
         self._counts: Counter[str] = Counter()
+        self._mbo_update_counts: Counter[str] = Counter()
+        self._last_mbo_update_time: int | None = None
+        self._trade_frame_counts: Counter[str] = Counter()
         self._subscriptions = {"l1": False, "l2": False, "mbo": False}
         self._trade_sequence = 0
         self._quote_sequence = 0
@@ -346,6 +353,7 @@ class RithmicMarketDataService:
             except Exception as exc:
                 reason = self._safe_reason(exc)
                 logger.warning("Rithmic shadow connection ended: %s", reason)
+                self._stops.reset()
                 await self._emit_icebergs(
                     self._icebergs.invalidate(now_ms(), new_session=False)
                 )
@@ -360,9 +368,13 @@ class RithmicMarketDataService:
             delay = min(self.config.reconnect_max_s, delay * 2)
 
     async def _run_connection(self) -> None:
+        self._stops.reset()
         await self._emit_icebergs(self._icebergs.invalidate(now_ms()))
         self.book.reset()
         self._counts.clear()
+        self._mbo_update_counts.clear()
+        self._last_mbo_update_time = None
+        self._trade_frame_counts.clear()
         self._subscriptions = {"l1": False, "l2": False, "mbo": False}
         self._last_bid = None
         self._last_ask = None
@@ -424,6 +436,7 @@ class RithmicMarketDataService:
                     f"websocket closed code={exc.code} reason={exc.reason or 'none'}"
                 ) from exc
             finally:
+                self._stops.reset()
                 await self._emit_icebergs(
                     self._icebergs.invalidate(now_ms(), new_session=False)
                 )
@@ -486,6 +499,10 @@ class RithmicMarketDataService:
     async def _dispatch(self, message: dict[str, Any]) -> None:
         message_type = str(message.get("type") or "unknown")
         self._counts[message_type] += 1
+        if message_type in {"trade", "bbo", "order_book", "mbo_update", "mbo_snapshot"}:
+            if (message.get("symbol") not in {None, self.config.wire_symbol}
+                    or message.get("exchange") not in {None, self.config.exchange}):
+                return
         if message_type in {"reject", "forced_logout"}:
             raise RithmicProbeError(
                 f"server {message_type} rpCode={message.get('rpCode', ['unknown'])}"
@@ -517,9 +534,13 @@ class RithmicMarketDataService:
             await self._publish_health(force=True)
             return
         if message_type == "trade":
+            presence = message.get("presenceBits")
+            self._trade_frame_counts["presence_missing" if presence is None else f"presence_{int(presence) & 31}"] += 1
             if not message.get("snapshot"):
                 trade = self._normalize_trade(message)
                 if trade is not None:
+                    self._trade_frame_counts["executions"] += 1
+                    self._stops.on_trade(trade)
                     await self._emit_icebergs(self._icebergs.on_trade(trade))
                     await self.sink.on_rithmic_trade(trade)
         elif message_type == "bbo":
@@ -528,12 +549,15 @@ class RithmicMarketDataService:
                 await self.sink.on_rithmic_quote(quote)
         elif message_type == "order_book":
             if message.get("updateType") in {"clear", "no_book"}:
+                self._stops.reset()
                 await self._emit_icebergs(
                     self._icebergs.invalidate(self._event_time(message), new_session=False)
                 )
                 if "mbo" in self.config.modes:
                     self._mbo_resync_requested = True
             book_update = self.book.apply_l2(message)
+            if book_update and (book_update.get("bids") or book_update.get("asks")):
+                await self._emit_stops(self._stops.on_depth(self._event_time(message)))
             await self.sink.on_rithmic_depth(
                 self._status_details(), book_update=book_update
             )
@@ -552,11 +576,13 @@ class RithmicMarketDataService:
                 gap = self.book.finish_mbo_snapshot()
                 self._mbo_snapshot_pending = False
                 if gap:
+                    self._stops.reset()
                     self._mbo_resync_requested = True
                     await self._emit_icebergs(
                         self._icebergs.invalidate(self._event_time(message), new_session=False)
                     )
                 elif self.book.metrics()["mboSynchronized"]:
+                    self._stops.seed_orders(self.book.orders.values())
                     await self._emit_icebergs(
                         self._icebergs.seed_orders(
                             self.book.orders.values(), self._event_time(message)
@@ -566,6 +592,19 @@ class RithmicMarketDataService:
                 self._status_details(), sequence_gap=gap
             )
         elif message_type == "mbo_update":
+            self._last_mbo_update_time = self._event_time(message)
+            for row in message.get("updates") or []:
+                action = row.get("action")
+                self._mbo_update_counts[action if action in {"new", "change", "delete"} else "unknown"] += 1
+                for field in ("exchangeOrderId", "size", "price", "side"):
+                    if row.get(field) is None:
+                        self._mbo_update_counts[f"missing_{field}"] += 1
+                if row.get("size") == 0:
+                    self._mbo_update_counts["zero_size"] += 1
+                if row.get("price") == 0:
+                    self._mbo_update_counts["zero_price"] += 1
+                if row.get("side") is not None and row["side"] not in {"buy", "sell"}:
+                    self._mbo_update_counts["unknown_side"] += 1
             previous_sequence = self.book.last_mbo_sequence
             sequence = message.get("sequence")
             duplicate = (
@@ -575,11 +614,13 @@ class RithmicMarketDataService:
             )
             gap = self.book.apply_mbo_update(message)
             if gap:
+                self._stops.reset()
                 self._mbo_resync_requested = True
                 await self._emit_icebergs(
                     self._icebergs.invalidate(self._event_time(message), new_session=False)
                 )
             elif not duplicate:
+                await self._emit_stops(self._stops.on_mbo_update(message, self._event_time(message)))
                 await self._emit_icebergs(
                     self._icebergs.on_mbo_update(message, self._event_time(message))
                 )
@@ -596,9 +637,15 @@ class RithmicMarketDataService:
             await callback(events)
 
     async def _begin_mbo_snapshot(self) -> None:
+        self._stops.reset()
         await self._emit_icebergs(self._icebergs.invalidate(now_ms()))
         self.book.begin_mbo_snapshot()
         self._mbo_snapshot_pending = True
+
+    async def _emit_stops(self, events: list[dict[str, Any]]) -> None:
+        callback = getattr(self.sink, "on_rithmic_stops", None)
+        if events and callback is not None:
+            await callback(events)
 
     @staticmethod
     def _event_time(message: dict[str, Any]) -> int:
@@ -869,6 +916,13 @@ class RithmicMarketDataService:
         }
 
     def _normalize_trade(self, message: dict[str, Any]) -> NormalizedTrade | None:
+        presence = message.get("presenceBits")
+        if (int(message.get("clearBits") or 0) & 1) or (
+            presence is not None and not int(presence) & 1
+        ):
+            # LastTrade also carries volume/VWAP/statistics updates. Cached
+            # price/size fields on those frames are not another execution.
+            return None
         price = message.get("price")
         size = message.get("size")
         if price is None or size is None or int(size) <= 0:
@@ -963,9 +1017,13 @@ class RithmicMarketDataService:
             "modes": sorted(self.config.modes),
             "subscriptions": dict(self._subscriptions),
             "messageCounts": dict(sorted(self._counts.items())),
+            "mboUpdateCounts": dict(sorted(self._mbo_update_counts.items())),
+            "mboLastUpdateTime": self._last_mbo_update_time,
+            "tradeFrameCounts": dict(self._trade_frame_counts),
             "reconnects": self._reconnects,
             **self.book.metrics(),
             **self._icebergs.metrics(),
+            **self._stops.metrics(),
         }
 
     async def _best_effort_logout(self, websocket) -> None:

@@ -71,6 +71,25 @@ def test_volume_profile_request_uses_minute_period() -> None:
     assert _varints(frame, 119215) == [1]
 
 
+@pytest.mark.parametrize("seconds", [15, 30])
+def test_time_bar_request_uses_native_second_period(seconds: int) -> None:
+    frame = build_time_bar_replay_request(symbol="GCZ6", exchange="COMEX",
+        start_seconds=1_700_000_000, finish_seconds=1_700_003_600,
+        period_seconds=seconds, resume_bars=True)
+    assert template_id(frame) == TIME_BAR_REPLAY_REQUEST
+    assert _varints(frame, 119200) == [1]
+    assert _varints(frame, 119112) == [seconds]
+    assert _varints(frame, 153642) == [1]
+
+
+@pytest.mark.parametrize("seconds", [0, -15])
+def test_time_bar_request_rejects_invalid_second_period(seconds: int) -> None:
+    with pytest.raises(ValueError, match="period_seconds"):
+        build_time_bar_replay_request(symbol="GCZ6", exchange="COMEX",
+            start_seconds=1_700_000_000, finish_seconds=1_700_003_600,
+            period_seconds=seconds)
+
+
 def test_resume_bars_request_and_response() -> None:
     request = build_resume_bars_request(
         request_key="history-request-key",

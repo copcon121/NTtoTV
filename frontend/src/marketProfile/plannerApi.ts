@@ -1,3 +1,5 @@
+import { requestAuthSessionCheck } from "../auth/sessionSync";
+
 export type PlanScope = "daily" | "asia" | "eu" | "us";
 
 export interface MpPlanAlert {
@@ -50,6 +52,7 @@ export async function mpRequest<T>(path: string, method = "GET", body?: unknown)
     ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
   });
   if (!response.ok) {
+    if (response.status === 401) requestAuthSessionCheck();
     const error = await response.json().catch(() => null) as { error?: { message?: string } } | null;
     throw new Error(error?.error?.message ?? `MP Planner: HTTP ${response.status}`);
   }

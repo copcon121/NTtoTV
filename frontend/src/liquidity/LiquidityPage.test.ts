@@ -26,7 +26,24 @@ import {
   validateMarketExplorerSettings,
   validateBigTradeSettings,
   visibleLiquidityBigTrades,
+  mergeMarketVolumeSignals,
 } from "./LiquidityPage";
+
+describe("SI Stops profile and MV Stop retirement", () => {
+  it("persists independent SI settings without inheriting the old net-volume threshold", () => {
+    const state = normalizeLiquidityChartProfileState({ siStops: { minVolume: 25, automatic: true, alertMinVolume: 50 } });
+    expect(state.siStops).toMatchObject({ minVolume: 25, automatic: true, alertMinVolume: 50, enabled: true });
+    expect(normalizeLiquidityChartProfileState({}).siStops?.minVolume).toBe(50);
+  });
+
+  it("keeps Volume Spike and Absorption history while excluding legacy MV Stop markers", () => {
+    const base = { signalId: "old", kind: "market_volume_stop" as const, signalIndex: 1,
+      detectionTime: 2000, time: 1000, side: "buy" as const, threshold: 500, value: 600, ratio: 1, price: 2700 };
+    const spike = { ...base, signalId: "vs", kind: "volume_spike" as const };
+    const absorption = { ...base, signalId: "abs", kind: "absorption" as const };
+    expect(mergeMarketVolumeSignals([base, spike], [base, absorption], 0)).toEqual([spike, absorption]);
+  });
+});
 
 describe("liquidity bar reconciliation", () => {
   it("merges REST heatmap history with newer socket samples without reopening an ended level", () => {

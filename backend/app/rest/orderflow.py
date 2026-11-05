@@ -96,6 +96,31 @@ async def iceberg_history(
         limit=limit, min_volume=min_volume, frm=frm, to=to,
     )
 
+@router.get("/orderflow/si-stops")
+async def si_stop_history(
+    request: Request,
+    symbol: str = Query(default="GC"), contract: str = Query(default="GC"),
+    limit: int = Query(default=5000, ge=1, le=5000),
+    min_volume: int = Query(default=1, ge=1),
+    frm: int | None = Query(default=None, alias="from", ge=0),
+    to: int | None = Query(default=None, ge=0),
+) -> dict[str, Any]:
+    """Completed live chains; trade-only history cannot recreate SI boundaries."""
+    if symbol not in default_settings.supported_symbols:
+        raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
+    if contract != symbol:
+        raise not_found("SI Stops use the logical chart contract", field="contract")
+    if frm is not None and to is not None and frm > to:
+        raise bad_request("from must be <= to", field="from")
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        return {"symbol": symbol, "contract": contract, "source": "rithmic",
+                "sourceContract": None, "sessionId": None, "connected": False,
+                "synchronized": False, "method": "aggressor_chain", "historyMode": "memory",
+                "retentionHours": 48, "limit": limit, "chains": []}
+    return runtime.pipeline.si_stop_snapshot(limit=limit, min_volume=min_volume, frm=frm, to=to)
+
+
 # Supported volume-delta timeframes mirror the Bar_Aggregator's set.
 from ..engines.bar_aggregator import SUPPORTED_TFS as _SUPPORTED_TFS_LIST
 
@@ -250,10 +275,10 @@ def _rebuild_big_trades(
     physical_contract = raw_contract or contract
     out: list[BigTradeRecord] = []
     had_raw_trades = False
-    if source == "bookmap":
+    if source in ("bookmap", "rithmic"):
         engine = BookmapBigTradeEngine()
         trades = tick_store.read_range(
-            physical_contract, frm, to, source="bookmap"
+            physical_contract, frm, to, source=source
         )
     else:
         engine = BigTradeEngine(dedupe_repeated_timestamp_runs=True)
@@ -261,10 +286,8 @@ def _rebuild_big_trades(
             tick_store, physical_contract, frm, to
         )
 
-    last_flush_clock = to
     for trade in trades:
         had_raw_trades = True
-        last_flush_clock = max(last_flush_clock, trade.received_at or trade.time)
         for bt in engine.on_trade(trade):
             out.append(
                 BigTradeRecord(
@@ -279,7 +302,7 @@ def _rebuild_big_trades(
                 )
             )
     if isinstance(engine, BookmapBigTradeEngine):
-        pending = engine.flush_idle(last_flush_clock + engine.idle_ms)
+        pending = engine.flush_all()
     else:
         pending = engine.flush(physical_contract)
     for bt in pending:
@@ -357,6 +380,8 @@ def _tdu_signal_to_dict(rec: TduSignalRecord) -> dict[str, Any]:
         "momentumDirection": rec.momentum_direction,
         "momentumLevel": rec.momentum_level,
         "deltaDivergence": rec.delta_divergence,
+        **({"momentumSamples": [list(sample) for sample in rec.momentum_samples]}
+           if rec.momentum_samples is not None else {}),
     }
 
 

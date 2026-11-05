@@ -38,6 +38,12 @@ accumulated execution quantity.
   that carries those earlier executions. It does not estimate hidden reserves.
 - `displayedSize` is the nonnegative tracked visible remainder.
 - `refillCount` counts observed replenishments after a depleted tranche.
+- A complete same-side reprice of an undetected visible order starts a fresh
+  baseline at its new price with zero accumulated execution/refills. This keeps
+  ordinary moving orders trackable without carrying old-price fills into a new
+  detection. An already detected ICE that changes price still ends as invalidated
+  at its original price; later unknown CHANGE rows cannot revive it. This differs
+  from SI's full movement lifecycle, which requires a richer history model.
 - Status is `active`, `executed`, `canceled`, or `invalidated`. Removal with no
   positive remainder is classified as executed; removal with remainder is
   classified as canceled. Neither reveals the size of an unseen reserve.

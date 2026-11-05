@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ApiClient } from "../api/client";
 import { AuthDialog, type AuthDialogMode } from "../auth/AuthDialog";
+import { useAuthSessionSync } from "../auth/useAuthSessionSync";
 import { ChartSocket } from "../socket/ChartSocket";
 import type { AlertEventMessage } from "../socket/messages";
 import { mpRequest, type MpPlanAlert, type MpPlannerState, type PlanScope } from "./plannerApi";
@@ -30,6 +31,17 @@ export function MarketProfilePlanner({ api, ws }: { api: ApiClient; ws: string }
   const handled = useRef(new Set<string>());
   const deepLinkHandled = useRef(false);
   const mounted = useRef(true);
+
+  useAuthSessionSync(api, (verified) => {
+    if (user !== undefined && user?.id === verified?.id) return;
+    setUser(verified ?? null);
+    if (verified) {
+      setError("");
+      setAuthOpen(false);
+    } else {
+      setState(undefined);
+    }
+  });
 
   const reload = useCallback(async () => {
     const data = await mpRequest<MpPlannerState>("/plans");

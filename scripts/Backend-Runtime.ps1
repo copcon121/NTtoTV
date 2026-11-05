@@ -38,6 +38,24 @@ function Test-BackendHealth {
     return $null
 }
 
+function Get-BackendTaskName {
+    param([int]$Port = 8000)
+    if ($Port -eq 8000) { return 'NTtoTV Backend' }
+    return "NTtoTV Backend $Port"
+}
+
+function Get-BackendScheduledTask {
+    param([int]$Port = 8000)
+    $task = Get-ScheduledTask -TaskName (Get-BackendTaskName -Port $Port) -ErrorAction SilentlyContinue
+    $script = Join-Path (Get-RepoRoot) 'scripts\Run-BackendScheduled.ps1'
+    if ($task -and @($task.Actions | Where-Object {
+        $_.Arguments -match [regex]::Escape(('"{0}"' -f $script))
+    }).Count -gt 0) {
+        return $task
+    }
+    return $null
+}
+
 function Get-CurrentProcessFamilyIds {
     $ids = New-Object "System.Collections.Generic.HashSet[int]"
     $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
@@ -48,10 +66,15 @@ function Get-CurrentProcessFamilyIds {
 
     $current = [int]$PID
     while ($current -gt 0 -and $byId.ContainsKey($current)) {
-        [void]$ids.Add($current)
-        $current = [int]$byId[$current].ParentProcessId
+        if (-not $ids.Add($current)) { break }
+        $process = $byId[$current]
+        $parentId = [int]$process.ParentProcessId
+        if ($byId.ContainsKey($parentId) -and $byId[$parentId].CreationDate -gt $process.CreationDate) {
+            break # The original parent exited and Windows reused its PID.
+        }
+        $current = $parentId
     }
-    return $ids
+    return ,$ids
 }
 
 function Add-ProcessWithRelatives {
@@ -62,7 +85,7 @@ function Add-ProcessWithRelatives {
         [string]$Root
     )
 
-    if (-not $ById.ContainsKey($ProcessId)) {
+    if (-not $ById.ContainsKey($ProcessId) -or $Selected.ContainsKey($ProcessId)) {
         return
     }
 
@@ -130,7 +153,7 @@ function Get-BackendRuntimeProcesses {
     $paths = Get-BackendPaths
     $root = $paths.Root
     $backendPattern = [regex]::Escape($paths.BackendDir)
-    $rootPattern = [regex]::Escape($root)
+    $runnerPattern = '\s-File\s+"?' + [regex]::Escape($paths.Runner) + '"?(?:\s|$)'
     $currentFamily = Get-CurrentProcessFamilyIds
     $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
     $byId = @{}
@@ -171,11 +194,8 @@ function Get-BackendRuntimeProcesses {
         )
         $isBackendWrapper = (
             $process.Name -eq "powershell.exe" -and
-            $cmd -match $rootPattern -and
-            (
-                $cmd -match "Run-BackendProcess\.ps1" -or
-                ($cmd -match "uvicorn" -and $cmd -match "app\.app:app" -and $cmd -match "--port\s+$Port")
-            )
+            $cmd -match $runnerPattern -and
+            $cmd -notmatch '\s-(?:Command|EncodedCommand)\b'
         )
 
         if ($isBackendPython -or $isBackendWorker -or $isBackendWrapper) {
@@ -199,9 +219,23 @@ function Get-BackendRuntimeProcesses {
 function Stop-BackendRuntime {
     param(
         [int]$Port = 8000,
-        [int]$TimeoutSec = 15
+        [int]$TimeoutSec = 15,
+        [switch]$KeepScheduledTask
     )
 
+    if (-not $KeepScheduledTask) {
+        $task = Get-BackendScheduledTask -Port $Port
+        if ($task) {
+            Stop-ScheduledTask -TaskName $task.TaskName -ErrorAction Stop
+            $taskDeadline = (Get-Date).AddSeconds($TimeoutSec)
+            while ((Get-BackendScheduledTask -Port $Port).State -eq 'Running') {
+                if ((Get-Date) -ge $taskDeadline) {
+                    throw "Scheduled backend task did not stop within $TimeoutSec seconds."
+                }
+                Start-Sleep -Milliseconds 200
+            }
+        }
+    }
     $processes = @(Get-BackendRuntimeProcesses -Port $Port)
     if ($processes.Count -eq 0) {
         Write-Host "No backend runtime process found for port $Port."
@@ -279,6 +313,21 @@ function Start-BackendRuntime {
         if ($listeners.Count -gt 0) {
             throw "Port $Port is already listening but /api/health is not OK. Run scripts\Restart-Backend.ps1."
         }
+    }
+
+    $task = Get-BackendScheduledTask -Port $Port
+    if ($task) {
+        Start-ScheduledTask -TaskName $task.TaskName -ErrorAction Stop
+        $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        do {
+            $health = Test-BackendHealth -Port $Port -TimeoutSec 2
+            if ($health) {
+                Write-Host "Backend health OK on port $Port; managed by Task Scheduler ($($task.TaskName))."
+                return
+            }
+            Start-Sleep -Seconds 1
+        } while ((Get-Date) -lt $deadline)
+        throw "Scheduled backend did not become healthy within $TimeoutSec seconds. See backend-supervisor.log."
     }
 
     Remove-Item -LiteralPath $paths.Stdout -Force -ErrorAction SilentlyContinue

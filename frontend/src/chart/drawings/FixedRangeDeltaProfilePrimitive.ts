@@ -16,6 +16,7 @@ import type {
   DeltaProfileLoadState,
   DeltaProfileRow,
 } from "../../orderflow/deltaProfile";
+import { fixedRangeProfileRowTicks } from "../../orderflow/deltaProfile";
 import { anchorToCoordinate } from "./coordinates";
 import type {
   AnchorPoint,
@@ -556,6 +557,13 @@ export class FixedRangeDeltaProfilePrimitive
 
   get extendRight(): boolean {
     return this._options?.fixedRangeProfileExtendRight === true;
+  }
+
+  get rowTicks(): number {
+    return fixedRangeProfileRowTicks(
+      this._options?.fixedRangeProfileRowTicks,
+      this.profileMode,
+    );
   }
 
   get autoFitVertical(): boolean {

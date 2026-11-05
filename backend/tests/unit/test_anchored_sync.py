@@ -140,3 +140,52 @@ def test_anchored_sync_waits_for_filled_position_ticket(tmp_path):
         assert saved.broker_position_ticket is None
     finally:
         cache.close()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("followup", ["manual_sl", "missing", "other_entry"])
+def test_basis_sync_keeps_be_stop_but_releases_on_actual_manual_edit(tmp_path, followup):
+    cache = CacheStore(tmp_path / "be.sqlite")
+    fake = FakeMt5Backend(bid=2338, ask=2338.1)
+    manager = Mt5Manager(backend=fake)
+    basis = BasisEngine()
+    try:
+        user = cache.users.create_user("be", "p")
+        account = cache.users.upsert_mt5_account(user_id=user.id, login=1,
+            password="fake", server="Fake-Demo", symbol_broker="XAUUSDm", credential_key="k")
+        order = OrderRecord(id="be-order", user_id=user.id, account_id=account.id,
+            source=OrderSource.API, symbol_internal="GC", contract_internal="GC",
+            source_contract="GC 12-26", symbol_broker="XAUUSDm", side=OrderSide.BUY,
+            kind=OrderKind.MARKET, volume_lots=0.05, gc_anchored=True,
+            status=OrderStatus.FILLED, idempotency_key="be", created_at=1, updated_at=1,
+            entry_gc=2350.1, fill_price_gc_estimate=2350.1, fill_price_broker=2338.1,
+            entry_broker=2338.1, sl_gc=2350.1, sl_broker=2338.1,
+            tp_gc=2356, tp_broker=2344)
+        result = fake.place_order(order)
+        order.broker_position_ticket = result.broker_position_ticket
+        cache.orders.create(order)
+        basis.update_gc(2350, now_ms())
+        basis.update_broker_mid(2337, now_ms())
+        engine = AnchoredSyncEngine(cache, manager, basis,
+            config=AnchoredSyncConfig(threshold_ticks=1, min_interval_ms=0))
+        assert engine.run_once() == 1
+        saved = cache.orders.read(order.id, user.id)
+        assert saved.sl_broker == 2338.1
+        assert saved.tp_broker == 2343
+        actual = fake.positions(user.id, account.id)[0]
+        if followup == "manual_sl":
+            actual["slBroker"] = 2336
+        elif followup == "missing":
+            fake._positions.clear()
+        else:
+            actual["entryBroker"] = 2340
+        basis.update_broker_mid(2336, now_ms())
+        if followup == "manual_sl":
+            assert engine.run_once() == 1
+            assert cache.orders.read(order.id, user.id).sl_broker == 2336
+            assert fake.positions(user.id, account.id)[0]["slBroker"] == 2336
+        else:
+            assert engine.run_once() == 0
+            assert cache.orders.read(order.id, user.id).tp_broker == 2343
+    finally:
+        cache.close()

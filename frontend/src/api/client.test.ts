@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ApiClient } from "./client";
 import { DEFAULT_EMA_SETTINGS } from "../chart/IndicatorToggles";
+import { AUTH_SESSION_CHECK_EVENT, AUTH_SESSION_STORAGE_KEY } from "../auth/sessionSync";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -12,6 +13,60 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe("ApiClient auth, MT5, and user profile", () => {
+  it("sends BE intent without a GC price for managed and manual positions", async () => {
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({order: {id: "partial"}, position: {brokerPositionTicket: 7}}));
+    const api = new ApiClient({ fetchFn });
+    await api.patchOrder("partial", {breakEven: true});
+    await api.patchMt5Position(7, {breakEven: true});
+    expect(fetchFn.mock.calls).toHaveLength(2);
+    for (const call of fetchFn.mock.calls) {
+      const options = call[1] as RequestInit;
+      expect(JSON.parse(options.body as string)).toEqual({breakEven: true});
+    }
+  });
+  it("reports an unauthorized close without retrying the trading mutation", async () => {
+    const onCheck = vi.fn();
+    window.addEventListener(AUTH_SESSION_CHECK_EVENT, onCheck);
+    try {
+      const fetchFn = vi.fn(async () => jsonResponse(
+        { error: { message: "Authentication required" } }, { status: 401 },
+      ));
+      const api = new ApiClient({ fetchFn });
+      await expect(api.closeOrder("ord_test")).rejects.toThrow("Authentication required");
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(onCheck).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(AUTH_SESSION_CHECK_EVENT, onCheck);
+    }
+  });
+
+  it("does not invalidate other tabs when a login password is rejected", async () => {
+    const onCheck = vi.fn();
+    window.addEventListener(AUTH_SESSION_CHECK_EVENT, onCheck);
+    try {
+      const api = new ApiClient({ fetchFn: vi.fn(async () => jsonResponse(
+        { error: { message: "Invalid username or password" } }, { status: 401 },
+      )) });
+      await expect(api.login("alice", "wrong")).rejects.toThrow("Invalid username or password");
+      expect(onCheck).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(AUTH_SESSION_CHECK_EVENT, onCheck);
+    }
+  });
+
+  it("broadcasts a successful login using only a change marker", async () => {
+    window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+    const api = new ApiClient({ fetchFn: vi.fn(async () => jsonResponse({
+      user: { id: "user_1", username: "alice" },
+    })) });
+    await api.login("alice", "private-test-password");
+    const marker = window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+    expect(marker).toMatch(/^\d+:[\d.]+$/);
+    expect(marker).not.toContain("alice");
+    expect(marker).not.toContain("private-test-password");
+  });
+
   it("reports a rejected alert deletion instead of treating it as success", async () => {
     const fetchFn = vi.fn(async () => jsonResponse(
       { error: { message: "Alert could not be deleted" } }, { status: 400 },
@@ -615,6 +670,7 @@ describe("ApiClient auth, MT5, and user profile", () => {
             momentumDirection: -1,
             momentumLevel: 3,
             deltaDivergence: 1,
+            momentumSamples: [[35, 10, -1]],
           },
         ],
       }),
@@ -631,6 +687,7 @@ describe("ApiClient auth, MT5, and user profile", () => {
         momentumDirection: -1,
         momentumLevel: 3,
         deltaDivergence: 1,
+        momentumSamples: [[35, 10, -1]],
       },
     ]);
 

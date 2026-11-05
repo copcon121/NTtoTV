@@ -1,0 +1,16 @@
+﻿{
+    "CapturedAtUtcPlus7":  "2026-10-30T05:52:03.2612901+07:00",
+    "ActiveSource":  "rithmic",
+    "PreferredSource":  "rithmic",
+    "Reason":  "rithmic_only",
+    "Contract":  "GC 12-26",
+    "BMEnabled":  false,
+    "BMConnected":  false,
+    "NTEnabled":  false,
+    "NTConnected":  false,
+    "RithmicConnected":  true,
+    "RithmicEligible":  true,
+    "MboSynchronized":  true,
+    "IceSynchronized":  true,
+    "LastEventAt":  1793314323129
+}

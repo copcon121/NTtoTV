@@ -89,7 +89,34 @@ class AnchoredSyncEngine:
         next_entry = (
             None if order.entry_gc is None else self._basis.to_broker(order.entry_gc, symbol)
         )
-        next_sl = None if order.sl_gc is None else self._basis.to_broker(order.sl_gc, symbol)
+        # A filled stop at the broker's entry is price break-even. Keep it there
+        # when basis moves; a subsequent manual SL change releases this pin.
+        break_even_sl = (
+            order.broker_position_ticket is not None
+            and order.status in {OrderStatus.FILLED, OrderStatus.SYNC_ERROR}
+            and order.fill_price_broker is not None
+            and order.sl_broker == symbol.round_price(order.fill_price_broker)
+        )
+        if break_even_sl:
+            position = next((row for row in backend.positions(order.user_id, order.account_id)
+                if row.get("ticket") == order.broker_position_ticket
+                and row.get("symbol", order.symbol_broker) == order.symbol_broker
+                and row.get("side") == order.side.value
+                and row.get("entryBroker") == order.fill_price_broker), None)
+            if position is None:
+                return False
+            observed_change = False
+            for role in ("sl", "tp"):
+                actual = position.get(role + "Broker") or None
+                if actual != getattr(order, role + "_broker"):
+                    setattr(order, role + "_broker", actual)
+                    setattr(order, role + "_gc", None if actual is None else self._basis.from_broker(actual, symbol).price)
+                    observed_change = True
+            if observed_change:
+                order.updated_at = now
+                self._cache.orders.update(order)
+            break_even_sl = order.sl_broker == symbol.round_price(order.fill_price_broker)
+        next_sl = None if order.sl_gc is None or break_even_sl else self._basis.to_broker(order.sl_gc, symbol)
         next_tp = None if order.tp_gc is None else self._basis.to_broker(order.tp_gc, symbol)
         converted = [c for c in (next_entry, next_sl, next_tp) if c is not None]
         if any(c.stale for c in converted):

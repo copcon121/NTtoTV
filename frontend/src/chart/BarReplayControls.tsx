@@ -12,6 +12,9 @@ export interface BarReplayControlsProps {
   currentBar: number;
   totalBars: number;
   selectionError?: string;
+  loading?: boolean;
+  loadError?: string;
+  disabled?: boolean;
   onCancelSelection: () => void;
   onTogglePlaying: () => void;
   onStepBack: () => void;
@@ -27,6 +30,9 @@ export function BarReplayControls({
   currentBar,
   totalBars,
   selectionError,
+  loading = false,
+  loadError,
+  disabled = false,
   onCancelSelection,
   onTogglePlaying,
   onStepBack,
@@ -53,18 +59,18 @@ export function BarReplayControls({
       <span className="bar-replay-live-lock" title="Live MT5 trading is disabled during replay">
         Replay
       </span>
-      <button type="button" onClick={onStepBack} disabled={currentBar <= 1}>
+      <button type="button" onClick={onStepBack} disabled={disabled || currentBar <= 1}>
         Back
       </button>
       <button
         type="button"
         className="bar-replay-main"
         onClick={onTogglePlaying}
-        disabled={complete}
+        disabled={disabled || complete}
       >
         {playing ? "Pause" : complete ? "Done" : "Play"}
       </button>
-      <button type="button" onClick={onStepForward} disabled={complete}>
+      <button type="button" onClick={onStepForward} disabled={disabled || complete}>
         Step
       </button>
       <label className="bar-replay-speed">
@@ -79,6 +85,8 @@ export function BarReplayControls({
           ))}
         </select>
       </label>
+      {loading && <span role="status">Loading replay history...</span>}
+      {loadError && <span role="alert">{loadError}</span>}
       <button type="button" onClick={onExit}>Live</button>
     </div>
   );

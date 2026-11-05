@@ -14,10 +14,12 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from ..models.icebergs import IcebergUpdate
+from ..models.si_stops import SiStopChain
 from .connection import SingleWriter, connect, connect_reader
 
 __all__ = ["LiquidityStore", "ICEBERG_RETENTION_MS"]
 ICEBERG_RETENTION_MS = 48 * 60 * 60 * 1000
+SI_STOP_RETENTION_MS = ICEBERG_RETENTION_MS
 
 
 _SCHEMA = """
@@ -99,6 +101,21 @@ CREATE TABLE IF NOT EXISTS iceberg_states (
 
 CREATE INDEX IF NOT EXISTS idx_iceberg_states_range
 ON iceberg_states(symbol, contract, source_contract, event_time);
+
+CREATE TABLE IF NOT EXISTS si_stop_chains (
+    symbol TEXT NOT NULL,
+    contract TEXT NOT NULL,
+    source_contract TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    chain_id TEXT NOT NULL,
+    event_time INTEGER NOT NULL,
+    executed_volume INTEGER NOT NULL,
+    source_sequence INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY(symbol, contract, source_contract, session_id, chain_id)
+);
+CREATE INDEX IF NOT EXISTS idx_si_stop_chains_range
+ON si_stop_chains(symbol, contract, source_contract, event_time);
 """
 
 
@@ -407,6 +424,46 @@ class LiquidityStore:
     def purge_icebergs_before(self, cutoff_ms: int) -> int:
         return int(self._writer.execute(
             "DELETE FROM iceberg_states WHERE event_time < ?", (int(cutoff_ms),)
+        ).rowcount)
+
+    def record_si_stops(self, payloads: Iterable[dict[str, Any]]) -> None:
+        rows = [SiStopChain.from_dict(payload) for payload in payloads]
+        if not rows:
+            return
+
+        def write(conn) -> None:
+            conn.executemany(
+                """INSERT OR IGNORE INTO si_stop_chains(
+                    symbol, contract, source_contract, session_id, chain_id,
+                    event_time, executed_volume, source_sequence, payload
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [(r.symbol, r.contract, r.source_contract, r.session_id, r.chain_id,
+                  r.time, r.executed_volume, r.sequence,
+                  json.dumps(r.to_dict(), separators=(",", ":"))) for r in rows],
+            )
+
+        self._writer.write(write)
+
+    def read_si_stops(self, symbol: str, contract: str, source_contract: str,
+                      start: int, end: int, *, limit: int = 5000,
+                      min_volume: int = 1) -> list[dict[str, Any]]:
+        conn = connect_reader(self.path)
+        try:
+            rows = conn.execute(
+                """SELECT payload FROM si_stop_chains
+                WHERE symbol=? AND contract=? AND source_contract=?
+                  AND event_time BETWEEN ? AND ? AND executed_volume>=?
+                ORDER BY event_time DESC, source_sequence DESC, chain_id DESC LIMIT ?""",
+                (symbol, contract, source_contract, int(start), int(end), int(min_volume),
+                 max(1, min(int(limit), 5000))),
+            ).fetchall()
+            return [json.loads(row["payload"]) for row in reversed(rows)]
+        finally:
+            conn.close()
+
+    def purge_si_stops_before(self, cutoff_ms: int) -> int:
+        return int(self._writer.execute(
+            "DELETE FROM si_stop_chains WHERE event_time < ?", (int(cutoff_ms),)
         ).rowcount)
 
     def purge_before(self, cutoff_ms: int) -> tuple[int, int]:

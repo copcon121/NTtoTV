@@ -1,0 +1,237 @@
+{
+  "capturedAtUtcPlus7": "2026-10-30T05:57:13.918647+07:00",
+  "source": "local public API and mode=ro raw Rithmic ticks",
+  "rawWindowStartUtcPlus7": "2026-10-30T05:50:40+07:00",
+  "activeSource": "rithmic",
+  "preferredSource": "rithmic",
+  "currentSession": "4faaa61248ab4dc1be6213ad35d9d028",
+  "currentSessionIcebergs": [],
+  "postRestartIcebergs": [],
+  "rithmic": {
+    "connected": true,
+    "eligible": true,
+    "messageCounts": {
+      "bbo": 438,
+      "heartbeat": 6,
+      "market_data_subscription": 1,
+      "mbo_snapshot": 1256,
+      "mbo_subscription": 1,
+      "mbo_update": 754,
+      "order_book": 3025,
+      "trade": 316
+    },
+    "mboUpdateCounts": {
+      "change": 176,
+      "delete": 176,
+      "new": 402
+    },
+    "mboSynchronized": true,
+    "icebergSynchronized": true,
+    "icebergTrackedOrders": 2501,
+    "icebergDroppedOrders": 0,
+    "icebergDiagnostics": {
+      "change_known": 84,
+      "new_unknown": 402,
+      "delete_unknown": 143,
+      "trade_known": 30,
+      "candidate_repriced": 73,
+      "delete_known": 33,
+      "removed_canceled": 33,
+      "trade_unknown": 125,
+      "removed_trade_side_price": 3,
+      "change_unknown": 92
+    },
+    "icebergLastMismatches": {
+      "trade": {
+        "orderId": "7816405952696",
+        "time": 1793314502871,
+        "trackedSide": "sell",
+        "trackedPrice": 4037.9,
+        "side": "sell",
+        "price": 4036.8
+      }
+    },
+    "icebergLastOverfill": null,
+    "mboLastSequence": null,
+    "mboOrders": 2532,
+    "reconnects": 0,
+    "subscriptions": {
+      "l1": true,
+      "l2": true,
+      "mbo": true
+    },
+    "wireSymbol": "GCZ6",
+    "exchange": "COMEX"
+  },
+  "rawTradeSummary": {
+    "trades": 156,
+    "quantity": 182,
+    "uniquePassiveIds": 151,
+    "missingPassiveIds": 0,
+    "sides": {
+      "buy": 59,
+      "sell": 97
+    }
+  },
+  "selectedRawTradeEvidence": [
+    {
+      "sequence": 2,
+      "time": 1793314254446,
+      "received_at": 1793314254554,
+      "price": 4037.7000000000003,
+      "volume": 1,
+      "side": "buy",
+      "aggressor_order_id": "7816405953595",
+      "passive_order_id": "7816405953444",
+      "source_time_nanos": 1793314254446641473
+    },
+    {
+      "sequence": 3,
+      "time": 1793314270308,
+      "received_at": 1793314270419,
+      "price": 4037.7000000000003,
+      "volume": 1,
+      "side": "buy",
+      "aggressor_order_id": "7816405954117",
+      "passive_order_id": "7816405953855",
+      "source_time_nanos": 1793314270308289917
+    },
+    {
+      "sequence": 31,
+      "time": 1793314288630,
+      "received_at": 1793314288790,
+      "price": 4035.5,
+      "volume": 1,
+      "side": "sell",
+      "aggressor_order_id": "7816405954809",
+      "passive_order_id": "7816405945017",
+      "source_time_nanos": 1793314288630420105
+    },
+    {
+      "sequence": 32,
+      "time": 1793314288630,
+      "received_at": 1793314288791,
+      "price": 4035.5,
+      "volume": 1,
+      "side": "sell",
+      "aggressor_order_id": "7816405954809",
+      "passive_order_id": "7816405945200",
+      "source_time_nanos": 1793314288630420105
+    },
+    {
+      "sequence": 44,
+      "time": 1793314315075,
+      "received_at": 1793314315193,
+      "price": 4036.4,
+      "volume": 2,
+      "side": "buy",
+      "aggressor_order_id": "7816405957700",
+      "passive_order_id": "7816405957610",
+      "source_time_nanos": 1793314315075925563
+    },
+    {
+      "sequence": 49,
+      "time": 1793314324643,
+      "received_at": 1793314324873,
+      "price": 4036.7000000000003,
+      "volume": 2,
+      "side": "buy",
+      "aggressor_order_id": "7816405958246",
+      "passive_order_id": "7816405956569",
+      "source_time_nanos": 1793314324643805017
+    },
+    {
+      "sequence": 50,
+      "time": 1793314324644,
+      "received_at": 1793314324881,
+      "price": 4036.8,
+      "volume": 2,
+      "side": "buy",
+      "aggressor_order_id": "7816405958266",
+      "passive_order_id": "7816405954960",
+      "source_time_nanos": 1793314324644157533
+    },
+    {
+      "sequence": 59,
+      "time": 1793314346515,
+      "received_at": 1793314346732,
+      "price": 4036.6000000000004,
+      "volume": 1,
+      "side": "sell",
+      "aggressor_order_id": "7816405959272",
+      "passive_order_id": "7816405956568",
+      "source_time_nanos": 1793314346515608993
+    },
+    {
+      "sequence": 61,
+      "time": 1793314349745,
+      "received_at": 1793314349989,
+      "price": 4036.4,
+      "volume": 3,
+      "side": "sell",
+      "aggressor_order_id": "7816405959567",
+      "passive_order_id": "7816405956568",
+      "source_time_nanos": 1793314349745321029
+    },
+    {
+      "sequence": 115,
+      "time": 1793314510531,
+      "received_at": 1793314510644,
+      "price": 4037.0,
+      "volume": 1,
+      "side": "buy",
+      "aggressor_order_id": "7816405965655",
+      "passive_order_id": "7816405962667",
+      "source_time_nanos": 1793314510531667779
+    },
+    {
+      "sequence": 116,
+      "time": 1793314510531,
+      "received_at": 1793314510679,
+      "price": 4037.0,
+      "volume": 4,
+      "side": "buy",
+      "aggressor_order_id": "7816405965658",
+      "passive_order_id": "7816405962667",
+      "source_time_nanos": 1793314510531943547
+    },
+    {
+      "sequence": 117,
+      "time": 1793314510532,
+      "received_at": 1793314510691,
+      "price": 4037.0,
+      "volume": 3,
+      "side": "buy",
+      "aggressor_order_id": "7816405965667",
+      "passive_order_id": "7816405962667",
+      "source_time_nanos": 1793314510532113333
+    },
+    {
+      "sequence": 118,
+      "time": 1793314510532,
+      "received_at": 1793314510695,
+      "price": 4037.0,
+      "volume": 15,
+      "side": "buy",
+      "aggressor_order_id": "7816405965674",
+      "passive_order_id": "7816405962667",
+      "source_time_nanos": 1793314510532222987
+    },
+    {
+      "sequence": 119,
+      "time": 1793314510532,
+      "received_at": 1793314510700,
+      "price": 4037.0,
+      "volume": 3,
+      "side": "buy",
+      "aggressor_order_id": "7816405965676",
+      "passive_order_id": "7816405962667",
+      "source_time_nanos": 1793314510532225187
+    }
+  ],
+  "limitations": [
+    "No raw MBO history; missing ICE cannot be reconstructed solely from trades.",
+    "BM chart icon time/price estimates need exact tooltip/order ID before direct per-order comparison.",
+    "Repeated same-passive prints/large quantity alone do not establish ICE."
+  ]
+}

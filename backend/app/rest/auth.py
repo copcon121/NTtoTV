@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -15,6 +16,7 @@ from .alerts import get_cache
 from .errors import ApiError, ErrorCode, bad_request, conflict
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 def _user_to_dict(user: AuthenticatedUser) -> dict[str, str]:
@@ -24,7 +26,19 @@ def _user_to_dict(user: AuthenticatedUser) -> dict[str, str]:
 def current_user_optional(
     request: Request, cache: CacheStore = Depends(get_cache)
 ) -> AuthenticatedUser | None:
-    return cache.users.read_session_user(request.cookies.get(SESSION_COOKIE))
+    token = request.cookies.get(SESSION_COOKIE)
+    user = cache.users.read_session_user(token)
+    if user is None and request.method not in {"GET", "HEAD", "OPTIONS"}:
+        # Record presence only, never the Cookie header, token, or its hash.
+        cookie_count = sum(
+            part.strip().partition("=")[0] == SESSION_COOKIE
+            for part in request.headers.get("cookie", "").split(";")
+        )
+        logger.warning(
+            "Authentication rejected method=%s path=%s session_cookie=%s cookie_count=%s",
+            request.method, request.url.path, "invalid" if token else "missing", cookie_count,
+        )
+    return user
 
 
 def get_current_user(

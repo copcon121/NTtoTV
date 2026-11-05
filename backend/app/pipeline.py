@@ -74,6 +74,7 @@ from .ingest.coordinator import QUOTE_CHANNEL, TRADE_CHANNEL, IngestionCoordinat
 from .ingest.endpoint import IngestHandlers
 from .ingest.sequence_validator import SeqOutcome, SequenceValidator, StreamId
 from .models.canonical import NormalizedQuote, NormalizedTrade
+from .models.si_stops import SiStopChain
 from .models.messages import (
     BarUpdate,
     AlertEvent,
@@ -211,6 +212,7 @@ def _volume_delta_update_for_contract(
         open_delta=update.open_delta,
         close_delta=update.close_delta,
         cumulative_delta=update.cumulative_delta,
+        source=update.source,
     )
 
 def _big_trade_for_contract(bt: BigTrade, contract: str) -> BigTrade:
@@ -277,6 +279,7 @@ class Pipeline:
         # Compact direct-feed detections are independent of OHLCV ownership.
         # Raw MBO stays in the Rithmic service; retain only bounded latest states.
         self._icebergs: OrderedDict[tuple[str, str, str], IcebergUpdate] = OrderedDict()
+        self._si_stops: OrderedDict[tuple[str, str, str], SiStopChain] = OrderedDict()
         self._auto_trade_closed_bar_sink = auto_trade_closed_bar_sink
         self._auto_trade_price_sink = auto_trade_price_sink
         self._manual_trailing_closed_bar_sink = manual_trailing_closed_bar_sink
@@ -308,6 +311,7 @@ class Pipeline:
                         mode=seed.mode if seed is not None else VolumeDeltaMode.DELTA,
                         min_trade_size=seed.min_trade_size if seed is not None else 0,
                         zero_baseline=source != "nt",
+                        source=source,
                     )
         # Compatibility alias for focused tests and replay code that injects the
         # historical NT engine.  Live routing uses the source-scoped map above.
@@ -413,6 +417,8 @@ class Pipeline:
         self._last_quote: dict[str, tuple[float | None, float | None]] = {}
         preferred = self._settings.market_data_preferred_source
         self._preferred_source = preferred if preferred in ("nt", "bookmap") else "nt"
+        if self._settings.market_data_rithmic_only:
+            self._preferred_source = "rithmic"
         started = now_ms()
         self._source_started_at = started
         self._active_feed: str | None = "nt" if self._preferred_source == "nt" else None
@@ -834,6 +840,55 @@ class Pipeline:
             "droppedOrders": int(state.details.get("icebergDroppedOrders", 0)),
             "limit": limit,
             "icebergs": rows[-limit:],
+        }
+
+    async def on_rithmic_stops(self, events: list[dict]) -> None:
+        accepted = []
+        for event in events:
+            chain = SiStopChain.from_dict(event)
+            if chain.symbol != self._symbol or chain.contract != self._chart_contract():
+                continue
+            key = (chain.source_contract, chain.session_id, chain.chain_id)
+            if key in self._si_stops:
+                continue  # Completed chains are immutable and never re-alert.
+            self._si_stops[key] = chain
+            while len(self._si_stops) > 5000:
+                self._si_stops.popitem(last=False)
+            accepted.append(chain)
+        if self._liquidity_store is not None and accepted:
+            await asyncio.to_thread(self._liquidity_store.record_si_stops,
+                                    [chain.to_dict() for chain in accepted])
+        for chain in accepted:
+            if chain.source_contract == self._active_contract():
+                await self._enqueue(OutboundEvent.from_message(chain))
+
+    def si_stop_snapshot(self, *, limit: int = 5000, min_volume: int = 1,
+                         frm: int | None = None, to: int | None = None) -> dict:
+        state = self._feed_states["rithmic"]
+        source_contract = self._active_contract()
+        start = max(now_ms() - ICEBERG_RETENTION_MS, frm or 0)
+        end = now_ms() if to is None else to
+        retained = {}
+        if self._liquidity_store is not None:
+            rows = self._liquidity_store.read_si_stops(
+                self._symbol, self._chart_contract(), source_contract, start, end,
+                limit=limit, min_volume=min_volume,
+            )
+            retained = {(row["sourceContract"], row["sessionId"], row["chainId"]): row for row in rows}
+        for key, chain in self._si_stops.items():
+            retained.setdefault(key, chain.to_dict())
+        rows = [r for r in retained.values() if r["sourceContract"] == source_contract
+                and start <= r["time"] <= end and r["executedVolume"] >= min_volume]
+        rows.sort(key=lambda r: (r["time"], r["sequence"], r["chainId"]))
+        return {
+            "symbol": self._symbol, "contract": self._chart_contract(), "source": "rithmic",
+            "sourceContract": source_contract, "sessionId": state.details.get("siStopsSessionId"),
+            "connected": state.connected,
+            "synchronized": bool(state.connected and state.contract == source_contract
+                                 and state.details.get("siStopsSynchronized", False)),
+            "method": "aggressor_chain", "retentionHours": 48, "from": start,
+            "historyMode": "persistent" if self._liquidity_store is not None else "memory",
+            "limit": limit, "chains": rows[-limit:],
         }
 
     async def on_rithmic_quote(self, quote: NormalizedQuote) -> None:
@@ -1368,6 +1423,7 @@ class Pipeline:
             delta_low=delta_low,
             open_delta=open_delta,
             close_delta=close_delta,
+            source="bookmap",
         )
         self._source_vds["bookmap"][FOOTPRINT_TIMEFRAME].seed_bar(
             contract,
@@ -2142,6 +2198,7 @@ class Pipeline:
                     momentum_direction=update.momentum_direction,
                     momentum_level=update.momentum_level,
                     delta_divergence=update.delta_divergence,
+                    momentum_samples=update.momentum_samples,
                 )
                 for update in (tdu_signal_updates or [])
             ),
@@ -2311,6 +2368,7 @@ class Pipeline:
                 delta_low=delta_low,
                 open_delta=0,
                 close_delta=running_delta,
+                source="bookmap",
             )
             self._source_vds["bookmap"][tf].seed_bar(
                 contract,
@@ -2402,14 +2460,14 @@ class Pipeline:
                 self._rithmic_liquidity.snapshots(now)
             )
 
-        # Direct feeds group exchange prints by aggressor order id. Flush idle
-        # groups for both feeds so a quiet final group is not stranded. Only
+        # Flush against the last exchange watermark, never the timer's wall
+        # clock: delayed fills may still belong to a pending execution. Only
         # the currently active source may publish shared chart keys.
         for source in ("bookmap", "rithmic"):
             engine = self._source_big_trades[source]
             if not isinstance(engine, BookmapBigTradeEngine):
                 continue
-            emitted = engine.flush_idle(now)
+            emitted = engine.flush_idle()
             published: list[BigTrade] = []
             if emitted:
                 async with self._derived_source_lock:
@@ -2601,6 +2659,7 @@ class Pipeline:
                 delta_low=update.delta_low,
                 open_delta=update.open_delta,
                 close_delta=update.close_delta,
+                source=update.source,
             )
 
     def note_nt_native_bar(self, bar_time: int, received_at: int | None = None) -> None:
@@ -2614,6 +2673,7 @@ class Pipeline:
         lags = list(state.event_lags)
         transport = list(state.transport_lags)
         result = {
+            "enabled": not self._settings.market_data_rithmic_only or source == "rithmic",
             "connected": state.connected,
             "eligible": self._feed_eligible(source, now),
             "contract": state.contract,
@@ -2686,6 +2746,8 @@ class Pipeline:
             state.transport_lags.append(max(0, received_at - bridge_time))
 
     def _feed_eligible(self, source: str, now: int) -> bool:
+        if self._settings.market_data_rithmic_only and source != "rithmic":
+            return False
         state = self._feed_states[source]
         if not state.connected or state.last_heartbeat_at is None:
             return False
@@ -2721,6 +2783,13 @@ class Pipeline:
         return state.contract in (None, self._active_contract())
 
     async def _evaluate_source_selection(self, now: int) -> None:
+        if self._settings.market_data_rithmic_only:
+            source = (
+                "rithmic" if not self._settings.rithmic_shadow_mode
+                and self._feed_eligible("rithmic", now) else None
+            )
+            await self._switch_feed(source, "rithmic_only", now)
+            return
         if self._preferred_source == "nt":
             if self._active_feed is None:
                 await self._switch_feed("nt", "nt_preferred", now)
@@ -3014,6 +3083,7 @@ class Pipeline:
                         0 if signal is None else signal.momentum_direction
                     ),
                     momentum_level=0 if signal is None else signal.momentum_level,
+                    momentum_samples=None if signal is None else signal.momentum_samples,
                     delta_divergence=(
                         None if signal is None else signal.delta_divergence
                     ),

@@ -87,8 +87,13 @@ import {
   TduSignalPrimitive,
   type RenderableTduSignal,
 } from "./TduSignalPrimitive";
-import { shouldRenderDenseOverlay } from "./zoomVisibility";
+import {
+  MIN_DENSE_OVERLAY_BAR_SPACING,
+  normalizeDenseOverlayMinSpacing,
+  shouldRenderDenseOverlay,
+} from "./zoomVisibility";
 import type { TduSignalUpdateMessage } from "../socket/messages";
+import type { TduSettings } from "./tduSettings";
 import {
   WaveDeltaMboxPrimitive,
   type RenderableWaveDeltaMbox,
@@ -1549,6 +1554,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly supertrendMarkerByTime = new Map<number, SupertrendMarker>();
   private readonly deltaColors: DeltaColors;
   private candleBars: BarSeries = [];
+  private candleLastRenderedTime: number | undefined;
+  private volumeLastRenderedTime: number | undefined;
+  private deltaLastRenderedTime: number | undefined;
   private outsideBar: OutsideBarSettings;
   private readonly barsByTime = new Map<number, Bar>();
   private readonly volumeDeltaByTime = new Map<number, VolumeDeltaDatum>();
@@ -1564,6 +1572,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     number,
     GcPushMomentumPoint
   >();
+  private readonly gcPushMomentumDisplayByTime = new Map<number, HistogramData | undefined>();
   private gcPushMomentumPaneIndex: number | undefined;
   private gcPushMomentumVisible = false;
   private gcPushMomentumSettings: GcPushMomentumSettings = {
@@ -1578,11 +1587,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private mgannOverlayCacheRevision = -1;
   private mgannOverlayCache: MgannSwingOverlay | undefined;
   private mgannImpulseColors = new Map<number, string>();
+  private mgannImpulseReindexNeeded = false;
   private mgannRenderTimer: number | undefined;
   private denseOverlaysVisibleForZoom = true;
+  private denseOverlayMinSpacing = MIN_DENSE_OVERLAY_BAR_SPACING;
   private readonly handleDenseOverlayZoomChange = (): void => {
     const visible = shouldRenderDenseOverlay(
       this.chart.timeScale().options().barSpacing,
+      this.denseOverlayMinSpacing,
     );
     if (visible === this.denseOverlaysVisibleForZoom) return;
     this.denseOverlaysVisibleForZoom = visible;
@@ -1622,6 +1634,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private disposePriceLineDragListeners: (() => void) | undefined;
   private disposeRealtimeInteractionListeners: (() => void) | undefined;
   private realtimeInteractionActive = false;
+  private realtimeRenderFrame: number | undefined;
   private readonly deferredBarTimes = new Set<number>();
   private readonly deferredVolumeDeltaTimes = new Set<number>();
   private deferredSessionMarkers = false;
@@ -1875,6 +1888,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   /** The underlying chart instance (for layout chrome wired in task 12.7). */
   get chartApi(): IChartApi {
     return this.chart;
+  }
+
+  setDenseOverlayMinSpacing(value: number): void {
+    this.denseOverlayMinSpacing = normalizeDenseOverlayMinSpacing(value);
+    this.tduSignalPrimitive?.setMinBarSpacing(this.denseOverlayMinSpacing);
+    this.handleDenseOverlayZoomChange();
   }
 
   /** The candle series instance (for DrawingManager to attach primitives). */
@@ -2162,9 +2181,24 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   /** Apply a single incremental candle update. */
   updateBar(bar: Bar, closed?: boolean): void {
+    if (
+      bar.time > (this.candleBars[this.candleBars.length - 1]?.time ?? bar.time) &&
+      this.replayMomentumIndex >= 0
+    ) {
+      // Preserve the preceding bucket's final calculation before advancing its
+      // bounded warmup window. Only forming snapshots of one bucket coalesce.
+      if (this.replayMomentumFrame !== undefined) {
+        window.cancelAnimationFrame(this.replayMomentumFrame);
+        this.replayMomentumFrame = undefined;
+      }
+      const pendingIndex = this.replayMomentumIndex;
+      this.replayMomentumIndex = -1;
+      this.updateGcPushMomentumAt(pendingIndex);
+    }
     const wasClosed = this.closedBarTimes.has(bar.time);
     const result = applyBarUpdate(this.candleBars, bar);
     this.candleBars = result.bars;
+    if (result.kind === "insert") this.mgannImpulseReindexNeeded = true;
     if (result.kind === "append" && result.index === this.xKontrolEngine.length) {
       this.xKontrolEngine.appendBar(result.bar);
     } else if (
@@ -2190,46 +2224,29 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     if (result.kind === "noop") {
       if (closedStateChanged) {
         this.invalidateMgannOverlay();
-        this.scheduleMgannRender();
+        this.deferredBarTimes.add(bar.time);
+        this.markGcPushMomentumDirty(result.index);
+        this.scheduleRealtimeRender();
       }
-      this.scheduleGcPushMomentumUpdate(result.index);
       return;
     }
     this.invalidateMgannOverlay();
-    if (this.realtimeInteractionActive) {
-      // Keep the data model current but defer canvas invalidation until the pan
-      // gesture ends. Usually this set contains only the live bar's timestamp.
-      this.deferredBarTimes.add(bar.time);
-      if (result.kind === "append" || result.kind === "insert") {
-        this.deferredSessionMarkers = true;
-      }
-    } else {
-      // Keep the primary price/volume path incremental even when the heavier
-      // mGann overlays are enabled. Their full-history series are refreshed in
-      // one coalesced pass below.
-      this.updateCandleAt(result.index);
-      this.updateCandleAt(result.index + 1);
-      // Session markers only exist on the two highlighted session boundaries.
-      // Most Replay appends do not change this collection, so avoid replacing
-      // the marker plugin data (and invalidating the chart) for every candle.
-      if (
-        (result.kind === "append" || result.kind === "insert") &&
-        utcPlus7SessionHighlightHour(bar.time, this.displayTimeOffsetMs) !== undefined
-      ) {
-        this.renderSessionMarkers();
-      }
-      if (this.volumeVisible) {
-        this.updateVolumeAt(result.index);
-      }
-      this.renderXKontrolSignals();
-      this.scheduleGcPushMomentumUpdate(result.index);
-      this.scheduleMgannRender();
+    // Retain every model/closed-state update, but paint each affected bucket
+    // once per frame. Transport bursts must not replay intermediate snapshots
+    // and full-history indicator scans before the browser can paint the price.
+    this.deferredBarTimes.add(bar.time);
+    this.markGcPushMomentumDirty(result.index);
+    if (
+      (result.kind === "append" || result.kind === "insert") &&
+      utcPlus7SessionHighlightHour(bar.time, this.displayTimeOffsetMs) !== undefined
+    ) {
+      this.deferredSessionMarkers = true;
     }
+    this.scheduleRealtimeRender();
     this.barsByTime.set(
       toUtcTimestamp(bar.time, this.displayTimeOffsetMs) as number,
       { ...bar },
     );
-    this.renderTduSignals();
     const previousLatestTime = this.latestBar?.time;
     if (this.latestBar === undefined || bar.time >= this.latestBar.time) {
       if (previousLatestTime === undefined || bar.time > previousLatestTime) {
@@ -2328,6 +2345,10 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderGcPushMomentumSeries();
   }
 
+  setTduSettings(settings: TduSettings): void {
+    this.tduSignalPrimitive?.setSettings(settings);
+  }
+
   setTduSignalsVisible(visible: boolean): void {
     this.tduSignalsVisible = visible;
     this.tduSignalPrimitive?.setVisible(visible);
@@ -2411,7 +2432,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       if (!this.waveDeltaVisible && !this.mgannSwingVisible) return;
       const overlay = this.currentMgannOverlay();
       if (this.shouldRenderMgannImpulseWaves()) {
-        this.renderCandleSeries(overlay);
+        this.updateMgannImpulseCandles(overlay);
       }
       this.renderWaveDeltaSeries(overlay);
       if (this.mgannSwingVisible) {
@@ -2470,6 +2491,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       ? this.mgannImpulseColorsByIndex(overlay ?? this.currentMgannOverlay())
       : new Map<number, string>();
     this.mgannImpulseColors = impulseColors;
+    this.mgannImpulseReindexNeeded = false;
     this.candleSeries.setData(
       this.candleBars.map((bar, index) =>
         toCandle(
@@ -2488,6 +2510,21 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         ),
       ),
     );
+    this.candleLastRenderedTime = this.candleBars[this.candleBars.length - 1]?.time;
+  }
+
+  private updateMgannImpulseCandles(overlay: MgannSwingOverlay): void {
+    if (this.mgannImpulseReindexNeeded) {
+      this.renderCandleSeries(overlay);
+      return;
+    }
+    const previous = this.mgannImpulseColors;
+    const next = this.mgannImpulseColorsByIndex(overlay);
+    this.mgannImpulseColors = next;
+    const indexes = new Set([...previous.keys(), ...next.keys()]);
+    for (const index of [...indexes].sort((a, b) => a - b)) {
+      if (previous.get(index) !== next.get(index)) this.updateCandleAt(index);
+    }
   }
 
   private renderVolumeSeries(): void {
@@ -2496,16 +2533,17 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         toVolumeHistogram(bar, this.displayTimeOffsetMs),
       ),
     );
+    this.volumeLastRenderedTime = this.candleBars[this.candleBars.length - 1]?.time;
   }
 
   private renderVolumeDeltaSeries(): void {
+    const points = [...this.volumeDeltaByTime.values()].sort((a, b) => a.time - b.time);
     this.deltaSeries.setData(
-      [...this.volumeDeltaByTime.values()]
-        .sort((a, b) => a.time - b.time)
-        .map((point) =>
+      points.map((point) =>
           toVolumeDelta(point, this.deltaColors, this.displayTimeOffsetMs),
         ),
     );
+    this.deltaLastRenderedTime = points[points.length - 1]?.time;
   }
 
   private ensureGcPushMomentumPane(): void {
@@ -2655,17 +2693,19 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     points: readonly GcPushMomentumPoint[],
   ): void {
     const waveStates = this.gcPushMomentumWaveStates(points);
-    this.gcPushMomentumSeries?.setData(
-      points.map((point) =>
-        toGcPushMomentumHistogram(
-          point,
-          this.closedBarTimes.has(point.time),
-          this.displayTimeOffsetMs,
-          this.gcPushMomentumSettings.displayMode,
-          waveStates.get(point.time),
-        ),
-      ),
-    );
+    this.gcPushMomentumDisplayByTime.clear();
+    const histograms = points.map((point) => {
+      const histogram = toGcPushMomentumHistogram(
+        point,
+        this.closedBarTimes.has(point.time),
+        this.displayTimeOffsetMs,
+        this.gcPushMomentumSettings.displayMode,
+        waveStates.get(point.time),
+      );
+      this.gcPushMomentumDisplayByTime.set(point.time, histogram);
+      return histogram;
+    });
+    this.gcPushMomentumSeries?.setData(histograms);
     this.gcPushMomentumPushSeries?.setData(
       points.map((point) =>
         toGcPushMomentumPushLine(point, this.displayTimeOffsetMs),
@@ -2736,7 +2776,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         delta === undefined
           ? (signal?.deltaDivergence ?? 0)
           : historicalDivergence;
-      if (momentumLevel === 0 && deltaDivergence === 0) {
+      if (momentumLevel === 0 && deltaDivergence === 0 && !signal?.momentumSamples?.length) {
         continue;
       }
       signals.push({
@@ -2748,6 +2788,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         momentumDirection,
         momentumLevel,
         deltaDivergence,
+        momentumSamples: signal?.momentumSamples,
       });
     }
     this.tduSignalPrimitive.setSignals(signals);
@@ -2811,6 +2852,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.renderGcPushMomentumSeries();
       return;
     }
+    // A coalesced close/open burst can first dirty the preceding bucket.
+    // Always include the newest bucket in the small live-tail repaint.
+    index = this.candleBars.length - 1;
 
     const windowSize = this.gcPushMomentumCalculationWindow();
     const from = Math.max(0, this.candleBars.length - windowSize);
@@ -2841,6 +2885,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       const historicalUpdate = currentIndex < this.candleBars.length - 1;
       if (point === undefined) {
         this.gcPushMomentumPointByTime.delete(bar.time);
+        if (
+          this.gcPushMomentumDisplayByTime.has(bar.time) &&
+          this.gcPushMomentumDisplayByTime.get(bar.time) === undefined
+        ) continue;
+        this.gcPushMomentumDisplayByTime.set(bar.time, undefined);
         const whitespace = {
           time: toUtcTimestamp(bar.time, this.displayTimeOffsetMs),
         };
@@ -2848,25 +2897,33 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         this.gcPushMomentumPushSeries?.update(whitespace, historicalUpdate);
         this.gcPushMomentumSignalSeries?.update(whitespace, historicalUpdate);
       } else {
+        const previousPoint = this.gcPushMomentumPointByTime.get(point.time);
         this.gcPushMomentumPointByTime.set(point.time, point);
-        series.update(
-          toGcPushMomentumHistogram(
-            point,
-            this.closedBarTimes.has(point.time),
-            this.displayTimeOffsetMs,
-            this.gcPushMomentumSettings.displayMode,
-            waveStates.get(point.time),
-          ),
-          historicalUpdate,
+        const histogram = toGcPushMomentumHistogram(
+          point,
+          this.closedBarTimes.has(point.time),
+          this.displayTimeOffsetMs,
+          this.gcPushMomentumSettings.displayMode,
+          waveStates.get(point.time),
         );
-        this.gcPushMomentumPushSeries?.update(
-          toGcPushMomentumPushLine(point, this.displayTimeOffsetMs),
-          historicalUpdate,
-        );
-        this.gcPushMomentumSignalSeries?.update(
-          toGcPushMomentumSignalLine(point, this.displayTimeOffsetMs),
-          historicalUpdate,
-        );
+        const previousHistogram = this.gcPushMomentumDisplayByTime.get(point.time);
+        if (
+          previousHistogram?.value !== histogram.value ||
+          previousHistogram?.color !== histogram.color
+        ) {
+          this.gcPushMomentumDisplayByTime.set(point.time, histogram);
+          series.update(histogram, historicalUpdate);
+        }
+        if (previousPoint?.smoothedPush !== point.smoothedPush) {
+          this.gcPushMomentumPushSeries?.update(
+            toGcPushMomentumPushLine(point, this.displayTimeOffsetMs), historicalUpdate,
+          );
+        }
+        if (previousPoint?.signal !== point.signal) {
+          this.gcPushMomentumSignalSeries?.update(
+            toGcPushMomentumSignalLine(point, this.displayTimeOffsetMs), historicalUpdate,
+          );
+        }
       }
     }
     if (this.trimGcPushMomentumDisplayPoints()) {
@@ -2880,15 +2937,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   /**
-   * Bar and delta projections arrive in the same React commit during Replay.
-   * Coalesce their identical momentum recalculation into one animation frame.
+   * Coalesce bar and delta projections, including live transport bursts.
    */
   private scheduleGcPushMomentumUpdate(index: number): void {
-    if (!this.bulkRenderCoalescing) {
-      this.updateGcPushMomentumAt(index);
-      return;
-    }
-    this.replayMomentumIndex = Math.max(this.replayMomentumIndex, index);
+    if (!this.gcPushMomentumVisible || index < 0) return;
+    // Both bar and delta messages describe the same live bucket. Compute from
+    // their latest combined state once per frame, including outside Replay.
+    // Keep the earliest changed index so a history correction still rebuilds.
+    this.markGcPushMomentumDirty(index);
     if (this.replayMomentumFrame !== undefined) return;
     this.replayMomentumFrame = window.requestAnimationFrame(() => {
       this.replayMomentumFrame = undefined;
@@ -2896,6 +2952,13 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.replayMomentumIndex = -1;
       this.updateGcPushMomentumAt(pendingIndex);
     });
+  }
+
+  private markGcPushMomentumDirty(index: number): void {
+    if (!this.gcPushMomentumVisible || index < 0) return;
+    this.replayMomentumIndex = this.replayMomentumIndex < 0
+      ? index
+      : Math.min(this.replayMomentumIndex, index);
   }
 
   private renderWaveDeltaSeries(overlay?: MgannSwingOverlay): void {
@@ -3062,17 +3125,23 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.mgannImpulseColors.get(index),
       isSessionHighlightTimeframeDuration(this.barCountdownDurationMs),
     );
-    this.candleSeries.update(candle, index < this.candleBars.length - 1);
+    const time = this.candleBars[index].time;
+    this.candleSeries.update(
+      candle, this.candleLastRenderedTime !== undefined && time < this.candleLastRenderedTime,
+    );
+    this.candleLastRenderedTime = Math.max(this.candleLastRenderedTime ?? time, time);
   }
 
   private updateVolumeAt(index: number): void {
     if (index < 0 || index >= this.candleBars.length) {
       return;
     }
+    const time = this.candleBars[index].time;
     this.volumeSeries.update(
       toVolumeHistogram(this.candleBars[index], this.displayTimeOffsetMs),
-      index < this.candleBars.length - 1,
+      this.volumeLastRenderedTime !== undefined && time < this.volumeLastRenderedTime,
     );
+    this.volumeLastRenderedTime = Math.max(this.volumeLastRenderedTime ?? time, time);
   }
 
   private updateBarCountdown(): void {
@@ -3435,25 +3504,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const next = { ...point };
     this.volumeDeltaByTime.set(point.time, next);
     this.invalidateMgannOverlay();
-    if (this.realtimeInteractionActive) {
-      this.deferredVolumeDeltaTimes.add(point.time);
-      return;
-    }
-    if (this.volumeDeltaVisible) {
-      this.deltaSeries.update(
-        toVolumeDelta(next, this.deltaColors, this.displayTimeOffsetMs),
-      );
-    }
-    if (this.shouldRenderMgannImpulseWaves()) {
-      const index = this.candleBars.findIndex((bar) => bar.time === point.time);
-      this.updateCandleAt(index);
-      this.updateCandleAt(index + 1);
-    }
-    this.scheduleGcPushMomentumUpdate(
-      this.candleBars.findIndex((bar) => bar.time === point.time),
-    );
-    this.renderTduSignals();
-    this.scheduleMgannRender();
+    this.deferredVolumeDeltaTimes.add(point.time);
+    this.markGcPushMomentumDirty(this.candleBars.findIndex(bar => bar.time === point.time));
+    this.scheduleRealtimeRender();
   }
 
   /** Bulk-load FVG Signal Grader candle colors. */
@@ -4652,7 +4705,19 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     };
   }
 
+  private scheduleRealtimeRender(): void {
+    if (this.realtimeInteractionActive || this.realtimeRenderFrame !== undefined) return;
+    this.realtimeRenderFrame = window.requestAnimationFrame(() => {
+      this.realtimeRenderFrame = undefined;
+      if (!this.realtimeInteractionActive) this.flushDeferredRealtimeUpdates();
+    });
+  }
+
   private flushDeferredRealtimeUpdates(): void {
+    if (this.realtimeRenderFrame !== undefined) {
+      window.cancelAnimationFrame(this.realtimeRenderFrame);
+      this.realtimeRenderFrame = undefined;
+    }
     const dirtyIndexes = [...this.deferredBarTimes]
       .map((time) => this.candleBars.findIndex((bar) => bar.time === time))
       .filter((index) => index >= 0);
@@ -4663,6 +4728,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     for (const index of dirtyIndexes) {
       candleIndexes.add(index);
       candleIndexes.add(index + 1);
+    }
+    if (this.shouldRenderMgannImpulseWaves()) {
+      for (const time of this.deferredVolumeDeltaTimes) {
+        const index = this.candleBars.findIndex((bar) => bar.time === time);
+        if (index < 0) continue;
+        candleIndexes.add(index);
+        candleIndexes.add(index + 1);
+      }
     }
     for (const index of [...candleIndexes].sort((left, right) => left - right)) {
       this.updateCandleAt(index);
@@ -4684,20 +4757,14 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         if (point !== undefined) {
           this.deltaSeries.update(
             toVolumeDelta(point, this.deltaColors, this.displayTimeOffsetMs),
+            this.deltaLastRenderedTime !== undefined && time < this.deltaLastRenderedTime,
           );
+          this.deltaLastRenderedTime = Math.max(this.deltaLastRenderedTime ?? time, time);
         }
       }
     }
-    if (hasBarUpdates || hasDeltaUpdates) {
-      const momentumIndexes = new Set(dirtyIndexes);
-      for (const time of this.deferredVolumeDeltaTimes) {
-        const index = this.candleBars.findIndex((bar) => bar.time === time);
-        if (index >= 0) momentumIndexes.add(index);
-      }
-      const earliestIndex = Math.min(...momentumIndexes);
-      if (Number.isFinite(earliestIndex)) {
-        this.updateGcPushMomentumAt(earliestIndex);
-      }
+    if (this.replayMomentumIndex >= 0) {
+      this.scheduleGcPushMomentumUpdate(this.replayMomentumIndex);
     }
     if (hasBarUpdates || hasDeltaUpdates) {
       this.scheduleMgannRender();
@@ -4712,6 +4779,10 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   /** Release the chart instance and its DOM. */
   dispose(): void {
+    if (this.realtimeRenderFrame !== undefined) {
+      window.cancelAnimationFrame(this.realtimeRenderFrame);
+      this.realtimeRenderFrame = undefined;
+    }
     if (this.bulkRenderFrame !== undefined) {
       window.cancelAnimationFrame(this.bulkRenderFrame);
       this.bulkRenderFrame = undefined;

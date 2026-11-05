@@ -108,6 +108,8 @@ import {
 } from "./timeframeRange";
 import type { DeltaProfileData, DeltaProfileLoadState } from "../orderflow/deltaProfile";
 import { DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX } from "./sessionVolumeProfileSettings";
+import { MIN_DENSE_OVERLAY_BAR_SPACING } from "./zoomVisibility";
+import { DEFAULT_TDU_SETTINGS, normalizeTduSettings, type TduSettings } from "./tduSettings";
 import {
   DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
   normalizeGcPushMomentumSettings,
@@ -135,6 +137,7 @@ import {
  * canvas.
  */
 export interface DisposableChartPort extends ChartSeriesPort {
+  setDenseOverlayMinSpacing?(value: number): void;
   dispose(): void;
   setDisplayTimeOffset?(offsetMs: number): void;
   setTimezoneOffsetMinutes?(offsetMinutes: number): void;
@@ -161,6 +164,7 @@ export interface DisposableChartPort extends ChartSeriesPort {
   setTduSignals?(signals: ReadonlyMap<number, TduSignalUpdateMessage>): void;
   updateTduSignal?(signal: TduSignalUpdateMessage): void;
   setTduSignalsVisible?(visible: boolean): void;
+  setTduSettings?(settings: TduSettings): void;
   setBigTrades?(markers: readonly BigTradeMarker[]): void;
   updateBigTrade?(marker: BigTradeMarker): void;
   setSmcAiSignals?(markers: readonly SmcAiSignalMarker[]): void;
@@ -242,6 +246,7 @@ export interface OrderControl {
 
 interface PositionedOrderControl extends OrderControl {
   top: number;
+  right: number;
 }
 
 const defaultPortFactory: ChartPortFactory = (container, options) =>
@@ -251,9 +256,6 @@ const PRIMARY_EMA_LINE_ID = "primary";
 const EMA_200_LINE_ID = "ema-200";
 const EMA_200_PERIOD = 200;
 const HISTORY_EDGE_THRESHOLD_BARS = 120;
-const ORDER_CONTROL_MIN_TOP_PX = 18;
-const ORDER_CONTROL_MAX_BOTTOM_PAD_PX = 18;
-const ORDER_CONTROL_MIN_GAP_PX = 30;
 
 interface EmaLineConfig {
   id: string;
@@ -358,6 +360,7 @@ export interface ChartContainerProps {
   showGcPushMomentum?: boolean;
   /** Show original-style TDU signals directly inside price bars. */
   showTduSignals?: boolean;
+  tduSettings?: Partial<TduSettings>;
   /** GC Push Momentum calculation settings. */
   gcPushMomentumSettings?: Partial<GcPushMomentumSettings>;
   /** Show current wave delta as an MBox histogram at the bottom of the chart. */
@@ -372,6 +375,7 @@ export interface ChartContainerProps {
   showFvgGrader?: boolean;
   /** BigTrade display-only filters. */
   bigTradeSettings?: BigTradeSettings;
+  denseOverlayMinSpacing?: number;
   /** SMC overlay config. Disabled clears all SMC markers/zones. */
   smc?: SmcSettings;
   /** Standalone close-based Sweep Reversal overlay config. */
@@ -577,7 +581,9 @@ function replayAppendStart<T>(
   next: readonly T[],
 ): number | undefined {
   if (previous.length > next.length) return undefined;
-  if (previous.length === 0) return 0;
+  // Empty projections occur while a replay timeframe is loading. Hydrate the
+  // new snapshot atomically before any indicator attempts historical updates.
+  if (previous.length === 0) return next.length === 0 ? 0 : undefined;
   if (
     previous[0] !== next[0] ||
     previous[previous.length - 1] !== next[previous.length - 1]
@@ -593,6 +599,7 @@ function replayMapAppends<T>(
   next: ReadonlyMap<number, T>,
 ): readonly T[] | undefined {
   if (previous.size > next.size) return undefined;
+  if (previous.size === 0 && next.size > 0) return undefined;
   for (const [time, value] of previous) {
     if (next.get(time) !== value) return undefined;
   }
@@ -694,6 +701,7 @@ export function ChartContainer({
   xKontrolSettings = DEFAULT_XKONTROL_DISPLAY_SETTINGS,
   showGcPushMomentum = false,
   showTduSignals = true,
+  tduSettings = DEFAULT_TDU_SETTINGS,
   gcPushMomentumSettings = DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
   showCvd = false,
   showMgannSwing = false,
@@ -701,6 +709,7 @@ export function ChartContainer({
   showBigTrades = true,
   showFvgGrader = true,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
+  denseOverlayMinSpacing = MIN_DENSE_OVERLAY_BAR_SPACING,
   smc,
   sweepReversal,
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -975,38 +984,24 @@ export function ChartContainer({
       return;
     }
     const paneHeight = Math.max(1, port.createFootprintViewport?.(1, 1).height ?? 1);
-    const topMax = Math.max(
-      ORDER_CONTROL_MIN_TOP_PX,
-      paneHeight - ORDER_CONTROL_MAX_BOTTOM_PAD_PX,
-    );
-    const raw = controls.flatMap((control) => {
+    const lanes: number[][] = [];
+    const next = controls.flatMap((control) => {
       const y = port.priceToCoordinate?.(control.price);
       if (y === null || y === undefined || !Number.isFinite(y)) return [];
-      const top = Math.min(
-        Math.max(ORDER_CONTROL_MIN_TOP_PX, Math.round(y as number)),
-        topMax,
+      // Labels must stay on their price lines, including closely spaced stops.
+      // Clamping an offscreen TP to the pane edge makes it show a false level.
+      if (y < 0 || y > paneHeight) return [];
+      const top = Math.round(y);
+      let lane = lanes.findIndex((tops) =>
+        tops.every((other) => Math.abs(top - other) >= 28),
       );
-      return [{ ...control, top }];
-    });
-    const sorted = raw.sort((left, right) => left.top - right.top);
-    let previousTop = Number.NEGATIVE_INFINITY;
-    const next = sorted.map((control) => {
-      const top = Math.min(
-        Math.max(control.top, previousTop + ORDER_CONTROL_MIN_GAP_PX),
-        topMax,
-      );
-      previousTop = top;
-      return { ...control, top };
-    });
-    for (let index = next.length - 2; index >= 0; index -= 1) {
-      const maxTop = next[index + 1].top - ORDER_CONTROL_MIN_GAP_PX;
-      if (next[index].top > maxTop) {
-        next[index] = {
-          ...next[index],
-          top: Math.max(ORDER_CONTROL_MIN_TOP_PX, maxTop),
-        };
+      if (lane === -1) {
+        lane = lanes.length;
+        lanes.push([]);
       }
-    }
+      lanes[lane].push(top);
+      return [{ ...control, top, right: lane * 154 }];
+    });
     setPositionedOrderControls(next);
   }, []);
 
@@ -1320,6 +1315,10 @@ export function ChartContainer({
   }, [outsideBar]);
 
   useEffect(() => {
+    portRef.current?.setDenseOverlayMinSpacing?.(denseOverlayMinSpacing);
+  }, [denseOverlayMinSpacing]);
+
+  useEffect(() => {
     portRef.current?.setVolumeVisible?.(showVolume);
   }, [showVolume]);
 
@@ -1393,6 +1392,10 @@ export function ChartContainer({
   useEffect(() => {
     portRef.current?.setTduSignalsVisible?.(showTduSignals);
   }, [showTduSignals]);
+
+  useEffect(() => {
+    portRef.current?.setTduSettings?.(normalizeTduSettings(tduSettings));
+  }, [tduSettings]);
 
   useEffect(() => {
     const controller = controllerRef.current;
@@ -2105,7 +2108,7 @@ export function ChartContainer({
               }${
                 (control.pnlValue ?? 0) < 0 ? " losing" : " winning"
               }`}
-              style={{ top: control.top }}
+              style={{ top: control.top, right: control.right }}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => event.stopPropagation()}
             >

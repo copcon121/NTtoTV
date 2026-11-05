@@ -62,6 +62,7 @@ from ..models.messages import (
     VolumeDeltaUpdate,
 )
 from ..models.timestamp import now_ms
+from ..models.si_stops import SiStopChain
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,7 @@ OutboundMessage = (
     | FvgSignalUpdate
     | LiquidityUpdate
     | IcebergUpdate
+    | SiStopChain
     | MarketExplorerUpdate
     | TduSignalUpdate
     | TrendAnalyzerUpdate
@@ -194,6 +196,8 @@ def coalescing_subkey(payload: Mapping[str, Any]) -> Hashable:
         )
     if t == "iceberg_update":
         return ("iceberg_update", payload.get("sourceContract"), payload.get("sessionId"), payload.get("orderId"))
+    if t == "si_stop":
+        return ("si_stop", payload.get("sourceContract"), payload.get("sessionId"), payload.get("chainId"))
     if t == "liquidity_update":
         if payload.get("eventKind") == "long_term":
             return ("liquidity_update", "long_term", payload.get("lineId"))

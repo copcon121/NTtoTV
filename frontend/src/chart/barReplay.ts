@@ -34,6 +34,22 @@ export function replayCursorBeforeSelection(selectedIndex: number): number {
   return Math.max(0, selectedIndex - 1);
 }
 
+/** Last fully known candle at a shared replay clock; never reveal a partial bucket. */
+export function replayCursorAtTime(
+  bars: readonly Bar[],
+  cutoffExclusive: number,
+  durationMs: number,
+): number {
+  let low = 0;
+  let high = bars.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (bars[middle].time + durationMs <= cutoffExclusive) low = middle + 1;
+    else high = middle;
+  }
+  return low - 1;
+}
+
 export function replayBarsThrough(
   bars: readonly Bar[],
   cursorIndex: number,

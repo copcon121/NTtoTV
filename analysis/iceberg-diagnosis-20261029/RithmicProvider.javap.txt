@@ -1,0 +1,3745 @@
+Compiled from "SourceFile"
+public class velox.api.layer1.providers.RithmicProvider extends velox.api.layer1.providers.C implements velox.api.layer1.settings.Layer1UserLicenseFieldsInterface,velox.rithmic.IRithmicListener {
+  private static final java.util.Set<java.lang.String> e;
+
+  private static final long f;
+
+  private static final boolean g;
+
+  private static final boolean h;
+
+  private static final long i;
+
+  private static final java.util.Set<velox.api.layer1.data.OrderStatus> j;
+
+  private static final java.util.concurrent.ExecutorService k;
+
+  protected final java.util.Map<java.lang.String, velox.api.layer1.providers.RithmicProvider$b> c;
+
+  private final java.util.HashMap<java.lang.String, velox.api.layer1.data.StatusInfoBuilder> l;
+
+  private final java.util.HashMap<java.lang.String, java.lang.String> m;
+
+  private final java.util.HashMap<java.lang.String, java.lang.String> n;
+
+  private final boolean o;
+
+  private java.util.concurrent.Future<?> p;
+
+  private volatile velox.rithmic.RithmicProvider q;
+
+  private final velox.api.layer1.providers.RithmicProvider$a r;
+
+  private java.lang.String s;
+
+  private java.lang.String t;
+
+  private boolean u;
+
+  private boolean v;
+
+  private boolean w;
+
+  private final java.util.concurrent.atomic.AtomicBoolean x;
+
+  private final java.util.concurrent.atomic.AtomicBoolean y;
+
+  private boolean z;
+
+  private boolean A;
+
+  static final boolean d;
+
+  private static java.util.concurrent.ExecutorService d();
+    Code:
+       0: new           #209                // class velox/api/layer1/providers/D
+       3: dup
+       4: invokespecial #469                // Method velox/api/layer1/providers/D."<init>":()V
+       7: astore_0
+       8: new           #154                // class java/util/concurrent/ThreadPoolExecutor
+      11: dup
+      12: iconst_0
+      13: iconst_1
+      14: lconst_1
+      15: getstatic     #233                // Field java/util/concurrent/TimeUnit.MINUTES:Ljava/util/concurrent/TimeUnit;
+      18: new           #153                // class java/util/concurrent/LinkedBlockingQueue
+      21: dup
+      22: invokespecial #377                // Method java/util/concurrent/LinkedBlockingQueue."<init>":()V
+      25: aload_0
+      26: invokespecial #378                // Method java/util/concurrent/ThreadPoolExecutor."<init>":(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;)V
+      29: areturn
+
+  public velox.api.layer1.providers.RithmicProvider();
+    Code:
+       0: aload_0
+       1: getstatic     #303                // Field h:Z
+       4: invokespecial #471                // Method "<init>":(Z)V
+       7: return
+
+  public velox.api.layer1.providers.RithmicProvider(boolean);
+    Code:
+       0: aload_0
+       1: invokespecial #461                // Method velox/api/layer1/providers/C."<init>":()V
+       4: aload_0
+       5: new           #149                // class java/util/concurrent/ConcurrentHashMap
+       8: dup
+       9: invokespecial #376                // Method java/util/concurrent/ConcurrentHashMap."<init>":()V
+      12: putfield      #297                // Field c:Ljava/util/Map;
+      15: aload_0
+      16: new           #140                // class java/util/HashMap
+      19: dup
+      20: invokespecial #369                // Method java/util/HashMap."<init>":()V
+      23: putfield      #308                // Field l:Ljava/util/HashMap;
+      26: aload_0
+      27: new           #140                // class java/util/HashMap
+      30: dup
+      31: invokespecial #369                // Method java/util/HashMap."<init>":()V
+      34: putfield      #309                // Field m:Ljava/util/HashMap;
+      37: aload_0
+      38: new           #140                // class java/util/HashMap
+      41: dup
+      42: invokespecial #369                // Method java/util/HashMap."<init>":()V
+      45: putfield      #311                // Field n:Ljava/util/HashMap;
+      48: aload_0
+      49: aconst_null
+      50: putfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+      53: aload_0
+      54: new           #214                // class velox/api/layer1/providers/RithmicProvider$a
+      57: dup
+      58: aload_0
+      59: invokedynamic #611,  0            // InvokeDynamic #0:accept:(Lvelox/api/layer1/providers/RithmicProvider;)Ljava/util/function/Consumer;
+      64: aload_0
+      65: invokedynamic #612,  0            // InvokeDynamic #1:get:(Lvelox/api/layer1/providers/RithmicProvider;)Ljava/util/function/Supplier;
+      70: invokespecial #529                // Method velox/api/layer1/providers/RithmicProvider$a."<init>":(Ljava/util/function/Consumer;Ljava/util/function/Supplier;)V
+      73: putfield      #315                // Field r:Lvelox/api/layer1/providers/RithmicProvider$a;
+      76: aload_0
+      77: aconst_null
+      78: putfield      #316                // Field s:Ljava/lang/String;
+      81: aload_0
+      82: aconst_null
+      83: putfield      #317                // Field t:Ljava/lang/String;
+      86: aload_0
+      87: iconst_0
+      88: putfield      #319                // Field u:Z
+      91: aload_0
+      92: iconst_0
+      93: putfield      #320                // Field v:Z
+      96: aload_0
+      97: iconst_0
+      98: putfield      #321                // Field w:Z
+     101: aload_0
+     102: new           #156                // class java/util/concurrent/atomic/AtomicBoolean
+     105: dup
+     106: iconst_0
+     107: invokespecial #381                // Method java/util/concurrent/atomic/AtomicBoolean."<init>":(Z)V
+     110: putfield      #322                // Field x:Ljava/util/concurrent/atomic/AtomicBoolean;
+     113: aload_0
+     114: new           #156                // class java/util/concurrent/atomic/AtomicBoolean
+     117: dup
+     118: iconst_0
+     119: invokespecial #381                // Method java/util/concurrent/atomic/AtomicBoolean."<init>":(Z)V
+     122: putfield      #323                // Field y:Ljava/util/concurrent/atomic/AtomicBoolean;
+     125: aload_0
+     126: iconst_0
+     127: putfield      #324                // Field z:Z
+     130: aload_0
+     131: iconst_0
+     132: putfield      #293                // Field A:Z
+     135: aload_0
+     136: iload_1
+     137: putfield      #312                // Field o:Z
+     140: return
+
+  protected java.lang.String a(java.lang.String, java.lang.String);
+    Code:
+       0: aload_2
+       1: aload_1
+       2: invokedynamic #613,  0            // InvokeDynamic #2:makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+       7: astore_3
+       8: aload_3
+       9: invokevirtual #360                // Method java/lang/String.toUpperCase:()Ljava/lang/String;
+      12: astore_3
+      13: aload_0
+      14: getfield      #309                // Field m:Ljava/util/HashMap;
+      17: aload_3
+      18: aload_1
+      19: invokevirtual #371                // Method java/util/HashMap.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+      22: pop
+      23: aload_0
+      24: getfield      #311                // Field n:Ljava/util/HashMap;
+      27: aload_3
+      28: aload_2
+      29: invokevirtual #371                // Method java/util/HashMap.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+      32: pop
+      33: aload_3
+      34: areturn
+
+  private java.lang.String a(java.lang.String);
+    Code:
+       0: aload_0
+       1: getfield      #309                // Field m:Ljava/util/HashMap;
+       4: aload_1
+       5: invokevirtual #370                // Method java/util/HashMap.get:(Ljava/lang/Object;)Ljava/lang/Object;
+       8: checkcast     #128                // class java/lang/String
+      11: areturn
+
+  private java.lang.String b(java.lang.String);
+    Code:
+       0: aload_0
+       1: getfield      #311                // Field n:Ljava/util/HashMap;
+       4: aload_1
+       5: invokevirtual #370                // Method java/util/HashMap.get:(Ljava/lang/Object;)Ljava/lang/Object;
+       8: checkcast     #128                // class java/lang/String
+      11: areturn
+
+  public void subscribe(velox.api.layer1.data.SubscribeInfo);
+    Code:
+       0: aload_1
+       1: getfield      #285                // Field velox/api/layer1/data/SubscribeInfo.symbol:Ljava/lang/String;
+       4: astore_2
+       5: aload_1
+       6: getfield      #284                // Field velox/api/layer1/data/SubscribeInfo.exchange:Ljava/lang/String;
+       9: astore_3
+      10: aload_1
+      11: getfield      #286                // Field velox/api/layer1/data/SubscribeInfo.type:Ljava/lang/String;
+      14: astore        4
+      16: ldc           #64                 // String Subscribing to %s, %s, %s.
+      18: iconst_3
+      19: anewarray     #125                // class java/lang/Object
+      22: dup
+      23: iconst_0
+      24: aload_2
+      25: aastore
+      26: dup
+      27: iconst_1
+      28: aload_3
+      29: aastore
+      30: dup
+      31: iconst_2
+      32: aload         4
+      34: aastore
+      35: invokestatic  #355                // Method java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;
+      38: invokestatic  #396                // Method velox/api/layer1/common/Log.info:(Ljava/lang/String;)V
+      41: aload_0
+      42: aload_3
+      43: aload_2
+      44: invokevirtual #477                // Method a:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+      47: astore        5
+      49: aload_0
+      50: getfield      #297                // Field c:Ljava/util/Map;
+      53: aload         5
+      55: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      60: checkcast     #208                // class velox/api/layer1/providers/C$a
+      63: astore        6
+      65: aload         6
+      67: ifnull        78
+      70: aload         6
+      72: getfield      #292                // Field velox/api/layer1/providers/C$a.b:Z
+      75: ifne          151
+      78: aload_2
+      79: invokevirtual #357                // Method java/lang/String.isEmpty:()Z
+      82: ifne          92
+      85: aload_3
+      86: invokevirtual #357                // Method java/lang/String.isEmpty:()Z
+      89: ifeq          142
+      92: aload_0
+      93: getfield      #305                // Field instrumentListeners:Ljava/util/List;
+      96: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     101: astore        7
+     103: aload         7
+     105: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     110: ifeq          139
+     113: aload         7
+     115: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     120: checkcast     #167                // class velox/api/layer1/Layer1ApiInstrumentListener
+     123: astore        8
+     125: aload         8
+     127: aload_2
+     128: aload_3
+     129: aload         4
+     131: invokeinterface #605,  4          // InterfaceMethod velox/api/layer1/Layer1ApiInstrumentListener.onInstrumentNotFound:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+     136: goto          103
+     139: goto          198
+     142: aload_0
+     143: aload_2
+     144: aload_3
+     145: invokevirtual #494                // Method b:(Ljava/lang/String;Ljava/lang/String;)V
+     148: goto          198
+     151: aload_0
+     152: getfield      #305                // Field instrumentListeners:Ljava/util/List;
+     155: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     160: astore        7
+     162: aload         7
+     164: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     169: ifeq          198
+     172: aload         7
+     174: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     179: checkcast     #167                // class velox/api/layer1/Layer1ApiInstrumentListener
+     182: astore        8
+     184: aload         8
+     186: aload_2
+     187: aload_3
+     188: aload         4
+     190: invokeinterface #604,  4          // InterfaceMethod velox/api/layer1/Layer1ApiInstrumentListener.onInstrumentAlreadySubscribed:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+     195: goto          162
+     198: return
+
+  private void b(java.lang.String, java.lang.String);
+    Code:
+       0: getstatic     #307                // Field k:Ljava/util/concurrent/ExecutorService;
+       3: aload_0
+       4: aload_1
+       5: aload_2
+       6: invokedynamic #614,  0            // InvokeDynamic #3:run:(Lvelox/api/layer1/providers/RithmicProvider;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Runnable;
+      11: invokeinterface #586,  2          // InterfaceMethod java/util/concurrent/ExecutorService.execute:(Ljava/lang/Runnable;)V
+      16: return
+
+  public void sendOrder(velox.api.layer1.data.OrderSendParameters);
+    Code:
+       0: aload_0
+       1: getfield      #323                // Field y:Ljava/util/concurrent/atomic/AtomicBoolean;
+       4: invokevirtual #382                // Method java/util/concurrent/atomic/AtomicBoolean.get:()Z
+       7: ifne          20
+      10: new           #119                // class java/lang/IllegalStateException
+      13: dup
+      14: ldc           #12                 // String Attempting to send order without an account being selected
+      16: invokespecial #344                // Method java/lang/IllegalStateException."<init>":(Ljava/lang/String;)V
+      19: athrow
+      20: aload_0
+      21: aload_1
+      22: invokevirtual #484                // Method a:(Lvelox/api/layer1/data/OrderSendParameters;)Ljava/lang/String;
+      25: astore_2
+      26: aload_1
+      27: invokevirtual #349                // Method java/lang/Object.getClass:()Ljava/lang/Class;
+      30: ldc           #195                // class velox/api/layer1/data/SimpleOrderSendParameters
+      32: if_acmpne     208
+      35: aload_1
+      36: checkcast     #195                // class velox/api/layer1/data/SimpleOrderSendParameters
+      39: astore_3
+      40: aload_3
+      41: getfield      #282                // Field velox/api/layer1/data/SimpleOrderSendParameters.stopPrice:D
+      44: dstore        4
+      46: aload_3
+      47: getfield      #278                // Field velox/api/layer1/data/SimpleOrderSendParameters.limitPrice:D
+      50: dstore        6
+      52: aload_0
+      53: aload_3
+      54: getfield      #276                // Field velox/api/layer1/data/SimpleOrderSendParameters.duration:Lvelox/api/layer1/data/OrderDuration;
+      57: invokevirtual #483                // Method a:(Lvelox/api/layer1/data/OrderDuration;)Ljava/lang/String;
+      60: astore        8
+      62: aload_0
+      63: aload_3
+      64: getfield      #279                // Field velox/api/layer1/data/SimpleOrderSendParameters.size:I
+      67: aload_3
+      68: getfield      #283                // Field velox/api/layer1/data/SimpleOrderSendParameters.takeProfitOffset:I
+      71: aload_3
+      72: getfield      #273                // Field velox/api/layer1/data/SimpleOrderSendParameters.additionalTakeProfitTiers:Ljava/util/List;
+      75: invokevirtual #474                // Method a:(IILjava/util/List;)Lorg/apache/commons/lang3/tuple/Pair;
+      78: astore        9
+      80: aload         9
+      82: invokevirtual #387                // Method org/apache/commons/lang3/tuple/Pair.getKey:()Ljava/lang/Object;
+      85: checkcast     #105                // class "[I"
+      88: astore        10
+      90: aload         9
+      92: invokevirtual #388                // Method org/apache/commons/lang3/tuple/Pair.getValue:()Ljava/lang/Object;
+      95: checkcast     #105                // class "[I"
+      98: astore        11
+     100: aload_0
+     101: aload_3
+     102: getfield      #279                // Field velox/api/layer1/data/SimpleOrderSendParameters.size:I
+     105: aload_3
+     106: getfield      #280                // Field velox/api/layer1/data/SimpleOrderSendParameters.stopLossOffset:I
+     109: aload_3
+     110: getfield      #272                // Field velox/api/layer1/data/SimpleOrderSendParameters.additionalStopLossTiers:Ljava/util/List;
+     113: invokevirtual #474                // Method a:(IILjava/util/List;)Lorg/apache/commons/lang3/tuple/Pair;
+     116: astore        12
+     118: aload         12
+     120: invokevirtual #387                // Method org/apache/commons/lang3/tuple/Pair.getKey:()Ljava/lang/Object;
+     123: checkcast     #105                // class "[I"
+     126: astore        13
+     128: aload         12
+     130: invokevirtual #388                // Method org/apache/commons/lang3/tuple/Pair.getValue:()Ljava/lang/Object;
+     133: checkcast     #105                // class "[I"
+     136: astore        14
+     138: aload_0
+     139: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+     142: aload_0
+     143: aload_2
+     144: invokevirtual #493                // Method b:(Ljava/lang/String;)Ljava/lang/String;
+     147: aload_0
+     148: aload_2
+     149: invokevirtual #476                // Method a:(Ljava/lang/String;)Ljava/lang/String;
+     152: aload_3
+     153: getfield      #274                // Field velox/api/layer1/data/SimpleOrderSendParameters.clientId:Ljava/lang/String;
+     156: aload_3
+     157: getfield      #277                // Field velox/api/layer1/data/SimpleOrderSendParameters.isBuy:Z
+     160: dload         6
+     162: dload         4
+     164: aload_3
+     165: getfield      #281                // Field velox/api/layer1/data/SimpleOrderSendParameters.stopLossTrailingStep:I
+     168: ifle          175
+     171: iconst_1
+     172: goto          176
+     175: iconst_0
+     176: aload_3
+     177: getfield      #279                // Field velox/api/layer1/data/SimpleOrderSendParameters.size:I
+     180: aload         8
+     182: aload         10
+     184: aload         11
+     186: aload         13
+     188: aload         14
+     190: aload_3
+     191: getfield      #275                // Field velox/api/layer1/data/SimpleOrderSendParameters.closingPositionHint:Z
+     194: aload_0
+     195: getfield      #320                // Field v:Z
+     198: aload_0
+     199: getfield      #321                // Field w:Z
+     202: invokevirtual #562                // Method velox/rithmic/RithmicProvider.sendOrder:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZDDZILjava/lang/String;[I[I[I[IZZZ)V
+     205: goto          555
+     208: aload_1
+     209: invokevirtual #349                // Method java/lang/Object.getClass:()Ljava/lang/Class;
+     212: ldc           #194                // class velox/api/layer1/data/OsoOrderSendParameters
+     214: if_acmpeq     226
+     217: aload_1
+     218: invokevirtual #349                // Method java/lang/Object.getClass:()Ljava/lang/Class;
+     221: ldc           #183                // class velox/api/layer1/data/OcoOrderSendParameters
+     223: if_acmpne     555
+     226: aload_1
+     227: invokevirtual #349                // Method java/lang/Object.getClass:()Ljava/lang/Class;
+     230: ldc           #194                // class velox/api/layer1/data/OsoOrderSendParameters
+     232: if_acmpne     245
+     235: aload_1
+     236: checkcast     #194                // class velox/api/layer1/data/OsoOrderSendParameters
+     239: getfield      #271                // Field velox/api/layer1/data/OsoOrderSendParameters.orders:Ljava/util/List;
+     242: goto          252
+     245: aload_1
+     246: checkcast     #183                // class velox/api/layer1/data/OcoOrderSendParameters
+     249: getfield      #248                // Field velox/api/layer1/data/OcoOrderSendParameters.orders:Ljava/util/List;
+     252: astore_3
+     253: aload_0
+     254: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+     257: aload_1
+     258: invokevirtual #349                // Method java/lang/Object.getClass:()Ljava/lang/Class;
+     261: ldc           #194                // class velox/api/layer1/data/OsoOrderSendParameters
+     263: if_acmpne     271
+     266: ldc           #94                 // String oso
+     268: goto          273
+     271: ldc           #87                 // String oco
+     273: aload_3
+     274: invokeinterface #572,  1          // InterfaceMethod java/util/List.stream:()Ljava/util/stream/Stream;
+     279: aload_0
+     280: aload_2
+     281: invokedynamic #615,  0            // InvokeDynamic #4:apply:(Lvelox/api/layer1/providers/RithmicProvider;Ljava/lang/String;)Ljava/util/function/Function;
+     286: invokeinterface #592,  2          // InterfaceMethod java/util/stream/Stream.map:(Ljava/util/function/Function;)Ljava/util/stream/Stream;
+     291: invokedynamic #616,  0            // InvokeDynamic #5:apply:()Ljava/util/function/IntFunction;
+     296: invokeinterface #595,  2          // InterfaceMethod java/util/stream/Stream.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
+     301: checkcast     #107                // class "[Ljava/lang/String;"
+     304: aload_3
+     305: invokeinterface #572,  1          // InterfaceMethod java/util/List.stream:()Ljava/util/stream/Stream;
+     310: aload_0
+     311: aload_2
+     312: invokedynamic #617,  0            // InvokeDynamic #6:apply:(Lvelox/api/layer1/providers/RithmicProvider;Ljava/lang/String;)Ljava/util/function/Function;
+     317: invokeinterface #592,  2          // InterfaceMethod java/util/stream/Stream.map:(Ljava/util/function/Function;)Ljava/util/stream/Stream;
+     322: invokedynamic #618,  0            // InvokeDynamic #7:apply:()Ljava/util/function/IntFunction;
+     327: invokeinterface #595,  2          // InterfaceMethod java/util/stream/Stream.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
+     332: checkcast     #107                // class "[Ljava/lang/String;"
+     335: aload_3
+     336: invokeinterface #572,  1          // InterfaceMethod java/util/List.stream:()Ljava/util/stream/Stream;
+     341: invokedynamic #619,  0            // InvokeDynamic #8:apply:()Ljava/util/function/Function;
+     346: invokeinterface #592,  2          // InterfaceMethod java/util/stream/Stream.map:(Ljava/util/function/Function;)Ljava/util/stream/Stream;
+     351: invokedynamic #620,  0            // InvokeDynamic #9:apply:()Ljava/util/function/IntFunction;
+     356: invokeinterface #595,  2          // InterfaceMethod java/util/stream/Stream.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
+     361: checkcast     #107                // class "[Ljava/lang/String;"
+     364: aload_3
+     365: invokeinterface #572,  1          // InterfaceMethod java/util/List.stream:()Ljava/util/stream/Stream;
+     370: invokedynamic #621,  0            // InvokeDynamic #10:apply:()Ljava/util/function/Function;
+     375: invokeinterface #592,  2          // InterfaceMethod java/util/stream/Stream.map:(Ljava/util/function/Function;)Ljava/util/stream/Stream;
+     380: invokedynamic #622,  0            // InvokeDynamic #11:apply:()Ljava/util/function/IntFunction;
+     385: invokeinterface #595,  2          // InterfaceMethod java/util/stream/Stream.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
+     390: checkcast     #106                // class "[Ljava/lang/Boolean;"
+     393: invokestatic  #489                // Method a:([Ljava/lang/Boolean;)[Z
+     396: aload_3
+     397: invokeinterface #572,  1          // InterfaceMethod java/util/List.stream:()Ljava/util/stream/Stream;
+     402: invokedynamic #623,  0            // InvokeDynamic #12:applyAsDouble:()Ljava/util/function/ToDoubleFunction;
+     407: invokeinterface #593,  2          // InterfaceMethod java/util/stream/Stream.mapToDouble:(Ljava/util/function/ToDoubleFunction;)Ljava/util/stream/DoubleStream;
+     412: invokeinterface #590,  1          // InterfaceMethod java/util/stream/DoubleStream.toArray:()[D
+     417: aload_3
+     418: invokeinterface #572,  1          // InterfaceMethod java/util/List.stream:()Ljava/util/stream/Stream;
+     423: invokedynamic #624,  0            // InvokeDynamic #13:applyAsDouble:()Ljava/util/function/ToDoubleFunction;
+     428: invokeinterface #593,  2          // InterfaceMethod java/util/stream/Stream.mapToDouble:(Ljava/util/function/ToDoubleFunction;)Ljava/util/stream/DoubleStream;
+     433: invokeinterface #590,  1          // InterfaceMethod java/util/stream/DoubleStream.toArray:()[D
+     438: aload_3
+     439: invokeinterface #572,  1          // InterfaceMethod java/util/List.stream:()Ljava/util/stream/Stream;
+     444: invokedynamic #625,  0            // InvokeDynamic #14:applyAsInt:()Ljava/util/function/ToIntFunction;
+     449: invokeinterface #594,  2          // InterfaceMethod java/util/stream/Stream.mapToInt:(Ljava/util/function/ToIntFunction;)Ljava/util/stream/IntStream;
+     454: invokeinterface #591,  1          // InterfaceMethod java/util/stream/IntStream.toArray:()[I
+     459: aload_3
+     460: invokeinterface #572,  1          // InterfaceMethod java/util/List.stream:()Ljava/util/stream/Stream;
+     465: invokedynamic #626,  0            // InvokeDynamic #15:applyAsInt:()Ljava/util/function/ToIntFunction;
+     470: invokeinterface #594,  2          // InterfaceMethod java/util/stream/Stream.mapToInt:(Ljava/util/function/ToIntFunction;)Ljava/util/stream/IntStream;
+     475: invokeinterface #591,  1          // InterfaceMethod java/util/stream/IntStream.toArray:()[I
+     480: aload_3
+     481: invokeinterface #572,  1          // InterfaceMethod java/util/List.stream:()Ljava/util/stream/Stream;
+     486: aload_0
+     487: invokedynamic #627,  0            // InvokeDynamic #16:apply:(Lvelox/api/layer1/providers/RithmicProvider;)Ljava/util/function/Function;
+     492: invokeinterface #592,  2          // InterfaceMethod java/util/stream/Stream.map:(Ljava/util/function/Function;)Ljava/util/stream/Stream;
+     497: invokedynamic #628,  0            // InvokeDynamic #17:apply:()Ljava/util/function/IntFunction;
+     502: invokeinterface #595,  2          // InterfaceMethod java/util/stream/Stream.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
+     507: checkcast     #107                // class "[Ljava/lang/String;"
+     510: aload_3
+     511: invokeinterface #572,  1          // InterfaceMethod java/util/List.stream:()Ljava/util/stream/Stream;
+     516: invokedynamic #629,  0            // InvokeDynamic #18:applyAsInt:()Ljava/util/function/ToIntFunction;
+     521: invokeinterface #594,  2          // InterfaceMethod java/util/stream/Stream.mapToInt:(Ljava/util/function/ToIntFunction;)Ljava/util/stream/IntStream;
+     526: invokeinterface #591,  1          // InterfaceMethod java/util/stream/IntStream.toArray:()[I
+     531: aload_3
+     532: invokeinterface #572,  1          // InterfaceMethod java/util/List.stream:()Ljava/util/stream/Stream;
+     537: invokedynamic #630,  0            // InvokeDynamic #19:applyAsInt:()Ljava/util/function/ToIntFunction;
+     542: invokeinterface #594,  2          // InterfaceMethod java/util/stream/Stream.mapToInt:(Ljava/util/function/ToIntFunction;)Ljava/util/stream/IntStream;
+     547: invokeinterface #591,  1          // InterfaceMethod java/util/stream/IntStream.toArray:()[I
+     552: invokevirtual #561                // Method velox/rithmic/RithmicProvider.sendChain:(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[Z[D[D[I[I[Ljava/lang/String;[I[I)V
+     555: return
+
+  private org.apache.commons.lang3.tuple.Pair<int[], int[]> a(int, int, java.util.List<velox.api.layer1.data.BracketTier>);
+    Code:
+       0: iload_2
+       1: ifle          114
+       4: iconst_1
+       5: aload_3
+       6: invokeinterface #571,  1          // InterfaceMethod java/util/List.size:()I
+      11: iadd
+      12: newarray       int
+      14: astore        4
+      16: iconst_1
+      17: aload_3
+      18: invokeinterface #571,  1          // InterfaceMethod java/util/List.size:()I
+      23: iadd
+      24: newarray       int
+      26: astore        5
+      28: aload         4
+      30: iconst_0
+      31: iload_2
+      32: iastore
+      33: iload_1
+      34: istore        6
+      36: iconst_0
+      37: istore        7
+      39: aload_3
+      40: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      45: astore        8
+      47: aload         8
+      49: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      54: ifeq          105
+      57: aload         8
+      59: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      64: checkcast     #173                // class velox/api/layer1/data/BracketTier
+      67: astore        9
+      69: iinc          7, 1
+      72: aload         4
+      74: iload         7
+      76: aload         9
+      78: getfield      #235                // Field velox/api/layer1/data/BracketTier.offset:I
+      81: iastore
+      82: aload         5
+      84: iload         7
+      86: aload         9
+      88: getfield      #236                // Field velox/api/layer1/data/BracketTier.size:I
+      91: iastore
+      92: iload         6
+      94: aload         9
+      96: getfield      #236                // Field velox/api/layer1/data/BracketTier.size:I
+      99: isub
+     100: istore        6
+     102: goto          47
+     105: aload         5
+     107: iconst_0
+     108: iload         6
+     110: iastore
+     111: goto          124
+     114: iconst_0
+     115: newarray       int
+     117: astore        4
+     119: iconst_0
+     120: newarray       int
+     122: astore        5
+     124: aload         4
+     126: aload         5
+     128: invokestatic  #389                // Method org/apache/commons/lang3/tuple/Pair.of:(Ljava/lang/Object;Ljava/lang/Object;)Lorg/apache/commons/lang3/tuple/Pair;
+     131: areturn
+
+  private java.lang.String a(velox.api.layer1.data.OrderDuration);
+    Code:
+       0: aload_1
+       1: getstatic     #254                // Field velox/api/layer1/data/OrderDuration.IOC:Lvelox/api/layer1/data/OrderDuration;
+       4: if_acmpne     12
+       7: ldc           #44                 // String OC
+       9: goto          16
+      12: aload_1
+      13: invokevirtual #423                // Method velox/api/layer1/data/OrderDuration.name:()Ljava/lang/String;
+      16: astore_2
+      17: ldc           #22                 // String DAY
+      19: aload_2
+      20: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      23: ifne          67
+      26: ldc           #29                 // String FOK
+      28: aload_2
+      29: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      32: ifne          67
+      35: ldc           #32                 // String GTC
+      37: aload_2
+      38: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      41: ifne          67
+      44: ldc           #44                 // String OC
+      46: aload_2
+      47: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      50: ifne          67
+      53: new           #126                // class java/lang/RuntimeException
+      56: dup
+      57: aload_2
+      58: invokedynamic #631,  0            // InvokeDynamic #20:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+      63: invokespecial #350                // Method java/lang/RuntimeException."<init>":(Ljava/lang/String;)V
+      66: athrow
+      67: aload_2
+      68: areturn
+
+  public static boolean[] a(java.lang.Boolean[]);
+    Code:
+       0: aload_0
+       1: arraylength
+       2: istore_1
+       3: iload_1
+       4: newarray       boolean
+       6: astore_2
+       7: iconst_0
+       8: istore_3
+       9: iload_3
+      10: iload_1
+      11: if_icmpge     29
+      14: aload_2
+      15: iload_3
+      16: aload_0
+      17: iload_3
+      18: aaload
+      19: invokevirtual #331                // Method java/lang/Boolean.booleanValue:()Z
+      22: bastore
+      23: iinc          3, 1
+      26: goto          9
+      29: aload_2
+      30: areturn
+
+  public void updateOrder(velox.api.layer1.data.OrderUpdateParameters);
+    Code:
+       0: aload_0
+       1: getfield      #323                // Field y:Ljava/util/concurrent/atomic/AtomicBoolean;
+       4: invokevirtual #382                // Method java/util/concurrent/atomic/AtomicBoolean.get:()Z
+       7: ifne          20
+      10: new           #119                // class java/lang/IllegalStateException
+      13: dup
+      14: ldc           #13                 // String Attempting to update without an account being selected
+      16: invokespecial #344                // Method java/lang/IllegalStateException."<init>":(Ljava/lang/String;)V
+      19: athrow
+      20: aload_1
+      21: getfield      #270                // Field velox/api/layer1/data/OrderUpdateParameters.orderId:Ljava/lang/String;
+      24: astore_2
+      25: aload_0
+      26: getfield      #294                // Field a:Ljava/util/HashMap;
+      29: aload_1
+      30: getfield      #270                // Field velox/api/layer1/data/OrderUpdateParameters.orderId:Ljava/lang/String;
+      33: invokevirtual #370                // Method java/util/HashMap.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      36: checkcast     #186                // class velox/api/layer1/data/OrderInfoBuilder
+      39: invokevirtual #427                // Method velox/api/layer1/data/OrderInfoBuilder.getInstrumentAlias:()Ljava/lang/String;
+      42: astore_3
+      43: aload_0
+      44: aload_3
+      45: invokevirtual #493                // Method b:(Ljava/lang/String;)Ljava/lang/String;
+      48: astore        4
+      50: aload_0
+      51: aload_3
+      52: invokevirtual #476                // Method a:(Ljava/lang/String;)Ljava/lang/String;
+      55: astore        5
+      57: aload_1
+      58: invokevirtual #349                // Method java/lang/Object.getClass:()Ljava/lang/Class;
+      61: ldc           #184                // class velox/api/layer1/data/OrderCancelParameters
+      63: if_acmpne     95
+      66: aload_0
+      67: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+      70: aload         4
+      72: aload         5
+      74: aload_2
+      75: aload_1
+      76: checkcast     #184                // class velox/api/layer1/data/OrderCancelParameters
+      79: getfield      #250                // Field velox/api/layer1/data/OrderCancelParameters.batchId:J
+      82: aload_1
+      83: checkcast     #184                // class velox/api/layer1/data/OrderCancelParameters
+      86: getfield      #249                // Field velox/api/layer1/data/OrderCancelParameters.batchEnd:Z
+      89: invokevirtual #554                // Method velox/rithmic/RithmicProvider.cancelOrder:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JZ)V
+      92: goto          202
+      95: aload_1
+      96: invokevirtual #349                // Method java/lang/Object.getClass:()Ljava/lang/Class;
+      99: ldc           #187                // class velox/api/layer1/data/OrderMoveParameters
+     101: if_acmpne     135
+     104: aload_1
+     105: checkcast     #187                // class velox/api/layer1/data/OrderMoveParameters
+     108: astore        6
+     110: aload_0
+     111: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+     114: aload         4
+     116: aload         5
+     118: aload_2
+     119: aload         6
+     121: getfield      #255                // Field velox/api/layer1/data/OrderMoveParameters.limitPrice:D
+     124: aload         6
+     126: getfield      #256                // Field velox/api/layer1/data/OrderMoveParameters.stopPrice:D
+     129: invokevirtual #560                // Method velox/rithmic/RithmicProvider.moveOrder:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;DD)V
+     132: goto          202
+     135: aload_1
+     136: invokevirtual #349                // Method java/lang/Object.getClass:()Ljava/lang/Class;
+     139: ldc           #188                // class velox/api/layer1/data/OrderMoveToMarketParameters
+     141: if_acmpne     170
+     144: aload_1
+     145: checkcast     #188                // class velox/api/layer1/data/OrderMoveToMarketParameters
+     148: astore        6
+     150: aload_0
+     151: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+     154: aload         4
+     156: aload         5
+     158: aload_2
+     159: aload         6
+     161: getfield      #257                // Field velox/api/layer1/data/OrderMoveToMarketParameters.offset:I
+     164: invokevirtual #559                // Method velox/rithmic/RithmicProvider.modifyOrderToMarketPrice:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V
+     167: goto          202
+     170: aload_1
+     171: invokevirtual #349                // Method java/lang/Object.getClass:()Ljava/lang/Class;
+     174: ldc           #189                // class velox/api/layer1/data/OrderResizeParameters
+     176: if_acmpne     202
+     179: aload_1
+     180: checkcast     #189                // class velox/api/layer1/data/OrderResizeParameters
+     183: astore        6
+     185: aload_0
+     186: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+     189: aload         4
+     191: aload         5
+     193: aload_2
+     194: aload         6
+     196: getfield      #258                // Field velox/api/layer1/data/OrderResizeParameters.size:I
+     199: invokevirtual #558                // Method velox/rithmic/RithmicProvider.modifyOrderSize:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V
+     202: return
+
+  public void login(velox.api.layer1.data.LoginData);
+    Code:
+       0: aload_0
+       1: invokevirtual #472                // Method a:()V
+       4: aload_1
+       5: checkcast     #177                // class velox/api/layer1/data/ExtendedLoginData
+       8: astore_2
+       9: aload_2
+      10: getfield      #240                // Field velox/api/layer1/data/ExtendedLoginData.extendedData:Ljava/util/Map;
+      13: astore_3
+      14: aload_3
+      15: ldc           #71                 // String appName
+      17: invokedynamic #632,  0            // InvokeDynamic #21:apply:()Ljava/util/function/Function;
+      22: invokeinterface #573,  3          // InterfaceMethod java/util/Map.computeIfAbsent:(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;
+      27: pop
+      28: aload_0
+      29: aload_3
+      30: ldc           #78                 // String convertToMarketOnReject
+      32: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      37: checkcast     #164                // class velox/api/layer0/credentialscomponents/CredentialsSerializationField
+      40: invokevirtual #391                // Method velox/api/layer0/credentialscomponents/CredentialsSerializationField.getStringValue:()Ljava/lang/String;
+      43: invokestatic  #332                // Method java/lang/Boolean.parseBoolean:(Ljava/lang/String;)Z
+      46: putfield      #320                // Field v:Z
+      49: aload_0
+      50: aload_3
+      51: ldc           #77                 // String convertBracketStopToMarketOnReject
+      53: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      58: checkcast     #164                // class velox/api/layer0/credentialscomponents/CredentialsSerializationField
+      61: invokevirtual #391                // Method velox/api/layer0/credentialscomponents/CredentialsSerializationField.getStringValue:()Ljava/lang/String;
+      64: invokestatic  #332                // Method java/lang/Boolean.parseBoolean:(Ljava/lang/String;)Z
+      67: putfield      #321                // Field w:Z
+      70: aload_0
+      71: getstatic     #307                // Field k:Ljava/util/concurrent/ExecutorService;
+      74: aload_0
+      75: aload_3
+      76: aload_2
+      77: invokedynamic #633,  0            // InvokeDynamic #22:run:(Lvelox/api/layer1/providers/RithmicProvider;Ljava/util/Map;Lvelox/api/layer1/data/ExtendedLoginData;)Ljava/lang/Runnable;
+      82: invokeinterface #587,  2          // InterfaceMethod java/util/concurrent/ExecutorService.submit:(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;
+      87: putfield      #313                // Field p:Ljava/util/concurrent/Future;
+      90: getstatic     #307                // Field k:Ljava/util/concurrent/ExecutorService;
+      93: aload_0
+      94: invokedynamic #634,  0            // InvokeDynamic #23:run:(Lvelox/api/layer1/providers/RithmicProvider;)Ljava/lang/Runnable;
+      99: invokeinterface #586,  2          // InterfaceMethod java/util/concurrent/ExecutorService.execute:(Ljava/lang/Runnable;)V
+     104: return
+
+  public void close();
+    Code:
+       0: aload_0
+       1: invokevirtual #472                // Method a:()V
+       4: aload_0
+       5: getfield      #313                // Field p:Ljava/util/concurrent/Future;
+       8: ifnull        22
+      11: aload_0
+      12: getfield      #313                // Field p:Ljava/util/concurrent/Future;
+      15: iconst_0
+      16: invokeinterface #588,  2          // InterfaceMethod java/util/concurrent/Future.cancel:(Z)Z
+      21: pop
+      22: getstatic     #307                // Field k:Ljava/util/concurrent/ExecutorService;
+      25: aload_0
+      26: invokedynamic #635,  0            // InvokeDynamic #24:run:(Lvelox/api/layer1/providers/RithmicProvider;)Ljava/lang/Runnable;
+      31: invokeinterface #586,  2          // InterfaceMethod java/util/concurrent/ExecutorService.execute:(Ljava/lang/Runnable;)V
+      36: return
+
+  void a();
+    Code:
+       0: new           #204                // class velox/api/layer1/messages/Layer1ApiUserMessageNotification
+       3: dup
+       4: aconst_null
+       5: getstatic     #304                // Field i:J
+       8: ldc           #1                  // String
+      10: iconst_0
+      11: iconst_0
+      12: aconst_null
+      13: invokespecial #456                // Method velox/api/layer1/messages/Layer1ApiUserMessageNotification."<init>":(Ljava/lang/String;JLjava/lang/String;ZILjava/lang/Runnable;)V
+      16: astore_1
+      17: aload_0
+      18: getfield      #295                // Field adminListeners:Ljava/util/List;
+      21: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      26: astore_2
+      27: aload_2
+      28: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      33: ifeq          56
+      36: aload_2
+      37: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      42: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      45: astore_3
+      46: aload_3
+      47: aload_1
+      48: invokeinterface #601,  2          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onUserMessage:(Ljava/lang/Object;)V
+      53: goto          27
+      56: return
+
+  public void onLoginFailed(boolean, boolean, int);
+    Code:
+       0: getstatic     #307                // Field k:Ljava/util/concurrent/ExecutorService;
+       3: aload_0
+       4: iload_1
+       5: iload_2
+       6: iload_3
+       7: invokedynamic #636,  0            // InvokeDynamic #25:run:(Lvelox/api/layer1/providers/RithmicProvider;ZZI)Ljava/lang/Runnable;
+      12: invokeinterface #586,  2          // InterfaceMethod java/util/concurrent/ExecutorService.execute:(Ljava/lang/Runnable;)V
+      17: return
+
+  public void onConnectionLost();
+    Code:
+       0: ldc           #54                 // String Rithmic connection lost
+       2: invokestatic  #398                // Method velox/api/layer1/common/Log.warn:(Ljava/lang/String;)V
+       5: aload_0
+       6: getfield      #295                // Field adminListeners:Ljava/util/List;
+       9: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      14: astore_1
+      15: aload_1
+      16: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      21: ifeq          47
+      24: aload_1
+      25: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      30: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      33: astore_2
+      34: aload_2
+      35: getstatic     #238                // Field velox/api/layer1/data/DisconnectionReason.NO_INTERNET:Lvelox/api/layer1/data/DisconnectionReason;
+      38: aconst_null
+      39: invokeinterface #596,  3          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onConnectionLost:(Lvelox/api/layer1/data/DisconnectionReason;Ljava/lang/String;)V
+      44: goto          15
+      47: return
+
+  public void onConnectionRestored();
+    Code:
+       0: ldc           #55                 // String Rithmic connection restored
+       2: invokestatic  #398                // Method velox/api/layer1/common/Log.warn:(Ljava/lang/String;)V
+       5: aload_0
+       6: getfield      #295                // Field adminListeners:Ljava/util/List;
+       9: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      14: astore_1
+      15: aload_1
+      16: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      21: ifeq          43
+      24: aload_1
+      25: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      30: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      33: astore_2
+      34: aload_2
+      35: invokeinterface #597,  1          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onConnectionRestored:()V
+      40: goto          15
+      43: return
+
+  public void onEngineCreationFailed(int, java.lang.String);
+    Code:
+       0: iload_1
+       1: aload_2
+       2: invokedynamic #637,  0            // InvokeDynamic #26:makeConcatWithConstants:(ILjava/lang/String;)Ljava/lang/String;
+       7: invokestatic  #393                // Method velox/api/layer1/common/Log.error:(Ljava/lang/String;)V
+      10: aload_0
+      11: getfield      #295                // Field adminListeners:Ljava/util/List;
+      14: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      19: astore_3
+      20: aload_3
+      21: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      26: ifeq          88
+      29: aload_3
+      30: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      35: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      38: astore        4
+      40: aload         4
+      42: getstatic     #244                // Field velox/api/layer1/data/LoginFailedReason.NO_INTERNET_CONNECTION:Lvelox/api/layer1/data/LoginFailedReason;
+      45: aconst_null
+      46: invokeinterface #598,  3          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onLoginFailed:(Lvelox/api/layer1/data/LoginFailedReason;Ljava/lang/String;)V
+      51: invokestatic  #490                // Method b:()Z
+      54: ifeq          85
+      57: ldc           #62                 // String Sending message to restart historical data server in 30 minutes
+      59: invokestatic  #396                // Method velox/api/layer1/common/Log.info:(Ljava/lang/String;)V
+      62: aload         4
+      64: new           #206                // class velox/api/layer1/messages/historicalserver/Layer1ApiRestartHistoricalServer
+      67: dup
+      68: getstatic     #233                // Field java/util/concurrent/TimeUnit.MINUTES:Ljava/util/concurrent/TimeUnit;
+      71: ldc2_w        #229                // long 30l
+      74: invokevirtual #379                // Method java/util/concurrent/TimeUnit.toMillis:(J)J
+      77: invokespecial #460                // Method velox/api/layer1/messages/historicalserver/Layer1ApiRestartHistoricalServer."<init>":(J)V
+      80: invokeinterface #601,  2          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onUserMessage:(Ljava/lang/Object;)V
+      85: goto          20
+      88: return
+
+  public static boolean b();
+    Code:
+       0: ldc           #102                // String true
+       2: ldc           #34                 // String IS_HISTORICAL_DATA_SERVER
+       4: invokestatic  #362                // Method java/lang/System.getenv:(Ljava/lang/String;)Ljava/lang/String;
+       7: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      10: ireturn
+
+  public void onLoginSuccess();
+    Code:
+       0: getstatic     #307                // Field k:Ljava/util/concurrent/ExecutorService;
+       3: aload_0
+       4: invokedynamic #638,  0            // InvokeDynamic #27:run:(Lvelox/api/layer1/providers/RithmicProvider;)Ljava/lang/Runnable;
+       9: invokeinterface #586,  2          // InterfaceMethod java/util/concurrent/ExecutorService.execute:(Ljava/lang/Runnable;)V
+      14: return
+
+  public void onForcedLogout();
+    Code:
+       0: aload_0
+       1: getfield      #295                // Field adminListeners:Ljava/util/List;
+       4: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+       9: astore_1
+      10: aload_1
+      11: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      16: ifeq          42
+      19: aload_1
+      20: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      25: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      28: astore_2
+      29: aload_2
+      30: getstatic     #239                // Field velox/api/layer1/data/DisconnectionReason.SIMULTANEOUS_LOGIN:Lvelox/api/layer1/data/DisconnectionReason;
+      33: aconst_null
+      34: invokeinterface #596,  3          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onConnectionLost:(Lvelox/api/layer1/data/DisconnectionReason;Ljava/lang/String;)V
+      39: goto          10
+      42: return
+
+  public void onAdminAlert(java.lang.String);
+    Code:
+       0: aload_0
+       1: getfield      #295                // Field adminListeners:Ljava/util/List;
+       4: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+       9: astore_2
+      10: aload_2
+      11: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      16: ifeq          42
+      19: aload_2
+      20: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      25: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      28: astore_3
+      29: aload_3
+      30: aload_1
+      31: getstatic     #288                // Field velox/api/layer1/data/SystemTextMessageType.UNCLASSIFIED:Lvelox/api/layer1/data/SystemTextMessageType;
+      34: invokeinterface #600,  3          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onSystemTextMessage:(Ljava/lang/String;Lvelox/api/layer1/data/SystemTextMessageType;)V
+      39: goto          10
+      42: return
+
+  public void onNotify(java.lang.String);
+    Code:
+       0: aload_0
+       1: getfield      #295                // Field adminListeners:Ljava/util/List;
+       4: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+       9: astore_2
+      10: aload_2
+      11: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      16: ifeq          42
+      19: aload_2
+      20: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      25: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      28: astore_3
+      29: aload_3
+      30: aload_1
+      31: getstatic     #288                // Field velox/api/layer1/data/SystemTextMessageType.UNCLASSIFIED:Lvelox/api/layer1/data/SystemTextMessageType;
+      34: invokeinterface #600,  3          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onSystemTextMessage:(Ljava/lang/String;Lvelox/api/layer1/data/SystemTextMessageType;)V
+      39: goto          10
+      42: return
+
+  public int selectAccount(java.lang.String[]);
+    Code:
+       0: aload_0
+       1: getfield      #322                // Field x:Ljava/util/concurrent/atomic/AtomicBoolean;
+       4: iconst_1
+       5: invokevirtual #383                // Method java/util/concurrent/atomic/AtomicBoolean.set:(Z)V
+       8: aload_1
+       9: invokestatic  #368                // Method java/util/Arrays.stream:([Ljava/lang/Object;)Ljava/util/stream/Stream;
+      12: invokedynamic #639,  0            // InvokeDynamic #28:apply:()Ljava/util/function/Function;
+      17: invokeinterface #592,  2          // InterfaceMethod java/util/stream/Stream.map:(Ljava/util/function/Function;)Ljava/util/stream/Stream;
+      22: invokedynamic #640,  0            // InvokeDynamic #29:apply:()Ljava/util/function/IntFunction;
+      27: invokeinterface #595,  2          // InterfaceMethod java/util/stream/Stream.toArray:(Ljava/util/function/IntFunction;)[Ljava/lang/Object;
+      32: checkcast     #108                // class "[Lvelox/api/layer1/data/AccountInfo;"
+      35: astore_2
+      36: iconst_0
+      37: istore_3
+      38: aload_0
+      39: getfield      #295                // Field adminListeners:Ljava/util/List;
+      42: invokeinterface #571,  1          // InterfaceMethod java/util/List.size:()I
+      47: ifle          123
+      50: new           #205                // class velox/api/layer1/messages/SelectAccountMessage
+      53: dup
+      54: aload_2
+      55: invokespecial #458                // Method velox/api/layer1/messages/SelectAccountMessage."<init>":([Lvelox/api/layer1/data/AccountInfo;)V
+      58: astore        4
+      60: aload_0
+      61: getfield      #295                // Field adminListeners:Ljava/util/List;
+      64: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      69: astore        5
+      71: aload         5
+      73: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      78: ifeq          105
+      81: aload         5
+      83: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      88: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      91: astore        6
+      93: aload         6
+      95: aload         4
+      97: invokeinterface #601,  2          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onUserMessage:(Ljava/lang/Object;)V
+     102: goto          71
+     105: aload         4
+     107: invokevirtual #459                // Method velox/api/layer1/messages/SelectAccountMessage.get:()I
+     110: istore_3
+     111: goto          123
+     114: astore        5
+     116: ldc           #11                 // String Account selection failed - using the first one
+     118: aload         5
+     120: invokestatic  #395                // Method velox/api/layer1/common/Log.error:(Ljava/lang/String;Ljava/lang/Throwable;)V
+     123: aload_1
+     124: arraylength
+     125: ifle          150
+     128: aload_0
+     129: aload_1
+     130: iload_3
+     131: aaload
+     132: putfield      #317                // Field t:Ljava/lang/String;
+     135: aload_0
+     136: aload_0
+     137: getfield      #317                // Field t:Ljava/lang/String;
+     140: ldc           #8                  // String /
+     142: invokevirtual #358                // Method java/lang/String.split:(Ljava/lang/String;)[Ljava/lang/String;
+     145: iconst_0
+     146: aaload
+     147: putfield      #317                // Field t:Ljava/lang/String;
+     150: aload_0
+     151: getfield      #323                // Field y:Ljava/util/concurrent/atomic/AtomicBoolean;
+     154: iconst_1
+     155: invokevirtual #383                // Method java/util/concurrent/atomic/AtomicBoolean.set:(Z)V
+     158: iload_3
+     159: ireturn
+    Exception table:
+       from    to  target type
+         105   111   114   Class java/lang/InterruptedException
+
+  public void onPnlUpdate(long, java.lang.String, java.lang.String, int, double, double, double, java.lang.String, java.lang.String, double, double);
+    Code:
+       0: aload_3
+       1: ifnonnull     44
+       4: aload         4
+       6: ifnonnull     44
+       9: aload_0
+      10: aload         12
+      12: putfield      #316                // Field s:Ljava/lang/String;
+      15: aload_0
+      16: dload         14
+      18: dload         8
+      20: dsub
+      21: dload         10
+      23: dload         8
+      25: dload         16
+      27: dload         14
+      29: aload         12
+      31: ldc2_w        #231                // double -1.0d
+      34: aload_0
+      35: getfield      #317                // Field t:Ljava/lang/String;
+      38: invokespecial #462                // Method velox/api/layer1/providers/C.a:(DDDDDLjava/lang/String;DLjava/lang/String;)V
+      41: goto          67
+      44: getstatic     #298                // Field d:Z
+      47: ifne          67
+      50: aload_3
+      51: ifnull        59
+      54: aload         4
+      56: ifnonnull     67
+      59: new           #110                // class java/lang/AssertionError
+      62: dup
+      63: invokespecial #330                // Method java/lang/AssertionError."<init>":()V
+      66: athrow
+      67: return
+
+  public void onLineUpdate(boolean, java.lang.String, java.lang.String, java.lang.String, double, java.lang.String, double, double, java.lang.String, long, java.lang.String, int, int, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String);
+    Code:
+       0: aload_0
+       1: aload_3
+       2: aload_2
+       3: invokevirtual #477                // Method a:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+       6: astore        24
+       8: aload_0
+       9: aload         7
+      11: invokevirtual #511                // Method e:(Ljava/lang/String;)Lvelox/api/layer1/data/OrderType;
+      14: astore        25
+      16: aload         18
+      18: aload         19
+      20: invokestatic  #501                // Method c:(Ljava/lang/String;Ljava/lang/String;)Lvelox/api/layer1/data/OrderStatus;
+      23: astore        26
+      25: aload         23
+      27: invokestatic  #506                // Method d:(Ljava/lang/String;)Lvelox/api/layer1/data/OrderDuration;
+      30: astore        27
+      32: aload         26
+      34: ifnonnull     58
+      37: aload         18
+      39: invokestatic  #386                // Method org/apache/commons/lang3/StringUtils.isEmpty:(Ljava/lang/CharSequence;)Z
+      42: ifne          57
+      45: aload         18
+      47: aload         19
+      49: invokedynamic #641,  0            // InvokeDynamic #30:makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+      54: invokestatic  #398                // Method velox/api/layer1/common/Log.warn:(Ljava/lang/String;)V
+      57: return
+      58: aload         26
+      60: getstatic     #262                // Field velox/api/layer1/data/OrderStatus.PENDING_MODIFY:Lvelox/api/layer1/data/OrderStatus;
+      63: if_acmpne     89
+      66: iload         17
+      68: ifne          89
+      71: iload         16
+      73: ifne          89
+      76: aload         18
+      78: aload         19
+      80: invokedynamic #642,  0            // InvokeDynamic #31:makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+      85: invokestatic  #398                // Method velox/api/layer1/common/Log.warn:(Ljava/lang/String;)V
+      88: return
+      89: aload         25
+      91: ifnonnull     105
+      94: aload         7
+      96: invokedynamic #643,  0            // InvokeDynamic #32:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+     101: invokestatic  #398                // Method velox/api/layer1/common/Log.warn:(Ljava/lang/String;)V
+     104: return
+     105: aload_0
+     106: getfield      #294                // Field a:Ljava/util/HashMap;
+     109: aload         12
+     111: invokevirtual #370                // Method java/util/HashMap.get:(Ljava/lang/Object;)Ljava/lang/Object;
+     114: checkcast     #186                // class velox/api/layer1/data/OrderInfoBuilder
+     117: astore        28
+     119: aload         28
+     121: ifnonnull     155
+     124: new           #186                // class velox/api/layer1/data/OrderInfoBuilder
+     127: dup
+     128: aload         24
+     130: aload         12
+     132: iload_1
+     133: aload         25
+     135: aload         4
+     137: iconst_0
+     138: invokespecial #425                // Method velox/api/layer1/data/OrderInfoBuilder."<init>":(Ljava/lang/String;Ljava/lang/String;ZLvelox/api/layer1/data/OrderType;Ljava/lang/String;Z)V
+     141: astore        28
+     143: aload_0
+     144: getfield      #294                // Field a:Ljava/util/HashMap;
+     147: aload         12
+     149: aload         28
+     151: invokevirtual #371                // Method java/util/HashMap.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+     154: pop
+     155: aload         28
+     157: invokevirtual #428                // Method velox/api/layer1/data/OrderInfoBuilder.getStatus:()Lvelox/api/layer1/data/OrderStatus;
+     160: astore        29
+     162: aload         26
+     164: aload         29
+     166: if_acmpeq     210
+     169: getstatic     #306                // Field j:Ljava/util/Set;
+     172: aload         29
+     174: invokeinterface #581,  2          // InterfaceMethod java/util/Set.contains:(Ljava/lang/Object;)Z
+     179: ifeq          210
+     182: ldc           #45                 // String Order %s has already been %s, but now we got an order update event with status %s. Ignoring this event.
+     184: iconst_3
+     185: anewarray     #125                // class java/lang/Object
+     188: dup
+     189: iconst_0
+     190: aload         12
+     192: aastore
+     193: dup
+     194: iconst_1
+     195: aload         29
+     197: aastore
+     198: dup
+     199: iconst_2
+     200: aload         26
+     202: aastore
+     203: invokestatic  #355                // Method java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;
+     206: invokestatic  #398                // Method velox/api/layer1/common/Log.warn:(Ljava/lang/String;)V
+     209: return
+     210: aload         26
+     212: getstatic     #264                // Field velox/api/layer1/data/OrderStatus.REJECTED:Lvelox/api/layer1/data/OrderStatus;
+     215: if_acmpne     226
+     218: dload         8
+     220: invokestatic  #340                // Method java/lang/Double.isNaN:(D)Z
+     223: ifne          234
+     226: aload         28
+     228: dload         8
+     230: invokevirtual #434                // Method velox/api/layer1/data/OrderInfoBuilder.setLimitPrice:(D)Lvelox/api/layer1/data/OrderInfoBuilder;
+     233: pop
+     234: aload         26
+     236: getstatic     #264                // Field velox/api/layer1/data/OrderStatus.REJECTED:Lvelox/api/layer1/data/OrderStatus;
+     239: if_acmpne     250
+     242: dload         10
+     244: invokestatic  #340                // Method java/lang/Double.isNaN:(D)Z
+     247: ifne          258
+     250: aload         28
+     252: dload         10
+     254: invokevirtual #437                // Method velox/api/layer1/data/OrderInfoBuilder.setStopPrice:(D)Lvelox/api/layer1/data/OrderInfoBuilder;
+     257: pop
+     258: aload         28
+     260: lload         13
+     262: invokevirtual #435                // Method velox/api/layer1/data/OrderInfoBuilder.setModificationUtcTime:(J)Lvelox/api/layer1/data/OrderInfoBuilder;
+     265: pop
+     266: aload         28
+     268: iload         16
+     270: invokevirtual #439                // Method velox/api/layer1/data/OrderInfoBuilder.setUnfilled:(I)Lvelox/api/layer1/data/OrderInfoBuilder;
+     273: pop
+     274: aload         28
+     276: iload         17
+     278: invokevirtual #433                // Method velox/api/layer1/data/OrderInfoBuilder.setFilled:(I)Lvelox/api/layer1/data/OrderInfoBuilder;
+     281: pop
+     282: aload         28
+     284: dload         5
+     286: invokevirtual #430                // Method velox/api/layer1/data/OrderInfoBuilder.setAverageFillPrice:(D)Lvelox/api/layer1/data/OrderInfoBuilder;
+     289: pop
+     290: aload         28
+     292: aload         26
+     294: invokevirtual #436                // Method velox/api/layer1/data/OrderInfoBuilder.setStatus:(Lvelox/api/layer1/data/OrderStatus;)Lvelox/api/layer1/data/OrderInfoBuilder;
+     297: pop
+     298: aload         27
+     300: ifnull        311
+     303: aload         28
+     305: aload         27
+     307: invokevirtual #431                // Method velox/api/layer1/data/OrderInfoBuilder.setDuration:(Lvelox/api/layer1/data/OrderDuration;)Lvelox/api/layer1/data/OrderInfoBuilder;
+     310: pop
+     311: aload         28
+     313: invokevirtual #429                // Method velox/api/layer1/data/OrderInfoBuilder.isStopTriggered:()Z
+     316: ifne          368
+     319: aload         25
+     321: getstatic     #268                // Field velox/api/layer1/data/OrderType.STP:Lvelox/api/layer1/data/OrderType;
+     324: if_acmpeq     335
+     327: aload         25
+     329: getstatic     #269                // Field velox/api/layer1/data/OrderType.STP_LMT:Lvelox/api/layer1/data/OrderType;
+     332: if_acmpne     357
+     335: aload         26
+     337: getstatic     #265                // Field velox/api/layer1/data/OrderStatus.WORKING:Lvelox/api/layer1/data/OrderStatus;
+     340: if_acmpne     357
+     343: aload         18
+     345: ldc           #101                // String trigger pending
+     347: invokevirtual #352                // Method java/lang/String.contains:(Ljava/lang/CharSequence;)Z
+     350: ifne          357
+     353: iconst_1
+     354: goto          358
+     357: iconst_0
+     358: istore        30
+     360: aload         28
+     362: iload         30
+     364: invokevirtual #438                // Method velox/api/layer1/data/OrderInfoBuilder.setStopTriggered:(Z)Lvelox/api/layer1/data/OrderInfoBuilder;
+     367: pop
+     368: aload         28
+     370: aload         15
+     372: invokevirtual #432                // Method velox/api/layer1/data/OrderInfoBuilder.setExchangeId:(Ljava/lang/String;)Lvelox/api/layer1/data/OrderInfoBuilder;
+     375: pop
+     376: aload         28
+     378: invokevirtual #426                // Method velox/api/layer1/data/OrderInfoBuilder.build:()Lvelox/api/layer1/data/OrderInfoUpdate;
+     381: astore        30
+     383: aload_0
+     384: aload         30
+     386: invokespecial #464                // Method velox/api/layer1/providers/C.a:(Lvelox/api/layer1/data/OrderInfoUpdate;)V
+     389: aload_0
+     390: aload         24
+     392: invokevirtual #500                // Method c:(Ljava/lang/String;)V
+     395: return
+
+  public void onFillReport(boolean, int, java.lang.String, java.lang.String, double, double, double, java.lang.String, java.lang.String, long, java.lang.String, int, int, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String);
+    Code:
+       0: ldc           #99                 // String sod
+       2: aload         22
+       4: invokevirtual #354                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+       7: ifeq          11
+      10: return
+      11: new           #176                // class velox/api/layer1/data/ExecutionInfo
+      14: dup
+      15: aload         12
+      17: iload_2
+      18: dload         7
+      20: aload         22
+      22: lload         13
+      24: invokespecial #401                // Method velox/api/layer1/data/ExecutionInfo."<init>":(Ljava/lang/String;IDLjava/lang/String;J)V
+      27: astore        23
+      29: aload_0
+      30: aload         23
+      32: invokespecial #463                // Method velox/api/layer1/providers/C.a:(Lvelox/api/layer1/data/ExecutionInfo;)V
+      35: return
+
+  public void addInstrument(java.lang.String, java.lang.String, double, double, java.lang.String);
+    Code:
+       0: aload_0
+       1: aload_2
+       2: aload_1
+       3: invokevirtual #477                // Method a:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+       6: astore        8
+       8: aload         8
+      10: aload         7
+      12: invokedynamic #644,  0            // InvokeDynamic #33:makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+      17: astore        9
+      19: getstatic     #300                // Field e:Ljava/util/Set;
+      22: aload_2
+      23: invokevirtual #360                // Method java/lang/String.toUpperCase:()Ljava/lang/String;
+      26: invokeinterface #581,  2          // InterfaceMethod java/util/Set.contains:(Ljava/lang/Object;)Z
+      31: ifne          38
+      34: iconst_1
+      35: goto          39
+      38: iconst_0
+      39: istore        10
+      41: new           #178                // class velox/api/layer1/data/InstrumentInfo
+      44: dup
+      45: aload_1
+      46: aload_2
+      47: aconst_null
+      48: dload_3
+      49: dload         5
+      51: aload         9
+      53: iload         10
+      55: invokespecial #402                // Method velox/api/layer1/data/InstrumentInfo."<init>":(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;DDLjava/lang/String;Z)V
+      58: astore        11
+      60: new           #215                // class velox/api/layer1/providers/RithmicProvider$b
+      63: dup
+      64: aload_0
+      65: aload         8
+      67: aload         11
+      69: invokespecial #531                // Method velox/api/layer1/providers/RithmicProvider$b."<init>":(Lvelox/api/layer1/providers/RithmicProvider;Ljava/lang/String;Lvelox/api/layer1/data/InstrumentInfo;)V
+      72: astore        12
+      74: aload_0
+      75: getfield      #297                // Field c:Ljava/util/Map;
+      78: aload         8
+      80: aload         12
+      82: invokeinterface #577,  3          // InterfaceMethod java/util/Map.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+      87: pop
+      88: aload         12
+      90: iconst_1
+      91: putfield      #325                // Field velox/api/layer1/providers/RithmicProvider$b.b:Z
+      94: aload_0
+      95: getfield      #305                // Field instrumentListeners:Ljava/util/List;
+      98: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     103: astore        13
+     105: aload         13
+     107: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     112: ifeq          141
+     115: aload         13
+     117: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     122: checkcast     #167                // class velox/api/layer1/Layer1ApiInstrumentListener
+     125: astore        14
+     127: aload         14
+     129: aload         8
+     131: aload         11
+     133: invokeinterface #603,  3          // InterfaceMethod velox/api/layer1/Layer1ApiInstrumentListener.onInstrumentAdded:(Ljava/lang/String;Lvelox/api/layer1/data/InstrumentInfo;)V
+     138: goto          105
+     141: return
+
+  public void instrumentNotFound(java.lang.String, java.lang.String);
+    Code:
+       0: aload_0
+       1: getfield      #305                // Field instrumentListeners:Ljava/util/List;
+       4: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+       9: astore_3
+      10: aload_3
+      11: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      16: ifeq          43
+      19: aload_3
+      20: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      25: checkcast     #167                // class velox/api/layer1/Layer1ApiInstrumentListener
+      28: astore        4
+      30: aload         4
+      32: aload_1
+      33: aload_2
+      34: aconst_null
+      35: invokeinterface #605,  4          // InterfaceMethod velox/api/layer1/Layer1ApiInstrumentListener.onInstrumentNotFound:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+      40: goto          10
+      43: return
+
+  public void onDepthData(java.lang.String, java.lang.String, boolean, double, long, boolean, long);
+    Code:
+       0: aload_0
+       1: aload_2
+       2: aload_1
+       3: invokevirtual #477                // Method a:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+       6: astore        11
+       8: aload_0
+       9: getfield      #297                // Field c:Ljava/util/Map;
+      12: aload         11
+      14: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      19: checkcast     #208                // class velox/api/layer1/providers/C$a
+      22: astore        12
+      24: aload         12
+      26: ifnonnull     30
+      29: return
+      30: dload         4
+      32: aload         12
+      34: invokevirtual #466                // Method velox/api/layer1/providers/C$a.a:()Lvelox/api/layer1/data/InstrumentInfo;
+      37: getfield      #242                // Field velox/api/layer1/data/InstrumentInfo.pips:D
+      40: ddiv
+      41: invokestatic  #347                // Method java/lang/Math.round:(D)J
+      44: l2i
+      45: istore        13
+      47: aload_0
+      48: getfield      #312                // Field o:Z
+      51: ifeq          109
+      54: aload         11
+      56: lload         9
+      58: lconst_0
+      59: invokestatic  #528                // Method velox/api/layer1/providers/RithmicProvider$TimestampMessage.createTimestampUserMessage:(Ljava/lang/String;JJ)Lvelox/api/layer1/reading/UserDataUserMessage;
+      62: astore        14
+      64: aload_0
+      65: getfield      #295                // Field adminListeners:Ljava/util/List;
+      68: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      73: astore        15
+      75: aload         15
+      77: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      82: ifeq          109
+      85: aload         15
+      87: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      92: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      95: astore        16
+      97: aload         16
+      99: aload         14
+     101: invokeinterface #601,  2          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onUserMessage:(Ljava/lang/Object;)V
+     106: goto          75
+     109: aload         12
+     111: iload_3
+     112: iload         13
+     114: lload         6
+     116: l2i
+     117: invokevirtual #468                // Method velox/api/layer1/providers/C$a.a:(ZII)V
+     120: aload_0
+     121: lload         9
+     123: invokevirtual #475                // Method a:(J)V
+     126: return
+
+  public void onDepthDataByOrder(java.lang.String, java.lang.String, boolean, java.lang.String, boolean, double, double, int, java.lang.String, java.lang.String, long, long);
+    Code:
+       0: aload_0
+       1: aload_2
+       2: aload_1
+       3: invokevirtual #477                // Method a:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+       6: astore        17
+       8: aload_0
+       9: getfield      #297                // Field c:Ljava/util/Map;
+      12: aload         17
+      14: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      19: checkcast     #215                // class velox/api/layer1/providers/RithmicProvider$b
+      22: astore        18
+      24: aload         18
+      26: ifnonnull     30
+      29: return
+      30: ldc           #1                  // String
+      32: aload         4
+      34: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      37: ifeq          44
+      40: ldc           #42                 // String N
+      42: astore        4
+      44: ldc           #42                 // String N
+      46: aload         4
+      48: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      51: istore        19
+      53: ldc           #17                 // String C
+      55: aload         4
+      57: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      60: istore        20
+      62: ldc           #21                 // String D
+      64: aload         4
+      66: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      69: istore        21
+      71: iload         19
+      73: ifne          101
+      76: iload         20
+      78: ifne          101
+      81: iload         21
+      83: ifne          101
+      86: new           #118                // class java/lang/IllegalArgumentException
+      89: dup
+      90: aload         4
+      92: invokedynamic #645,  0            // InvokeDynamic #34:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+      97: invokespecial #343                // Method java/lang/IllegalArgumentException."<init>":(Ljava/lang/String;)V
+     100: athrow
+     101: aload         18
+     103: invokevirtual #532                // Method velox/api/layer1/providers/RithmicProvider$b.a:()Lvelox/api/layer1/data/InstrumentInfo;
+     106: getfield      #242                // Field velox/api/layer1/data/InstrumentInfo.pips:D
+     109: dstore        22
+     111: dload         8
+     113: dload         22
+     115: ddiv
+     116: invokestatic  #347                // Method java/lang/Math.round:(D)J
+     119: l2i
+     120: istore        24
+     122: aload         12
+     124: invokestatic  #345                // Method java/lang/Long.parseLong:(Ljava/lang/String;)J
+     127: lstore        25
+     129: aload         18
+     131: getfield      #326                // Field velox/api/layer1/providers/RithmicProvider$b.f:Lvelox/bookmap/eq;
+     134: astore        27
+     136: aload         18
+     138: getfield      #328                // Field velox/api/layer1/providers/RithmicProvider$b.h:Ljava/util/HashSet;
+     141: astore        28
+     143: aload         18
+     145: getfield      #329                // Field velox/api/layer1/providers/RithmicProvider$b.i:Z
+     148: ifeq          255
+     151: aload         27
+     153: aload         11
+     155: invokevirtual #544                // Method velox/bookmap/eq.b:(Ljava/lang/String;)Lvelox/bookmap/eq$b;
+     158: astore        29
+     160: iload         21
+     162: ifeq          202
+     165: iload_3
+     166: ifeq          179
+     169: new           #118                // class java/lang/IllegalArgumentException
+     172: dup
+     173: ldc           #46                 // String Order deletion in image?
+     175: invokespecial #343                // Method java/lang/IllegalArgumentException."<init>":(Ljava/lang/String;)V
+     178: athrow
+     179: aload         28
+     181: aload         11
+     183: invokevirtual #373                // Method java/util/HashSet.add:(Ljava/lang/Object;)Z
+     186: pop
+     187: aload         29
+     189: ifnull        252
+     192: aload         27
+     194: aload         11
+     196: invokevirtual #540                // Method velox/bookmap/eq.a:(Ljava/lang/String;)V
+     199: goto          252
+     202: aload         28
+     204: aload         11
+     206: invokevirtual #375                // Method java/util/HashSet.contains:(Ljava/lang/Object;)Z
+     209: istore        30
+     211: aload         29
+     213: ifnonnull     221
+     216: iload         30
+     218: ifeq          225
+     221: iload_3
+     222: ifne          252
+     225: aload         29
+     227: ifnull        237
+     230: aload         27
+     232: aload         11
+     234: invokevirtual #540                // Method velox/bookmap/eq.a:(Ljava/lang/String;)V
+     237: aload         27
+     239: aload         11
+     241: iload         5
+     243: iload         24
+     245: iload         10
+     247: lload         25
+     249: invokevirtual #542                // Method velox/bookmap/eq.a:(Ljava/lang/String;ZIIJ)V
+     252: goto          636
+     255: getstatic     #302                // Field g:Z
+     258: ifeq          317
+     261: aload_0
+     262: getfield      #295                // Field adminListeners:Ljava/util/List;
+     265: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     270: astore        29
+     272: aload         29
+     274: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     279: ifeq          317
+     282: aload         29
+     284: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     289: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+     292: astore        30
+     294: aload         30
+     296: new           #212                // class velox/api/layer1/providers/RithmicProvider$OrderPriorityMessage
+     299: dup
+     300: aload         17
+     302: aload         11
+     304: lload         25
+     306: invokespecial #527                // Method velox/api/layer1/providers/RithmicProvider$OrderPriorityMessage."<init>":(Ljava/lang/String;Ljava/lang/String;J)V
+     309: invokeinterface #601,  2          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onUserMessage:(Ljava/lang/Object;)V
+     314: goto          272
+     317: aload_0
+     318: getfield      #312                // Field o:Z
+     321: ifeq          380
+     324: aload         17
+     326: lload         13
+     328: lload         15
+     330: invokestatic  #528                // Method velox/api/layer1/providers/RithmicProvider$TimestampMessage.createTimestampUserMessage:(Ljava/lang/String;JJ)Lvelox/api/layer1/reading/UserDataUserMessage;
+     333: astore        29
+     335: aload_0
+     336: getfield      #295                // Field adminListeners:Ljava/util/List;
+     339: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     344: astore        30
+     346: aload         30
+     348: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     353: ifeq          380
+     356: aload         30
+     358: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     363: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+     366: astore        31
+     368: aload         31
+     370: aload         29
+     372: invokeinterface #601,  2          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onUserMessage:(Ljava/lang/Object;)V
+     377: goto          346
+     380: iload         19
+     382: ifeq          468
+     385: aload_0
+     386: getfield      #310                // Field mboDataListeners:Ljava/util/List;
+     389: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     394: astore        29
+     396: aload         29
+     398: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     403: ifeq          438
+     406: aload         29
+     408: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     413: checkcast     #168                // class velox/api/layer1/Layer1ApiMboDataListener
+     416: astore        30
+     418: aload         30
+     420: aload         17
+     422: aload         11
+     424: iload         5
+     426: iload         24
+     428: iload         10
+     430: invokeinterface #609,  6          // InterfaceMethod velox/api/layer1/Layer1ApiMboDataListener.onMboSend:(Ljava/lang/String;Ljava/lang/String;ZII)V
+     435: goto          396
+     438: aload         27
+     440: aload         11
+     442: iload         5
+     444: iload         24
+     446: iload         10
+     448: lload         25
+     450: invokevirtual #542                // Method velox/bookmap/eq.a:(Ljava/lang/String;ZIIJ)V
+     453: goto          636
+     456: astore        29
+     458: ldc           #56                 // String Rithmic data corruption?
+     460: aload         29
+     462: invokestatic  #399                // Method velox/api/layer1/common/Log.warn:(Ljava/lang/String;Ljava/lang/Exception;)V
+     465: goto          636
+     468: iload         20
+     470: ifeq          552
+     473: aload_0
+     474: getfield      #310                // Field mboDataListeners:Ljava/util/List;
+     477: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     482: astore        29
+     484: aload         29
+     486: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     491: ifeq          524
+     494: aload         29
+     496: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     501: checkcast     #168                // class velox/api/layer1/Layer1ApiMboDataListener
+     504: astore        30
+     506: aload         30
+     508: aload         17
+     510: aload         11
+     512: iload         24
+     514: iload         10
+     516: invokeinterface #608,  5          // InterfaceMethod velox/api/layer1/Layer1ApiMboDataListener.onMboReplace:(Ljava/lang/String;Ljava/lang/String;II)V
+     521: goto          484
+     524: aload         27
+     526: aload         11
+     528: iload         24
+     530: iload         10
+     532: lload         25
+     534: invokevirtual #541                // Method velox/bookmap/eq.a:(Ljava/lang/String;IIJ)V
+     537: goto          636
+     540: astore        29
+     542: ldc           #56                 // String Rithmic data corruption?
+     544: aload         29
+     546: invokestatic  #399                // Method velox/api/layer1/common/Log.warn:(Ljava/lang/String;Ljava/lang/Exception;)V
+     549: goto          636
+     552: iload         21
+     554: ifeq          626
+     557: aload_0
+     558: getfield      #310                // Field mboDataListeners:Ljava/util/List;
+     561: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     566: astore        29
+     568: aload         29
+     570: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     575: ifeq          604
+     578: aload         29
+     580: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     585: checkcast     #168                // class velox/api/layer1/Layer1ApiMboDataListener
+     588: astore        30
+     590: aload         30
+     592: aload         17
+     594: aload         11
+     596: invokeinterface #607,  3          // InterfaceMethod velox/api/layer1/Layer1ApiMboDataListener.onMboCancel:(Ljava/lang/String;Ljava/lang/String;)V
+     601: goto          568
+     604: aload         27
+     606: aload         11
+     608: invokevirtual #540                // Method velox/bookmap/eq.a:(Ljava/lang/String;)V
+     611: goto          636
+     614: astore        29
+     616: ldc           #56                 // String Rithmic data corruption?
+     618: aload         29
+     620: invokestatic  #399                // Method velox/api/layer1/common/Log.warn:(Ljava/lang/String;Ljava/lang/Exception;)V
+     623: goto          636
+     626: new           #126                // class java/lang/RuntimeException
+     629: dup
+     630: ldc           #65                 // String Unknown event type
+     632: invokespecial #350                // Method java/lang/RuntimeException."<init>":(Ljava/lang/String;)V
+     635: athrow
+     636: aload_0
+     637: lload         13
+     639: invokevirtual #475                // Method a:(J)V
+     642: return
+    Exception table:
+       from    to  target type
+         438   453   456   Class java/lang/IllegalArgumentException
+         524   537   540   Class java/lang/IllegalArgumentException
+         604   611   614   Class java/lang/IllegalArgumentException
+
+  private void a(long);
+    Code:
+       0: lload_1
+       1: lconst_0
+       2: lcmp
+       3: ifeq          14
+       6: aload_0
+       7: getfield      #315                // Field r:Lvelox/api/layer1/providers/RithmicProvider$a;
+      10: lload_1
+      11: invokevirtual #530                // Method velox/api/layer1/providers/RithmicProvider$a.a:(J)V
+      14: return
+
+  private void b(long);
+    Code:
+       0: aload_0
+       1: getfield      #319                // Field u:Z
+       4: ifeq          8
+       7: return
+       8: lload_1
+       9: lconst_0
+      10: lcmp
+      11: ifeq          18
+      14: iconst_1
+      15: goto          19
+      18: iconst_0
+      19: istore_3
+      20: lload_1
+      21: l2d
+      22: getstatic     #234                // Field java/util/concurrent/TimeUnit.SECONDS:Ljava/util/concurrent/TimeUnit;
+      25: lconst_1
+      26: invokevirtual #380                // Method java/util/concurrent/TimeUnit.toNanos:(J)J
+      29: l2d
+      30: ddiv
+      31: dstore        4
+      33: ldc           #23                 // String Data latency spike detected! (~%.1f seconds delay; Connection: Rithmic)
+      35: iconst_1
+      36: anewarray     #125                // class java/lang/Object
+      39: dup
+      40: iconst_0
+      41: dload         4
+      43: invokestatic  #341                // Method java/lang/Double.valueOf:(D)Ljava/lang/Double;
+      46: aastore
+      47: invokestatic  #355                // Method java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;
+      50: astore        6
+      52: new           #204                // class velox/api/layer1/messages/Layer1ApiUserMessageNotification
+      55: dup
+      56: aconst_null
+      57: getstatic     #304                // Field i:J
+      60: aload         6
+      62: iload_3
+      63: iconst_0
+      64: aconst_null
+      65: invokespecial #456                // Method velox/api/layer1/messages/Layer1ApiUserMessageNotification."<init>":(Ljava/lang/String;JLjava/lang/String;ZILjava/lang/Runnable;)V
+      68: astore        7
+      70: aload_0
+      71: getfield      #295                // Field adminListeners:Ljava/util/List;
+      74: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      79: astore        8
+      81: aload         8
+      83: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      88: ifeq          115
+      91: aload         8
+      93: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      98: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+     101: astore        9
+     103: aload         9
+     105: aload         7
+     107: invokeinterface #601,  2          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onUserMessage:(Ljava/lang/Object;)V
+     112: goto          81
+     115: lload_1
+     116: lconst_0
+     117: lcmp
+     118: ifle          124
+     121: invokestatic  #536                // Method velox/api/layer1/utils/PerformanceLoggingHelper.logPerformance:()V
+     124: return
+
+  public void onDepthDataByOrderImageStart(java.lang.String, java.lang.String);
+    Code:
+       0: aload_0
+       1: aload_2
+       2: aload_1
+       3: invokevirtual #477                // Method a:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+       6: astore_3
+       7: aload_0
+       8: getfield      #297                // Field c:Ljava/util/Map;
+      11: aload_3
+      12: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      17: checkcast     #215                // class velox/api/layer1/providers/RithmicProvider$b
+      20: astore        4
+      22: aload         4
+      24: iconst_1
+      25: putfield      #329                // Field velox/api/layer1/providers/RithmicProvider$b.i:Z
+      28: aload         4
+      30: getfield      #327                // Field velox/api/layer1/providers/RithmicProvider$b.g:Lvelox/bookmap/eq;
+      33: ifnonnull     46
+      36: aload         4
+      38: aload         4
+      40: getfield      #326                // Field velox/api/layer1/providers/RithmicProvider$b.f:Lvelox/bookmap/eq;
+      43: putfield      #327                // Field velox/api/layer1/providers/RithmicProvider$b.g:Lvelox/bookmap/eq;
+      46: aload         4
+      48: new           #222                // class velox/bookmap/eq
+      51: dup
+      52: invokespecial #538                // Method velox/bookmap/eq."<init>":()V
+      55: putfield      #326                // Field velox/api/layer1/providers/RithmicProvider$b.f:Lvelox/bookmap/eq;
+      58: return
+
+  public void onDepthDataByOrderImageEnd(java.lang.String, java.lang.String);
+    Code:
+       0: aload_0
+       1: aload_2
+       2: aload_1
+       3: invokevirtual #477                // Method a:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+       6: astore_3
+       7: new           #203                // class velox/api/layer1/messages/Layer1ApiTimeFreeze
+      10: dup
+      11: getstatic     #301                // Field f:J
+      14: aload_0
+      15: invokevirtual #349                // Method java/lang/Object.getClass:()Ljava/lang/Class;
+      18: invokespecial #454                // Method velox/api/layer1/messages/Layer1ApiTimeFreeze."<init>":(JLjava/lang/Class;)V
+      21: astore        4
+      23: aload_0
+      24: getfield      #295                // Field adminListeners:Ljava/util/List;
+      27: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      32: astore        5
+      34: aload         5
+      36: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      41: ifeq          68
+      44: aload         5
+      46: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      51: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      54: astore        6
+      56: aload         6
+      58: aload         4
+      60: invokeinterface #601,  2          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onUserMessage:(Ljava/lang/Object;)V
+      65: goto          34
+      68: aload_0
+      69: getfield      #297                // Field c:Ljava/util/Map;
+      72: aload_3
+      73: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      78: checkcast     #215                // class velox/api/layer1/providers/RithmicProvider$b
+      81: astore        5
+      83: aload         5
+      85: iconst_0
+      86: putfield      #329                // Field velox/api/layer1/providers/RithmicProvider$b.i:Z
+      89: aload         5
+      91: getfield      #328                // Field velox/api/layer1/providers/RithmicProvider$b.h:Ljava/util/HashSet;
+      94: invokevirtual #374                // Method java/util/HashSet.clear:()V
+      97: aload         5
+      99: getfield      #327                // Field velox/api/layer1/providers/RithmicProvider$b.g:Lvelox/bookmap/eq;
+     102: astore        6
+     104: aload         5
+     106: getfield      #326                // Field velox/api/layer1/providers/RithmicProvider$b.f:Lvelox/bookmap/eq;
+     109: astore        7
+     111: new           #141                // class java/util/HashSet
+     114: dup
+     115: aload         6
+     117: invokestatic  #384                // Method org/apache/commons/collections4/IterableUtils.toList:(Ljava/lang/Iterable;)Ljava/util/List;
+     120: invokespecial #372                // Method java/util/HashSet."<init>":(Ljava/util/Collection;)V
+     123: astore        8
+     125: aload         8
+     127: aload         7
+     129: invokedynamic #646,  0            // InvokeDynamic #35:test:(Lvelox/bookmap/eq;)Ljava/util/function/Predicate;
+     134: invokeinterface #583,  2          // InterfaceMethod java/util/Set.removeIf:(Ljava/util/function/Predicate;)Z
+     139: pop
+     140: aload         8
+     142: invokeinterface #582,  1          // InterfaceMethod java/util/Set.iterator:()Ljava/util/Iterator;
+     147: astore        9
+     149: aload         9
+     151: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     156: ifeq          233
+     159: aload         9
+     161: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     166: checkcast     #224                // class velox/bookmap/eq$b
+     169: astore        10
+     171: aload         6
+     173: aload         10
+     175: invokevirtual #548                // Method velox/bookmap/eq$b.a:()Ljava/lang/String;
+     178: invokevirtual #540                // Method velox/bookmap/eq.a:(Ljava/lang/String;)V
+     181: aload_0
+     182: getfield      #310                // Field mboDataListeners:Ljava/util/List;
+     185: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     190: astore        11
+     192: aload         11
+     194: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     199: ifeq          230
+     202: aload         11
+     204: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     209: checkcast     #168                // class velox/api/layer1/Layer1ApiMboDataListener
+     212: astore        12
+     214: aload         12
+     216: aload_3
+     217: aload         10
+     219: invokevirtual #548                // Method velox/bookmap/eq$b.a:()Ljava/lang/String;
+     222: invokeinterface #607,  3          // InterfaceMethod velox/api/layer1/Layer1ApiMboDataListener.onMboCancel:(Ljava/lang/String;Ljava/lang/String;)V
+     227: goto          192
+     230: goto          149
+     233: aload         7
+     235: invokevirtual #539                // Method velox/bookmap/eq.a:()Ljava/util/SortedMap;
+     238: invokeinterface #584,  1          // InterfaceMethod java/util/SortedMap.entrySet:()Ljava/util/Set;
+     243: invokeinterface #582,  1          // InterfaceMethod java/util/Set.iterator:()Ljava/util/Iterator;
+     248: astore        9
+     250: aload         9
+     252: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     257: ifeq          318
+     260: aload         9
+     262: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     267: checkcast     #145                // class java/util/Map$Entry
+     270: astore        10
+     272: aload         6
+     274: invokevirtual #539                // Method velox/bookmap/eq.a:()Ljava/util/SortedMap;
+     277: aload         10
+     279: invokeinterface #579,  1          // InterfaceMethod java/util/Map$Entry.getKey:()Ljava/lang/Object;
+     284: invokeinterface #585,  2          // InterfaceMethod java/util/SortedMap.get:(Ljava/lang/Object;)Ljava/lang/Object;
+     289: checkcast     #223                // class velox/bookmap/eq$a
+     292: astore        11
+     294: aload_0
+     295: aload_3
+     296: aload         11
+     298: aload         10
+     300: invokeinterface #580,  1          // InterfaceMethod java/util/Map$Entry.getValue:()Ljava/lang/Object;
+     305: checkcast     #223                // class velox/bookmap/eq$a
+     308: aload         6
+     310: aload         7
+     312: invokevirtual #480                // Method a:(Ljava/lang/String;Lvelox/bookmap/eq$a;Lvelox/bookmap/eq$a;Lvelox/bookmap/eq;Lvelox/bookmap/eq;)V
+     315: goto          250
+     318: aload         7
+     320: invokevirtual #543                // Method velox/bookmap/eq.b:()Ljava/util/SortedMap;
+     323: invokeinterface #584,  1          // InterfaceMethod java/util/SortedMap.entrySet:()Ljava/util/Set;
+     328: invokeinterface #582,  1          // InterfaceMethod java/util/Set.iterator:()Ljava/util/Iterator;
+     333: astore        9
+     335: aload         9
+     337: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     342: ifeq          403
+     345: aload         9
+     347: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     352: checkcast     #145                // class java/util/Map$Entry
+     355: astore        10
+     357: aload         6
+     359: invokevirtual #543                // Method velox/bookmap/eq.b:()Ljava/util/SortedMap;
+     362: aload         10
+     364: invokeinterface #579,  1          // InterfaceMethod java/util/Map$Entry.getKey:()Ljava/lang/Object;
+     369: invokeinterface #585,  2          // InterfaceMethod java/util/SortedMap.get:(Ljava/lang/Object;)Ljava/lang/Object;
+     374: checkcast     #223                // class velox/bookmap/eq$a
+     377: astore        11
+     379: aload_0
+     380: aload_3
+     381: aload         11
+     383: aload         10
+     385: invokeinterface #580,  1          // InterfaceMethod java/util/Map$Entry.getValue:()Ljava/lang/Object;
+     390: checkcast     #223                // class velox/bookmap/eq$a
+     393: aload         6
+     395: aload         7
+     397: invokevirtual #480                // Method a:(Ljava/lang/String;Lvelox/bookmap/eq$a;Lvelox/bookmap/eq$a;Lvelox/bookmap/eq;Lvelox/bookmap/eq;)V
+     400: goto          335
+     403: aload         5
+     405: aconst_null
+     406: putfield      #327                // Field velox/api/layer1/providers/RithmicProvider$b.g:Lvelox/bookmap/eq;
+     409: aload         4
+     411: invokevirtual #455                // Method velox/api/layer1/messages/Layer1ApiTimeFreeze.resume:()V
+     414: goto          427
+     417: astore        13
+     419: aload         4
+     421: invokevirtual #455                // Method velox/api/layer1/messages/Layer1ApiTimeFreeze.resume:()V
+     424: aload         13
+     426: athrow
+     427: return
+    Exception table:
+       from    to  target type
+          23   409   417   any
+         417   419   417   any
+
+  private void a(java.lang.String, velox.bookmap.eq$a, velox.bookmap.eq$a, velox.bookmap.eq, velox.bookmap.eq);
+    Code:
+       0: aload_3
+       1: aload_2
+       2: invokevirtual #547                // Method velox/bookmap/eq$a.equals:(Ljava/lang/Object;)Z
+       5: ifeq          9
+       8: return
+       9: aload_3
+      10: invokevirtual #546                // Method velox/bookmap/eq$a.a:()Ljava/util/SortedMap;
+      13: astore        6
+      15: aload         6
+      17: invokeinterface #584,  1          // InterfaceMethod java/util/SortedMap.entrySet:()Ljava/util/Set;
+      22: invokeinterface #582,  1          // InterfaceMethod java/util/Set.iterator:()Ljava/util/Iterator;
+      27: astore        7
+      29: aload         7
+      31: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      36: ifeq          328
+      39: aload         7
+      41: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      46: checkcast     #145                // class java/util/Map$Entry
+      49: astore        8
+      51: aload         8
+      53: invokeinterface #580,  1          // InterfaceMethod java/util/Map$Entry.getValue:()Ljava/lang/Object;
+      58: checkcast     #224                // class velox/bookmap/eq$b
+      61: astore        9
+      63: aload         9
+      65: invokevirtual #548                // Method velox/bookmap/eq$b.a:()Ljava/lang/String;
+      68: astore        10
+      70: getstatic     #302                // Field g:Z
+      73: ifeq          137
+      76: aload_0
+      77: getfield      #295                // Field adminListeners:Ljava/util/List;
+      80: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      85: astore        11
+      87: aload         11
+      89: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      94: ifeq          137
+      97: aload         11
+      99: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     104: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+     107: astore        12
+     109: aload         12
+     111: new           #212                // class velox/api/layer1/providers/RithmicProvider$OrderPriorityMessage
+     114: dup
+     115: aload_1
+     116: aload         9
+     118: invokevirtual #548                // Method velox/bookmap/eq$b.a:()Ljava/lang/String;
+     121: aload         9
+     123: invokevirtual #552                // Method velox/bookmap/eq$b.e:()J
+     126: invokespecial #527                // Method velox/api/layer1/providers/RithmicProvider$OrderPriorityMessage."<init>":(Ljava/lang/String;Ljava/lang/String;J)V
+     129: invokeinterface #601,  2          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onUserMessage:(Ljava/lang/Object;)V
+     134: goto          87
+     137: aload         4
+     139: aload         10
+     141: invokevirtual #545                // Method velox/bookmap/eq.c:(Ljava/lang/String;)Z
+     144: ifne          214
+     147: aload_0
+     148: getfield      #310                // Field mboDataListeners:Ljava/util/List;
+     151: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     156: astore        11
+     158: aload         11
+     160: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     165: ifeq          211
+     168: aload         11
+     170: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     175: checkcast     #168                // class velox/api/layer1/Layer1ApiMboDataListener
+     178: astore        12
+     180: aload         12
+     182: aload_1
+     183: aload         9
+     185: invokevirtual #548                // Method velox/bookmap/eq$b.a:()Ljava/lang/String;
+     188: aload         9
+     190: invokevirtual #549                // Method velox/bookmap/eq$b.b:()Z
+     193: aload         9
+     195: invokevirtual #550                // Method velox/bookmap/eq$b.c:()I
+     198: aload         9
+     200: invokevirtual #551                // Method velox/bookmap/eq$b.d:()I
+     203: invokeinterface #609,  6          // InterfaceMethod velox/api/layer1/Layer1ApiMboDataListener.onMboSend:(Ljava/lang/String;Ljava/lang/String;ZII)V
+     208: goto          158
+     211: goto          325
+     214: aload_0
+     215: getfield      #310                // Field mboDataListeners:Ljava/util/List;
+     218: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     223: astore        11
+     225: aload         11
+     227: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     232: ifeq          325
+     235: aload         11
+     237: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     242: checkcast     #168                // class velox/api/layer1/Layer1ApiMboDataListener
+     245: astore        12
+     247: aload         4
+     249: aload         10
+     251: invokevirtual #544                // Method velox/bookmap/eq.b:(Ljava/lang/String;)Lvelox/bookmap/eq$b;
+     254: astore        13
+     256: aload         13
+     258: ifnull        299
+     261: aload         13
+     263: invokevirtual #550                // Method velox/bookmap/eq$b.c:()I
+     266: aload         9
+     268: invokevirtual #550                // Method velox/bookmap/eq$b.c:()I
+     271: if_icmpne     299
+     274: aload         12
+     276: aload_1
+     277: aload         9
+     279: invokevirtual #548                // Method velox/bookmap/eq$b.a:()Ljava/lang/String;
+     282: aload         9
+     284: invokevirtual #550                // Method velox/bookmap/eq$b.c:()I
+     287: aload         9
+     289: invokevirtual #551                // Method velox/bookmap/eq$b.d:()I
+     292: iconst_1
+     293: iadd
+     294: invokeinterface #608,  5          // InterfaceMethod velox/api/layer1/Layer1ApiMboDataListener.onMboReplace:(Ljava/lang/String;Ljava/lang/String;II)V
+     299: aload         12
+     301: aload_1
+     302: aload         9
+     304: invokevirtual #548                // Method velox/bookmap/eq$b.a:()Ljava/lang/String;
+     307: aload         9
+     309: invokevirtual #550                // Method velox/bookmap/eq$b.c:()I
+     312: aload         9
+     314: invokevirtual #551                // Method velox/bookmap/eq$b.d:()I
+     317: invokeinterface #608,  5          // InterfaceMethod velox/api/layer1/Layer1ApiMboDataListener.onMboReplace:(Ljava/lang/String;Ljava/lang/String;II)V
+     322: goto          225
+     325: goto          29
+     328: return
+
+  public void onMarketMode(java.lang.String, java.lang.String, java.lang.String);
+    Code:
+       0: aload_0
+       1: aload_2
+       2: aload_1
+       3: invokevirtual #477                // Method a:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+       6: astore        4
+       8: aload_0
+       9: getfield      #297                // Field c:Ljava/util/Map;
+      12: aload         4
+      14: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      19: checkcast     #208                // class velox/api/layer1/providers/C$a
+      22: astore        5
+      24: aload         5
+      26: ifnonnull     30
+      29: return
+      30: aload_3
+      31: invokestatic  #422                // Method velox/api/layer1/data/MarketMode.valueOfLoose:(Ljava/lang/String;)Lvelox/api/layer1/data/MarketMode;
+      34: astore        6
+      36: aload         6
+      38: ifnonnull     57
+      41: aload_3
+      42: aload         4
+      44: invokedynamic #647,  0            // InvokeDynamic #36:makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+      49: invokestatic  #392                // Method velox/api/layer1/common/Log.debug:(Ljava/lang/String;)V
+      52: getstatic     #247                // Field velox/api/layer1/data/MarketMode.OPEN:Lvelox/api/layer1/data/MarketMode;
+      55: astore        6
+      57: aload_0
+      58: getfield      #299                // Field dataListeners:Ljava/util/List;
+      61: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      66: astore        7
+      68: aload         7
+      70: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      75: ifeq          104
+      78: aload         7
+      80: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      85: checkcast     #166                // class velox/api/layer1/Layer1ApiDataListener
+      88: astore        8
+      90: aload         8
+      92: aload         4
+      94: aload         6
+      96: invokeinterface #602,  3          // InterfaceMethod velox/api/layer1/Layer1ApiDataListener.onMarketMode:(Ljava/lang/String;Lvelox/api/layer1/data/MarketMode;)V
+     101: goto          68
+     104: return
+
+  public void onTrade(java.lang.String, java.lang.String, double, int, java.lang.String, long, java.lang.String, java.lang.String);
+    Code:
+       0: aload_0
+       1: aload_2
+       2: aload_1
+       3: invokevirtual #477                // Method a:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+       6: astore        11
+       8: aload_0
+       9: getfield      #297                // Field c:Ljava/util/Map;
+      12: aload         11
+      14: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      19: checkcast     #208                // class velox/api/layer1/providers/C$a
+      22: astore        12
+      24: aload         12
+      26: ifnonnull     30
+      29: return
+      30: iload         5
+      32: ifne          46
+      35: aload         11
+      37: invokedynamic #648,  0            // InvokeDynamic #37:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+      42: invokestatic  #398                // Method velox/api/layer1/common/Log.warn:(Ljava/lang/String;)V
+      45: return
+      46: dload_3
+      47: aload         12
+      49: invokevirtual #466                // Method velox/api/layer1/providers/C$a.a:()Lvelox/api/layer1/data/InstrumentInfo;
+      52: getfield      #242                // Field velox/api/layer1/data/InstrumentInfo.pips:D
+      55: ddiv
+      56: dstore        13
+      58: ldc           #14                 // String B
+      60: aload         6
+      62: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      65: ifeq          74
+      68: iconst_1
+      69: istore        15
+      71: goto          99
+      74: ldc           #59                 // String S
+      76: aload         6
+      78: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      81: ifeq          90
+      84: iconst_0
+      85: istore        15
+      87: goto          99
+      90: aload         12
+      92: dload         13
+      94: invokevirtual #467                // Method velox/api/layer1/providers/C$a.a:(D)Z
+      97: istore        15
+      99: iconst_0
+     100: istore        16
+     102: aload         12
+     104: getfield      #291                // Field velox/api/layer1/providers/C$a.a:Lvelox/api/layer1/providers/data/TradeAggregator;
+     107: dload         13
+     109: aload         9
+     111: iload         15
+     113: iconst_0
+     114: iload         5
+     116: aload         9
+     118: aload         10
+     120: invokevirtual #535                // Method velox/api/layer1/providers/data/TradeAggregator.onTrade:(DLjava/lang/String;ZZILjava/lang/String;Ljava/lang/String;)V
+     123: return
+
+  public void onNewOrder(java.lang.String, java.lang.String, java.lang.String, boolean, double, int);
+    Code:
+       0: return
+
+  public void onOrderRejected(java.lang.String, java.lang.String, boolean, double, int, boolean, java.lang.String);
+    Code:
+       0: iload         7
+       2: ifeq          6
+       5: return
+       6: aload_0
+       7: getfield      #295                // Field adminListeners:Ljava/util/List;
+      10: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      15: astore        9
+      17: aload         9
+      19: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      24: ifeq          54
+      27: aload         9
+      29: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      34: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      37: astore        10
+      39: aload         10
+      41: aload         8
+      43: getstatic     #287                // Field velox/api/layer1/data/SystemTextMessageType.ORDER_FAILURE:Lvelox/api/layer1/data/SystemTextMessageType;
+      46: invokeinterface #600,  3          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onSystemTextMessage:(Ljava/lang/String;Lvelox/api/layer1/data/SystemTextMessageType;)V
+      51: goto          17
+      54: return
+
+  public void onOrderFailure(java.lang.String, java.lang.String, boolean, double, java.lang.String);
+    Code:
+       0: aload_0
+       1: getfield      #295                // Field adminListeners:Ljava/util/List;
+       4: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+       9: astore        7
+      11: aload         7
+      13: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      18: ifeq          48
+      21: aload         7
+      23: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      28: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      31: astore        8
+      33: aload         8
+      35: aload         6
+      37: getstatic     #287                // Field velox/api/layer1/data/SystemTextMessageType.ORDER_FAILURE:Lvelox/api/layer1/data/SystemTextMessageType;
+      40: invokeinterface #600,  3          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onSystemTextMessage:(Ljava/lang/String;Lvelox/api/layer1/data/SystemTextMessageType;)V
+      45: goto          11
+      48: return
+
+  public void onOrderUpdated(java.lang.String, java.lang.String, java.lang.String, double, int, int);
+    Code:
+       0: return
+
+  public void onOrderCancelled(java.lang.String, java.lang.String, java.lang.String);
+    Code:
+       0: return
+
+  public void onExecution(java.lang.String, java.lang.String, java.lang.String, java.lang.String, boolean, double, int);
+    Code:
+       0: return
+
+  public void onStatus(java.lang.String, java.lang.String, java.lang.String, double, double, int, double, int);
+    Code:
+       0: aload_0
+       1: aload_2
+       2: aload_1
+       3: invokevirtual #477                // Method a:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+       6: astore        12
+       8: new           #197                // class velox/api/layer1/data/StatusInfoBuilder
+      11: dup
+      12: invokespecial #440                // Method velox/api/layer1/data/StatusInfoBuilder."<init>":()V
+      15: aload         12
+      17: invokevirtual #444                // Method velox/api/layer1/data/StatusInfoBuilder.setInstrumentAlias:(Ljava/lang/String;)Lvelox/api/layer1/data/StatusInfoBuilder;
+      20: dload         4
+      22: invokevirtual #447                // Method velox/api/layer1/data/StatusInfoBuilder.setUnrealizedPnl:(D)Lvelox/api/layer1/data/StatusInfoBuilder;
+      25: dload         6
+      27: invokevirtual #446                // Method velox/api/layer1/data/StatusInfoBuilder.setRealizedPnl:(D)Lvelox/api/layer1/data/StatusInfoBuilder;
+      30: aload_0
+      31: getfield      #316                // Field s:Ljava/lang/String;
+      34: invokevirtual #443                // Method velox/api/layer1/data/StatusInfoBuilder.setCurrency:(Ljava/lang/String;)Lvelox/api/layer1/data/StatusInfoBuilder;
+      37: iload         8
+      39: invokevirtual #445                // Method velox/api/layer1/data/StatusInfoBuilder.setPosition:(I)Lvelox/api/layer1/data/StatusInfoBuilder;
+      42: dload         9
+      44: invokevirtual #442                // Method velox/api/layer1/data/StatusInfoBuilder.setAveragePrice:(D)Lvelox/api/layer1/data/StatusInfoBuilder;
+      47: iload         11
+      49: invokevirtual #448                // Method velox/api/layer1/data/StatusInfoBuilder.setVolume:(I)Lvelox/api/layer1/data/StatusInfoBuilder;
+      52: astore        13
+      54: aload_0
+      55: getfield      #308                // Field l:Ljava/util/HashMap;
+      58: aload         12
+      60: aload         13
+      62: invokevirtual #371                // Method java/util/HashMap.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+      65: pop
+      66: aload_0
+      67: aload         12
+      69: invokevirtual #500                // Method c:(Ljava/lang/String;)V
+      72: return
+
+  public void onPositionExit(java.lang.String, java.lang.String);
+    Code:
+       0: aload_0
+       1: aload_2
+       2: aload_1
+       3: invokevirtual #477                // Method a:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+       6: astore_3
+       7: new           #202                // class velox/api/layer1/messages/Layer1ApiPositionCloseCompleteMessage
+      10: dup
+      11: aload_3
+      12: invokespecial #453                // Method velox/api/layer1/messages/Layer1ApiPositionCloseCompleteMessage."<init>":(Ljava/lang/String;)V
+      15: astore        4
+      17: aload_0
+      18: getfield      #295                // Field adminListeners:Ljava/util/List;
+      21: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      26: astore        5
+      28: aload         5
+      30: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      35: ifeq          62
+      38: aload         5
+      40: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      45: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      48: astore        6
+      50: aload         6
+      52: aload         4
+      54: invokeinterface #601,  2          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onUserMessage:(Ljava/lang/Object;)V
+      59: goto          28
+      62: return
+
+  private void c(java.lang.String);
+    Code:
+       0: aload_0
+       1: getfield      #308                // Field l:Ljava/util/HashMap;
+       4: aload_1
+       5: invokevirtual #370                // Method java/util/HashMap.get:(Ljava/lang/Object;)Ljava/lang/Object;
+       8: checkcast     #197                // class velox/api/layer1/data/StatusInfoBuilder
+      11: astore_2
+      12: aload_2
+      13: ifnull        101
+      16: aload_0
+      17: getfield      #296                // Field b:Ljava/util/HashMap;
+      20: aload_1
+      21: invokevirtual #370                // Method java/util/HashMap.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      24: checkcast     #216                // class velox/api/layer1/providers/WorkingOrdersCounter
+      27: astore_3
+      28: aload_3
+      29: ifnull        50
+      32: aload_2
+      33: aload_3
+      34: invokevirtual #533                // Method velox/api/layer1/providers/WorkingOrdersCounter.getWorkingBuys:()I
+      37: invokevirtual #449                // Method velox/api/layer1/data/StatusInfoBuilder.setWorkingBuys:(I)Lvelox/api/layer1/data/StatusInfoBuilder;
+      40: pop
+      41: aload_2
+      42: aload_3
+      43: invokevirtual #534                // Method velox/api/layer1/providers/WorkingOrdersCounter.getWorkingSells:()I
+      46: invokevirtual #450                // Method velox/api/layer1/data/StatusInfoBuilder.setWorkingSells:(I)Lvelox/api/layer1/data/StatusInfoBuilder;
+      49: pop
+      50: aload_2
+      51: invokevirtual #441                // Method velox/api/layer1/data/StatusInfoBuilder.build:()Lvelox/api/layer1/data/StatusInfo;
+      54: astore        4
+      56: aload_0
+      57: getfield      #318                // Field tradingListeners:Ljava/util/List;
+      60: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      65: astore        5
+      67: aload         5
+      69: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      74: ifeq          101
+      77: aload         5
+      79: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      84: checkcast     #170                // class velox/api/layer1/Layer1ApiTradingListener
+      87: astore        6
+      89: aload         6
+      91: aload         4
+      93: invokeinterface #610,  2          // InterfaceMethod velox/api/layer1/Layer1ApiTradingListener.onStatus:(Lvelox/api/layer1/data/StatusInfo;)V
+      98: goto          67
+     101: return
+
+  public void unsubscribe(java.lang.String);
+    Code:
+       0: aload_0
+       1: getfield      #297                // Field c:Ljava/util/Map;
+       4: aload_1
+       5: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      10: checkcast     #208                // class velox/api/layer1/providers/C$a
+      13: astore_2
+      14: aload_2
+      15: ifnonnull     19
+      18: return
+      19: aload_2
+      20: invokevirtual #466                // Method velox/api/layer1/providers/C$a.a:()Lvelox/api/layer1/data/InstrumentInfo;
+      23: getfield      #243                // Field velox/api/layer1/data/InstrumentInfo.symbol:Ljava/lang/String;
+      26: astore_3
+      27: aload_2
+      28: invokevirtual #466                // Method velox/api/layer1/providers/C$a.a:()Lvelox/api/layer1/data/InstrumentInfo;
+      31: getfield      #241                // Field velox/api/layer1/data/InstrumentInfo.exchange:Ljava/lang/String;
+      34: astore        4
+      36: getstatic     #307                // Field k:Ljava/util/concurrent/ExecutorService;
+      39: aload_0
+      40: aload_3
+      41: aload         4
+      43: invokedynamic #649,  0            // InvokeDynamic #38:run:(Lvelox/api/layer1/providers/RithmicProvider;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Runnable;
+      48: invokeinterface #586,  2          // InterfaceMethod java/util/concurrent/ExecutorService.execute:(Ljava/lang/Runnable;)V
+      53: aload_2
+      54: getfield      #292                // Field velox/api/layer1/providers/C$a.b:Z
+      57: ifeq          109
+      60: aload_0
+      61: getfield      #305                // Field instrumentListeners:Ljava/util/List;
+      64: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      69: astore        5
+      71: aload         5
+      73: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      78: ifeq          104
+      81: aload         5
+      83: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      88: checkcast     #167                // class velox/api/layer1/Layer1ApiInstrumentListener
+      91: astore        6
+      93: aload         6
+      95: aload_1
+      96: invokeinterface #606,  2          // InterfaceMethod velox/api/layer1/Layer1ApiInstrumentListener.onInstrumentRemoved:(Ljava/lang/String;)V
+     101: goto          71
+     104: aload_2
+     105: iconst_0
+     106: putfield      #292                // Field velox/api/layer1/providers/C$a.b:Z
+     109: return
+
+  private static velox.api.layer1.data.OrderDuration d(java.lang.String);
+    Code:
+       0: ldc           #44                 // String OC
+       2: aload_0
+       3: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+       6: ifeq          13
+       9: getstatic     #254                // Field velox/api/layer1/data/OrderDuration.IOC:Lvelox/api/layer1/data/OrderDuration;
+      12: areturn
+      13: aload_0
+      14: invokestatic  #424                // Method velox/api/layer1/data/OrderDuration.valueOfLoose:(Ljava/lang/String;)Lvelox/api/layer1/data/OrderDuration;
+      17: astore_1
+      18: aload_1
+      19: ifnonnull     33
+      22: ldc           #15                 // String BMDEV-5195
+      24: aload_0
+      25: invokedynamic #650,  0            // InvokeDynamic #39:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+      30: invokestatic  #394                // Method velox/api/layer1/common/Log.error:(Ljava/lang/String;Ljava/lang/String;)V
+      33: aload_1
+      34: areturn
+
+  private velox.api.layer1.data.OrderType e(java.lang.String);
+    Code:
+       0: aload_1
+       1: astore_2
+       2: iconst_m1
+       3: istore_3
+       4: aload_2
+       5: invokevirtual #356                // Method java/lang/String.hashCode:()I
+       8: lookupswitch  { // 7
+
+                    69: 160
+
+                    76: 76
+
+                    77: 90
+
+                 75383: 146
+
+                 76344: 132
+
+                 82447: 104
+
+               2548160: 118
+               default: 172
+          }
+      76: aload_2
+      77: ldc           #37                 // String L
+      79: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      82: ifeq          172
+      85: iconst_0
+      86: istore_3
+      87: goto          172
+      90: aload_2
+      91: ldc           #40                 // String M
+      93: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      96: ifeq          172
+      99: iconst_1
+     100: istore_3
+     101: goto          172
+     104: aload_2
+     105: ldc           #61                 // String STP
+     107: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     110: ifeq          172
+     113: iconst_2
+     114: istore_3
+     115: goto          172
+     118: aload_2
+     119: ldc           #60                 // String SLMT
+     121: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     124: ifeq          172
+     127: iconst_3
+     128: istore_3
+     129: goto          172
+     132: aload_2
+     133: ldc           #41                 // String MIT
+     135: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     138: ifeq          172
+     141: iconst_4
+     142: istore_3
+     143: goto          172
+     146: aload_2
+     147: ldc           #38                 // String LIT
+     149: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     152: ifeq          172
+     155: iconst_5
+     156: istore_3
+     157: goto          172
+     160: aload_2
+     161: ldc           #24                 // String E
+     163: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     166: ifeq          172
+     169: bipush        6
+     171: istore_3
+     172: iload_3
+     173: tableswitch   { // 0 to 6
+
+                     0: 216
+
+                     1: 220
+
+                     2: 224
+
+                     3: 228
+
+                     4: 232
+
+                     5: 232
+
+                     6: 232
+               default: 232
+          }
+     216: getstatic     #266                // Field velox/api/layer1/data/OrderType.LMT:Lvelox/api/layer1/data/OrderType;
+     219: areturn
+     220: getstatic     #267                // Field velox/api/layer1/data/OrderType.MKT:Lvelox/api/layer1/data/OrderType;
+     223: areturn
+     224: getstatic     #268                // Field velox/api/layer1/data/OrderType.STP:Lvelox/api/layer1/data/OrderType;
+     227: areturn
+     228: getstatic     #269                // Field velox/api/layer1/data/OrderType.STP_LMT:Lvelox/api/layer1/data/OrderType;
+     231: areturn
+     232: aconst_null
+     233: areturn
+
+  private static velox.api.layer1.data.OrderStatus c(java.lang.String, java.lang.String);
+    Code:
+       0: aload_0
+       1: invokevirtual #359                // Method java/lang/String.toLowerCase:()Ljava/lang/String;
+       4: astore_0
+       5: aload_0
+       6: astore_2
+       7: iconst_m1
+       8: istore_3
+       9: aload_2
+      10: invokevirtual #356                // Method java/lang/String.hashCode:()I
+      13: lookupswitch  { // 18
+
+           -2088682949: 238
+
+           -1244095496: 196
+
+            -792934015: 402
+
+            -615513399: 357
+
+            -599445191: 417
+
+            -427670479: 282
+
+            -201969880: 267
+
+               3417674: 342
+
+             331411346: 372
+
+             392454868: 210
+
+             558112332: 252
+
+             673565928: 327
+
+             704895463: 182
+
+            1091213307: 297
+
+            1424940044: 312
+
+            1532248879: 387
+
+            1551841777: 224
+
+            1676435905: 168
+               default: 429
+          }
+     168: aload_2
+     169: ldc           #89                 // String open pending
+     171: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     174: ifeq          429
+     177: iconst_0
+     178: istore_3
+     179: goto          429
+     182: aload_2
+     183: ldc           #92                 // String order sent to exch
+     185: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     188: ifeq          429
+     191: iconst_1
+     192: istore_3
+     193: goto          429
+     196: aload_2
+     197: ldc           #90                 // String order received by exch gateway
+     199: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     202: ifeq          429
+     205: iconst_2
+     206: istore_3
+     207: goto          429
+     210: aload_2
+     211: ldc           #91                 // String order received from client
+     213: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     216: ifeq          429
+     219: iconst_3
+     220: istore_3
+     221: goto          429
+     224: aload_2
+     225: ldc           #72                 // String cancel pending
+     227: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     230: ifeq          429
+     233: iconst_4
+     234: istore_3
+     235: goto          429
+     238: aload_2
+     239: ldc           #75                 // String cancel sent to exch
+     241: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     244: ifeq          429
+     247: iconst_5
+     248: istore_3
+     249: goto          429
+     252: aload_2
+     253: ldc           #73                 // String cancel received by exch gateway
+     255: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     258: ifeq          429
+     261: bipush        6
+     263: istore_3
+     264: goto          429
+     267: aload_2
+     268: ldc           #74                 // String cancel received from client
+     270: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     273: ifeq          429
+     276: bipush        7
+     278: istore_3
+     279: goto          429
+     282: aload_2
+     283: ldc           #83                 // String modify pending
+     285: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     288: ifeq          429
+     291: bipush        8
+     293: istore_3
+     294: goto          429
+     297: aload_2
+     298: ldc           #86                 // String modify sent to exch
+     300: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     303: ifeq          429
+     306: bipush        9
+     308: istore_3
+     309: goto          429
+     312: aload_2
+     313: ldc           #84                 // String modify received by exch gateway
+     315: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     318: ifeq          429
+     321: bipush        10
+     323: istore_3
+     324: goto          429
+     327: aload_2
+     328: ldc           #85                 // String modify received from client
+     330: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     333: ifeq          429
+     336: bipush        11
+     338: istore_3
+     339: goto          429
+     342: aload_2
+     343: ldc           #88                 // String open
+     345: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     348: ifeq          429
+     351: bipush        12
+     353: istore_3
+     354: goto          429
+     357: aload_2
+     358: ldc           #81                 // String modified
+     360: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     363: ifeq          429
+     366: bipush        13
+     368: istore_3
+     369: goto          429
+     372: aload_2
+     373: ldc           #82                 // String modified, trigger pending
+     375: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     378: ifeq          429
+     381: bipush        14
+     383: istore_3
+     384: goto          429
+     387: aload_2
+     388: ldc           #101                // String trigger pending
+     390: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     393: ifeq          429
+     396: bipush        15
+     398: istore_3
+     399: goto          429
+     402: aload_2
+     403: ldc           #95                 // String partial
+     405: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     408: ifeq          429
+     411: bipush        16
+     413: istore_3
+     414: goto          429
+     417: aload_2
+     418: ldc           #76                 // String complete
+     420: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     423: ifeq          429
+     426: bipush        17
+     428: istore_3
+     429: iload_3
+     430: tableswitch   { // 0 to 17
+
+                     0: 516
+
+                     1: 516
+
+                     2: 516
+
+                     3: 516
+
+                     4: 520
+
+                     5: 520
+
+                     6: 520
+
+                     7: 520
+
+                     8: 524
+
+                     9: 524
+
+                    10: 524
+
+                    11: 524
+
+                    12: 528
+
+                    13: 528
+
+                    14: 528
+
+                    15: 528
+
+                    16: 528
+
+                    17: 532
+               default: 718
+          }
+     516: getstatic     #263                // Field velox/api/layer1/data/OrderStatus.PENDING_SUBMIT:Lvelox/api/layer1/data/OrderStatus;
+     519: areturn
+     520: getstatic     #261                // Field velox/api/layer1/data/OrderStatus.PENDING_CANCEL:Lvelox/api/layer1/data/OrderStatus;
+     523: areturn
+     524: getstatic     #262                // Field velox/api/layer1/data/OrderStatus.PENDING_MODIFY:Lvelox/api/layer1/data/OrderStatus;
+     527: areturn
+     528: getstatic     #265                // Field velox/api/layer1/data/OrderStatus.WORKING:Lvelox/api/layer1/data/OrderStatus;
+     531: areturn
+     532: aload_1
+     533: astore        4
+     535: iconst_m1
+     536: istore        5
+     538: aload         4
+     540: invokevirtual #356                // Method java/lang/String.hashCode:()I
+     543: lookupswitch  { // 5
+
+                    67: 592
+
+                    70: 656
+
+                    82: 624
+
+                  2235: 640
+
+               2452663: 608
+               default: 669
+          }
+     592: aload         4
+     594: ldc           #17                 // String C
+     596: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     599: ifeq          669
+     602: iconst_0
+     603: istore        5
+     605: goto          669
+     608: aload         4
+     610: ldc           #47                 // String PFBC
+     612: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     615: ifeq          669
+     618: iconst_1
+     619: istore        5
+     621: goto          669
+     624: aload         4
+     626: ldc           #48                 // String R
+     628: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     631: ifeq          669
+     634: iconst_2
+     635: istore        5
+     637: goto          669
+     640: aload         4
+     642: ldc           #28                 // String FA
+     644: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     647: ifeq          669
+     650: iconst_3
+     651: istore        5
+     653: goto          669
+     656: aload         4
+     658: ldc           #27                 // String F
+     660: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     663: ifeq          669
+     666: iconst_4
+     667: istore        5
+     669: iload         5
+     671: tableswitch   { // 0 to 4
+
+                     0: 704
+
+                     1: 704
+
+                     2: 708
+
+                     3: 708
+
+                     4: 712
+               default: 716
+          }
+     704: getstatic     #259                // Field velox/api/layer1/data/OrderStatus.CANCELLED:Lvelox/api/layer1/data/OrderStatus;
+     707: areturn
+     708: getstatic     #264                // Field velox/api/layer1/data/OrderStatus.REJECTED:Lvelox/api/layer1/data/OrderStatus;
+     711: areturn
+     712: getstatic     #260                // Field velox/api/layer1/data/OrderStatus.FILLED:Lvelox/api/layer1/data/OrderStatus;
+     715: areturn
+     716: aconst_null
+     717: areturn
+     718: aconst_null
+     719: areturn
+
+  public java.lang.String getSource();
+    Code:
+       0: ldc           #51                 // String Rithmic
+       2: areturn
+
+  public velox.api.layer1.data.Layer1ApiProviderSupportedFeatures getSupportedFeatures();
+    Code:
+       0: invokestatic  #498                // Method c:()Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeatures;
+       3: invokevirtual #403                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeatures.toBuilder:()Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+       6: astore_1
+       7: aload_1
+       8: aload_0
+       9: getfield      #322                // Field x:Ljava/util/concurrent/atomic/AtomicBoolean;
+      12: invokevirtual #382                // Method java/util/concurrent/atomic/AtomicBoolean.get:()Z
+      15: invokevirtual #419                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setTrading:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+      18: pop
+      19: aload_1
+      20: aload_0
+      21: getfield      #319                // Field u:Z
+      24: ifne          31
+      27: iconst_1
+      28: goto          32
+      31: iconst_0
+      32: invokevirtual #413                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setMbo:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+      35: pop
+      36: aload_1
+      37: iconst_1
+      38: invokevirtual #407                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setBracketTiers:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+      41: pop
+      42: aload_1
+      43: invokedynamic #651,  0            // InvokeDynamic #40:apply:()Ljava/util/function/Function;
+      48: invokevirtual #416                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setSubscriptionInfoFunction:(Ljava/util/function/Function;)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+      51: pop
+      52: aload_1
+      53: invokevirtual #405                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.build:()Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeatures;
+      56: areturn
+
+  public static velox.api.layer1.data.Layer1ApiProviderSupportedFeatures c();
+    Code:
+       0: new           #180                // class velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder
+       3: dup
+       4: invokespecial #404                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder."<init>":()V
+       7: astore_0
+       8: aload_0
+       9: iconst_1
+      10: invokevirtual #419                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setTrading:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+      13: pop
+      14: aload_0
+      15: iconst_1
+      16: invokevirtual #414                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setOco:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+      19: pop
+      20: aload_0
+      21: iconst_1
+      22: invokevirtual #413                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setMbo:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+      25: pop
+      26: aload_0
+      27: iconst_1
+      28: invokevirtual #420                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setTrailingStopsAsBracketChildren:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+      31: pop
+      32: aload_0
+      33: iconst_1
+      34: invokevirtual #408                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setBrackets:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+      37: pop
+      38: aload_0
+      39: iconst_1
+      40: invokevirtual #412                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setMarketMode:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+      43: pop
+      44: aload_0
+      45: iconst_4
+      46: anewarray     #185                // class velox/api/layer1/data/OrderDuration
+      49: dup
+      50: iconst_0
+      51: getstatic     #251                // Field velox/api/layer1/data/OrderDuration.DAY:Lvelox/api/layer1/data/OrderDuration;
+      54: aastore
+      55: dup
+      56: iconst_1
+      57: getstatic     #253                // Field velox/api/layer1/data/OrderDuration.GTC:Lvelox/api/layer1/data/OrderDuration;
+      60: aastore
+      61: dup
+      62: iconst_2
+      63: getstatic     #252                // Field velox/api/layer1/data/OrderDuration.FOK:Lvelox/api/layer1/data/OrderDuration;
+      66: aastore
+      67: dup
+      68: iconst_3
+      69: getstatic     #254                // Field velox/api/layer1/data/OrderDuration.IOC:Lvelox/api/layer1/data/OrderDuration;
+      72: aastore
+      73: invokestatic  #367                // Method java/util/Arrays.asList:([Ljava/lang/Object;)Ljava/util/List;
+      76: invokevirtual #417                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setSupportedOrderDurations:(Ljava/util/List;)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+      79: pop
+      80: aload_0
+      81: iconst_2
+      82: anewarray     #192                // class velox/api/layer1/data/OrderType
+      85: dup
+      86: iconst_0
+      87: getstatic     #267                // Field velox/api/layer1/data/OrderType.MKT:Lvelox/api/layer1/data/OrderType;
+      90: aastore
+      91: dup
+      92: iconst_1
+      93: getstatic     #266                // Field velox/api/layer1/data/OrderType.LMT:Lvelox/api/layer1/data/OrderType;
+      96: aastore
+      97: invokestatic  #367                // Method java/util/Arrays.asList:([Ljava/lang/Object;)Ljava/util/List;
+     100: invokevirtual #418                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setSupportedStopOrders:(Ljava/util/List;)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+     103: pop
+     104: aload_0
+     105: iconst_1
+     106: invokevirtual #409                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setConvertOrderToMkt:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+     109: pop
+     110: aload_0
+     111: iconst_1
+     112: invokevirtual #406                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setBalanceSupported:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+     115: pop
+     116: aload_0
+     117: iconst_1
+     118: invokevirtual #410                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setExchangeUsedForSubscription:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+     121: pop
+     122: aload_0
+     123: iconst_0
+     124: invokevirtual #421                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setTypeUsedForSubscription:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+     127: pop
+     128: aload_0
+     129: invokestatic  #509                // Method e:()Ljava/util/List;
+     132: invokevirtual #411                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setKnownInstruments:(Ljava/util/List;)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+     135: pop
+     136: aload_0
+     137: iconst_1
+     138: invokevirtual #415                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.setReceiveCrossTradingStatusMessage:(Z)Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder;
+     141: pop
+     142: aload_0
+     143: invokevirtual #405                // Method velox/api/layer1/data/Layer1ApiProviderSupportedFeaturesBuilder.build:()Lvelox/api/layer1/data/Layer1ApiProviderSupportedFeatures;
+     146: areturn
+
+  public static java.lang.String a(velox.api.layer1.data.SubscribeInfo);
+    Code:
+       0: ldc           #9                  // String <html>To see the symbol table, click <a href=\"https://www.bookmap.com/api/v1/redirect/symbol-table\"><font color=\"white\">here</font></a></html>
+       2: areturn
+
+  private static java.util.List<velox.api.layer1.data.SubscribeInfo> e();
+    Code:
+       0: ldc           #33                 // String HISTORICAL_SERVER_INSTRUMENTS
+       2: invokestatic  #362                // Method java/lang/System.getenv:(Ljava/lang/String;)Ljava/lang/String;
+       5: astore_0
+       6: aload_0
+       7: ifnull        83
+      10: new           #137                // class java/util/ArrayList
+      13: dup
+      14: invokespecial #366                // Method java/util/ArrayList."<init>":()V
+      17: astore_1
+      18: aload_0
+      19: ldc           #7                  // String ,
+      21: invokevirtual #358                // Method java/lang/String.split:(Ljava/lang/String;)[Ljava/lang/String;
+      24: astore_2
+      25: aload_2
+      26: arraylength
+      27: istore_3
+      28: iconst_0
+      29: istore        4
+      31: iload         4
+      33: iload_3
+      34: if_icmpge     81
+      37: aload_2
+      38: iload         4
+      40: aaload
+      41: astore        5
+      43: aload         5
+      45: ldc           #10                 // String @
+      47: invokevirtual #358                // Method java/lang/String.split:(Ljava/lang/String;)[Ljava/lang/String;
+      50: astore        6
+      52: aload_1
+      53: new           #198                // class velox/api/layer1/data/SubscribeInfo
+      56: dup
+      57: aload         6
+      59: iconst_0
+      60: aaload
+      61: aload         6
+      63: iconst_1
+      64: aaload
+      65: aconst_null
+      66: invokespecial #451                // Method velox/api/layer1/data/SubscribeInfo."<init>":(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+      69: invokeinterface #569,  2          // InterfaceMethod java/util/List.add:(Ljava/lang/Object;)Z
+      74: pop
+      75: iinc          4, 1
+      78: goto          31
+      81: aload_1
+      82: areturn
+      83: iconst_5
+      84: anewarray     #198                // class velox/api/layer1/data/SubscribeInfo
+      87: dup
+      88: iconst_0
+      89: new           #198                // class velox/api/layer1/data/SubscribeInfo
+      92: dup
+      93: aconst_null
+      94: ldc           #19                 // String CME
+      96: aconst_null
+      97: invokespecial #451                // Method velox/api/layer1/data/SubscribeInfo."<init>":(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+     100: aastore
+     101: dup
+     102: iconst_1
+     103: new           #198                // class velox/api/layer1/data/SubscribeInfo
+     106: dup
+     107: aconst_null
+     108: ldc           #18                 // String CBOT
+     110: aconst_null
+     111: invokespecial #451                // Method velox/api/layer1/data/SubscribeInfo."<init>":(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+     114: aastore
+     115: dup
+     116: iconst_2
+     117: new           #198                // class velox/api/layer1/data/SubscribeInfo
+     120: dup
+     121: aconst_null
+     122: ldc           #43                 // String NYMEX
+     124: aconst_null
+     125: invokespecial #451                // Method velox/api/layer1/data/SubscribeInfo."<init>":(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+     128: aastore
+     129: dup
+     130: iconst_3
+     131: new           #198                // class velox/api/layer1/data/SubscribeInfo
+     134: dup
+     135: aconst_null
+     136: ldc           #20                 // String COMEX
+     138: aconst_null
+     139: invokespecial #451                // Method velox/api/layer1/data/SubscribeInfo."<init>":(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+     142: aastore
+     143: dup
+     144: iconst_4
+     145: new           #198                // class velox/api/layer1/data/SubscribeInfo
+     148: dup
+     149: aconst_null
+     150: ldc           #25                 // String EUREX
+     152: aconst_null
+     153: invokespecial #451                // Method velox/api/layer1/data/SubscribeInfo."<init>":(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+     156: aastore
+     157: invokestatic  #367                // Method java/util/Arrays.asList:([Ljava/lang/Object;)Ljava/util/List;
+     160: areturn
+
+  public java.lang.String a(java.util.Map<java.lang.String, velox.api.layer0.credentialscomponents.CredentialsSerializationField>);
+    Code:
+       0: aload_1
+       1: ldc           #100                // String system
+       3: invokeinterface #574,  2          // InterfaceMethod java/util/Map.containsKey:(Ljava/lang/Object;)Z
+       8: ifeq          22
+      11: aload_1
+      12: ldc           #79                 // String gateway
+      14: invokeinterface #574,  2          // InterfaceMethod java/util/Map.containsKey:(Ljava/lang/Object;)Z
+      19: ifne          25
+      22: ldc           #1                  // String
+      24: areturn
+      25: aload_1
+      26: ldc           #100                // String system
+      28: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      33: checkcast     #164                // class velox/api/layer0/credentialscomponents/CredentialsSerializationField
+      36: invokevirtual #391                // Method velox/api/layer0/credentialscomponents/CredentialsSerializationField.getStringValue:()Ljava/lang/String;
+      39: astore_2
+      40: aload_1
+      41: ldc           #79                 // String gateway
+      43: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      48: checkcast     #164                // class velox/api/layer0/credentialscomponents/CredentialsSerializationField
+      51: invokevirtual #391                // Method velox/api/layer0/credentialscomponents/CredentialsSerializationField.getStringValue:()Ljava/lang/String;
+      54: astore_3
+      55: aload_0
+      56: ldc           #69                 // String aggregateQuotes
+      58: aload_1
+      59: invokevirtual #495                // Method b:(Ljava/lang/String;Ljava/util/Map;)Z
+      62: istore        4
+      64: aload_0
+      65: aload_2
+      66: ldc           #53                 // String Rithmic Paper Trading
+      68: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      71: ifne          87
+      74: aload_2
+      75: ldc           #52                 // String Rithmic 01 Test
+      77: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      80: ifne          87
+      83: iconst_1
+      84: goto          88
+      87: iconst_0
+      88: putfield      #324                // Field z:Z
+      91: aload_2
+      92: aload_3
+      93: iload         4
+      95: invokestatic  #470                // Method velox/api/layer1/providers/RithmicFieldManager.a:(Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/String;
+      98: areturn
+
+  private java.lang.String a(java.lang.String, java.util.Map<java.lang.String, velox.api.layer0.credentialscomponents.CredentialsSerializationField>);
+    Code:
+       0: aload_2
+       1: aload_1
+       2: new           #164                // class velox/api/layer0/credentialscomponents/CredentialsSerializationField
+       5: dup
+       6: iconst_0
+       7: iconst_0
+       8: ldc           #1                  // String
+      10: invokespecial #390                // Method velox/api/layer0/credentialscomponents/CredentialsSerializationField."<init>":(ZZLjava/lang/String;)V
+      13: invokeinterface #576,  3          // InterfaceMethod java/util/Map.getOrDefault:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;
+      18: checkcast     #164                // class velox/api/layer0/credentialscomponents/CredentialsSerializationField
+      21: invokevirtual #391                // Method velox/api/layer0/credentialscomponents/CredentialsSerializationField.getStringValue:()Ljava/lang/String;
+      24: areturn
+
+  private boolean b(java.lang.String, java.util.Map<java.lang.String, velox.api.layer0.credentialscomponents.CredentialsSerializationField>);
+    Code:
+       0: aload_0
+       1: aload_1
+       2: aload_2
+       3: invokevirtual #478                // Method a:(Ljava/lang/String;Ljava/util/Map;)Ljava/lang/String;
+       6: astore_3
+       7: aload_3
+       8: ldc           #1                  // String
+      10: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      13: ifeq          18
+      16: iconst_0
+      17: ireturn
+      18: aload_3
+      19: invokestatic  #333                // Method java/lang/Boolean.valueOf:(Ljava/lang/String;)Ljava/lang/Boolean;
+      22: invokevirtual #331                // Method java/lang/Boolean.booleanValue:()Z
+      25: ireturn
+
+  private java.lang.String f();
+    Code:
+       0: ldc           #169                // class velox/api/layer1/Layer1ApiProvider
+       2: invokevirtual #336                // Method java/lang/Class.getClassLoader:()Ljava/lang/ClassLoader;
+       5: ldc           #104                // String velox.api.layer1.common.helper.External
+       7: invokevirtual #339                // Method java/lang/ClassLoader.loadClass:(Ljava/lang/String;)Ljava/lang/Class;
+      10: astore_1
+      11: aload_1
+      12: ldc           #80                 // String getInitializer
+      14: iconst_0
+      15: anewarray     #112                // class java/lang/Class
+      18: invokevirtual #337                // Method java/lang/Class.getMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;
+      21: aconst_null
+      22: iconst_0
+      23: anewarray     #125                // class java/lang/Object
+      26: invokevirtual #365                // Method java/lang/reflect/Method.invoke:(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;
+      29: checkcast     #128                // class java/lang/String
+      32: areturn
+      33: astore_1
+      34: aload_1
+      35: invokevirtual #342                // Method java/lang/Exception.getCause:()Ljava/lang/Throwable;
+      38: ifnull        53
+      41: aload_1
+      42: invokevirtual #342                // Method java/lang/Exception.getCause:()Ljava/lang/Throwable;
+      45: instanceof    #119                // class java/lang/IllegalStateException
+      48: ifeq          53
+      51: aconst_null
+      52: areturn
+      53: ldc           #1                  // String
+      55: areturn
+    Exception table:
+       from    to  target type
+           0    32    33   Class java/lang/ClassNotFoundException
+           0    32    33   Class java/lang/IllegalAccessException
+           0    32    33   Class java/lang/IllegalArgumentException
+           0    32    33   Class java/lang/reflect/InvocationTargetException
+           0    32    33   Class java/lang/NoSuchMethodException
+           0    32    33   Class java/lang/SecurityException
+
+  public void acceptUserLicenseFields(java.util.Map<java.lang.String, java.lang.String>);
+    Code:
+       0: aload_0
+       1: aload_1
+       2: invokestatic  #537                // Method velox/bookmap/ep.a:(Ljava/util/Map;)Z
+       5: putfield      #293                // Field A:Z
+       8: return
+
+  private void f(java.lang.String);
+    Code:
+       0: aload_1
+       1: invokevirtual #360                // Method java/lang/String.toUpperCase:()Ljava/lang/String;
+       4: astore_1
+       5: aload_0
+       6: aload_1
+       7: invokevirtual #493                // Method b:(Ljava/lang/String;)Ljava/lang/String;
+      10: astore_2
+      11: aload_0
+      12: aload_1
+      13: invokevirtual #476                // Method a:(Ljava/lang/String;)Ljava/lang/String;
+      16: astore_3
+      17: aload_0
+      18: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+      21: aload_2
+      22: aload_3
+      23: invokevirtual #556                // Method velox/rithmic/RithmicProvider.initInstrument:(Ljava/lang/String;Ljava/lang/String;)V
+      26: return
+
+  public java.lang.Object sendUserMessage(java.lang.Object);
+    Code:
+       0: aload_1
+       1: instanceof    #200                // class velox/api/layer1/messages/CrossTradingStatusMessage
+       4: ifeq          32
+       7: aload_1
+       8: checkcast     #200                // class velox/api/layer1/messages/CrossTradingStatusMessage
+      11: astore_2
+      12: aload_2
+      13: getfield      #289                // Field velox/api/layer1/messages/CrossTradingStatusMessage.status:Lvelox/api/layer1/data/CrossTradingStatus;
+      16: getstatic     #237                // Field velox/api/layer1/data/CrossTradingStatus.STARTED:Lvelox/api/layer1/data/CrossTradingStatus;
+      19: if_acmpne     30
+      22: aload_0
+      23: aload_2
+      24: getfield      #290                // Field velox/api/layer1/messages/CrossTradingStatusMessage.targetAlias:Ljava/lang/String;
+      27: invokevirtual #516                // Method f:(Ljava/lang/String;)V
+      30: aconst_null
+      31: areturn
+      32: aload_0
+      33: aload_1
+      34: invokespecial #465                // Method velox/api/layer1/providers/C.sendUserMessage:(Ljava/lang/Object;)Ljava/lang/Object;
+      37: areturn
+
+  private void d(java.lang.String, java.lang.String);
+    Code:
+       0: aload_0
+       1: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+       4: aload_1
+       5: aload_2
+       6: invokevirtual #565                // Method velox/rithmic/RithmicProvider.unsubscribe:(Ljava/lang/String;Ljava/lang/String;)V
+       9: return
+
+  private static boolean a(velox.bookmap.eq, velox.bookmap.eq$b);
+    Code:
+       0: aload_0
+       1: aload_1
+       2: invokevirtual #548                // Method velox/bookmap/eq$b.a:()Ljava/lang/String;
+       5: invokevirtual #545                // Method velox/bookmap/eq.c:(Ljava/lang/String;)Z
+       8: ireturn
+
+  private static velox.api.layer1.data.AccountInfo[] a(int);
+    Code:
+       0: iload_0
+       1: anewarray     #172                // class velox/api/layer1/data/AccountInfo
+       4: areturn
+
+  private static velox.api.layer1.data.AccountInfo g(java.lang.String);
+    Code:
+       0: new           #172                // class velox/api/layer1/data/AccountInfo
+       3: dup
+       4: aload_0
+       5: invokespecial #400                // Method velox/api/layer1/data/AccountInfo."<init>":(Ljava/lang/String;)V
+       8: areturn
+
+  private void g();
+    Code:
+       0: aload_0
+       1: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+       4: ifnonnull     8
+       7: return
+       8: aload_0
+       9: aload_0
+      10: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+      13: invokevirtual #557                // Method velox/rithmic/RithmicProvider.isAggregated:()Z
+      16: putfield      #319                // Field u:Z
+      19: aload_0
+      20: getfield      #297                // Field c:Ljava/util/Map;
+      23: invokeinterface #578,  1          // InterfaceMethod java/util/Map.values:()Ljava/util/Collection;
+      28: invokeinterface #566,  1          // InterfaceMethod java/util/Collection.iterator:()Ljava/util/Iterator;
+      33: astore_1
+      34: aload_1
+      35: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      40: ifeq          128
+      43: aload_1
+      44: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      49: checkcast     #208                // class velox/api/layer1/providers/C$a
+      52: astore_2
+      53: aload_2
+      54: getfield      #292                // Field velox/api/layer1/providers/C$a.b:Z
+      57: ifeq          125
+      60: aload_2
+      61: invokevirtual #466                // Method velox/api/layer1/providers/C$a.a:()Lvelox/api/layer1/data/InstrumentInfo;
+      64: getfield      #243                // Field velox/api/layer1/data/InstrumentInfo.symbol:Ljava/lang/String;
+      67: ifnull        80
+      70: aload_2
+      71: invokevirtual #466                // Method velox/api/layer1/providers/C$a.a:()Lvelox/api/layer1/data/InstrumentInfo;
+      74: getfield      #241                // Field velox/api/layer1/data/InstrumentInfo.exchange:Ljava/lang/String;
+      77: ifnonnull     107
+      80: new           #124                // class java/lang/NullPointerException
+      83: dup
+      84: aload_2
+      85: invokevirtual #466                // Method velox/api/layer1/providers/C$a.a:()Lvelox/api/layer1/data/InstrumentInfo;
+      88: getfield      #243                // Field velox/api/layer1/data/InstrumentInfo.symbol:Ljava/lang/String;
+      91: aload_2
+      92: invokevirtual #466                // Method velox/api/layer1/providers/C$a.a:()Lvelox/api/layer1/data/InstrumentInfo;
+      95: getfield      #241                // Field velox/api/layer1/data/InstrumentInfo.exchange:Ljava/lang/String;
+      98: invokedynamic #652,  0            // InvokeDynamic #41:makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+     103: invokespecial #348                // Method java/lang/NullPointerException."<init>":(Ljava/lang/String;)V
+     106: athrow
+     107: aload_0
+     108: aload_2
+     109: invokevirtual #466                // Method velox/api/layer1/providers/C$a.a:()Lvelox/api/layer1/data/InstrumentInfo;
+     112: getfield      #243                // Field velox/api/layer1/data/InstrumentInfo.symbol:Ljava/lang/String;
+     115: aload_2
+     116: invokevirtual #466                // Method velox/api/layer1/providers/C$a.a:()Lvelox/api/layer1/data/InstrumentInfo;
+     119: getfield      #241                // Field velox/api/layer1/data/InstrumentInfo.exchange:Ljava/lang/String;
+     122: invokevirtual #494                // Method b:(Ljava/lang/String;Ljava/lang/String;)V
+     125: goto          34
+     128: aload_0
+     129: getfield      #295                // Field adminListeners:Ljava/util/List;
+     132: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     137: astore_1
+     138: aload_1
+     139: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     144: ifeq          183
+     147: aload_1
+     148: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     153: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+     156: astore_2
+     157: aload_2
+     158: invokeinterface #599,  1          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onLoginSuccessful:()V
+     163: aload_2
+     164: new           #201                // class velox/api/layer1/messages/Layer1ApiIsRealTradingMessage
+     167: dup
+     168: aload_0
+     169: getfield      #324                // Field z:Z
+     172: invokespecial #452                // Method velox/api/layer1/messages/Layer1ApiIsRealTradingMessage."<init>":(Z)V
+     175: invokeinterface #601,  2          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onUserMessage:(Ljava/lang/Object;)V
+     180: goto          138
+     183: return
+
+  private void a(boolean, boolean, int);
+    Code:
+       0: aload_0
+       1: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+       4: ifnonnull     8
+       7: return
+       8: aload_0
+       9: invokevirtual #503                // Method close:()V
+      12: iload_1
+      13: ifeq          67
+      16: aload_0
+      17: getfield      #295                // Field adminListeners:Ljava/util/List;
+      20: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      25: astore        4
+      27: aload         4
+      29: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      34: ifeq          64
+      37: aload         4
+      39: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      44: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+      47: astore        5
+      49: aload         5
+      51: getstatic     #246                // Field velox/api/layer1/data/LoginFailedReason.WRONG_CREDENTIALS:Lvelox/api/layer1/data/LoginFailedReason;
+      54: ldc           #68                 // String Your Bookmap license only allows paper trading.
+      56: invokeinterface #598,  3          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onLoginFailed:(Lvelox/api/layer1/data/LoginFailedReason;Ljava/lang/String;)V
+      61: goto          27
+      64: goto          259
+      67: iload_2
+      68: ifeq          121
+      71: aload_0
+      72: getfield      #295                // Field adminListeners:Ljava/util/List;
+      75: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+      80: astore        4
+      82: aload         4
+      84: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+      89: ifeq          118
+      92: aload         4
+      94: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+      99: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+     102: astore        5
+     104: aload         5
+     106: getstatic     #246                // Field velox/api/layer1/data/LoginFailedReason.WRONG_CREDENTIALS:Lvelox/api/layer1/data/LoginFailedReason;
+     109: aconst_null
+     110: invokeinterface #598,  3          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onLoginFailed:(Lvelox/api/layer1/data/LoginFailedReason;Ljava/lang/String;)V
+     115: goto          82
+     118: goto          259
+     121: iload_3
+     122: ifle          202
+     125: iload_3
+     126: iconst_1
+     127: if_icmple     135
+     130: ldc           #98                 // String s
+     132: goto          137
+     135: ldc           #1                  // String
+     137: astore        4
+     139: iload_3
+     140: aload         4
+     142: aload         4
+     144: invokedynamic #653,  0            // InvokeDynamic #42:makeConcatWithConstants:(ILjava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+     149: astore        5
+     151: aload_0
+     152: getfield      #295                // Field adminListeners:Ljava/util/List;
+     155: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     160: astore        6
+     162: aload         6
+     164: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     169: ifeq          199
+     172: aload         6
+     174: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     179: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+     182: astore        7
+     184: aload         7
+     186: getstatic     #245                // Field velox/api/layer1/data/LoginFailedReason.UNKNOWN:Lvelox/api/layer1/data/LoginFailedReason;
+     189: aload         5
+     191: invokeinterface #598,  3          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onLoginFailed:(Lvelox/api/layer1/data/LoginFailedReason;Ljava/lang/String;)V
+     196: goto          162
+     199: goto          259
+     202: ldc           #58                 // String Rithmic: unable to check agreements (most likely rithmic repository is broken)
+     204: invokestatic  #398                // Method velox/api/layer1/common/Log.warn:(Ljava/lang/String;)V
+     207: ldc           #70                 // String agreements are not signed or credentials are wrong.<br>To sign the agreements, click <a href=\"https://rithmic.com/rag_paper.html\"><font color=\"white\">here</font></a>.<br>If that doesn\'t work, please contact support@bookmap.com
+     209: astore        4
+     211: aload_0
+     212: getfield      #295                // Field adminListeners:Ljava/util/List;
+     215: invokeinterface #570,  1          // InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator;
+     220: astore        5
+     222: aload         5
+     224: invokeinterface #567,  1          // InterfaceMethod java/util/Iterator.hasNext:()Z
+     229: ifeq          259
+     232: aload         5
+     234: invokeinterface #568,  1          // InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object;
+     239: checkcast     #165                // class velox/api/layer1/Layer1ApiAdminListener
+     242: astore        6
+     244: aload         6
+     246: getstatic     #245                // Field velox/api/layer1/data/LoginFailedReason.UNKNOWN:Lvelox/api/layer1/data/LoginFailedReason;
+     249: aload         4
+     251: invokeinterface #598,  3          // InterfaceMethod velox/api/layer1/Layer1ApiAdminListener.onLoginFailed:(Lvelox/api/layer1/data/LoginFailedReason;Ljava/lang/String;)V
+     256: goto          222
+     259: return
+
+  private void h();
+    Code:
+       0: aload_0
+       1: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+       4: ifnull        26
+       7: ldc           #49                 // String RITHMIC
+       9: ldc           #63                 // String Shut down
+      11: invokestatic  #397                // Method velox/api/layer1/common/Log.info:(Ljava/lang/String;Ljava/lang/String;)V
+      14: aload_0
+      15: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+      18: invokevirtual #563                // Method velox/rithmic/RithmicProvider.shutDown:()V
+      21: aload_0
+      22: aconst_null
+      23: putfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+      26: return
+
+  private void i();
+    Code:
+       0: aload_0
+       1: getfield      #313                // Field p:Ljava/util/concurrent/Future;
+       4: invokeinterface #589,  1          // InterfaceMethod java/util/concurrent/Future.get:()Ljava/lang/Object;
+       9: pop
+      10: goto          27
+      13: astore_1
+      14: goto          27
+      17: astore_1
+      18: new           #126                // class java/lang/RuntimeException
+      21: dup
+      22: aload_1
+      23: invokespecial #351                // Method java/lang/RuntimeException."<init>":(Ljava/lang/Throwable;)V
+      26: athrow
+      27: return
+    Exception table:
+       from    to  target type
+           0    10    13   Class java/util/concurrent/CancellationException
+           0    10    17   Class java/lang/InterruptedException
+           0    10    17   Class java/util/concurrent/ExecutionException
+
+  private void a(java.util.Map, velox.api.layer1.data.ExtendedLoginData);
+    Code:
+       0: aload_0
+       1: ldc           #103                // String username
+       3: aload_1
+       4: invokevirtual #478                // Method a:(Ljava/lang/String;Ljava/util/Map;)Ljava/lang/String;
+       7: astore_3
+       8: iconst_2
+       9: anewarray     #128                // class java/lang/String
+      12: dup
+      13: iconst_0
+      14: aload_0
+      15: invokevirtual #514                // Method f:()Ljava/lang/String;
+      18: aastore
+      19: dup
+      20: iconst_1
+      21: aload_3
+      22: aastore
+      23: invokestatic  #385                // Method org/apache/commons/lang3/ObjectUtils.firstNonNull:([Ljava/lang/Object;)Ljava/lang/Object;
+      26: checkcast     #128                // class java/lang/String
+      29: astore_3
+      30: aload_0
+      31: new           #226                // class velox/rithmic/RithmicProvider
+      34: dup
+      35: aload_0
+      36: aload_3
+      37: aload_0
+      38: ldc           #96                 // String password
+      40: aload_1
+      41: invokevirtual #478                // Method a:(Ljava/lang/String;Ljava/util/Map;)Ljava/lang/String;
+      44: aload_0
+      45: aload_1
+      46: invokevirtual #481                // Method a:(Ljava/util/Map;)Ljava/lang/String;
+      49: aload_2
+      50: getfield      #240                // Field velox/api/layer1/data/ExtendedLoginData.extendedData:Ljava/util/Map;
+      53: ldc           #71                 // String appName
+      55: invokeinterface #575,  2          // InterfaceMethod java/util/Map.get:(Ljava/lang/Object;)Ljava/lang/Object;
+      60: checkcast     #164                // class velox/api/layer0/credentialscomponents/CredentialsSerializationField
+      63: invokevirtual #391                // Method velox/api/layer0/credentialscomponents/CredentialsSerializationField.getStringValue:()Ljava/lang/String;
+      66: aload_0
+      67: ldc           #97                 // String pluginMode
+      69: aload_1
+      70: invokevirtual #495                // Method b:(Ljava/lang/String;Ljava/util/Map;)Z
+      73: aload_0
+      74: getfield      #293                // Field A:Z
+      77: invokespecial #553                // Method velox/rithmic/RithmicProvider."<init>":(Lvelox/rithmic/IRithmicListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZ)V
+      80: putfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+      83: ldc           #49                 // String RITHMIC
+      85: ldc           #39                 // String Login: created native RithmicProvider
+      87: invokestatic  #397                // Method velox/api/layer1/common/Log.info:(Ljava/lang/String;Ljava/lang/String;)V
+      90: return
+
+  private static velox.api.layer0.credentialscomponents.CredentialsSerializationField h(java.lang.String);
+    Code:
+       0: new           #164                // class velox/api/layer0/credentialscomponents/CredentialsSerializationField
+       3: dup
+       4: iconst_0
+       5: iconst_0
+       6: ldc           #16                 // String Bookmap
+       8: invokespecial #390                // Method velox/api/layer0/credentialscomponents/CredentialsSerializationField."<init>":(ZZLjava/lang/String;)V
+      11: areturn
+
+  private static int a(velox.api.layer1.data.SimpleOrderSendParameters);
+    Code:
+       0: aload_0
+       1: getfield      #280                // Field velox/api/layer1/data/SimpleOrderSendParameters.stopLossOffset:I
+       4: ireturn
+
+  private static int b(velox.api.layer1.data.SimpleOrderSendParameters);
+    Code:
+       0: aload_0
+       1: getfield      #283                // Field velox/api/layer1/data/SimpleOrderSendParameters.takeProfitOffset:I
+       4: ireturn
+
+  private static java.lang.String[] b(int);
+    Code:
+       0: iload_0
+       1: anewarray     #128                // class java/lang/String
+       4: areturn
+
+  private java.lang.String c(velox.api.layer1.data.SimpleOrderSendParameters);
+    Code:
+       0: aload_0
+       1: aload_1
+       2: getfield      #276                // Field velox/api/layer1/data/SimpleOrderSendParameters.duration:Lvelox/api/layer1/data/OrderDuration;
+       5: invokevirtual #483                // Method a:(Lvelox/api/layer1/data/OrderDuration;)Ljava/lang/String;
+       8: areturn
+
+  private static int d(velox.api.layer1.data.SimpleOrderSendParameters);
+    Code:
+       0: aload_0
+       1: getfield      #279                // Field velox/api/layer1/data/SimpleOrderSendParameters.size:I
+       4: ireturn
+
+  private static int e(velox.api.layer1.data.SimpleOrderSendParameters);
+    Code:
+       0: iconst_0
+       1: ireturn
+
+  private static double f(velox.api.layer1.data.SimpleOrderSendParameters);
+    Code:
+       0: aload_0
+       1: getfield      #282                // Field velox/api/layer1/data/SimpleOrderSendParameters.stopPrice:D
+       4: dreturn
+
+  private static double g(velox.api.layer1.data.SimpleOrderSendParameters);
+    Code:
+       0: aload_0
+       1: getfield      #278                // Field velox/api/layer1/data/SimpleOrderSendParameters.limitPrice:D
+       4: dreturn
+
+  private static java.lang.Boolean[] c(int);
+    Code:
+       0: iload_0
+       1: anewarray     #111                // class java/lang/Boolean
+       4: areturn
+
+  private static java.lang.Boolean h(velox.api.layer1.data.SimpleOrderSendParameters);
+    Code:
+       0: aload_0
+       1: getfield      #277                // Field velox/api/layer1/data/SimpleOrderSendParameters.isBuy:Z
+       4: invokestatic  #334                // Method java/lang/Boolean.valueOf:(Z)Ljava/lang/Boolean;
+       7: areturn
+
+  private static java.lang.String[] d(int);
+    Code:
+       0: iload_0
+       1: anewarray     #128                // class java/lang/String
+       4: areturn
+
+  private static java.lang.String i(velox.api.layer1.data.SimpleOrderSendParameters);
+    Code:
+       0: aload_0
+       1: getfield      #274                // Field velox/api/layer1/data/SimpleOrderSendParameters.clientId:Ljava/lang/String;
+       4: areturn
+
+  private static java.lang.String[] e(int);
+    Code:
+       0: iload_0
+       1: anewarray     #128                // class java/lang/String
+       4: areturn
+
+  private java.lang.String a(java.lang.String, velox.api.layer1.data.SimpleOrderSendParameters);
+    Code:
+       0: aload_0
+       1: aload_1
+       2: invokevirtual #476                // Method a:(Ljava/lang/String;)Ljava/lang/String;
+       5: areturn
+
+  private static java.lang.String[] f(int);
+    Code:
+       0: iload_0
+       1: anewarray     #128                // class java/lang/String
+       4: areturn
+
+  private java.lang.String b(java.lang.String, velox.api.layer1.data.SimpleOrderSendParameters);
+    Code:
+       0: aload_0
+       1: aload_1
+       2: invokevirtual #493                // Method b:(Ljava/lang/String;)Ljava/lang/String;
+       5: areturn
+
+  private void e(java.lang.String, java.lang.String);
+    Code:
+       0: aload_0
+       1: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+       4: aload_1
+       5: aload_2
+       6: invokevirtual #564                // Method velox/rithmic/RithmicProvider.subscribe:(Ljava/lang/String;Ljava/lang/String;)V
+       9: return
+
+  private java.lang.Long j();
+    Code:
+       0: aload_0
+       1: getfield      #314                // Field q:Lvelox/rithmic/RithmicProvider;
+       4: invokevirtual #555                // Method velox/rithmic/RithmicProvider.getPendingMarketDataConnectionInputSize:()J
+       7: invokestatic  #346                // Method java/lang/Long.valueOf:(J)Ljava/lang/Long;
+      10: areturn
+
+  static {};
+    Code:
+       0: ldc           #211                // class velox/api/layer1/providers/RithmicProvider
+       2: invokevirtual #335                // Method java/lang/Class.desiredAssertionStatus:()Z
+       5: ifne          12
+       8: iconst_1
+       9: goto          13
+      12: iconst_0
+      13: putstatic     #298                // Field d:Z
+      16: new           #141                // class java/util/HashSet
+      19: dup
+      20: iconst_1
+      21: anewarray     #128                // class java/lang/String
+      24: dup
+      25: iconst_0
+      26: ldc           #25                 // String EUREX
+      28: aastore
+      29: invokestatic  #367                // Method java/util/Arrays.asList:([Ljava/lang/Object;)Ljava/util/List;
+      32: invokespecial #372                // Method java/util/HashSet."<init>":(Ljava/util/Collection;)V
+      35: putstatic     #300                // Field e:Ljava/util/Set;
+      38: getstatic     #234                // Field java/util/concurrent/TimeUnit.SECONDS:Ljava/util/concurrent/TimeUnit;
+      41: ldc2_w        #227                // long 15l
+      44: invokevirtual #380                // Method java/util/concurrent/TimeUnit.toNanos:(J)J
+      47: putstatic     #301                // Field f:J
+      50: ldc           #102                // String true
+      52: ldc           #211                // class velox/api/layer1/providers/RithmicProvider
+      54: invokevirtual #338                // Method java/lang/Class.getName:()Ljava/lang/String;
+      57: invokedynamic #654,  0            // InvokeDynamic #43:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+      62: invokestatic  #361                // Method java/lang/System.getProperty:(Ljava/lang/String;)Ljava/lang/String;
+      65: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      68: putstatic     #302                // Field g:Z
+      71: ldc           #102                // String true
+      73: ldc           #211                // class velox/api/layer1/providers/RithmicProvider
+      75: invokevirtual #338                // Method java/lang/Class.getName:()Ljava/lang/String;
+      78: invokedynamic #655,  0            // InvokeDynamic #44:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+      83: invokestatic  #361                // Method java/lang/System.getProperty:(Ljava/lang/String;)Ljava/lang/String;
+      86: invokevirtual #353                // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+      89: putstatic     #303                // Field h:Z
+      92: invokestatic  #457                // Method velox/api/layer1/messages/Layer1ApiUserMessageNotification.getNextId:()J
+      95: putstatic     #304                // Field i:J
+      98: new           #141                // class java/util/HashSet
+     101: dup
+     102: iconst_3
+     103: anewarray     #191                // class velox/api/layer1/data/OrderStatus
+     106: dup
+     107: iconst_0
+     108: getstatic     #259                // Field velox/api/layer1/data/OrderStatus.CANCELLED:Lvelox/api/layer1/data/OrderStatus;
+     111: aastore
+     112: dup
+     113: iconst_1
+     114: getstatic     #260                // Field velox/api/layer1/data/OrderStatus.FILLED:Lvelox/api/layer1/data/OrderStatus;
+     117: aastore
+     118: dup
+     119: iconst_2
+     120: getstatic     #264                // Field velox/api/layer1/data/OrderStatus.REJECTED:Lvelox/api/layer1/data/OrderStatus;
+     123: aastore
+     124: invokestatic  #367                // Method java/util/Arrays.asList:([Ljava/lang/Object;)Ljava/util/List;
+     127: invokespecial #372                // Method java/util/HashSet."<init>":(Ljava/util/Collection;)V
+     130: putstatic     #306                // Field j:Ljava/util/Set;
+     133: invokestatic  #504                // Method d:()Ljava/util/concurrent/ExecutorService;
+     136: putstatic     #307                // Field k:Ljava/util/concurrent/ExecutorService;
+     139: return
+}

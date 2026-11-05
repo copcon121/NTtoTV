@@ -1,6 +1,13 @@
 export const DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX = 60;
 export const MIN_SESSION_VOLUME_PROFILE_WIDTH_PX = 32;
 export const MAX_SESSION_VOLUME_PROFILE_WIDTH_PX = 180;
+export const DEFAULT_SESSION_VOLUME_PROFILE_ROW_TICKS = 2;
+
+export function normalizeSessionVolumeProfileRowTicks(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1
+    ? value
+    : DEFAULT_SESSION_VOLUME_PROFILE_ROW_TICKS;
+}
 
 export function normalizeSessionVolumeProfileWidth(value: unknown): number {
   const parsed = Math.round(Number(value));

@@ -11,9 +11,13 @@ Each audit compares minute summaries, saved provenance and ladder totals. Dense
 volume profiles are downloaded only for missing/revised data and the recent
 overlap; complete older ladders are reused to keep weekly downloads bounded.
 
-The service repairs closed M1 candles, final delta and footprint ladders, then
-rebuilds closed larger-timeframe bars/delta. It does not fabricate 15s/30s bars
-from minute history. Cache-miss rebuilds can use locally recorded Rithmic ticks.
+The service repairs closed 15s, 30s and M1 candles and final delta directly from
+native History Plant time bars, repairs M1 footprint ladders, then rebuilds
+closed larger-timeframe bars/delta. Each audit also checks 15s/30s independently
+of M1 coverage, so a complete minute chart cannot hide a subminute outage.
+Subminute OHLCV is never fabricated from minute history. Second-bar replay does
+not supply footprint ladders or the intrabar delta path; matching measured delta
+extrema are preserved. Cache-miss rebuilds can use locally recorded Rithmic ticks.
 Bookmap/NT rows, open bars, physical-contract ML archives, and history owned by
 a different physical contract are preserved. Matching realtime delta extrema
 are retained; missing extrema can only be bounded by the final minute delta.

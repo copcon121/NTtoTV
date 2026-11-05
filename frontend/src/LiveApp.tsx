@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOrderSubmissionLock } from "./orders/useOrderSubmissionLock";
+import { useAuthSessionSync } from "./auth/useAuthSessionSync";
+import { fixedRangeProfileRowTicks } from "./orderflow/deltaProfile";
 import type { UTCTimestamp } from "lightweight-charts";
+import { DEFAULT_TDU_SETTINGS, normalizeTduSettings, type TduSettings } from "./chart/tduSettings";
 
 import {
   ApiClient,
@@ -62,6 +65,7 @@ import {
   timedValuesBefore,
   type BarReplaySpeed,
 } from "./chart/barReplay";
+import { useBarReplaySession, type ReplayHistoryRange } from "./chart/useBarReplaySession";
 import { barDurationForTimeframe } from "./chart/barCountdown";
 import {
   type BigTradeMarker,
@@ -111,6 +115,8 @@ import {
 } from "./chart/supertrend";
 import {
   DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  DEFAULT_SESSION_VOLUME_PROFILE_ROW_TICKS,
+  normalizeSessionVolumeProfileRowTicks,
   normalizeSessionVolumeProfileWidth,
 } from "./chart/sessionVolumeProfileSettings";
 import {
@@ -140,6 +146,8 @@ import {
   type MarketOrderSettings,
 } from "./orders/MarketOrderBar";
 import { Mt5AccountDialog } from "./orders/Mt5AccountDialog";
+import { createTradingStateRefresh } from "./orders/tradingStateRefresh";
+import { projectBrokerOrder, useBrokerChartPositions } from "./orders/brokerChartLevels";
 import { ChartSocket } from "./socket/ChartSocket";
 import {
   type AccountPositionUpdate,
@@ -162,6 +170,10 @@ import type {
   DeltaProfileSource,
 } from "./orderflow/deltaProfile";
 import { StatusIndicator, type ConnectionState } from "./status/StatusIndicator";
+import {
+  persistDenseOverlayMinSpacing,
+  readDenseOverlayMinSpacing,
+} from "./chart/zoomVisibility";
 import type {
   DrawingState,
   DrawingToolType,
@@ -280,8 +292,6 @@ const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
 // to render up to its 500-marker display budget.
 const INITIAL_BIG_TRADE_LIMIT = 500;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
-const VOLUME_PROFILE_ROW_TICKS = 1;
-const DELTA_PROFILE_ROW_TICKS = 2;
 const SESSION_VP_START_UTC_HOUR = 22;
 const DELTA_PROFILE_VALUE_AREA_PCT = 68;
 const DELTA_PROFILE_REFRESH_DELAY_MS = 1_000;
@@ -824,6 +834,21 @@ function orderLineId(orderId: string, field: OrderLineField): string {
   return `${orderId}:${field}`;
 }
 
+function pendingOrderPatch(patch: {
+  entryGc?: number | null;
+  slGc?: number | null;
+  tpGc?: number | null;
+}) {
+  // Until MT5 confirms the conversion, show the new level without the previous
+  // broker stop's money value.
+  return {
+    ...patch,
+    ...(patch.entryGc !== undefined ? { entryBroker: undefined } : {}),
+    ...(patch.slGc !== undefined ? { slBroker: undefined } : {}),
+    ...(patch.tpGc !== undefined ? { tpBroker: undefined } : {}),
+  };
+}
+
 function parseOrderLineId(id: string):
   | { orderId: string; field: OrderLineField }
   | undefined {
@@ -897,22 +922,11 @@ export function projectBrokerAnchoredOrders(
 ): readonly TradingOrder[] {
   const byTicket = new Map(positions.map((position) => [position.brokerPositionTicket, position]));
   return orders.map((order) => {
-    const fixedBrokerBracket = !order.gcAnchored ||
-      (order.source === "market_bar" && order.kind === "market");
     const position = order.brokerPositionTicket == null
       ? undefined : byTicket.get(order.brokerPositionTicket);
-    const projected = !fixedBrokerBracket || position === undefined ||
-      !isFinitePrice(position.entryGcEstimate)
-      ? order
-      : {
-          ...order,
-          fillPriceGcEstimate: position.entryGcEstimate,
-          entryGc: position.entryGcEstimate,
-          slGc: position.slGc,
-          tpGc: position.tpGc,
-        };
+    const projected = projectBrokerOrder(order, position);
     const edit = pendingEdits.get(order.id);
-    return edit === undefined ? projected : { ...projected, ...edit };
+    return edit === undefined ? projected : { ...projected, ...pendingOrderPatch(edit) };
   });
 }
 
@@ -945,9 +959,16 @@ function estimatePnlAtPrice(input: {
   volumeLots: number;
   entryGc: number | undefined;
   exitGc: number | undefined;
+  entryBroker?: number | null;
+  exitBroker?: number | null;
   symbol: Mt5Symbol | undefined;
 }): number | undefined {
-  if (input.entryGc === undefined || input.exitGc === undefined) return undefined;
+  // Broker fills and stops can use different GC/XAU bases. Their GC estimates
+  // cannot be subtracted to calculate the actual money at risk.
+  const brokerPrices = isFinitePrice(input.entryBroker);
+  const entry = brokerPrices ? input.entryBroker : input.entryGc;
+  const exit = brokerPrices ? input.exitBroker : input.exitGc;
+  if (!isFinitePrice(entry) || !isFinitePrice(exit)) return undefined;
   const tickSize =
     input.symbol?.tickSize && input.symbol.tickSize > 0
       ? input.symbol.tickSize
@@ -958,7 +979,7 @@ function estimatePnlAtPrice(input: {
       : 1;
   const direction = input.side === "buy" ? 1 : -1;
   return (
-    ((input.exitGc - input.entryGc) * direction) /
+    ((exit - entry) * direction) /
     tickSize *
     tickValue *
     input.volumeLots
@@ -1268,7 +1289,7 @@ function toMarketOrderRows(
   return rows;
 }
 
-function toOrderControls(
+export function toOrderControls(
   orders: readonly TradingOrder[],
   currentPrice: number | undefined,
   symbol: Mt5Symbol | undefined,
@@ -1292,6 +1313,9 @@ function toOrderControls(
     entry: number | undefined;
     sl: number | null | undefined;
     tp: number | null | undefined;
+    entryBroker?: number | null;
+    slBroker?: number | null;
+    tpBroker?: number | null;
     pnlValue?: number;
     canClose?: boolean;
     canCancel?: boolean;
@@ -1322,6 +1346,8 @@ function toOrderControls(
         volumeLots: input.volumeLots,
         entryGc: input.entry,
         exitGc: input.sl,
+        entryBroker: input.entryBroker,
+        exitBroker: input.slBroker,
         symbol,
       });
       controls.push({
@@ -1343,6 +1369,8 @@ function toOrderControls(
         volumeLots: input.volumeLots,
         entryGc: input.entry,
         exitGc: input.tp,
+        entryBroker: input.entryBroker,
+        exitBroker: input.tpBroker,
         symbol,
       });
       controls.push({
@@ -1373,10 +1401,14 @@ function toOrderControls(
       actionId,
       orderId: order.id,
       side: order.side,
-      volumeLots: order.volumeLots,
+      volumeLots: brokerPosition?.volumeLots ?? order.volumeLots,
       entry,
       sl: order.slGc,
       tp: order.tpGc,
+      entryBroker:
+        brokerPosition?.entryBroker ?? order.fillPriceBroker ?? order.entryBroker,
+      slBroker: order.slBroker,
+      tpBroker: order.tpBroker,
       pnlValue: brokerPosition?.profit ?? estimateOrderPnl(order, currentPrice, symbol),
       canClose:
         hasBrokerPosition &&
@@ -1402,6 +1434,9 @@ function toOrderControls(
       entry: position.entryGcEstimate,
       sl: position.slGc,
       tp: position.tpGc,
+      entryBroker: position.entryBroker,
+      slBroker: position.slBroker,
+      tpBroker: position.tpBroker,
       pnlValue: position.profit,
       canClose: true,
       closing: closingIds.has(actionId),
@@ -1420,6 +1455,9 @@ function toOrderControls(
       entry: isFinitePrice(pending.entryGc) ? pending.entryGc : undefined,
       sl: pending.slGc,
       tp: pending.tpGc,
+      entryBroker: pending.entryBroker,
+      slBroker: pending.slBroker,
+      tpBroker: pending.tpBroker,
       canCancel: true,
       cancelling: cancellingIds.has(actionId),
     });
@@ -2069,10 +2107,6 @@ function fixedRangeDeltaProfileSource(
   return mode === "volume" ? "minute_bars" : "footprint_cache";
 }
 
-function fixedRangeDeltaProfileRowTicks(mode: FixedRangeProfileMode): number {
-  return mode === "delta" ? DELTA_PROFILE_ROW_TICKS : VOLUME_PROFILE_ROW_TICKS;
-}
-
 /**
  * LiveApp â€” the composed, runnable application.
  *
@@ -2135,16 +2169,23 @@ export function LiveApp() {
   >([]);
   const [replaySelecting, setReplaySelecting] = useState(false);
   const [replaySelectionError, setReplaySelectionError] = useState("");
-  const [replayDataset, setReplayDataset] = useState<BarReplayDataset>();
-  const [replayCursorIndex, setReplayCursorIndex] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState<BarReplaySpeed>(1);
   const [replayFollowLatest, setReplayFollowLatest] = useState(true);
   const [marketDataStatus, setMarketDataStatus] =
     useState<MarketDataStatusMessage>();
   const [indicatorsVisible, setIndicatorsVisible] = useState(true);
+  const [denseOverlayMinSpacing, setDenseOverlayMinSpacing] = useState(
+    () => readDenseOverlayMinSpacing(browserStorage()),
+  );
+  useEffect(() => {
+    persistDenseOverlayMinSpacing(denseOverlayMinSpacing, browserStorage());
+  }, [denseOverlayMinSpacing]);
   const [orderLevelsVisible, setOrderLevelsVisible] = useState(true);
   const [showDailyVolumeProfile, setShowDailyVolumeProfile] = useState(false);
+  const [dailyVolumeProfileRowTicks, setDailyVolumeProfileRowTicks] = useState(
+    DEFAULT_SESSION_VOLUME_PROFILE_ROW_TICKS,
+  );
   const [dailyVolumeProfileWidth, setDailyVolumeProfileWidth] = useState(
     DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
   );
@@ -2162,6 +2203,7 @@ export function LiveApp() {
     }));
   const [showGcPushMomentum, setShowGcPushMomentum] = useState(true);
   const [showTduSignals, setShowTduSignals] = useState(true);
+  const [tduSettings, setTduSettings] = useState<TduSettings>(() => ({ ...DEFAULT_TDU_SETTINGS }));
   const [gcPushMomentumSettings, setGcPushMomentumSettings] =
     useState<GcPushMomentumSettings>(() => ({
       ...DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
@@ -2250,6 +2292,8 @@ export function LiveApp() {
   const [webPushStatus, setWebPushStatus] = useState("");
   const [webPushSupported, setWebPushSupported] = useState(false);
   const [authUser, setAuthUser] = useState<AuthUser | undefined>(undefined);
+  const authUserRef = useRef(authUser);
+  authUserRef.current = authUser;
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
   const [authMode, setAuthMode] = useState<AuthDialogMode>("login");
   const [authPending, setAuthPending] = useState(false);
@@ -2385,9 +2429,11 @@ export function LiveApp() {
       xKontrol: { ...xKontrolSettings },
       showGcPushMomentum,
       showTduSignals,
+      tduSettings: { ...tduSettings },
       gcPushMomentum: { ...gcPushMomentumSettings },
       showDailyVolumeProfile,
       dailyVolumeProfileWidth,
+      dailyVolumeProfileRowTicks,
       showDailyVolumeProfileDevelopingPoc,
       showCvd: showMgannWaveDelta,
       showMgannSwing,
@@ -2417,6 +2463,7 @@ export function LiveApp() {
       bigTradeSettings,
       chartBackgroundColor,
       dailyVolumeProfileWidth,
+      dailyVolumeProfileRowTicks,
       drawings,
       ema,
       footprintSettings,
@@ -2441,6 +2488,7 @@ export function LiveApp() {
       showMgannWaveDelta,
       showGcPushMomentum,
       showTduSignals,
+      tduSettings,
       showFvgGrader,
       smc,
       supertrend,
@@ -2530,7 +2578,51 @@ export function LiveApp() {
     };
   }
   const hasLoadedCurrentSeries = loadedSeriesKey === currentSeriesKey;
-  const replayActive = replayDataset?.seriesKey === currentSeriesKey;
+  const loadReplayTimeframe = useCallback(async (
+    source: BarReplayDataset,
+    nextTimeframe: Timeframe,
+    range: ReplayHistoryRange,
+  ): Promise<BarReplayDataset> => {
+    const response = await fetch(buildHistoryUrl({
+      symbol: SYMBOL, contract, timeframe: nextTimeframe,
+      ...range, limit: BAR_REPLAY_HISTORY_LIMIT,
+    }, endpoints.api));
+    if (!response.ok) throw new Error(`Unable to load replay history (${response.status})`);
+    const body = await response.json() as Partial<HistoryResponse> | null;
+    if (!Array.isArray(body?.bars)) throw new Error("Replay history is missing candles");
+    const [delta, fvg, trades] = await Promise.allSettled([
+      api.volumeDelta(SYMBOL, contract, nextTimeframe, BAR_REPLAY_HISTORY_LIMIT, range),
+      nextTimeframe === "1m"
+        ? api.fvgSignals(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range)
+        : Promise.resolve<FvgSignalUpdateMessage[]>([]),
+      api.bigTrades(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range, true),
+    ]);
+    return {
+      ...source,
+      bars: body.bars,
+      barsTimeframe: nextTimeframe,
+      volumeDelta: delta.status === "fulfilled" ? replayVolumeDelta(delta.value) : [],
+      fvgSignals: new Map(fvg.status === "fulfilled"
+        ? fvg.value.filter((signal) => signal.phase !== "clear" && signal.pulse !== 0)
+          .map((signal) => [signal.time, signal])
+        : []),
+      bigTrades: trades.status === "fulfilled" ? trades.value : [],
+      smcAiSignals: [],
+      alertSignals: [],
+    };
+  }, [api, contract, endpoints.api]);
+  const {
+    dataset: replayDataset,
+    cursorIndex: replayCursorIndex,
+    active: replayActive,
+    ready: replayReady,
+    loading: replayLoading,
+    error: replayLoadError,
+    start: startReplaySession,
+    stop: stopReplaySession,
+    updateDataset: updateReplayDataset,
+    step: advanceReplaySession,
+  } = useBarReplaySession(currentSeriesKey, timeframe, loadReplayTimeframe);
   const replayPhase: BarReplayPhase = replayActive
     ? "active"
     : replaySelecting
@@ -2542,7 +2634,7 @@ export function LiveApp() {
     setReplaySelectionError("");
     setReplayPlaying(false);
     setReplayFollowLatest(true);
-    setReplayDataset(undefined);
+    stopReplaySession();
     const live = cache.get({ symbol: SYMBOL, contract, timeframe });
     if (live !== undefined) {
       setLoadedSeriesKey(currentSeriesKey);
@@ -2552,7 +2644,7 @@ export function LiveApp() {
     // Catch up Volume Delta/FVG and any REST overlays that changed during replay.
     setSocketGeneration((generation) => generation + 1);
     setOverlayRefreshNonce((nonce) => nonce + 1);
-  }, [cache, contract, currentSeriesKey, timeframe]);
+  }, [cache, contract, currentSeriesKey, stopReplaySession, timeframe]);
 
   const beginBarReplaySelection = useCallback(() => {
     const loaded = cache.get({ symbol: SYMBOL, contract, timeframe })?.bars ?? bars;
@@ -2560,13 +2652,13 @@ export function LiveApp() {
       setReplaySelectionError("Load at least three candles before starting replay");
       return;
     }
-    setReplayDataset(undefined);
+    stopReplaySession();
     setReplayPlaying(false);
     setReplayFollowLatest(true);
     setReplaySelectionError("");
     setActiveTool(null);
     setReplaySelecting(true);
-  }, [bars, cache, contract, timeframe]);
+  }, [bars, cache, contract, stopReplaySession, timeframe]);
 
   const cancelBarReplaySelection = useCallback(() => {
     setReplaySelecting(false);
@@ -2602,8 +2694,7 @@ export function LiveApp() {
         smcAiSignals: smcAiSignals.slice(),
         alertSignals: alertSignalMarkers.slice(),
       };
-      setReplayDataset(snapshot);
-      setReplayCursorIndex(replayCursorBeforeSelection(selectedIndex));
+      startReplaySession(snapshot, replayCursorBeforeSelection(selectedIndex));
       setReplayPlaying(false);
       setReplayFollowLatest(true);
       setReplaySelecting(false);
@@ -2632,8 +2723,8 @@ export function LiveApp() {
           : Promise.resolve<FvgSignalUpdateMessage[]>([]),
         api.bigTrades(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range, true),
       ]).then(([deltaResult, fvgResult, bigTradeResult]) => {
-        setReplayDataset((current) => {
-          if (current?.id !== id) return current;
+        updateReplayDataset((current) => {
+          if (current.id !== id) return current;
           const nextFvg = new Map<number, FvgSignalUpdateMessage>();
           const loadedFvg = fvgResult.status === "fulfilled" ? fvgResult.value : undefined;
           if (loadedFvg !== undefined) {
@@ -2673,28 +2764,27 @@ export function LiveApp() {
       smcAiSignals,
       timeframe,
       volumeDelta,
+      startReplaySession,
+      updateReplayDataset,
     ],
   );
 
   const stepBarReplay = useCallback((direction: -1 | 1) => {
     setReplayPlaying(false);
-    setReplayCursorIndex((current) => {
-      const last = Math.max(0, (replayDataset?.bars.length ?? 1) - 1);
-      return Math.min(last, Math.max(0, current + direction));
-    });
-  }, [replayDataset]);
+    advanceReplaySession(direction);
+  }, [advanceReplaySession]);
 
   useEffect(() => {
-    if (!replayActive || !replayPlaying || replayDataset === undefined) return;
+    if (!replayReady || !replayPlaying || replayDataset === undefined) return;
     if (replayCursorIndex >= replayDataset.bars.length - 1) {
       setReplayPlaying(false);
       return;
     }
     const timer = window.setTimeout(() => {
-      setReplayCursorIndex((current) => Math.min(current + 1, replayDataset.bars.length - 1));
+      advanceReplaySession(1);
     }, barReplayDelayMs(replaySpeed));
     return () => window.clearTimeout(timer);
-  }, [replayActive, replayCursorIndex, replayDataset, replayPlaying, replaySpeed]);
+  }, [advanceReplaySession, replayReady, replayCursorIndex, replayDataset, replayPlaying, replaySpeed]);
 
   useEffect(() => {
     if (!replayActive && !replaySelecting) return;
@@ -2705,7 +2795,7 @@ export function LiveApp() {
         if (replayActive) exitBarReplay();
         else cancelBarReplaySelection();
         event.preventDefault();
-      } else if (replayActive && event.code === "Space") {
+      } else if (replayReady && event.code === "Space") {
         setReplayPlaying((playing) => !playing);
         event.preventDefault();
       } else if (replayActive && event.key === "ArrowRight") {
@@ -2722,18 +2812,16 @@ export function LiveApp() {
     cancelBarReplaySelection,
     exitBarReplay,
     replayActive,
+    replayReady,
     replaySelecting,
     stepBarReplay,
   ]);
 
   useEffect(() => {
-    if (replayDataset !== undefined && replayDataset.seriesKey !== currentSeriesKey) {
-      setReplayDataset(undefined);
-      setReplayPlaying(false);
-    }
+    setReplayPlaying(false);
     setReplaySelecting(false);
     setReplaySelectionError("");
-  }, [currentSeriesKey, replayDataset]);
+  }, [currentSeriesKey]);
 
   const hasLiveTrailing = hasLiveSupertrendTrailing(
     supertrendTrailings,
@@ -2783,26 +2871,22 @@ export function LiveApp() {
     [],
   );
 
-  const refreshTradingState = useCallback(async () => {
-    const [ordersResult, openTradesResult, statusResult, trailingResult] = await Promise.allSettled([
-      api.orders(true),
-      api.mt5OpenTrades(),
-      api.mt5Status(),
-      api.supertrendTrailings(),
-    ]);
-    if (ordersResult.status === "fulfilled") {
-      setOrders(ordersResult.value);
-    }
-    if (openTradesResult.status === "fulfilled") {
-      setMt5OpenTrades(openTradesResult.value);
-    }
-    if (statusResult.status === "fulfilled") {
-      applyMt5Status(statusResult.value);
-    }
-    if (trailingResult.status === "fulfilled") {
-      setSupertrendTrailings(supertrendTrailingMap(trailingResult.value));
-    }
-  }, [api, applyMt5Status]);
+  const tradingRefresh = useMemo(
+    () => createTradingStateRefresh(api, {
+      guard: () => {
+        const editRevision = orderEditRevisionRef.current;
+        return () => editRevision === orderEditRevisionRef.current &&
+          pendingOrderEditsRef.current.size === 0;
+      },
+      orders: setOrders,
+      openTrades: setMt5OpenTrades,
+      status: applyMt5Status,
+      trailings: (rows) => setSupertrendTrailings(supertrendTrailingMap(rows)),
+    }),
+    [api, applyMt5Status],
+  );
+  const refreshTradingState = tradingRefresh.refresh;
+  useEffect(() => () => tradingRefresh.invalidate(), [tradingRefresh, authUser?.id]);
 
   const scheduleDeltaProfileRefresh = useCallback(() => {
     if (deltaProfileRefreshTimerRef.current !== undefined) {
@@ -3023,7 +3107,10 @@ export function LiveApp() {
         drawing.options?.fixedRangeProfileMode,
       );
       const source = fixedRangeDeltaProfileSource(mode);
-      const rowTicks = fixedRangeDeltaProfileRowTicks(mode);
+      const rowTicks = fixedRangeProfileRowTicks(
+        drawing.options?.fixedRangeProfileRowTicks,
+        mode,
+      );
       const requestKey = [
         contract,
         timeframe,
@@ -3142,7 +3229,7 @@ export function LiveApp() {
           contract,
           from: fromMs,
           to: Date.now(),
-          rowTicks: DELTA_PROFILE_ROW_TICKS,
+          rowTicks: dailyVolumeProfileRowTicks,
           valueAreaPct: DELTA_PROFILE_VALUE_AREA_PCT,
           source: "footprint_cache",
         })
@@ -3156,7 +3243,7 @@ export function LiveApp() {
     fetchProfile();
     const timer = window.setInterval(fetchProfile, 65_000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [api, contract, showDailyVolumeProfile]);
+  }, [api, contract, showDailyVolumeProfile, dailyVolumeProfileRowTicks]);
 
   // Connect the socket once and keep it for the component's lifetime. Status
   // + alert handlers are attached here; subscription management lives in its
@@ -4330,6 +4417,7 @@ export function LiveApp() {
       } catch {
         /* Local state still clears if the session was already gone. */
       } finally {
+        authUserRef.current = undefined;
         setAuthUser(undefined);
         setShowVolumeDelta(false);
         setMt5Account(undefined);
@@ -4356,6 +4444,7 @@ export function LiveApp() {
     })();
   };
   const onMarketOrder = (side: "buy" | "sell") => {
+    if (orderPending) return;
     // A settings input may have just committed on blur, before this click's
     // render. Read that value synchronously for both sizing and the bracket.
     const settings = marketOrderSettingsRef.current;
@@ -4385,6 +4474,7 @@ export function LiveApp() {
     setOrderError("");
     void (async () => {
       try {
+        tradingRefresh.invalidate();
         const order = await api.createOrder({
           source: "market_bar",
           side,
@@ -4411,7 +4501,7 @@ export function LiveApp() {
           return isOpenTradingOrder(order) ? [order, ...without] : without;
         });
         setOrderError(rejectedOrderMessage(order));
-        await refreshTradingState();
+        void refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Order failed");
         await refreshTradingState().catch(() => undefined);
@@ -4471,6 +4561,7 @@ export function LiveApp() {
     setOrderError("");
     void (async () => {
       try {
+        tradingRefresh.invalidate();
         const order = await api.createOrder({
           source: "chart_bracket",
           side,
@@ -4499,7 +4590,7 @@ export function LiveApp() {
         });
         setOrderError(rejectedOrderMessage(order));
         removeTransientDrawing(drawing.id);
-        await refreshTradingState();
+        void refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Chart order failed");
         await refreshTradingState().catch(() => undefined);
@@ -4522,18 +4613,23 @@ export function LiveApp() {
     }
   };
 
-  const commitOrderLevelPatch = (orderId: string, patch: OrderLevelPatch) => {
+  const commitOrderLevelPatch = (
+    orderId: string,
+    patch: OrderLevelPatch,
+    requestPatch: Parameters<ApiClient["patchOrder"]>[1] = patch,
+  ) => {
+    tradingRefresh.invalidate();
     const edit = { ...pendingOrderEditsRef.current.get(orderId), ...patch };
     pendingOrderEditsRef.current.set(orderId, edit);
     orderEditRevisionRef.current += 1;
     setPendingOrderEdits(new Map(pendingOrderEditsRef.current));
     setOrderError("");
     setOrders((prev) => prev.map((order) =>
-      order.id === orderId ? { ...order, ...patch } : order,
+      order.id === orderId ? { ...order, ...pendingOrderPatch(patch) } : order,
     ));
-    void (async () => {
+    return (async () => {
       try {
-        const updated = await api.patchOrder(orderId, patch);
+        const updated = await api.patchOrder(orderId, requestPatch);
         setOrders((prev) => {
           const without = prev.filter((order) => order.id !== updated.id);
           return isOpenTradingOrder(updated) ? [updated, ...without] : without;
@@ -4584,12 +4680,13 @@ export function LiveApp() {
         ...prev,
         positions: prev.positions.map((position) =>
           position.brokerPositionTicket === ticket
-            ? { ...position, ...patch }
+            ? { ...position, ...pendingOrderPatch(patch) }
             : position,
         ),
       }));
       void (async () => {
         try {
+          tradingRefresh.invalidate();
           await api.patchMt5Position(ticket, patch);
           setMt5OpenTrades(await api.mt5OpenTrades());
         } catch (error) {
@@ -4613,11 +4710,12 @@ export function LiveApp() {
       setMt5OpenTrades((prev) => ({
         ...prev,
         orders: prev.orders.map((order) =>
-          order.brokerOrderTicket === ticket ? { ...order, ...patch } : order,
+          order.brokerOrderTicket === ticket ? { ...order, ...pendingOrderPatch(patch) } : order,
         ),
       }));
       void (async () => {
         try {
+          tradingRefresh.invalidate();
           await api.patchMt5Order(ticket, patch);
           setMt5OpenTrades(await api.mt5OpenTrades());
         } catch (error) {
@@ -4685,12 +4783,13 @@ export function LiveApp() {
           ...prev,
           positions: prev.positions.map((position) =>
             position.brokerPositionTicket === ticket
-              ? { ...position, ...patch }
+              ? { ...position, ...pendingOrderPatch(patch) }
               : position,
           ),
         }));
         void (async () => {
           try {
+            tradingRefresh.invalidate();
             await api.patchMt5Position(ticket, patch);
             setMt5OpenTrades(await api.mt5OpenTrades());
           } catch (error) {
@@ -4715,11 +4814,12 @@ export function LiveApp() {
         setMt5OpenTrades((prev) => ({
           ...prev,
           orders: prev.orders.map((order) =>
-            order.brokerOrderTicket === ticket ? { ...order, ...patch } : order,
+            order.brokerOrderTicket === ticket ? { ...order, ...pendingOrderPatch(patch) } : order,
           ),
         }));
         void (async () => {
           try {
+            tradingRefresh.invalidate();
             await api.patchMt5Order(ticket, patch);
             setMt5OpenTrades(await api.mt5OpenTrades());
           } catch (error) {
@@ -4757,6 +4857,7 @@ export function LiveApp() {
     setClosingOrderIds((prev) => new Set(prev).add(orderId));
     void (async () => {
       try {
+        tradingRefresh.invalidate();
         const closed = await api.closeOrder(orderId);
         setOrders((prev) => {
           const without = prev.filter((item) => item.id !== closed.id);
@@ -4786,6 +4887,7 @@ export function LiveApp() {
     setCancellingOrderIds((prev) => new Set(prev).add(orderId));
     void (async () => {
       try {
+        tradingRefresh.invalidate();
         const cancelled = await api.cancelOrder(orderId);
         setOrders((prev) => {
           const without = prev.filter((item) => item.id !== cancelled.id);
@@ -4824,16 +4926,7 @@ export function LiveApp() {
             throw new Error("Break-even is only available for open positions");
           }
           const level = roundGcPrice(entry);
-          setOrders((prev) =>
-            prev.map((item) =>
-              item.id === parsed.orderId ? { ...item, slGc: level } : item,
-            ),
-          );
-          const updated = await api.patchOrder(parsed.orderId, { slGc: level });
-          setOrders((prev) => {
-            const without = prev.filter((item) => item.id !== updated.id);
-            return isOpenTradingOrder(updated) ? [updated, ...without] : without;
-          });
+          await commitOrderLevelPatch(parsed.orderId, { slGc: level }, { breakEven: true });
           return;
         }
         if (parsed.source === "mt5pos") {
@@ -4849,11 +4942,12 @@ export function LiveApp() {
             ...prev,
             positions: prev.positions.map((item) =>
               item.brokerPositionTicket === parsed.ticket
-                ? { ...item, slGc: level }
+                ? { ...item, ...pendingOrderPatch({ slGc: level }) }
                 : item,
             ),
           }));
-          await api.patchMt5Position(parsed.ticket, { slGc: level });
+          tradingRefresh.invalidate();
+          await api.patchMt5Position(parsed.ticket, { breakEven: true });
           setMt5OpenTrades(await api.mt5OpenTrades());
           return;
         }
@@ -4992,6 +5086,7 @@ export function LiveApp() {
     setClosingOrderIds((prev) => new Set(prev).add(rowId));
     void (async () => {
       try {
+        tradingRefresh.invalidate();
         await api.closeMt5Position(parsed.ticket);
         await refreshTradingState();
       } catch (error) {
@@ -5023,6 +5118,7 @@ export function LiveApp() {
       setClosingOrderIds((prev) => new Set(prev).add(parsed.orderId));
       void (async () => {
         try {
+          tradingRefresh.invalidate();
           const updated = await api.closeOrder(parsed.orderId, halfVolume);
           setOrders((prev) => {
             const without = prev.filter((item) => item.id !== updated.id);
@@ -5052,6 +5148,7 @@ export function LiveApp() {
     setClosingOrderIds((prev) => new Set(prev).add(rowId));
     void (async () => {
       try {
+        tradingRefresh.invalidate();
         await api.closeMt5Position(parsed.ticket, halfVolume);
         await refreshTradingState();
       } catch (error) {
@@ -5083,6 +5180,7 @@ export function LiveApp() {
     setCancellingOrderIds((prev) => new Set(prev).add(rowId));
     void (async () => {
       try {
+        tradingRefresh.invalidate();
         await api.cancelMt5Order(parsed.ticket);
         await refreshTradingState();
       } catch (error) {
@@ -5131,6 +5229,7 @@ export function LiveApp() {
     setOrderError("");
     void (async () => {
       try {
+        tradingRefresh.invalidate();
         const order = await api.createOrder({
           ...draft,
           ...supertrendAfter1rOrderFields(
@@ -5145,7 +5244,7 @@ export function LiveApp() {
           return isOpenTradingOrder(order) ? [order, ...without] : without;
         });
         setOrderError(rejectedOrderMessage(order));
-        await refreshTradingState();
+        void refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Chart order failed");
         await refreshTradingState().catch(() => undefined);
@@ -5175,10 +5274,14 @@ export function LiveApp() {
     setXKontrolSettings(normalizeXKontrolDisplaySettings(payload.xKontrol));
     setShowGcPushMomentum(payload.showGcPushMomentum !== false);
     setShowTduSignals(payload.showTduSignals !== false);
+    setTduSettings(normalizeTduSettings(payload.tduSettings));
     setGcPushMomentumSettings(
       normalizeGcPushMomentumSettings(payload.gcPushMomentum),
     );
     setShowDailyVolumeProfile(Boolean(payload.showDailyVolumeProfile));
+    setDailyVolumeProfileRowTicks(
+      normalizeSessionVolumeProfileRowTicks(payload.dailyVolumeProfileRowTicks),
+    );
     setDailyVolumeProfileWidth(
       normalizeSessionVolumeProfileWidth(payload.dailyVolumeProfileWidth),
     );
@@ -5251,6 +5354,7 @@ export function LiveApp() {
     user: AuthUser,
     options: { openMt5Setup?: boolean } = {},
   ): Promise<void> {
+    authUserRef.current = user;
     setAuthUser(user);
     setProfileLoading(true);
     setProfileHydrated(false);
@@ -5325,6 +5429,29 @@ export function LiveApp() {
     setProfileHydrated(true);
   }
 
+  useAuthSessionSync(api, (user) => {
+    if (user?.id === authUserRef.current?.id) return;
+    if (user) {
+      setAuthDialogOpen(false);
+      void loadAuthenticatedState(user).catch(() => {
+        setProfileLoading(false);
+      });
+      return;
+    }
+    authUserRef.current = undefined;
+    setAuthUser(undefined);
+    setMt5Account(undefined);
+    setMt5Symbol(undefined);
+    setOrders([]);
+    setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
+    setSupertrendTrailings(new Map());
+    setAlerts([]);
+    setMt5DialogOpen(false);
+    setAuthMode("login");
+    setAuthError("Your session is no longer valid. Please log in again before trading.");
+    setAuthDialogOpen(true);
+  });
+
   useEffect(() => {
     let cancelled = false;
     setProfileLoading(true);
@@ -5365,13 +5492,14 @@ export function LiveApp() {
     let cancelled = false;
     const refreshOrders = () => {
       const editRevision = orderEditRevisionRef.current;
+      const canApply = tradingRefresh.guard();
       void Promise.allSettled([
         api.orders(true),
         api.mt5OpenTrades(),
         api.mt5Status(),
         api.supertrendTrailings(),
       ]).then(([ordersResult, openTradesResult, statusResult, trailingResult]) => {
-        if (cancelled) return;
+        if (cancelled || !canApply()) return;
         const levelsUnchanged = editRevision === orderEditRevisionRef.current &&
           pendingOrderEditsRef.current.size === 0;
         if (levelsUnchanged && ordersResult.status === "fulfilled") {
@@ -5412,7 +5540,7 @@ export function LiveApp() {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [api, applyMt5Status, authUser, mt5Account]);
+  }, [api, applyMt5Status, authUser, mt5Account, tradingRefresh]);
 
   const onAuthSubmit = (input: {
     username: string;
@@ -5480,18 +5608,26 @@ export function LiveApp() {
   // Alert level lines drawn on the candle scale (Req 16.5). Recomputed only
   // when the alert set changes.
   const alertLines = useMemo(() => toAlertLines(alerts), [alerts]);
+  const chartPositions = useBrokerChartPositions(
+    mt5OpenTrades.positions, orders,
+    `${authUser?.id ?? ""}:${mt5Account?.accountId ?? ""}`,
+  );
+  const chartOpenTrades = useMemo(
+    () => ({ ...mt5OpenTrades, positions: chartPositions }),
+    [mt5OpenTrades, chartPositions],
+  );
   const displayedOrders = useMemo(
-    () => projectBrokerAnchoredOrders(orders, mt5OpenTrades.positions, pendingOrderEdits),
-    [orders, mt5OpenTrades.positions, pendingOrderEdits],
+    () => projectBrokerAnchoredOrders(orders, chartPositions, pendingOrderEdits),
+    [orders, chartPositions, pendingOrderEdits],
   );
   const orderLines = useMemo(
     () =>
       [
         ...toOrderLines(displayedOrders),
-        ...manualPositionLines(mt5OpenTrades.positions, orders),
-        ...manualPendingOrderLines(mt5OpenTrades.orders, orders),
+        ...manualPositionLines(chartOpenTrades.positions, orders),
+        ...manualPendingOrderLines(chartOpenTrades.orders, orders),
       ],
-    [orders, displayedOrders, mt5OpenTrades],
+    [orders, displayedOrders, chartOpenTrades],
   );
   const orderRows = useMemo(
     () =>
@@ -5499,7 +5635,7 @@ export function LiveApp() {
         displayedOrders,
         latestPrice,
         mt5Symbol,
-        mt5OpenTrades,
+        chartOpenTrades,
         closingOrderIds,
         cancellingOrderIds,
         breakingEvenOrderIds,
@@ -5510,7 +5646,7 @@ export function LiveApp() {
       displayedOrders,
       latestPrice,
       mt5Symbol,
-      mt5OpenTrades,
+      chartOpenTrades,
       closingOrderIds,
       cancellingOrderIds,
       breakingEvenOrderIds,
@@ -5524,7 +5660,7 @@ export function LiveApp() {
         displayedOrders,
         latestPrice,
         mt5Symbol,
-        mt5OpenTrades,
+        chartOpenTrades,
         closingOrderIds,
         cancellingOrderIds,
       ),
@@ -5532,7 +5668,7 @@ export function LiveApp() {
       displayedOrders,
       latestPrice,
       mt5Symbol,
-      mt5OpenTrades,
+      chartOpenTrades,
       closingOrderIds,
       cancellingOrderIds,
     ],
@@ -5544,7 +5680,7 @@ export function LiveApp() {
   const replayBigTrades = replayDataset?.bigTrades;
   const replaySmcAiSignals = replayDataset?.smcAiSignals;
   const replayAlertSignals = replayDataset?.alertSignals;
-  const replayCurrentBar = replayActive ? replayBars?.[replayCursorIndex] : undefined;
+  const replayCurrentBar = replayReady ? replayBars?.[replayCursorIndex] : undefined;
   const replayCutoffExclusive = replayCurrentBar === undefined
     ? undefined
     : replayCurrentBar.time + barDurationForTimeframe(timeframe);
@@ -5554,10 +5690,10 @@ export function LiveApp() {
   // the whole chart even while replay is paused.
   const replayChartBars = useMemo(
     () =>
-      replayActive && replayBars !== undefined
+      replayReady && replayBars !== undefined
         ? replayBarsThrough(replayBars, replayCursorIndex)
         : undefined,
-    [replayActive, replayBars, replayCursorIndex],
+    [replayReady, replayBars, replayCursorIndex],
   );
   const chartBars = replayActive
     ? replayChartBars ?? EMPTY_BARS
@@ -5807,17 +5943,19 @@ export function LiveApp() {
             setReplaySelecting(false);
             setReplaySelectionError("");
             setReplayPlaying(false);
-            setReplayDataset(undefined);
             setTimeframe(nextTimeframe);
           }}
         />
         <IndicatorToggles
+          denseOverlayMinSpacing={denseOverlayMinSpacing}
+          onDenseOverlayMinSpacingChange={setDenseOverlayMinSpacing}
           indicatorsVisible={indicatorsVisible}
           volumeDelta={showVolumeDelta}
           xKontrol={showXKontrol}
           xKontrolSettings={xKontrolSettings}
           gcPushMomentum={showGcPushMomentum}
           tduSignals={showTduSignals}
+          tduSettings={tduSettings}
           gcPushMomentumSettings={gcPushMomentumSettings}
           mgannSwing={showMgannSwing}
           mgannSwingSettings={mgannSwing}
@@ -5846,9 +5984,11 @@ export function LiveApp() {
           bigTradeDisabled={!bigTradeOverlayEnabled}
           dailyVolumeProfile={showDailyVolumeProfile}
           dailyVolumeProfileWidth={dailyVolumeProfileWidth}
+          dailyVolumeProfileRowTicks={dailyVolumeProfileRowTicks}
           dailyVolumeProfileDevelopingPoc={showDailyVolumeProfileDevelopingPoc}
           onDailyVolumeProfileChange={setShowDailyVolumeProfile}
           onDailyVolumeProfileWidthChange={setDailyVolumeProfileWidth}
+          onDailyVolumeProfileRowTicksChange={setDailyVolumeProfileRowTicks}
           onDailyVolumeProfileDevelopingPocChange={
             setShowDailyVolumeProfileDevelopingPoc
           }
@@ -5857,6 +5997,7 @@ export function LiveApp() {
           onXKontrolSettingsChange={setXKontrolSettings}
           onGcPushMomentumChange={setShowGcPushMomentum}
           onTduSignalsChange={setShowTduSignals}
+          onTduSettingsChange={setTduSettings}
           onGcPushMomentumSettingsChange={setGcPushMomentumSettings}
           onMgannSwingChange={setShowMgannSwing}
           onMgannSwingSettingsChange={setMgannSwing}
@@ -5999,6 +6140,7 @@ export function LiveApp() {
         />
         <div className="chart-stack">
           <ChartContainer
+            denseOverlayMinSpacing={denseOverlayMinSpacing}
             symbol={SYMBOL}
             contract={contract}
             timeframe={timeframe}
@@ -6048,6 +6190,7 @@ export function LiveApp() {
               gcPushMomentumEnabledForTimeframe(timeframe)
             }
             gcPushMomentumSettings={gcPushMomentumSettings}
+            tduSettings={tduSettings}
             showTduSignals={
               indicatorsVisible &&
               showTduSignals &&
@@ -6106,10 +6249,13 @@ export function LiveApp() {
               currentBar={replayActive ? replayCursorIndex + 1 : 0}
               totalBars={replayDataset?.bars.length ?? 0}
               selectionError={replaySelectionError}
+              loading={replayLoading}
+              loadError={replayLoadError}
+              disabled={!replayReady}
               onCancelSelection={cancelBarReplaySelection}
               onTogglePlaying={() => {
                 if (
-                  replayDataset !== undefined &&
+                  replayReady && replayDataset !== undefined &&
                   replayCursorIndex < replayDataset.bars.length - 1
                 ) {
                   setReplayPlaying((playing) => !playing);
