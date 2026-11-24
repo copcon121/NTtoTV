@@ -70,7 +70,6 @@ from app.engines.supertrend import (
     SUPERTREND_SOURCES,
     SUPERTREND_TIMEFRAMES,
 )
-from app.engines.smc_fail_break import FAIL_BREAK_DEFAULTS, SMC_FAIL_BREAK_RETEST
 from app.engines.sweep_reversal import (
     SWEEP_REVERSAL_DEFAULT_ATR_LENGTH,
     SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_LENGTH,
@@ -165,13 +164,6 @@ def _params_for(alert_type: str):
             params["maxBars"] = SMC_DEFAULT_MAX_BARS
             params["pauseOnInsideBars"] = SMC_DEFAULT_PAUSE_ON_INSIDE_BARS
             params["retestToleranceTicks"] = SMC_DEFAULT_RETEST_TOLERANCE_TICKS
-        elif alert_type == SMC_FAIL_BREAK_RETEST:
-            params.update(FAIL_BREAK_DEFAULTS)
-            params["swingLength"] = draw(st.integers(min_value=1, max_value=500))
-            params["maxBars"] = draw(st.integers(min_value=3, max_value=2000))
-            params["direction"] = draw(st.sampled_from(("both", "long", "short")))
-            params["requirePb"] = draw(st.booleans())
-            params["useChartSmc"] = draw(st.booleans())
         elif alert_type == SWEEP_REVERSAL:
             params.update(
                 {

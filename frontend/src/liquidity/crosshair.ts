@@ -1,4 +1,5 @@
 import type { VolumeDeltaPoint } from "../chart/indicatorReducer";
+import { DEFAULT_THEME, workspaceColors, type WorkspaceColors } from "../workspace/themes";
 
 export interface LiquidityCrosshairViewport {
   left: number;
@@ -46,13 +47,14 @@ export function drawLiquidityCrosshair(
   delta: readonly VolumeDeltaPoint[],
   formatTime: (time: number) => string,
   formatVolume: (volume: number) => string,
+  colors: WorkspaceColors = workspaceColors(DEFAULT_THEME),
 ) {
   const cursor = liquidityCrosshairAt(hover, view, delta);
   if (!cursor) return;
   const bottom = view.deltaTop + view.deltaHeight;
   const right = view.left + view.width;
   context.save();
-  context.strokeStyle = "rgba(190, 205, 220, 0.65)";
+  context.strokeStyle = colors.crosshair;
   context.lineWidth = 1;
   context.setLineDash([3, 3]);
   context.beginPath();
@@ -72,16 +74,16 @@ export function drawLiquidityCrosshair(
   const label = formatTime(cursor.time);
   const labelWidth = Math.min(view.width, context.measureText(label).width + 12);
   const labelLeft = Math.min(right - labelWidth, Math.max(view.left, cursor.x - labelWidth / 2));
-  context.fillStyle = "#344352";
+  context.fillStyle = colors.panel;
   context.fillRect(labelLeft, bottom + 5, labelWidth, 20);
-  context.fillStyle = "#edf4fa";
+  context.fillStyle = colors.text;
   context.textAlign = "center";
   context.fillText(label, labelLeft + labelWidth / 2, bottom + 15);
 
   if (cursor.value !== null) {
-    context.fillStyle = "#344352";
+    context.fillStyle = colors.panel;
     context.fillRect(right, cursor.y - 9, 78, 18);
-    context.fillStyle = "#edf4fa";
+    context.fillStyle = colors.text;
     context.textAlign = "left";
     context.fillText(cursor.pane === "price" ? cursor.value.toFixed(1)
       : formatVolume(cursor.value), right + 6, cursor.y);
@@ -92,10 +94,10 @@ export function drawLiquidityCrosshair(
   context.font = "bold 11px Segoe UI, sans-serif";
   context.textAlign = "right";
   const valueWidth = context.measureText(deltaLabel).width + 12;
-  context.fillStyle = "#0a1118";
+  context.fillStyle = colors.panel;
   context.fillRect(right - valueWidth, view.deltaTop + 2, valueWidth, 18);
-  context.fillStyle = cursor.delta === null ? "#8d9aaa"
-    : cursor.delta >= 0 ? "#00d68f" : "#ff5267";
+  context.fillStyle = cursor.delta === null ? colors.muted
+    : cursor.delta >= 0 ? colors.rise : colors.fall;
   context.fillText(deltaLabel, right - 6, view.deltaTop + 11);
   if (cursor.delta !== null) {
     const y = view.deltaTop + (view.deltaExtent - cursor.delta) / (view.deltaExtent * 2) * view.deltaHeight;

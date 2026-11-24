@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -20,12 +20,12 @@ import {
   DEFAULT_BIG_TRADE_SETTINGS,
   ChartContainer,
   filterBigTradeMarkers,
-  smcComputationBars,
 } from "./index";
 import { type BigTradeMarker } from "./indicatorReducer";
-import { DEFAULT_SMC_SETTINGS, computeSmcOverlay } from "./smc";
+import { DEFAULT_SMC_SETTINGS } from "./smc";
 import type { BarSeries } from "./index";
 import { type Bar } from "../cache/types";
+import type { FootprintBar } from "../footprint/footprintModel";
 import { ChartSocket, SocketReadyState, type WebSocketLike } from "../socket";
 import type {
   BarUpdateMessage,
@@ -34,7 +34,6 @@ import type {
 } from "../socket/messages";
 import type { SmcWorkerRequest, SmcWorkerResponse } from "./smcWorker";
 import type { GcPushMomentumSettings } from "./gcPushMomentum";
-import { DEFAULT_TDU_SETTINGS } from "./tduSettings";
 import type {
   SupertrendOverlay,
   SupertrendPoint,
@@ -400,18 +399,6 @@ function deltaUpdate(
 }
 
 describe("ChartContainer", () => {
-  it("applies zoom visibility changes to the existing chart port", () => {
-    const port = new FakePort();
-    const setDenseOverlayMinSpacing = vi.fn();
-    const factory: ChartPortFactory = () => Object.assign(port, { setDenseOverlayMinSpacing });
-    const props = { symbol: "GC", contract: "GC", timeframe: "1m" as const, bars: [bar(10)], portFactory: factory };
-    const { rerender } = render(<ChartContainer {...props} />);
-    expect(setDenseOverlayMinSpacing).toHaveBeenLastCalledWith(6);
-    rerender(<ChartContainer {...props} denseOverlayMinSpacing={0} />);
-    expect(setDenseOverlayMinSpacing).toHaveBeenLastCalledWith(0);
-    expect(port.disposed).toBeFalsy();
-  });
-
   it("bulk-loads initial history once via the port", () => {
     const port = new FakePort();
     const factory: ChartPortFactory = () => port;
@@ -636,17 +623,6 @@ describe("ChartContainer", () => {
     );
 
     expect(port.setVolumeDeltaVisibleCalls).toEqual([true, false]);
-  });
-
-  it("passes TDU settings to the chart port on initial render and changes", () => {
-    const port = new FakePort();
-    const setTduSettings = vi.fn();
-    const factory: ChartPortFactory = () => Object.assign(port, { setTduSettings });
-    const props = { symbol: "GC", contract: "GC", timeframe: "1m" as const, portFactory: factory };
-    const { rerender } = render(<ChartContainer {...props} />);
-    expect(setTduSettings).toHaveBeenLastCalledWith(DEFAULT_TDU_SETTINGS);
-    rerender(<ChartContainer {...props} tduSettings={{ showLevel1: false, minBodyPercent: 45 }} />);
-    expect(setTduSettings).toHaveBeenLastCalledWith({ ...DEFAULT_TDU_SETTINGS, showLevel1: false, minBodyPercent: 45 });
   });
 
   it("configures and toggles the GC Push Momentum pane", () => {
@@ -1328,29 +1304,7 @@ describe("ChartContainer", () => {
     }
   });
 
-  it("limits SMC computation to about one day with swing warm-up", () => {
-    const rows = Array.from({ length: 5_000 }, (_, index) =>
-      ohlc(index * 300_000, 10, 11, 9, 10),
-    );
-
-    expect(smcComputationBars(rows, "1m", DEFAULT_SMC_SETTINGS)).toHaveLength(1440);
-    expect(smcComputationBars(rows, "5m", DEFAULT_SMC_SETTINGS)).toBe(rows);
-    expect(smcComputationBars(rows, "1h", DEFAULT_SMC_SETTINGS)).toBe(rows);
-  });
-
-  it.each(["3m", "5m", "15m", "1h", "4h"] as const)("preserves older external SMC structure on %s", (tf) => {
-    const rows = Array.from({ length: 800 }, (_, i) =>
-      ohlc(i * 300_000, i > 201 ? 112 : 100, i > 201 ? 113 : 101, i > 201 ? 111 : 99, i > 201 ? 112 : 100),
-    );
-    rows[1] = ohlc(300_000, 100, 110, 90, 100);
-    const settings = { ...DEFAULT_SMC_SETTINGS, enabled: true };
-    const truncated = computeSmcOverlay(rows.slice(-302), settings);
-    const complete = computeSmcOverlay(smcComputationBars(rows, tf, settings), settings);
-    expect(truncated.lines.filter((line) => line.kind === "structure")).toHaveLength(0);
-    expect(complete.lines.some((line) => line.kind === "structure")).toBe(true);
-  });
-
-  it("refreshes SMC only after the chart timeframe bar closes", () => {
+  it("refreshes the SMC overlay after matching realtime bar updates", () => {
     vi.useFakeTimers();
     try {
       const port = new FakePort();
@@ -1383,20 +1337,11 @@ describe("ChartContainer", () => {
         />,
       );
 
-      act(() => {
-        vi.advanceTimersByTime(100);
-      });
-      const callsBeforeLiveUpdate = port.setSmcOverlayCalls.length;
-
       ws.deliver(barUpdate(ohlc(5, 12.5, 13, 9, 12.5)));
-      act(() => {
-        vi.advanceTimersByTime(1_000);
-      });
-      expect(port.setSmcOverlayCalls).toHaveLength(callsBeforeLiveUpdate);
 
-      ws.deliver(
-        barUpdate(ohlc(5, 12.5, 13, 9, 12.5), { closed: true }),
-      );
+      // SMC overlay recomputation is throttled to max once per 500ms during
+      // realtime updates to avoid blocking the main thread on every tick.
+      vi.advanceTimersByTime(500);
 
       const overlay = port.setSmcOverlayCalls[port.setSmcOverlayCalls.length - 1];
       expect(overlay.lines.some((line) => line.label === "BOS")).toBe(true);
@@ -1637,39 +1582,6 @@ describe("ChartContainer", () => {
     expect(onOrderDragBatchCommit).toHaveBeenCalledWith(updates);
   });
 
-  it("keeps nearby stop labels at their prices and hides offscreen targets", () => {
-    let offset = 0;
-    const port = Object.assign(new FakePort(), {
-      priceToCoordinate: (price: number) => price + offset,
-      createFootprintViewport: () => ({
-        priceToY: (price: number) => price + offset, width: 800, height: 400,
-      }),
-    });
-    const { container } = render(
-      <ChartContainer
-        symbol="GC" contract="GC" timeframe="1m" bars={[bar(10)]}
-        portFactory={() => port}
-        orderControls={[
-          { id: "entry", orderId: "o1", level: "entry", side: "sell", title: "ENTRY", price: 100 },
-          { id: "sl", orderId: "o1", level: "sl", side: "sell", title: "SL", price: 105 },
-          { id: "tp", orderId: "o1", level: "tp", side: "sell", title: "TP", price: 450 },
-        ]}
-      />,
-    );
-    const entry = container.querySelector<HTMLElement>(".order-action-chip.entry")!;
-    const stop = container.querySelector<HTMLElement>(".order-action-chip.sl")!;
-    expect(entry.style.top).toBe("100px");
-    expect(stop.style.top).toBe("105px");
-    expect(stop.style.right).not.toBe(entry.style.right);
-    expect(container.querySelector(".order-action-chip.tp")).toBeNull();
-
-    offset = -60;
-    fireEvent(window, new Event("resize"));
-    expect(entry.style.top).toBe("40px");
-    expect(stop.style.top).toBe("45px");
-    expect(container.querySelector<HTMLElement>(".order-action-chip.tp")?.style.top).toBe("390px");
-  });
-
   it("requests more history only after user navigation reaches the oldest bars", () => {
     const port = new FakePort();
     const factory: ChartPortFactory = () => port;
@@ -1769,50 +1681,6 @@ describe("ChartContainer", () => {
 
     fireEvent.wheel(host);
     expect(onChartNavigate).toHaveBeenCalledTimes(2);
-  });
-
-  it("bulk-loads replay history after switching from D1 through an empty loading state", () => {
-    const port = new FakePort();
-    const factory: ChartPortFactory = () => port;
-    const dailyBars = [bar(86_400_000), bar(172_800_000)];
-    const minuteBars = Array.from({ length: 200 }, (_, index) => bar(180_000_000 + index * 60_000));
-    const deltas: VolumeDeltaDatum[] = minuteBars.map(({ time }) => ({
-      time, delta: 5, deltaHigh: 5, deltaLow: 0, openDelta: 0, closeDelta: 5,
-    }));
-    const fvg: FvgSignalUpdateMessage = {
-      type: "fvg_signal_update", symbol: "GC", contract: "GC", tf: "1m",
-      time: minuteBars[20].time, direction: 1, level: 1, pulse: 1,
-      top: 2, bottom: 1, breakoutRatio: 1, phase: "confirmed",
-    };
-    const view = (timeframe: "1D" | "1m", loaded: boolean, count = minuteBars.length) => (
-      <ChartContainer
-        symbol="GC" contract="GC" timeframe={timeframe}
-        bars={timeframe === "1D" ? dailyBars : loaded ? minuteBars.slice(0, count) : []}
-        volumeDelta={timeframe === "1m" && loaded ? deltas.slice(0, count) : []}
-        fvgSignals={new Map(timeframe === "1m" && loaded ? [[fvg.time, fvg]] : [])}
-        suspendRealtime portFactory={factory}
-      />
-    );
-    const { rerender } = render(view("1D", true));
-    rerender(view("1m", false));
-    rerender(view("1m", true));
-    expect(port.setBarsCalls).toHaveLength(3);
-    expect(port.setBarsCalls).toEqual([dailyBars, [], minuteBars]);
-    expect(port.updateBarCalls).toHaveLength(0);
-    expect(port.setVolumeDeltaCalls[port.setVolumeDeltaCalls.length - 1]).toEqual(deltas);
-    expect(port.updateVolumeDeltaCalls).toHaveLength(0);
-    expect(port.updateFvgSignalCalls).toHaveLength(0);
-    expect(port.setFvgSignalsCalls[port.setFvgSignalsCalls.length - 1]).toEqual([fvg]);
-
-    // A cached replay snapshot also hydrates in bulk after returning through loading.
-    rerender(view("1D", true));
-    rerender(view("1m", false));
-    rerender(view("1m", true, minuteBars.length - 1));
-    const bulkLoads = port.setBarsCalls.length;
-    rerender(view("1m", true));
-    expect(port.setBarsCalls).toHaveLength(bulkLoads);
-    expect(port.updateBarCalls).toEqual([minuteBars[minuteBars.length - 1]]);
-    expect(port.updateVolumeDeltaCalls).toEqual([deltas[deltas.length - 1]]);
   });
 
   it("reveals replay bars and overlays incrementally without bulk repainting", () => {
@@ -1944,5 +1812,64 @@ describe("ChartContainer", () => {
 
     unmount();
     expect(port.disposed).toBe(true);
+  });
+
+  it("forwards the configurable dense-overlay threshold without rebuilding the chart", () => {
+    const port = new FakePort();
+    const setThreshold = vi.fn();
+    Object.assign(port, { setDenseOverlayMinBarSpacing: setThreshold });
+    const factory = vi.fn(() => port);
+    const { rerender } = render(<ChartContainer symbol="GC" contract="GC" timeframe="1m" portFactory={factory} denseOverlayMinBarSpacing={12} />);
+    expect(setThreshold).toHaveBeenLastCalledWith(12);
+    rerender(<ChartContainer symbol="GC" contract="GC" timeframe="1m" portFactory={factory} denseOverlayMinBarSpacing={0} />);
+    expect(setThreshold).toHaveBeenLastCalledWith(0);
+    expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it("zooms a dragged footprint region and Cancel restores the previous view", () => {
+    vi.stubGlobal("PointerEvent", MouseEvent);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const port = new FakePort();
+    let spacing = 6;
+    const zoom = vi.fn(() => { spacing = 80; return true; });
+    const restore = vi.fn(() => { spacing = 6; });
+    const setHiddenCandleTimes = vi.fn();
+    const footprint: FootprintBar = {
+      type: "footprint_update", symbol: "GC", contract: "GC", tf: "1m", time: 60_000,
+      open: 100, high: 101, low: 99, close: 100,
+      rows: [{ price: 100, bid: 3, ask: 5, imbalance: null }],
+      poc: 100, pocVolume: 8, vah: 100, val: 100, barDelta: 2,
+      buyPct: 5 / 8, sellPct: 3 / 8, stackedImbalance: [],
+      unfinishedAuction: { high: false, low: false },
+    };
+    const bars = [bar(60_000, 100), bar(120_000, 101)];
+    const footprintBars = new Map([[footprint.time, footprint]]);
+    Object.assign(port, {
+      zoomToFootprintRegion: zoom,
+      restoreFootprintZoom: restore,
+      setHiddenCandleTimes,
+      createFootprintViewport: () => ({ width: 480, height: 300, barSpacing: spacing, priceToY: (price: number) => price, timeToX: () => 100 }),
+    });
+    const factory = () => port;
+    const onComplete = vi.fn();
+    const view = (selecting: boolean) => <ChartContainer symbol="GC" contract="GC" timeframe="1m" bars={bars} footprintBars={footprintBars}
+      autoFootprint footprintZoomSelecting={selecting} onFootprintZoomSelectionComplete={onComplete} suspendRealtime portFactory={factory} />;
+    const { container, rerender } = render(view(true));
+    expect(setHiddenCandleTimes).toHaveBeenLastCalledWith([]);
+    const selection = screen.getByLabelText("Select bars for footprint zoom");
+    Object.assign(selection, { setPointerCapture: vi.fn(), hasPointerCapture: () => true, releasePointerCapture: vi.fn() });
+    fireEvent.pointerDown(selection, { button: 0, clientX: 50, clientY: 60 });
+    fireEvent.pointerMove(selection, { clientX: 200, clientY: 240 });
+    fireEvent.pointerUp(selection, { clientX: 200, clientY: 240 });
+    expect(zoom).toHaveBeenCalledWith({ left: 50, right: 200, top: 60, bottom: 240 });
+    expect(onComplete).toHaveBeenCalledOnce();
+    rerender(view(false));
+    expect(container.querySelector(".footprint-canvas-chart")).toBeInTheDocument();
+    expect(setHiddenCandleTimes).toHaveBeenLastCalledWith([60_000]);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(restore).toHaveBeenCalledOnce();
+    expect(container.querySelector(".footprint-canvas-chart")).not.toBeInTheDocument();
+    expect(setHiddenCandleTimes).toHaveBeenLastCalledWith([]);
+    vi.restoreAllMocks();
   });
 });

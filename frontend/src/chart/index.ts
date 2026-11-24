@@ -185,7 +185,6 @@ export {
   type OrderControl,
   ChartContainer,
   filterBigTradeMarkers,
-  smcComputationBars,
 } from "./ChartContainer";
 
 // Layout chrome (task 12.7): Toolbar, TimeframeSelector, SymbolContractLabel,

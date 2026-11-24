@@ -6,6 +6,8 @@ import {
   type FootprintRenderInputs,
   type FootprintViewport,
   selectDisplayBars,
+  selectChartDisplayBars,
+  groupFootprintRows,
   shouldRedraw,
 } from "./footprintModel";
 import type { FootprintSettings } from "../chart/IndicatorToggles";
@@ -50,15 +52,20 @@ export interface FootprintCanvasProps {
   renderHeightPx?: number;
   /** Current vertical offset inside the standalone virtual scroller. */
   scrollTopPx?: number;
-  /** Compact chart overlay or full standalone page canvas. */
-  layout?: "overlay" | "standalone";
+  /** Compact preview, standalone page, or ladders aligned to the chart candles. */
+  layout?: "overlay" | "standalone" | "chart";
   /** Show MBoxWave XKontrol signal dots on the footprint columns. */
   showXKontrol?: boolean;
   /** Select which XKontrol signal strengths are drawn. */
   xKontrolSettings?: Partial<XKontrolDisplaySettings>;
   /** Optional longer M1 history used only to warm up XKontrol. */
   xKontrolBars?: ReadonlyMap<number, FootprintBar>;
+  /** Explicit raw-price tick grouping; overrides adaptive chart grouping. */
+  ticksPerLevel?: number;
+  tickSize?: number;
 }
+
+type CanvasRenderInputs = FootprintRenderInputs & Pick<FootprintCanvasProps, "ticksPerLevel" | "tickSize">;
 
 export interface FootprintXKontrolOverlay {
   signals: readonly XKontrolSignal[];
@@ -88,6 +95,7 @@ const MIN_THROTTLE_MS = 100;
 const MAX_THROTTLE_MS = 125;
 const systemNow = () => Date.now();
 const MZ_THEME = {
+  background: "#ffffff",
   bidCellStrong: "rgba(250, 128, 114, 1)",
   askCellStrong: "rgba(0, 139, 139, 1)",
   vaZone: "rgba(144, 238, 144, 0.32)",
@@ -123,7 +131,7 @@ function clampThrottle(ms: number): number {
 /** Draw the selected footprint bars onto the 2D context. Exported for tests. */
 export function drawFootprint(
   ctx: CanvasRenderingContext2D,
-  inputs: FootprintRenderInputs,
+  inputs: CanvasRenderInputs,
   settings?: FootprintSettings,
   xKontrol?: FootprintXKontrolOverlay,
   orderflowGaps?: FootprintOrderflowGapsOverlay,
@@ -146,7 +154,41 @@ export function drawFootprint(
     0,
     Math.round(settings?.absorptionFilter ?? 3),
   );
-  const { bars, viewport } = inputs;
+  const { viewport } = inputs;
+  const chartAligned = inputs.layout === "chart";
+  const sourceBars = chartAligned
+    ? selectChartDisplayBars(new Map(inputs.bars.map((bar) => [bar.time, bar])), viewport)
+    : inputs.bars;
+  const tickStep = Number.isFinite(inputs.tickSize) && inputs.tickSize! > 0 ? inputs.tickSize! : inferPriceStep(sourceBars);
+  const referencePrice = sourceBars[0]?.rows[0]?.price ?? sourceBars[0]?.close ?? 0;
+  const pixelsPerTick = Math.abs(viewport.priceToY(referencePrice + tickStep) - viewport.priceToY(referencePrice));
+  const targetRowH = Math.max(18, inputs.rowHeightPx ?? 18);
+  const baseTicks = Math.max(1, Math.round(inputs.ticksPerLevel ?? 1));
+  const ticksPerRow = chartAligned && Number.isFinite(pixelsPerTick) && pixelsPerTick > 0
+    ? Math.max(baseTicks, Math.ceil(targetRowH / (pixelsPerTick * baseTicks)) * baseTicks)
+    : baseTicks;
+  const bars = chartAligned || inputs.ticksPerLevel !== undefined ? sourceBars.map((bar) => groupFootprintRows(bar, tickStep, ticksPerRow)) : sourceBars;
+  const theme = viewport.theme;
+  const colors = theme ? {
+    ...MZ_THEME,
+    background: theme.background,
+    text: theme.text,
+    bidCellStrong: theme.sell,
+    askCellStrong: theme.buy,
+    vaZone: theme.accent + "33",
+    vaBorder: theme.accent + "88",
+    deltaPos: theme.rise,
+    deltaNeg: theme.fall,
+    candleUp: theme.rise,
+    candleDown: theme.fall,
+    orderflowGapBuyZone: theme.buy + "33",
+    orderflowGapBuyBorder: theme.buy + "cc",
+    orderflowGapSellZone: theme.sell + "33",
+    orderflowGapSellBorder: theme.sell + "cc",
+    xKontrolOffers: theme.buy,
+    xKontrolBids: theme.sell,
+    axis: theme.text + "55",
+  } : MZ_THEME;
   const displayCount = Math.max(
     1,
     Math.round(inputs.displayCount ?? FOOTPRINT_DISPLAY_COUNT),
@@ -156,12 +198,12 @@ export function drawFootprint(
   const scrollTop = standalone ? Math.max(0, inputs.scrollTopPx ?? 0) : 0;
   ctx.clearRect(0, 0, viewport.width, renderHeight);
   if (standalone) {
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = colors.background;
     ctx.fillRect(0, 0, viewport.width, renderHeight);
   }
   if (bars.length === 0) return;
 
-  const priceStep = inferPriceStep(bars);
+  const priceStep = chartAligned || inputs.ticksPerLevel !== undefined ? tickStep * ticksPerRow : inferPriceStep(bars);
   const panelBars = bars.map((bar) => {
     const profile = profileForBar(bar, vaPercent, priceStep);
     return {
@@ -183,12 +225,12 @@ export function drawFootprint(
 
   const rightAxisW = standalone ? 58 : 0;
   const bottomAxisH = standalone ? 34 : 15;
-  const panelW = standalone
+  const panelW = chartAligned ? viewport.width : standalone
     ? Math.max(40, viewport.width - 20)
     : Math.min(400, Math.max(40, viewport.width - 20));
-  const panelH = Math.max(40, viewport.height - 40);
-  const panelX = standalone ? 10 : Math.max(10, viewport.width - panelW - 10);
-  const panelY = 20 - scrollTop;
+  const panelH = chartAligned ? viewport.height : Math.max(40, viewport.height - 40);
+  const panelX = chartAligned ? 0 : standalone ? 10 : Math.max(10, viewport.width - panelW - 10);
+  const panelY = chartAligned ? 0 : 20 - scrollTop;
   const panelBottom = panelY + panelH;
   const contentTop = panelY + 25;
   const contentBottom = panelBottom - bottomAxisH;
@@ -218,27 +260,27 @@ export function drawFootprint(
   const priceRange = Math.max(priceStep, dataMaxPrice - dataMinPrice);
   const numPriceLevels = Math.max(10, Math.ceil(priceRange / priceStep) + 1);
   const defaultRowH = contentHeight / numPriceLevels;
-  const rowH = standalone
+  const rowH = chartAligned ? Math.max(targetRowH, pixelsPerTick * ticksPerRow) : standalone
     ? Math.max(1, Math.min(32, inputs.rowHeightPx ?? defaultRowH))
     : Math.max(1, Math.min(20, defaultRowH));
   const visibleRange = Math.max(priceRange, (contentHeight / rowH) * priceStep);
   const viewportTopPrice = dataMaxPrice + Math.max(0, visibleRange - priceRange) / 2;
-  const yForPrice = (price: number) =>
+  const yForPrice = chartAligned ? viewport.priceToY : (price: number) =>
     contentTop + ((viewportTopPrice - price) / priceStep) * rowH;
 
   const plotLeft = panelX + 10;
   const plotRight = panelX + panelW - rightAxisW - 10;
   const plotW = Math.max(20, plotRight - plotLeft);
-  const barW = plotW / displayCount;
+  const barW = chartAligned ? viewport.barSpacing! : plotW / displayCount;
   // Keep standalone columns visually distinct when absorption zones and
   // XKontrol markers extend toward neighboring bars.
   const cellW = Math.max(24, barW - (standalone ? 24 : 20));
   const sideW = Math.max(5, (cellW - 4) / 2);
   const fontSize = Math.max(7, Math.min(10, rowH * 0.7));
-  const cellFontSize = standalone
-    ? Math.max(6, Math.min(13, rowH * 0.72))
+  const cellFontSize = chartAligned || standalone
+    ? Math.max(8, Math.min(13, rowH * 0.72))
     : 10;
-  const textColor = viewport.textColor ?? MZ_THEME.text;
+  const textColor = viewport.textColor ?? colors.text;
   const xKontrolByTime = new Map(
     (xKontrol?.signals ?? []).map((signal) => [signal.time, signal]),
   );
@@ -261,17 +303,17 @@ export function drawFootprint(
       contentTop,
       contentBottom,
       plotRight,
-    });
+    }, colors);
   }
 
   panelBars.forEach(({ bar, profile, imbalances, absorptions, rowsWithVolume }, col) => {
-    const xCenter = plotLeft + barW * col + barW / 2;
+    const xCenter = chartAligned ? viewport.timeToX!(bar.time)! : plotLeft + barW * col + barW / 2;
     const bidRight = xCenter - 8;
     const bidLeft = bidRight - sideW;
     const askLeft = xCenter + 8;
     const askRight = askLeft + sideW;
     const fullW = askRight - bidLeft;
-    drawPanelCandle(ctx, profile, xCenter, barW, yForPrice);
+    drawPanelCandle(ctx, profile, xCenter, barW, yForPrice, colors);
 
     const orderflowGap = orderflowGapByTime.get(bar.time);
     if (orderflowGap) {
@@ -282,6 +324,7 @@ export function drawFootprint(
         fullW,
         rowH,
         yForPrice,
+        colors,
       );
     }
 
@@ -290,9 +333,9 @@ export function drawFootprint(
       const yVal = yForPrice(profile.val);
       const top = Math.min(yVah, yVal);
       const height = Math.max(1, Math.abs(yVal - yVah));
-      ctx.fillStyle = MZ_THEME.vaZone;
+      ctx.fillStyle = colors.vaZone;
       ctx.fillRect(bidLeft, top, fullW, height);
-      ctx.strokeStyle = MZ_THEME.vaBorder;
+      ctx.strokeStyle = colors.vaBorder;
       ctx.lineWidth = 1;
       ctx.strokeRect(bidLeft, top, fullW, height);
     }
@@ -309,8 +352,15 @@ export function drawFootprint(
 
       if (row.bid > 0) {
         const textX = bidLeft + sideW / 2;
+        if (chartAligned) {
+          ctx.save();
+          ctx.globalAlpha = 0.16;
+          ctx.fillStyle = colors.bidCellStrong;
+          ctx.fillRect(bidLeft, rowTop, sideW, rowH);
+          ctx.restore();
+        }
         if (showImbalance && imbalance === "bid") {
-          drawImbalanceCircle(ctx, textX, y, fontSize, MZ_THEME.bidCellStrong);
+          drawImbalanceCircle(ctx, textX, y, fontSize, colors.bidCellStrong);
         }
         ctx.fillStyle = textColor;
         ctx.font =
@@ -323,8 +373,15 @@ export function drawFootprint(
 
       if (row.ask > 0) {
         const textX = askLeft + sideW / 2;
+        if (chartAligned) {
+          ctx.save();
+          ctx.globalAlpha = 0.16;
+          ctx.fillStyle = colors.askCellStrong;
+          ctx.fillRect(askLeft, rowTop, sideW, rowH);
+          ctx.restore();
+        }
         if (showImbalance && imbalance === "ask") {
-          drawImbalanceCircle(ctx, textX, y, fontSize, MZ_THEME.askCellStrong);
+          drawImbalanceCircle(ctx, textX, y, fontSize, colors.askCellStrong);
         }
         ctx.fillStyle = textColor;
         ctx.font =
@@ -336,7 +393,7 @@ export function drawFootprint(
       }
 
       if (isSellAbsorption) {
-        drawDashedRect(ctx, bidLeft, rowTop, fullW, rowH, MZ_THEME.bidAbsorption);
+        drawDashedRect(ctx, bidLeft, rowTop, fullW, rowH, colors.bidAbsorption);
       }
       if (isBuyAbsorption) {
         const inset = isSellAbsorption ? 1 : 0;
@@ -346,19 +403,19 @@ export function drawFootprint(
           rowTop + inset,
           Math.max(1, fullW - inset * 2),
           Math.max(1, rowH - inset * 2),
-          MZ_THEME.askAbsorption,
+          colors.askAbsorption,
         );
       }
 
       if (isPoc) {
-        ctx.strokeStyle = MZ_THEME.poc;
+        ctx.strokeStyle = colors.poc;
         ctx.lineWidth = 2;
         ctx.strokeRect(bidLeft, rowTop, fullW, rowH);
       }
     }
 
     if (showUnfinishedAuction && (bar.unfinishedAuction.high || bar.unfinishedAuction.low)) {
-      ctx.strokeStyle = MZ_THEME.unfinishedAuction;
+      ctx.strokeStyle = colors.unfinishedAuction;
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 3]);
       if (bar.unfinishedAuction.high && rowsWithVolume[0]) {
@@ -385,6 +442,7 @@ export function drawFootprint(
         xCenter,
         yForPrice(xKontrolSignal.price),
         xKontrolSignal.code,
+        colors,
       );
     }
   });
@@ -520,12 +578,13 @@ function drawXKontrolDot(
   x: number,
   y: number,
   code: XKontrolSignal["code"],
+  colors: typeof MZ_THEME = MZ_THEME,
 ): void {
   const level = Math.abs(code) as 1 | 2 | 3;
   ctx.save();
   ctx.beginPath();
   ctx.arc(x, y, XKONTROL_RADIUS_BY_LEVEL[level], 0, Math.PI * 2);
-  ctx.fillStyle = code > 0 ? MZ_THEME.xKontrolOffers : MZ_THEME.xKontrolBids;
+  ctx.fillStyle = code > 0 ? colors.xKontrolOffers : colors.xKontrolBids;
   ctx.fill();
   ctx.restore();
 }
@@ -537,17 +596,18 @@ function drawOrderflowGapZone(
   width: number,
   rowHeight: number,
   yForPrice: (price: number) => number,
+  colors: typeof MZ_THEME = MZ_THEME,
 ): void {
   const zoneTop = yForPrice(signal.zoneHigh) - rowHeight / 2;
   const zoneBottom = yForPrice(signal.zoneLow) + rowHeight / 2;
   const color =
     signal.side === "buy"
-      ? MZ_THEME.orderflowGapBuyZone
-      : MZ_THEME.orderflowGapSellZone;
+      ? colors.orderflowGapBuyZone
+      : colors.orderflowGapSellZone;
   const border =
     signal.side === "buy"
-      ? MZ_THEME.orderflowGapBuyBorder
-      : MZ_THEME.orderflowGapSellBorder;
+      ? colors.orderflowGapBuyBorder
+      : colors.orderflowGapSellBorder;
   ctx.fillStyle = color;
   ctx.fillRect(x, zoneTop, width, Math.max(1, zoneBottom - zoneTop));
   ctx.strokeStyle = border;
@@ -566,8 +626,9 @@ function drawStandaloneFrame(
     contentBottom: number;
     plotRight: number;
   },
+  colors: typeof MZ_THEME = MZ_THEME,
 ): void {
-  ctx.strokeStyle = "#d4d4d4";
+  ctx.strokeStyle = colors.axis;
   ctx.lineWidth = 1;
   ctx.strokeRect(input.panelX, input.panelY, input.panelW, input.panelH);
 }
@@ -864,13 +925,14 @@ function drawPanelCandle(
   xCenter: number,
   barW: number,
   yForPrice: (price: number) => number,
+  colors: typeof MZ_THEME = MZ_THEME,
 ): void {
   const openY = yForPrice(profile.open);
   const closeY = yForPrice(profile.close);
   const highY = yForPrice(profile.high);
   const lowY = yForPrice(profile.low);
   const isBullish = profile.close >= profile.open;
-  const color = isBullish ? MZ_THEME.candleUp : MZ_THEME.candleDown;
+  const color = isBullish ? colors.candleUp : colors.candleDown;
   const candleWidth = Math.min(10, Math.max(4, barW - 18));
 
   ctx.strokeStyle = color;
@@ -905,14 +967,16 @@ export function FootprintCanvas({
   showXKontrol = false,
   xKontrolSettings = DEFAULT_XKONTROL_DISPLAY_SETTINGS,
   xKontrolBars,
+  ticksPerLevel,
+  tickSize,
 }: FootprintCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const prevInputsRef = useRef<FootprintRenderInputs | null>(null);
+  const prevInputsRef = useRef<CanvasRenderInputs | null>(null);
   const lastDrawAtRef = useRef<number>(-Infinity);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRenderRef = useRef<{
     ctx: CanvasRenderingContext2D;
-    inputs: FootprintRenderInputs;
+    inputs: CanvasRenderInputs;
     settings?: FootprintSettings;
     xKontrol?: FootprintXKontrolOverlay;
     orderflowGaps?: FootprintOrderflowGapsOverlay;
@@ -947,15 +1011,17 @@ const orderflowGaps = (layout === "overlay" || settings?.showOrderflowsGaps)
     }
       : undefined;
 
-    const next: FootprintRenderInputs = {
-      bars: selectDisplayBars(bars, effectiveDisplayCount),
+    const next: CanvasRenderInputs = {
+      bars: layout === "chart" ? selectChartDisplayBars(bars, viewport) : selectDisplayBars(bars, effectiveDisplayCount),
       viewport,
       displayCount: effectiveDisplayCount,
       rowHeightPx,
       renderHeightPx,
       scrollTopPx,
       layout,
-      settingsKey: footprintSettingsKey(settings, xKontrol, orderflowGaps),
+      ticksPerLevel,
+      tickSize,
+      settingsKey: footprintSettingsKey(settings, xKontrol, orderflowGaps) + JSON.stringify([ticksPerLevel, tickSize]),
     };
 
     if (!shouldRedraw(prevInputsRef.current, next)) {
@@ -1009,6 +1075,8 @@ const orderflowGaps = (layout === "overlay" || settings?.showOrderflowsGaps)
     showXKontrol,
     xKontrolSettings,
     xKontrolBars,
+    ticksPerLevel,
+    tickSize,
   ]);
 
   useEffect(
@@ -1027,6 +1095,8 @@ const orderflowGaps = (layout === "overlay" || settings?.showOrderflowsGaps)
       ref={canvasRef}
       className={`footprint-canvas${
         layout === "standalone" ? " footprint-canvas-standalone" : ""
+      }${
+        layout === "chart" ? " footprint-canvas-chart" : ""
       }`}
       width={viewport.width}
       height={renderHeightPx ?? viewport.height}

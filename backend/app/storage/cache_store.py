@@ -18,13 +18,16 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from ..config import Settings, settings as default_settings
+from ..engines.session_calendar import CALENDAR_TFS, DAILY_TF
 from .alert_store import AlertStore
 from .auto_trade_store import AutoTradeStore
+from .calendar_rollups import daily_read_bounds, rollup_bars, rollup_volume_delta
 from .connection import SingleWriter, connect, connect_reader
 from .keyed_store import KeyedStore
 from .order_store import OrderStore
 from .profile_store import ProfileStore
 from .supertrend_trailing_store import SupertrendTrailingStore
+from .workspace_store import WorkspaceStore
 from .records import (
     AlertEventRecord,
     AlertRecord,
@@ -47,6 +50,7 @@ __all__ = ["CacheStore", "CACHE_SCHEMA", "CACHE_TABLES"]
 CACHE_TABLES: tuple[str, ...] = (
     "metadata",
     "profiles",
+    "workspaces",
     "stream_gaps",
     "bars",
     "orderflow_volume_delta",
@@ -84,6 +88,19 @@ CREATE TABLE IF NOT EXISTS profiles (
     updated_at INTEGER NOT NULL
 );
 
+-- Multi-panel layouts and theme settings are isolated by authenticated user.
+CREATE TABLE IF NOT EXISTS workspaces (
+    id         TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    payload    TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_workspaces_user_updated
+    ON workspaces(user_id, updated_at DESC);
+
 -- Recorded Stream_Gap detections. (Req 4.4)
 CREATE TABLE IF NOT EXISTS stream_gaps (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,7 +117,7 @@ CREATE TABLE IF NOT EXISTS stream_gaps (
 CREATE TABLE IF NOT EXISTS bars (
     symbol    TEXT    NOT NULL,
     contract  TEXT    NOT NULL,
-    timeframe TEXT    NOT NULL,        -- 15s,30s,1m,3m,5m,15m,30m,1h,4h,1D
+    timeframe TEXT    NOT NULL,        -- 15s,1m,3m,5m,15m,30m,1h,4h,1D
     time      INTEGER NOT NULL,        -- bucket start, Canonical_Timestamp
     open      REAL    NOT NULL,
     high      REAL    NOT NULL,
@@ -165,7 +182,7 @@ CREATE TABLE IF NOT EXISTS footprint_levels (
     PRIMARY KEY (symbol, contract, timeframe, time, price)
 );
 
--- Confirmed FVG signal grader candle colors (30s and M1).
+-- Confirmed FVG signal grader candle colors (M1).
 CREATE TABLE IF NOT EXISTS fvg_signals (
     symbol         TEXT NOT NULL,
     contract       TEXT NOT NULL,
@@ -189,7 +206,6 @@ CREATE TABLE IF NOT EXISTS tdu_signals (
     momentum_direction INTEGER NOT NULL,
     momentum_level     INTEGER NOT NULL,
     delta_divergence   INTEGER NOT NULL,
-    momentum_samples  TEXT,
     PRIMARY KEY (symbol, contract, timeframe, time)
 );
 
@@ -260,7 +276,8 @@ CREATE TABLE IF NOT EXISTS users (
     id            TEXT PRIMARY KEY,
     username      TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    created_at    INTEGER NOT NULL
+    created_at    INTEGER NOT NULL,
+    must_change_password INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -303,7 +320,6 @@ CREATE TABLE IF NOT EXISTS orders (
     volume_lots                REAL NOT NULL,
     gc_anchored                INTEGER NOT NULL,
     take_profit_1r_enabled     INTEGER NOT NULL DEFAULT 0,
-    take_profit_r              REAL NOT NULL DEFAULT 1.0,
     auto_supertrend_after_1r_enabled INTEGER NOT NULL DEFAULT 0,
     trailing_timeframe         TEXT,
     trailing_period            INTEGER,
@@ -424,6 +440,7 @@ class CacheStore:
         # same single-writer seam and WAL reader factory. (Req 16, 17.3, 18.8-11)
         self._alerts = AlertStore(self._writer, self.reader)
         self._profiles = ProfileStore(self._writer, self.reader)
+        self._workspaces = WorkspaceStore(self._writer, self.reader)
         self._users = UserStore(self._writer, self.reader)
         self._orders = OrderStore(self._writer, self.reader)
         self._auto_trade = AutoTradeStore(self._writer, self.reader)
@@ -449,17 +466,22 @@ class CacheStore:
     def _init_schema(self) -> None:
         """Create all Cache_Store tables and indexes if absent (idempotent)."""
         self._writer.executescript(CACHE_SCHEMA)
+        self._migrate_users()
         self._migrate_footprint_bars()
         self._migrate_profiles_and_alerts()
         self._migrate_big_trades()
         self._migrate_market_sources()
         self._migrate_orders()
-        self._migrate_tdu_samples()
 
-    def _migrate_tdu_samples(self) -> None:
-        columns = self._writer.connection.execute("PRAGMA table_info(tdu_signals)").fetchall()
-        if "momentum_samples" not in {row[1] for row in columns}:
-            self._writer.execute("ALTER TABLE tdu_signals ADD COLUMN momentum_samples TEXT")
+    def _migrate_users(self) -> None:
+        """Add the one-time password-change flag to existing user databases."""
+        rows = self._writer.connection.execute("PRAGMA table_info(users)").fetchall()
+        existing = {str(row["name"]) for row in rows}
+        if "must_change_password" not in existing:
+            self._writer.execute(
+                "ALTER TABLE users ADD COLUMN must_change_password "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _migrate_orders(self) -> None:
         """Add opt-in order-management fields to existing cache files."""
@@ -467,7 +489,6 @@ class CacheStore:
         existing = {str(row["name"]) for row in rows}
         columns = {
             "take_profit_1r_enabled": "INTEGER NOT NULL DEFAULT 0",
-            "take_profit_r": "REAL NOT NULL DEFAULT 1.0",
             "auto_supertrend_after_1r_enabled": "INTEGER NOT NULL DEFAULT 0",
             "trailing_timeframe": "TEXT",
             "trailing_period": "INTEGER",
@@ -706,6 +727,12 @@ class CacheStore:
         to: int | None = None,
         limit: int | None = None,
     ) -> list[BarRecord]:
+        if timeframe in CALENDAR_TFS:
+            daily_to, daily_limit = daily_read_bounds(timeframe, to, limit)
+            rows = self._keyed.read_bars(
+                symbol, contract, DAILY_TF, frm, daily_to, daily_limit
+            )
+            return rollup_bars(rows, timeframe, frm, limit)
         return self._keyed.read_bars(symbol, contract, timeframe, frm, to, limit)
 
     def upsert_volume_delta(self, rec: VolumeDeltaRecord) -> None:
@@ -723,6 +750,12 @@ class CacheStore:
         to: int | None = None,
         limit: int | None = None,
     ) -> list[VolumeDeltaRecord]:
+        if timeframe in CALENDAR_TFS:
+            daily_to, daily_limit = daily_read_bounds(timeframe, to, limit)
+            rows = self._keyed.read_volume_delta(
+                symbol, contract, DAILY_TF, frm, daily_to, daily_limit
+            )
+            return rollup_volume_delta(rows, timeframe, frm, limit)
         return self._keyed.read_volume_delta(
             symbol, contract, timeframe, frm, to, limit
         )
@@ -908,6 +941,10 @@ class CacheStore:
 
     def delete_profile(self, profile_id: str, user_id: str | None = None) -> bool:
         return self._profiles.delete_profile(profile_id, user_id)
+
+    @property
+    def workspaces(self) -> WorkspaceStore:
+        return self._workspaces
 
     def upsert_alert(self, alert: AlertRecord) -> None:
         self._alerts.upsert_alert(alert)

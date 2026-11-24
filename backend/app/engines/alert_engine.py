@@ -42,12 +42,11 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..models.canonical import Side
 from ..models.messages import AlertEvent
 from ..models.timestamp import CanonicalTimestamp
-from ..storage.cache_store import CacheStore
 from ..storage.records import AlertEventRecord, AlertRecord, BigTradeRecord
 from .breakout_box_engine import BreakoutBoxEvent
 from .mgann_big_trade_sweep import (
@@ -80,7 +79,6 @@ from .smc_external import (
     SmcLiquidityBreakEvent,
     SmcStrategyTrigger,
 )
-from .smc_fail_break import FAIL_BREAK_DEFAULTS, SMC_FAIL_BREAK_RETEST, SmcFailBreakState
 from .sweep_reversal import (
     SWEEP_REVERSAL_DEFAULT_ATR_LENGTH,
     SWEEP_REVERSAL_DEFAULT_LIQUIDITY_ATR_LENGTH,
@@ -112,6 +110,9 @@ from .supertrend import (
     SupertrendConfig,
     SupertrendState,
 )
+
+if TYPE_CHECKING:
+    from ..storage.cache_store import CacheStore
 
 __all__ = [
     "ALERT_TYPES",
@@ -193,7 +194,6 @@ ALERT_TYPES: frozenset[str] = frozenset(
         BIG_TRADE_THRESHOLD,
         STACKED_IMBALANCE,
         SMC_EXTERNAL_BREAK_BIG_TRADE,
-        SMC_FAIL_BREAK_RETEST,
         LIQUIDITY_POOL_BREAK,
         MGANN_BREAK_LS,
         MGANN_SWEEP,
@@ -215,10 +215,6 @@ def _canonical_alert_type(alert_type: str) -> str:
 
 def _canonical_alert_params(alert_type: str, params: dict[str, Any]) -> dict[str, Any]:
     out = dict(params)
-    if alert_type == SMC_FAIL_BREAK_RETEST:
-        out = {**FAIL_BREAK_DEFAULTS, **out}
-        out.pop("minDisplacementTicks", None)
-        out.pop("retestToleranceTicks", None)
     if alert_type == MGANN_BIG_TRADE_SWEEP:
         out["requireBigTrade"] = True
     elif alert_type == MGANN_SWEEP:
@@ -358,7 +354,6 @@ class AlertEngine:
         self._price_state: dict[str, _PriceCrossState] = {}
         self._bar_state: dict[str, _BarState] = {}
         self._smc_state: dict[str, SmcExternalBreakState] = {}
-        self._fail_break_state: dict[str, SmcFailBreakState] = {}
         self._liquidity_break_state: dict[str, _LiquidityPoolBreakState] = {}
         self._mgann_sweep_state: dict[str, MgannBigTradeSweepState] = {}
         self._sweep_reversal_state: dict[str, SweepReversalState] = {}
@@ -381,7 +376,6 @@ class AlertEngine:
         self._price_state.pop(alert.id, None)
         self._bar_state.pop(alert.id, None)
         self._smc_state.pop(alert.id, None)
-        self._fail_break_state.pop(alert.id, None)
         self._liquidity_break_state.pop(alert.id, None)
         self._mgann_sweep_state.pop(alert.id, None)
         self._sweep_reversal_state.pop(alert.id, None)
@@ -414,7 +408,6 @@ class AlertEngine:
         self._price_state.pop(alert_id, None)
         self._bar_state.pop(alert_id, None)
         self._smc_state.pop(alert_id, None)
-        self._fail_break_state.pop(alert_id, None)
         self._liquidity_break_state.pop(alert_id, None)
         self._mgann_sweep_state.pop(alert_id, None)
         self._sweep_reversal_state.pop(alert_id, None)
@@ -430,7 +423,6 @@ class AlertEngine:
         alert.enabled = enabled
         if enabled:
             self._smc_state.pop(alert.id, None)
-            self._fail_break_state.pop(alert.id, None)
             self._liquidity_break_state.pop(alert.id, None)
             self._mgann_sweep_state.pop(alert.id, None)
             self._sweep_reversal_state.pop(alert.id, None)
@@ -469,18 +461,6 @@ class AlertEngine:
 
     # -- evaluation -----------------------------------------------------------
 
-    def retire_mp_alert(self, alert_id: str, at: int, *, fired: bool = False) -> None:
-        """Remove an MP alert from chart/history while keeping its consumed state."""
-        if self._store is not None:
-            self._store.alerts.retire_mp_alert(alert_id, at, fired=fired)
-        alert = self._alerts.get(alert_id)
-        if alert is not None and alert.params.get("source") == "mp_plan":
-            alert.enabled = False
-            alert.params.setdefault("mpDeletedAt", at)
-            alert.params.pop("mpPaused", None)
-            if fired:
-                alert.params["mpFiredAt"] = at
-
     def evaluate(self, ctx: MarketContext) -> list[AlertEvent]:
         """Evaluate all enabled alerts for ``ctx`` and return emitted events.
 
@@ -492,9 +472,6 @@ class AlertEngine:
         for alert in self._alerts.values():
             if not alert.enabled:  # Req 16.4, 17.1
                 continue
-            if alert.params.get("source") == "mp_plan" and ctx.time >= alert.params.get("mpExpiresAt", 0):
-                self.retire_mp_alert(alert.id, ctx.time)
-                continue
             if alert.symbol != ctx.symbol:
                 continue
             evaluated = self._evaluate_one(alert, ctx)
@@ -505,9 +482,6 @@ class AlertEngine:
             )
             if alert_events:
                 events.extend(alert_events)
-                if alert.params.get("source") == "mp_plan":
-                    alert.params["mpFiredAt"] = ctx.time
-                    alert.params["mpDeletedAt"] = ctx.time
                 if not _is_repeat_alert(alert):
                     one_shot_fired_alerts.append(alert)
 
@@ -517,14 +491,9 @@ class AlertEngine:
         # Persist emitted events (audit log). (Req 17.3)
         if self._store is not None:
             for ev in events:
-                source_alert = self._alerts[ev.alert_id]
-                if source_alert.params.get("source") == "mp_plan":
-                    self._persist_mp_event(ev, source_alert)
-                else:
-                    self._persist_event(ev)
+                self._persist_event(ev)
             for alert in one_shot_fired_alerts:
-                if alert.params.get("source") != "mp_plan":
-                    self._persist_enabled(alert)
+                self._persist_enabled(alert)
         return events
 
     def evaluate_sweep_reversal_only(self, ctx: MarketContext) -> list[AlertEvent]:
@@ -705,8 +674,6 @@ class AlertEngine:
             return self._eval_stacked_imbalance(alert, ctx)
         if alert.type == SMC_EXTERNAL_BREAK_BIG_TRADE:
             return self._eval_smc_external_break_big_trade(alert, ctx)
-        if alert.type == SMC_FAIL_BREAK_RETEST:
-            return self._eval_fail_break(alert, ctx)
         if alert.type == LIQUIDITY_POOL_BREAK:
             return self._eval_liquidity_pool_break(alert, ctx)
         if alert.type in MGANN_BREAK_LS_TYPES:
@@ -837,47 +804,6 @@ class AlertEngine:
         if trigger is None:
             return None
         return self._make_smc_event(alert, ctx, trigger)
-
-    def _eval_fail_break(self, alert: Alert, ctx: MarketContext) -> list[AlertEvent]:
-        if ctx.bar_tf not in (None, "1m"):
-            return []
-        bar = self._smc_bar_from_context(ctx)
-        if bar is None:
-            return []
-        state = self._fail_break_state.get(alert.id)
-        if state is None:
-            state = self._new_fail_break_state(alert)
-            self._fail_break_state[alert.id] = state
-        triggers = (state.on_closed_bar(bar, ctx.bar_volume_delta) if ctx.bar_closed
-                    else state.on_live_bar(bar, ctx.bar_volume_delta))
-        if not _is_repeat_alert(alert):
-            triggers = triggers[:1]
-        return [AlertEvent(
-            alert_id=alert.id, alert_type=alert.type, symbol=ctx.symbol,
-            contract=ctx.contract, time=trigger.time, price=trigger.price,
-            message=(f"{alert.symbol} M1 fail break retest "
-                     f"{'L' if trigger.direction > 0 else 'S'}: external "
-                     f"{trigger.setup.kind} reclaimed, mGann multi-wave retest "
-                     f"{_fmt_num(trigger.zone_bottom)}-{_fmt_num(trigger.zone_top)}"
-                     + (" + live mGann PB" if trigger.pb else "")),
-            level=trigger.setup.level, profile_id=alert.profile_id,
-            direction=trigger.direction,
-        ) for trigger in triggers]
-
-    def evaluate_live_fail_break(self, ctx: MarketContext) -> list[AlertEvent]:
-        """Evaluate only live retests, preserving other alerts' bar-close gates."""
-        events = []
-        for alert in self._alerts.values():
-            if not alert.enabled or alert.symbol != ctx.symbol or alert.type != SMC_FAIL_BREAK_RETEST:
-                continue
-            fired = self._eval_fail_break(alert, ctx)
-            events.extend(fired)
-            if fired and not _is_repeat_alert(alert):
-                alert.enabled = False
-                self._persist_enabled(alert)
-        for event in events:
-            self._persist_event(event)
-        return events
 
     # -- standalone liquidity_pool_break -------------------------------------
 
@@ -1248,42 +1174,7 @@ class AlertEngine:
             self._supertrend_state[alert.id] = state
         return state
 
-    def _new_fail_break_state(self, alert: Alert) -> SmcFailBreakState:
-        params = dict(alert.params)
-        if params.get("useChartSmc", True) and self._store is not None:
-            profile = (self._store.profiles.read_user_default_profile(alert.profile_id)
-                       or self._store.read_profile(alert.profile_id))
-            smc = profile.payload.get("smc") if profile is not None else None
-            length = smc.get("swingLength") if isinstance(smc, dict) else None
-            if isinstance(length, int) and not isinstance(length, bool) and 1 <= length <= 500:
-                params["swingLength"] = length
-        return SmcFailBreakState(**params)
-
-    def refresh_fail_break_profile(self, profile_id: str) -> None:
-        for alert in self._alerts.values():
-            if (alert.enabled and alert.profile_id == profile_id
-                    and alert.type == SMC_FAIL_BREAK_RETEST and alert.params.get("useChartSmc", True)):
-                current = self._fail_break_state.get(alert.id)
-                configured = self._new_fail_break_state(alert)
-                if current is None or current.params["swingLength"] != configured.params["swingLength"]:
-                    self._warm_alert_state(alert)
-
     def _warm_alert_state(self, alert: Alert) -> None:
-        if alert.type == SMC_FAIL_BREAK_RETEST:
-            state = self._new_fail_break_state(alert)
-            if self._store is not None:
-                limit = max(1000, state.params["swingLength"] * 4
-                            + int(alert.params.get("maxBars", 120)))
-                deltas = {row.time: row.close_delta for row in self._store.read_volume_delta(
-                    alert.symbol, alert.symbol, "1m", limit=limit,
-                )}
-                for rec in self._store.read_bars(alert.symbol, alert.symbol, "1m", limit=limit):
-                    if rec.closed:
-                        state.on_closed_bar(SmcBar(
-                            rec.time, rec.open, rec.high, rec.low, rec.close, rec.volume,
-                        ), deltas.get(rec.time))
-            self._fail_break_state[alert.id] = state
-            return
         if alert.type == SUPERTREND_DIRECTION_CHANGE:
             self._warm_supertrend_alert(alert)
             return
@@ -1894,11 +1785,6 @@ class AlertEngine:
             )
         )
 
-    def _persist_mp_event(self, event: AlertEvent, alert: Alert) -> None:
-        # The event still reaches websocket/Telegram/push delivery. It is not
-        # retained in history after this managed one-shot has been consumed.
-        self.retire_mp_alert(alert.id, event.time, fired=True)
-
     def _persist_enabled(self, alert: Alert) -> None:
         if self._store is None:
             return
@@ -1906,8 +1792,6 @@ class AlertEngine:
         if rec is None:
             return
         rec.enabled = alert.enabled
-        if alert.params.get("source") == "mp_plan":
-            rec.params = dict(alert.params)
         from ..models.timestamp import now_ms
 
         rec.updated_at = now_ms()
@@ -1916,8 +1800,6 @@ class AlertEngine:
     @staticmethod
     def _message(alert: Alert, price: float, level: float | None) -> str:
         sym = alert.symbol
-        if alert.params.get("source") == "mp_plan":
-            return str(alert.params.get("mpMessage", f"{sym} MP level {level}"))
         if alert.type == PRICE_CROSSES_LEVEL:
             return f"{sym} crossed {level}"
         if alert.type == BAR_CLOSES_ABOVE:

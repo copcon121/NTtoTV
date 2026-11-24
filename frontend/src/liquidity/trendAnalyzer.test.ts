@@ -16,7 +16,7 @@ const point = (
 ): TrendAnalyzerPoint => ({ instance, side, time, price });
 
 describe("TTW TrendAnalyzer chart model", () => {
-  it("uses the two palettes observed in the loaded Bookmap addon", () => {
+  it("uses the two configured trend palettes", () => {
     expect(TREND_ANALYZER_STYLES).toEqual({
       1: { buy: "#33ff33", sell: "#ff0066" },
       2: { buy: "#ccff00", sell: "#cc00cc" },
@@ -66,4 +66,3 @@ describe("TTW TrendAnalyzer chart model", () => {
     expect(mergeTrendMarkers([buy], [buy, sell], 0)).toEqual([buy, sell]);
   });
 });
-

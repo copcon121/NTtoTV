@@ -176,6 +176,7 @@ export class DrawingManager implements IDrawingManager {
   private _paneResolver: DrawingPaneResolver | undefined;
 
   /** All completed drawings, keyed by id. */
+  private _externalPreview: DrawingPrimitive | null = null;
   private readonly _drawings = new Map<string, DrawingPrimitive>();
   /** Stable pane ownership and the currently attached host series per drawing. */
   private readonly _drawingPaneIds = new Map<string, DrawingPaneId>();
@@ -205,8 +206,10 @@ export class DrawingManager implements IDrawingManager {
   private _onPointerDown: ((e: PointerEvent) => void) | null = null;
   private _onPointerMove: ((e: PointerEvent) => void) | null = null;
   private _onPointerUp: ((e: PointerEvent) => void) | null = null;
+  private _onPointerCancel: ((e: PointerEvent) => void) | null = null;
   private _onDoubleClick: ((e: MouseEvent) => void) | null = null;
   private _edit: DrawingEdit | null = null;
+  private _editOriginalAnchors: AnchorPoint[] | null = null;
   private _editCursorActive = false;
   private _selectedDrawingId: string | null = null;
   private readonly _lockedDrawingIds = new Set<string>();
@@ -249,6 +252,7 @@ export class DrawingManager implements IDrawingManager {
     series: ISeriesApi<"Candlestick">,
     container: HTMLElement,
     paneResolver?: DrawingPaneResolver,
+    keyboardActive: () => boolean = () => true,
   ): void {
     this._chart = chart;
     this._series = series;
@@ -257,6 +261,7 @@ export class DrawingManager implements IDrawingManager {
 
     // Escape key cancels placement
     this._onKeyDown = (e: KeyboardEvent) => {
+      if (!keyboardActive()) return;
       if (!this._isEditableTarget(e.target) && (e.ctrlKey || e.metaKey)) {
         const key = e.key.toLowerCase();
         const handled =
@@ -274,8 +279,7 @@ export class DrawingManager implements IDrawingManager {
         }
       }
       if (e.key === "Escape") {
-        this.cancelDrawing();
-        this._selectDrawing(null);
+        this.cancelInteraction();
         return;
       }
       if (e.key === "Enter" && this._placement?.tool === "path") {
@@ -315,10 +319,11 @@ export class DrawingManager implements IDrawingManager {
     this._onPointerDown = (e: PointerEvent) => this._beginEdit(e);
     this._onPointerMove = (e: PointerEvent) => this._updateEdit(e);
     this._onPointerUp = (e: PointerEvent) => this._endEdit(e);
+    this._onPointerCancel = () => this.cancelInteraction();
     container.addEventListener("pointerdown", this._onPointerDown);
     container.addEventListener("pointermove", this._onPointerMove);
     container.addEventListener("pointerup", this._onPointerUp);
-    container.addEventListener("pointercancel", this._onPointerUp);
+    container.addEventListener("pointercancel", this._onPointerCancel);
     this._onDoubleClick = (e: MouseEvent) => this._showDrawingSettingsFromMouse(e);
     container.addEventListener("dblclick", this._onDoubleClick);
     this._installSelectionActions(container);
@@ -331,7 +336,7 @@ export class DrawingManager implements IDrawingManager {
     this.cancelDrawing();
     this._selectDrawing(null);
 
-    const def = DRAWING_TOOLS.find((t) => t.type === tool);
+    const def = DRAWING_TOOLS.find((t) => t.type === tool) ?? (tool === "vertical_line" ? { anchors: 1 } : undefined);
     if (!def || !this._chart || !this._series || !this._container) return;
 
     this._placement = {
@@ -417,6 +422,29 @@ export class DrawingManager implements IDrawingManager {
     }
   }
 
+  /** Separate group overlays do not forward their clicks into the native chart canvas. */
+  placeOverlayAnchor(point: { x: number; y: number }, shiftKey = false): void {
+    if (!this._placement || !this._chart || !this._series || !this._isInPane(point.y, 0)) return;
+    if (!this._placementTargetForPane(0)) return;
+    const anchor = anchorFromPoint(this._chart, this._series, point);
+    if (anchor) this._addAnchor(anchor, shiftKey);
+  }
+
+  previewOverlayAnchor(point: { x: number; y: number }, shiftKey = false): void {
+    const placement = this._placement;
+    if (!placement || placement.anchors.length < 1 || placement.anchorsNeeded !== 2 || !this._chart || !this._series) return;
+    if (!this._placementTargetForPane(0)) return;
+    const anchor = anchorFromPoint(this._chart, this._series, point);
+    if (!anchor) return;
+    placement.rawPreviewAnchor = anchor;
+    const anchors = [...placement.anchors, this._constrainPlacementAnchor(anchor, shiftKey)];
+    if (placement.preview) placement.preview.setAnchors(anchors);
+    else {
+      const primitive = this._createPrimitive(placement.tool, `preview-${uid()}`, anchors, placement.options);
+      if (primitive) { primitive.setSelected(true); placement.preview = primitive; this._series.attachPrimitive(primitive); }
+    }
+  }
+
   cancelDrawing(): void {
     if (!this._placement) return;
 
@@ -431,6 +459,26 @@ export class DrawingManager implements IDrawingManager {
     this._placement = null;
     this._cleanupListeners();
     this._restoreChart();
+  }
+
+  /** Cancel a placement or unfinished drag without committing its preview. */
+  cancelInteraction(): void {
+    this.cancelDrawing();
+    if (this._edit) {
+      const drawing = this._drawings.get(this._edit.drawingId);
+      if (drawing && this._editOriginalAnchors) drawing.setAnchors(this._editOriginalAnchors);
+      this._container?.releasePointerCapture?.(this._edit.pointerId);
+      this._edit = null;
+      this._editOriginalAnchors = null;
+      this._setScroll(true);
+      if (this._container) this._container.style.cursor = "";
+      this._editCursorActive = false;
+    }
+    this._selectDrawing(null);
+  }
+
+  removeSelectedDrawing(): void {
+    if (this._selectedDrawingId) this.removeDrawing(this._selectedDrawingId);
   }
 
   removeDrawing(id: string): void {
@@ -493,6 +541,7 @@ export class DrawingManager implements IDrawingManager {
   requestUpdateAll(): void {
     this._syncDrawingAttachments();
     this._placement?.preview?.requestUpdate();
+    this._externalPreview?.requestUpdate();
     for (const drawing of this._drawings.values()) {
       drawing.requestUpdate();
     }
@@ -511,6 +560,26 @@ export class DrawingManager implements IDrawingManager {
     });
   }
 
+  setExternalPreview(state?: DrawingState): void {
+    const series = this._series;
+    if (!series) return;
+    if (this._externalPreview) series.detachPrimitive(this._externalPreview);
+    this._externalPreview = state
+      ? this._createPrimitive(state.tool, state.id, state.anchors, state.options)
+      : null;
+    if (this._externalPreview) series.attachPrimitive(this._externalPreview);
+  }
+
+  addDrawings(states: readonly DrawingState[]): void {
+    if (!this._series || states.length === 0) return;
+    for (const state of states) {
+      if (this._drawings.has(state.id)) continue;
+      this._attachState(state);
+    }
+    this._notifyCountChange();
+    this._notifyStateChange();
+  }
+
   loadState(states: readonly DrawingState[]): void {
     if (!this._series) return;
     this._replaceState(states);
@@ -525,25 +594,18 @@ export class DrawingManager implements IDrawingManager {
     if (!this._series) return;
     this.cancelDrawing();
     this._clearDrawings(false);
-    for (const state of states) {
-      const drawing = this._createPrimitive(
-        state.tool,
-        state.id,
-        state.anchors,
-        state.options,
-      );
-      if (!drawing) continue;
-      this._drawings.set(state.id, drawing);
-      this._drawingPaneIds.set(state.id, state.paneId ?? "main");
-      this._attachDrawingToCurrentPane(state.id, drawing);
-      if (state.locked === true) {
-        this._lockedDrawingIds.add(state.id);
-      } else {
-        this._lockedDrawingIds.delete(state.id);
-      }
-      bumpNextId(state.id);
-    }
+    for (const state of states) this._attachState(state);
     this._selectDrawing(null);
+  }
+
+  private _attachState(state: DrawingState): void {
+    const drawing = this._createPrimitive(state.tool, state.id, state.anchors, state.options);
+    if (!drawing) return;
+    this._drawings.set(state.id, drawing);
+    this._drawingPaneIds.set(state.id, state.paneId ?? "main");
+    this._attachDrawingToCurrentPane(state.id, drawing);
+    if (state.locked) this._lockedDrawingIds.add(state.id);
+    bumpNextId(state.id);
   }
 
   onCountChange(handler: (count: number) => void): () => void {
@@ -557,6 +619,7 @@ export class DrawingManager implements IDrawingManager {
   }
 
   dispose(): void {
+    this.setExternalPreview();
     this.cancelDrawing();
     this._clearDrawings(false);
     if (this._onKeyDown) {
@@ -581,8 +644,11 @@ export class DrawingManager implements IDrawingManager {
     }
     if (this._container && this._onPointerUp) {
       this._container.removeEventListener("pointerup", this._onPointerUp);
-      this._container.removeEventListener("pointercancel", this._onPointerUp);
       this._onPointerUp = null;
+    }
+    if (this._container && this._onPointerCancel) {
+      this._container.removeEventListener("pointercancel", this._onPointerCancel);
+      this._onPointerCancel = null;
     }
     if (this._container && this._onDoubleClick) {
       this._container.removeEventListener("dblclick", this._onDoubleClick);
@@ -895,6 +961,15 @@ export class DrawingManager implements IDrawingManager {
     e.stopPropagation();
   }
 
+  /** Select a shared overlay from its chart host without intercepting blank-area navigation. */
+  beginOverlayEdit(e: PointerEvent): boolean {
+    if (e.button !== 0 || this._placement !== null || this._edit !== null) return false;
+    const hit = this._hitAnchor(e.clientX, e.clientY) ?? this._hitDrawing(e.clientX, e.clientY);
+    if (hit === null) return false;
+    this._beginEdit(e);
+    return this._edit !== null;
+  }
+
   private _beginEdit(e: PointerEvent): void {
     if (this._placement?.tool === "brush") {
       this._beginBrushPlacement(e);
@@ -916,6 +991,7 @@ export class DrawingManager implements IDrawingManager {
           return;
         }
         if (point !== null && drawing) {
+          this._editOriginalAnchors = drawing.anchors.map(anchor => ({ ...anchor }));
           if (
             drawing.tool === "fixed_range_delta_profile" &&
             drawing.anchors.length >= 2 &&
@@ -966,6 +1042,7 @@ export class DrawingManager implements IDrawingManager {
       return;
     }
     this._edit = { ...hit, pointerId: e.pointerId };
+    this._editOriginalAnchors = this._drawings.get(hit.drawingId)?.anchors.map(anchor => ({ ...anchor })) ?? null;
     this._container?.setPointerCapture?.(e.pointerId);
     this._setScroll(false);
     if (this._container) this._container.style.cursor = "grabbing";
@@ -1089,6 +1166,7 @@ export class DrawingManager implements IDrawingManager {
       return;
     }
     this._edit = null;
+    this._editOriginalAnchors = null;
     this._container?.releasePointerCapture?.(e.pointerId);
     this._setScroll(true);
     if (this._container) this._container.style.cursor = "";
@@ -1566,21 +1644,6 @@ export class DrawingManager implements IDrawingManager {
       button.textContent = item.label;
       menu.appendChild(button);
     }
-    const rowTicksControl = document.createElement("label");
-    rowTicksControl.className = "drawing-profile-context-row-ticks";
-    const rowTicksLabel = document.createElement("span");
-    rowTicksLabel.textContent = "Ticks per row";
-    const rowTicksInput = document.createElement("input");
-    rowTicksInput.type = "number";
-    rowTicksInput.min = "1";
-    rowTicksInput.step = "1";
-    rowTicksInput.value = String(drawing.rowTicks);
-    rowTicksInput.dataset.rowTicks = "true";
-    const rowTicksHint = document.createElement("span");
-    rowTicksHint.className = "drawing-profile-context-row-ticks-hint";
-    rowTicksHint.textContent = `${(drawing.rowTicks * 0.1).toFixed(1)} price / row (Volume & Delta)`;
-    rowTicksControl.append(rowTicksLabel, rowTicksInput, rowTicksHint);
-    menu.appendChild(rowTicksControl);
     const developingPocButton = document.createElement("button");
     developingPocButton.type = "button";
     developingPocButton.className = "drawing-profile-context-item";
@@ -1622,7 +1685,7 @@ export class DrawingManager implements IDrawingManager {
 
     const paneSize = this._chart.paneSize(0);
     const menuWidth = 188;
-    const menuHeight = 304;
+    const menuHeight = 236;
     menu.style.left = `${clamp(point.x, 8, paneSize.width - menuWidth - 8)}px`;
     menu.style.top = `${clamp(point.y, 8, paneSize.height - menuHeight - 8)}px`;
     menu.style.maxHeight = `${Math.max(140, paneSize.height - 16)}px`;
@@ -1636,10 +1699,9 @@ export class DrawingManager implements IDrawingManager {
       event.stopPropagation();
     };
     this._onProfileMenuClick = (event: Event) => {
+      event.preventDefault();
       event.stopPropagation();
       const target = event.target;
-      if (target instanceof HTMLInputElement || target instanceof HTMLLabelElement) return;
-      event.preventDefault();
       if (!(target instanceof HTMLElement)) return;
       if (target.dataset.extendRight === "toggle") {
         const selectedId = this._profileMenuEl?.dataset.drawingId;
@@ -1670,10 +1732,7 @@ export class DrawingManager implements IDrawingManager {
       const selectedId = this._profileMenuEl?.dataset.drawingId;
       const selected = selectedId ? this._drawings.get(selectedId) : undefined;
       if (selected instanceof FixedRangeDeltaProfilePrimitive) {
-        selected.setOptions({
-          fixedRangeProfileMode: mode,
-          fixedRangeProfileRowTicks: selected.rowTicks,
-        });
+        selected.setOptions({ fixedRangeProfileMode: mode });
         this._notifyStateChange();
       }
       this._hideProfileContextMenu();
@@ -1685,14 +1744,6 @@ export class DrawingManager implements IDrawingManager {
       const selectedId = this._profileMenuEl?.dataset.drawingId;
       const selected = selectedId ? this._drawings.get(selectedId) : undefined;
       if (!(selected instanceof FixedRangeDeltaProfilePrimitive)) return;
-      if (target.dataset.rowTicks === "true") {
-        const rowTicks = target.valueAsNumber;
-        if (!Number.isSafeInteger(rowTicks) || rowTicks < 1) return;
-        selected.setOptions({ fixedRangeProfileRowTicks: rowTicks });
-        rowTicksHint.textContent = `${(rowTicks * 0.1).toFixed(1)} price / row (Volume & Delta)`;
-        this._notifyStateChange();
-        return;
-      }
       const value = Number(target.value) / 100;
       if (target.dataset.opacity === "valueAreaOpacity") {
         selected.setOptions({ fixedRangeProfileValueAreaOpacity: value });
@@ -2614,7 +2665,7 @@ function hitFibRetracement(
   const endPrice = drawing.anchors[1].price;
   for (const level of drawing.fibLevels) {
     if (level.enabled === false) continue;
-    const price = fibLevelPrice(startPrice, endPrice, level.value);
+    const price = fibLevelPrice(startPrice, endPrice, level.value, drawing.toState().options?.fibDirectional);
     const y = series.priceToCoordinate(price);
     if (y !== null && Math.abs((y as number) - point.y) <= tolerance) {
       return true;

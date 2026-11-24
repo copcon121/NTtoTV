@@ -10,14 +10,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("shows a deletion error while keeping the alert available to retry", () => {
-  const onDelete = vi.fn();
-  render(<AlertPanel alerts={alerts} error="Alert could not be deleted" onDelete={onDelete} />);
-  expect(screen.getByRole("alert")).toHaveTextContent("Alert could not be deleted");
-  fireEvent.click(screen.getByRole("button", { name: "Delete a_1" }));
-  expect(onDelete).toHaveBeenCalledWith("a_1");
-});
-
 const alerts: Alert[] = [
   {
     id: "a_1",
@@ -236,23 +228,6 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     });
   });
 
-  it("creates a multi-wave fail break alert following chart SMC with live PB", () => {
-    const onCreate = vi.fn();
-    render(<AlertPanel alerts={alerts} onCreate={onCreate} smcSwingLength={20} />);
-    fireEvent.change(screen.getByLabelText("Alert type"), { target: { value: "smc_fail_break_retest" } });
-    expect(screen.getByLabelText("Repeat alert")).toBeChecked();
-    expect(screen.queryByLabelText("Minimum displacement ticks")).not.toBeInTheDocument();
-    expect(screen.getByText(/several child waves/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Fail break direction"), { target: { value: "short" } });
-    fireEvent.click(screen.getByLabelText("Require live mGann PB"));
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    expect(onCreate).toHaveBeenCalledWith({ type: "smc_fail_break_retest", params: {
-      timeframe: "1m", swingLength: 20, useChartSmc: true,
-      maxBars: 120, direction: "short",
-      requirePb: true, repeat: true,
-    } });
-  });
-
   it("does not offer the removed mGann FVG retest alert", () => {
     render(<AlertPanel alerts={alerts} />);
 
@@ -457,13 +432,6 @@ describe("AlertPanel (Req 16.5, 17.4)", () => {
     render(<AlertPanel alerts={alerts} lastEvent={event()} onDelete={onDelete} />);
 
     expect(onDelete).toHaveBeenCalledWith("a_1");
-  });
-
-  it("keeps a managed MP alert and its audit history after it fires", () => {
-    const onDelete = vi.fn();
-    render(<AlertPanel alerts={alerts} lastEvent={{ ...event(), alertId: "mp_managed" }} onDelete={onDelete} />);
-    expect(screen.getByTestId("alert-toast")).toBeInTheDocument();
-    expect(onDelete).not.toHaveBeenCalled();
   });
 
   it("does not re-fire for the same event object on re-render", () => {

@@ -7,6 +7,7 @@ import pytest
 
 from app.models import NormalizedTrade, Side
 from app.rithmic.book import RithmicBookState
+from app.rithmic.client import RithmicDirectClient, RithmicProbeError
 from app.rithmic.service import RithmicMarketDataService, RithmicServiceConfig
 
 
@@ -53,8 +54,8 @@ def _service() -> tuple[RithmicMarketDataService, _Sink]:
             user="user",
             password="password",
             system_name="Rithmic Paper Trading",
-            app_name="Bookmap",
-            app_version="7.4.0.21",
+            app_name="NTtoTV Rithmic Connector",
+            app_version="1.0.0",
             exchange="COMEX",
             wire_symbol="GCZ6",
             contract="GC 12-26",
@@ -62,6 +63,22 @@ def _service() -> tuple[RithmicMarketDataService, _Sink]:
         sink,
     )
     return service, sink
+
+
+@pytest.mark.unit
+def test_login_probe_result_keeps_plant_status_and_error_payload() -> None:
+    result = RithmicDirectClient._login_probe_result(
+        {"type": "reject", "rpCode": [13], "heartbeatInterval": None}
+    )
+    error = RithmicProbeError("login rejected", result={"tickerPlant": result})
+
+    assert result == {
+        "ok": False,
+        "messageType": "reject",
+        "rpCode": [13],
+        "heartbeatInterval": None,
+    }
+    assert error.result == {"tickerPlant": result}
 
 
 @pytest.mark.unit
@@ -248,6 +265,27 @@ def test_snapshot_last_trade_is_not_forwarded() -> None:
         )
     )
     assert sink.trades == []
+
+
+@pytest.mark.unit
+def test_front_month_requires_two_consecutive_observations() -> None:
+    service, sink = _service()
+
+    async def scenario() -> None:
+        await service._dispatch(
+            {"type": "front_month_contract", "tradingSymbol": "GCG7"}
+        )
+        await service._dispatch(
+            {"type": "front_month_contract", "tradingSymbol": "GCG7"}
+        )
+
+    asyncio.run(scenario())
+
+    pending = sink.health[-1]["rollPending"]
+    assert pending["current"] == "GCZ6"
+    assert pending["candidate"] == "GCG7"
+    assert pending["observations"] == 2
+    assert pending["confirmed"] is True
 
 
 @pytest.mark.unit

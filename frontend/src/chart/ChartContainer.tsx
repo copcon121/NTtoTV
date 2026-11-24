@@ -30,13 +30,13 @@ import {
 import { type BigTradeMarker } from "./indicatorReducer";
 import { type ChartSeriesPort, ChartSeriesController } from "./chartSeriesController";
 import { applyBarUpdate } from "./barReducer";
+import { DEFAULT_CHART_BACKGROUND } from "./theme";
 import { type EmaPoint, emaSeries, nextEma } from "./ema";
 import {
   DEFAULT_OUTSIDE_BAR_SETTINGS,
   type OutsideBarSettings,
 } from "./outsideBar";
 import {
-  DEFAULT_SMC_SETTINGS,
   type SmcOverlay,
   type SmcSettings,
   computeSmcOverlay,
@@ -55,13 +55,19 @@ import {
   type CrosshairPosition,
   type EmaLineData,
   type OrderLine,
+  type OrderLineDragUpdate,
   type PriceLineSelection,
   type SmcAiSignalMarker,
   type VisibleLogicalRangeInfo,
+  chartContrastPalette,
   LightweightChartsAdapter,
 } from "./lightweightChartsAdapter";
 import { type Bar } from "../cache/types";
 import { FootprintCanvas } from "../footprint/FootprintCanvas";
+import { useChartFootprint } from "../footprint/useChartFootprint";
+import type { ApiClient } from "../api/client";
+import { normalizeTheme } from "../workspace/themes";
+import { MIN_DENSE_OVERLAY_BAR_SPACING } from "./zoomVisibility";
 import {
   DEFAULT_EMA_SETTINGS,
   DEFAULT_BIG_TRADE_SETTINGS,
@@ -77,6 +83,7 @@ import {
 } from "./mgannSwing";
 import { bigTradeMinVolumeForTime } from "./bigTradeSessions";
 import {
+  selectChartDisplayBars,
   type FootprintBar,
   type FootprintViewport,
 } from "../footprint/footprintModel";
@@ -89,12 +96,17 @@ import type {
   VolumeDeltaUpdateMessage,
 } from "../socket/messages";
 import { DrawingManager } from "./drawings/DrawingManager";
+import { ChartSyncLayer, type ChartSyncLayerProps } from "./shared/ChartSyncLayer";
+import { SHARED_DRAWING_TOOLS } from "./shared/sync";
+import type { ChartSyncConnection } from "./shared/sync";
+import { ScanAiDraftPrimitive } from "./scanAi/ScanAiDraftPrimitive";
+import type { ScanAiSuggestion } from "./scanAi/types";
 import type {
   DrawingState,
   DrawingToolType,
   FixedRangeProfileMode,
 } from "./drawings/types";
-import { barDurationForTimeframe } from "./barCountdown";
+import { barDurationForTimeframe, barEndForTimeframe } from "./barCountdown";
 import {
   DEFAULT_TIMEZONE_OFFSET_MINUTES,
   TIMEZONE_OFFSET_OPTIONS,
@@ -108,8 +120,6 @@ import {
 } from "./timeframeRange";
 import type { DeltaProfileData, DeltaProfileLoadState } from "../orderflow/deltaProfile";
 import { DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX } from "./sessionVolumeProfileSettings";
-import { MIN_DENSE_OVERLAY_BAR_SPACING } from "./zoomVisibility";
-import { DEFAULT_TDU_SETTINGS, normalizeTduSettings, type TduSettings } from "./tduSettings";
 import {
   DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
   normalizeGcPushMomentumSettings,
@@ -137,12 +147,11 @@ import {
  * canvas.
  */
 export interface DisposableChartPort extends ChartSeriesPort {
-  setDenseOverlayMinSpacing?(value: number): void;
   dispose(): void;
   setDisplayTimeOffset?(offsetMs: number): void;
   setTimezoneOffsetMinutes?(offsetMinutes: number): void;
   takeScreenshotDataUrl?(): string | undefined;
-  setBarCountdownDuration?(durationMs: number): void;
+  setBarCountdownDuration?(durationMs: number, timeframe?: Timeframe): void;
   setBarCountdownVisible?(visible: boolean): void;
   /** Coalesce related bulk history setters into one animation-frame render. */
   setBulkRenderCoalescing?(enabled: boolean): void;
@@ -164,7 +173,6 @@ export interface DisposableChartPort extends ChartSeriesPort {
   setTduSignals?(signals: ReadonlyMap<number, TduSignalUpdateMessage>): void;
   updateTduSignal?(signal: TduSignalUpdateMessage): void;
   setTduSignalsVisible?(visible: boolean): void;
-  setTduSettings?(settings: TduSettings): void;
   setBigTrades?(markers: readonly BigTradeMarker[]): void;
   updateBigTrade?(marker: BigTradeMarker): void;
   setSmcAiSignals?(markers: readonly SmcAiSignalMarker[]): void;
@@ -197,7 +205,14 @@ export interface DisposableChartPort extends ChartSeriesPort {
   setSessionVolumeProfileWidth?(widthPx: number): void;
   setSessionVolumeProfileDevelopingPoc?(visible: boolean): void;
   setChartBackgroundColor?(color: string): void;
+  setChartTheme?(theme: { background: string; text: string; rise: string; fall: string }): void;
+  fitPriceScale?(): void;
+  setDenseOverlayMinBarSpacing?(spacing: number): void;
+  zoomToFootprintRegion?(region: { left: number; right: number; top: number; bottom: number }): boolean;
+  restoreFootprintZoom?(): void;
+  clearFootprintZoom?(): void;
   createFootprintViewport?(width: number, height: number): FootprintViewport;
+  setHiddenCandleTimes?(times: readonly number[]): void;
   subscribeContextMenu?(
     handler: (info: { price: number; x: number; y: number }) => void,
   ): () => void;
@@ -246,7 +261,6 @@ export interface OrderControl {
 
 interface PositionedOrderControl extends OrderControl {
   top: number;
-  right: number;
 }
 
 const defaultPortFactory: ChartPortFactory = (container, options) =>
@@ -256,6 +270,9 @@ const PRIMARY_EMA_LINE_ID = "primary";
 const EMA_200_LINE_ID = "ema-200";
 const EMA_200_PERIOD = 200;
 const HISTORY_EDGE_THRESHOLD_BARS = 120;
+const ORDER_CONTROL_MIN_TOP_PX = 18;
+const ORDER_CONTROL_MAX_BOTTOM_PAD_PX = 18;
+const ORDER_CONTROL_MIN_GAP_PX = 30;
 
 interface EmaLineConfig {
   id: string;
@@ -305,6 +322,7 @@ function emaLineConfigs(ema?: Partial<EmaSettings>): EmaLineConfig[] {
 }
 
 export interface ChartContainerProps {
+  sync?: ChartSyncConnection;
   symbol: string;
   contract: string;
   timeframe: Timeframe;
@@ -314,9 +332,9 @@ export interface ChartContainerProps {
   barsTimeframe?: Timeframe;
   /** Initial volume-delta history for the lower MyVolumeDelta-style candles. */
   volumeDelta?: readonly VolumeDeltaDatum[];
-  /** Initial/live footprint bars keyed by the selected footprint timeframe. */
+  /** Initial/live footprint bars keyed by M1 bar time. */
   footprintBars?: ReadonlyMap<number, FootprintBar>;
-  /** Initial/live FVG Signal Grader colors keyed by 30s/M1 source-bar time. */
+  /** Initial/live FVG Signal Grader candle colors keyed by M1 source-bar time. */
   fvgSignals?: ReadonlyMap<number, FvgSignalUpdateMessage>;
   /** Original TDU momentum triangles and candle/delta divergence. */
   tduSignals?: ReadonlyMap<number, TduSignalUpdateMessage>;
@@ -340,8 +358,13 @@ export interface ChartContainerProps {
   ema?: Partial<EmaSettings>;
   /** Pine-v4-compatible ATR trailing regime overlay. Disabled by default. */
   supertrend?: Partial<SupertrendSettings>;
-  /** Show the footprint overlay on supported 30s/M1 chart timeframes. */
-  showFootprint?: boolean;
+  /** Show bid/ask ladders aligned to candles when zoomed in far enough. */
+  autoFootprint?: boolean;
+  footprintZoomSelecting?: boolean;
+  onFootprintZoomSelectionComplete?: () => void;
+  onAutoFootprintVisibilityChange?: (visible: boolean) => void;
+  denseOverlayMinBarSpacing?: number;
+  footprintApi?: Pick<ApiClient, "footprintDetails">;
   /** Session volume profile data for the right-edge histogram. */
   sessionVolumeProfile?: DeltaProfileData | null;
   /** Session volume profile histogram width in CSS pixels. */
@@ -360,7 +383,6 @@ export interface ChartContainerProps {
   showGcPushMomentum?: boolean;
   /** Show original-style TDU signals directly inside price bars. */
   showTduSignals?: boolean;
-  tduSettings?: Partial<TduSettings>;
   /** GC Push Momentum calculation settings. */
   gcPushMomentumSettings?: Partial<GcPushMomentumSettings>;
   /** Show current wave delta as an MBox histogram at the bottom of the chart. */
@@ -371,11 +393,10 @@ export interface ChartContainerProps {
   mgannSwing?: Partial<MgannSwingSettings>;
   /** Show BigTrade markers on the candle series. */
   showBigTrades?: boolean;
-  /** Show FVG Signal Grader candle recoloring on 30s or M1. */
+  /** Show FVG Signal Grader candle recoloring. FVG grading is M1-only. */
   showFvgGrader?: boolean;
   /** BigTrade display-only filters. */
   bigTradeSettings?: BigTradeSettings;
-  denseOverlayMinSpacing?: number;
   /** SMC overlay config. Disabled clears all SMC markers/zones. */
   smc?: SmcSettings;
   /** Standalone close-based Sweep Reversal overlay config. */
@@ -384,6 +405,8 @@ export interface ChartContainerProps {
   outsideBar?: OutsideBarSettings;
   /** Main chart background color. */
   chartBackgroundColor?: string;
+  /** Main chart theme colors, applied without remounting the chart. */
+  chartTheme?: { background: string; text: string; rise: string; fall: string };
   /** Display timezone offset for axis labels, in minutes from UTC. */
   timezoneOffsetMinutes?: number;
   /** Change the chart timezone from the bottom-right timezone control. */
@@ -435,7 +458,7 @@ export interface ChartContainerProps {
   onOrderDragCommit?: (id: string, price: number) => void;
   /** Fired when one selected order group has multiple pending line edits. */
   onOrderDragBatchCommit?: (
-    updates: readonly { id: string; price: number }[],
+    updates: readonly OrderLineDragUpdate[],
   ) => void;
   /** Fired from an order action chip. */
   onOrderClose?: (orderId: string) => void;
@@ -457,6 +480,9 @@ export interface ChartContainerProps {
   drawingsLoadKey?: number | string;
   /** Called whenever completed drawings change. */
   onDrawingsChange?: (drawings: DrawingState[]) => void;
+  onDrawingActionsReady?: (actions: ChartDrawingActions | undefined) => void;
+  previewDrawing?: DrawingState;
+  drawingKeyboardActive?: boolean;
   /** Increment to trigger delete-all drawings. */
   deleteAllSignal?: number;
   /** Completed drawing ids to remove after parent-side handling. */
@@ -465,6 +491,12 @@ export interface ChartContainerProps {
   fixedRangeDeltaProfiles?: ReadonlyMap<string, DeltaProfileLoadState>;
   /** Footprint display settings. */
   footprintSettings?: FootprintSettings;
+  /** Scan AI preview suggestions drawn directly on chart. */
+  scanDrafts?: {
+    suggestions: readonly ScanAiSuggestion[];
+    showTargets?: boolean;
+    onAddSuggestion: (sug: ScanAiSuggestion) => void;
+  };
   /** Optional overlay controls rendered inside the chart frame. */
   children?: ReactNode;
 }
@@ -492,60 +524,11 @@ function sweepClosedBars(
   const latest = capped[capped.length - 1];
   if (
     latest !== undefined &&
-    latest.time + barDurationForTimeframe(timeframe) > nowMs
+    barEndForTimeframe(latest.time, timeframe) > nowMs
   ) {
     return capped.slice(0, -1);
   }
   return capped;
-}
-
-const SMC_COMPUTATION_WINDOW_MS = 24 * 60 * 60 * 1_000;
-const SMC_FVG_VOLUME_WARMUP_BARS = 20;
-
-/**
- * Bound fast-timeframe work to a day plus warm-up; higher timeframes retain
- * loaded history so older external pivots and their structures remain visible.
- */
-export function smcComputationBars(
-  bars: readonly Bar[],
-  timeframe: Timeframe,
-  settings?: Partial<SmcSettings>,
-): readonly Bar[] {
-  const durationMs = barDurationForTimeframe(timeframe);
-  // Higher-timeframe external pivots can predate the most recent day by many
-  // sessions. Re-seeding from a short tail loses BOS/CHoCH and order blocks
-  // while PD still renders, so use the chart's loaded history on these TFs.
-  if (durationMs > 60_000) return bars;
-  const oneDayBars = Math.max(1, Math.ceil(SMC_COMPUTATION_WINDOW_MS / durationMs));
-  const swingLength = Math.max(
-    1,
-    Math.round(settings?.swingLength ?? DEFAULT_SMC_SETTINGS.swingLength),
-  );
-  const internalLength = Math.max(
-    1,
-    Math.round(settings?.internalLength ?? DEFAULT_SMC_SETTINGS.internalLength),
-  );
-  const liquidityLookback = Math.max(
-    1,
-    Math.round(
-      settings?.liquidityLookbackBars ??
-        DEFAULT_SMC_SETTINGS.liquidityLookbackBars,
-    ),
-  );
-  const fvgLookback = Math.max(
-    1,
-    Math.round(
-      settings?.fvgThresholdLookback ??
-        DEFAULT_SMC_SETTINGS.fvgThresholdLookback,
-    ),
-  );
-  const warmupBars = Math.max(
-    swingLength * 2 + 2,
-    internalLength * 2 + 2,
-    liquidityLookback + 2,
-    fvgLookback + SMC_FVG_VOLUME_WARMUP_BARS + 2,
-  );
-  return bars.slice(-Math.max(oneDayBars, warmupBars));
 }
 
 function matchesVolumeDeltaSeries(
@@ -581,9 +564,7 @@ function replayAppendStart<T>(
   next: readonly T[],
 ): number | undefined {
   if (previous.length > next.length) return undefined;
-  // Empty projections occur while a replay timeframe is loading. Hydrate the
-  // new snapshot atomically before any indicator attempts historical updates.
-  if (previous.length === 0) return next.length === 0 ? 0 : undefined;
+  if (previous.length === 0) return 0;
   if (
     previous[0] !== next[0] ||
     previous[previous.length - 1] !== next[previous.length - 1]
@@ -599,7 +580,6 @@ function replayMapAppends<T>(
   next: ReadonlyMap<number, T>,
 ): readonly T[] | undefined {
   if (previous.size > next.size) return undefined;
-  if (previous.size === 0 && next.size > 0) return undefined;
   for (const [time, value] of previous) {
     if (next.get(time) !== value) return undefined;
   }
@@ -623,9 +603,11 @@ export function filterBigTradeMarkers(
 
 function ChartTimezoneControl({
   offsetMinutes,
+  textColor,
   onChange,
 }: {
   offsetMinutes: number;
+  textColor: string;
   onChange?: (offsetMinutes: number) => void;
 }) {
   const normalizedOffset = normalizeTimezoneOffsetMinutes(offsetMinutes);
@@ -648,6 +630,7 @@ function ChartTimezoneControl({
   return (
     <div
       className="chart-timezone-control"
+      style={{ color: textColor }}
       aria-label={`Chart timezone: ${timezoneLabel}`}
       title={`Chart timezone: ${label}`}
       onPointerDown={(event) => event.stopPropagation()}
@@ -673,7 +656,13 @@ function ChartTimezoneControl({
   );
 }
 
+export interface ChartDrawingActions {
+  add: (drawings: readonly DrawingState[]) => void;
+  undo: () => boolean;
+}
+
 export function ChartContainer({
+  sync,
   symbol,
   contract,
   timeframe,
@@ -691,7 +680,12 @@ export function ChartContainer({
   orderControls,
   ema,
   supertrend = DEFAULT_SUPERTREND_SETTINGS,
-  showFootprint = false,
+  autoFootprint = false,
+  footprintZoomSelecting = false,
+  onFootprintZoomSelectionComplete,
+  onAutoFootprintVisibilityChange,
+  denseOverlayMinBarSpacing = MIN_DENSE_OVERLAY_BAR_SPACING,
+  footprintApi,
   sessionVolumeProfile = null,
   sessionVolumeProfileWidth = DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
   sessionVolumeProfileDevelopingPoc = true,
@@ -701,7 +695,6 @@ export function ChartContainer({
   xKontrolSettings = DEFAULT_XKONTROL_DISPLAY_SETTINGS,
   showGcPushMomentum = false,
   showTduSignals = true,
-  tduSettings = DEFAULT_TDU_SETTINGS,
   gcPushMomentumSettings = DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
   showCvd = false,
   showMgannSwing = false,
@@ -709,11 +702,11 @@ export function ChartContainer({
   showBigTrades = true,
   showFvgGrader = true,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
-  denseOverlayMinSpacing = MIN_DENSE_OVERLAY_BAR_SPACING,
   smc,
   sweepReversal,
   outsideBar = DEFAULT_OUTSIDE_BAR_SETTINGS,
-  chartBackgroundColor = "#d3d3d3",
+  chartBackgroundColor = DEFAULT_CHART_BACKGROUND,
+  chartTheme,
   timezoneOffsetMinutes = DEFAULT_TIMEZONE_OFFSET_MINUTES,
   onTimezoneOffsetChange,
   socket,
@@ -743,17 +736,35 @@ export function ChartContainer({
   drawings,
   drawingsLoadKey,
   onDrawingsChange,
+  onDrawingActionsReady,
+  previewDrawing,
+  drawingKeyboardActive = true,
   deleteAllSignal,
   removeDrawingIds,
   fixedRangeDeltaProfiles,
   footprintSettings,
+  scanDrafts,
   children,
 }: ChartContainerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const portRef = useRef<DisposableChartPort | null>(null);
   const controllerRef = useRef<ChartSeriesController | null>(null);
   const drawingManagerRef = useRef<DrawingManager | null>(null);
+  const sharedEditingRef = useRef(false);
+  const shareOrdinaryTool = !!sync?.config?.groupId && !!sync.config.syncDrawings &&
+    !!activeTool && SHARED_DRAWING_TOOLS.some(tool => tool === activeTool);
+  const [syncBinding, setSyncBinding] = useState<Pick<ChartSyncLayerProps, "chart" | "series" | "container">>();
+  const scanDraftPrimitiveRef = useRef<ScanAiDraftPrimitive | null>(null);
+  const [hoveredDraftNode, setHoveredDraftNode] = useState<{
+    suggestion: ScanAiSuggestion;
+    point: { x: number; y: number };
+  } | null>(null);
+  const isHoveringNodeRef = useRef(false);
+  const scanDraftClearTimerRef = useRef<number | null>(null);
+  const drawingKeyboardActiveRef = useRef(drawingKeyboardActive);
+  drawingKeyboardActiveRef.current = drawingKeyboardActive;
   const showMgannSwingForTimeframe = showMgannSwing;
+  const smcThrottleRef = useRef<number | undefined>(undefined);
   const smcWorkerRef = useRef<Worker | undefined>(undefined);
   const smcWorkerBusyRef = useRef(false);
   const smcRequestIdRef = useRef(0);
@@ -766,9 +777,44 @@ export function ChartContainer({
   const chartInteractionActiveRef = useRef(false);
   const [footprintViewport, setFootprintViewport] =
     useState<FootprintViewport | null>(null);
+  const [footprintInspection, setFootprintInspection] = useState(false);
+  const [footprintSelection, setFootprintSelection] = useState<{ x: number; y: number; endX: number; endY: number }>();
+  const footprintSelectionRef = useRef<typeof footprintSelection>();
+  const [liveZoomFootprints, setLiveZoomFootprints] = useState<ReadonlyMap<number, FootprintBar>>(() => new Map());
+  const [liveFootprintCandles, setLiveFootprintCandles] = useState<{ seriesKey: string; source: typeof bars; bars: readonly Bar[] }>();
+  const footprintInputBarsRef = useRef(bars);
+  footprintInputBarsRef.current = bars;
+  const footprintSeriesKey = `${symbol}/${contract}/${timeframe}`;
+  const footprintSessionKey = `${footprintSeriesKey}/${suspendRealtime}`;
+  const footprintSessionRef = useRef(footprintSessionKey);
+  const footprintCandles = barsTimeframe !== timeframe ? [] : !suspendRealtime && liveFootprintCandles?.seriesKey === footprintSeriesKey
+    && liveFootprintCandles.source === bars ? liveFootprintCandles.bars : bars ?? [];
+  const supportsChartFootprint = footprintEnabledForTimeframe(timeframe);
+  const chartFootprintVisible = supportsChartFootprint && (autoFootprint || footprintInspection)
+    && (footprintViewport?.barSpacing ?? 0) >= 64;
+  const chartFootprintVisibleRef = useRef(chartFootprintVisible);
+  chartFootprintVisibleRef.current = chartFootprintVisible;
+  const autoFootprintVisibilityRef = useRef(onAutoFootprintVisibilityChange);
+  autoFootprintVisibilityRef.current = onAutoFootprintVisibilityChange;
+  useEffect(() => {
+    autoFootprintVisibilityRef.current?.(chartFootprintVisible);
+    return () => autoFootprintVisibilityRef.current?.(false);
+  }, [chartFootprintVisible]);
+  const footprintRange = useMemo(() => {
+    if (!chartFootprintVisible || !footprintViewport?.timeToX) return undefined;
+    const visible = footprintCandles.filter((bar) => {
+      const x = footprintViewport.timeToX!(bar.time);
+      return x !== null && x >= -(footprintViewport.barSpacing ?? 0) && x <= footprintViewport.width + (footprintViewport.barSpacing ?? 0);
+    });
+    if (!visible.length) return undefined;
+    return { from: visible[0].time, to: barEndForTimeframe(visible[visible.length - 1].time, timeframe) - 1 };
+  }, [footprintCandles, timeframe, chartFootprintVisible, footprintViewport]);
+  const zoomLiveBars = useMemo(() => new Map([...(footprintBars ?? []), ...(suspendRealtime ? [] : liveZoomFootprints)]), [footprintBars, liveZoomFootprints, suspendRealtime]);
+  const zoomFootprint = useChartFootprint({ symbol, contract, timeframe, bars: footprintCandles, range: footprintRange,
+    liveBars: zoomLiveBars, enabled: chartFootprintVisible, suspendRealtime, api: footprintApi });
+  const footprintTheme = useMemo(() => normalizeTheme({ ...chartTheme, preset: "Custom", background: chartBackgroundColor }), [chartTheme, chartBackgroundColor]);
   const footprintRenderEnabledRef = useRef(false);
-  footprintRenderEnabledRef.current =
-    showFootprint && footprintEnabledForTimeframe(timeframe);
+  footprintRenderEnabledRef.current = supportsChartFootprint && (autoFootprint || footprintInspection);
   const [positionedOrderControls, setPositionedOrderControls] = useState<
     readonly PositionedOrderControl[]
   >([]);
@@ -813,7 +859,7 @@ export function ChartContainer({
   >(onOrderDragCommit);
   orderDragCommitRef.current = onOrderDragCommit;
   const orderDragBatchCommitRef = useRef<
-    ((updates: readonly { id: string; price: number }[]) => void) | undefined
+    ((updates: readonly OrderLineDragUpdate[]) => void) | undefined
   >(onOrderDragBatchCommit);
   orderDragBatchCommitRef.current = onOrderDragBatchCommit;
   const priceSnapRef = useRef<((price: number) => number) | undefined>(priceSnap);
@@ -984,24 +1030,38 @@ export function ChartContainer({
       return;
     }
     const paneHeight = Math.max(1, port.createFootprintViewport?.(1, 1).height ?? 1);
-    const lanes: number[][] = [];
-    const next = controls.flatMap((control) => {
+    const topMax = Math.max(
+      ORDER_CONTROL_MIN_TOP_PX,
+      paneHeight - ORDER_CONTROL_MAX_BOTTOM_PAD_PX,
+    );
+    const raw = controls.flatMap((control) => {
       const y = port.priceToCoordinate?.(control.price);
       if (y === null || y === undefined || !Number.isFinite(y)) return [];
-      // Labels must stay on their price lines, including closely spaced stops.
-      // Clamping an offscreen TP to the pane edge makes it show a false level.
-      if (y < 0 || y > paneHeight) return [];
-      const top = Math.round(y);
-      let lane = lanes.findIndex((tops) =>
-        tops.every((other) => Math.abs(top - other) >= 28),
+      const top = Math.min(
+        Math.max(ORDER_CONTROL_MIN_TOP_PX, Math.round(y as number)),
+        topMax,
       );
-      if (lane === -1) {
-        lane = lanes.length;
-        lanes.push([]);
-      }
-      lanes[lane].push(top);
-      return [{ ...control, top, right: lane * 154 }];
+      return [{ ...control, top }];
     });
+    const sorted = raw.sort((left, right) => left.top - right.top);
+    let previousTop = Number.NEGATIVE_INFINITY;
+    const next = sorted.map((control) => {
+      const top = Math.min(
+        Math.max(control.top, previousTop + ORDER_CONTROL_MIN_GAP_PX),
+        topMax,
+      );
+      previousTop = top;
+      return { ...control, top };
+    });
+    for (let index = next.length - 2; index >= 0; index -= 1) {
+      const maxTop = next[index + 1].top - ORDER_CONTROL_MIN_GAP_PX;
+      if (next[index].top > maxTop) {
+        next[index] = {
+          ...next[index],
+          top: Math.max(ORDER_CONTROL_MIN_TOP_PX, maxTop),
+        };
+      }
+    }
     setPositionedOrderControls(next);
   }, []);
 
@@ -1014,7 +1074,9 @@ export function ChartContainer({
       ...options,
       displayTimeOffsetMs: displayOffsetForTimeframe(timeframe),
       barCountdownDurationMs: barDurationForTimeframe(timeframe),
+      barCountdownTimeframe: timeframe,
       chartBackgroundColor,
+      chartTheme,
       timezoneOffsetMinutes,
       outsideBar,
     });
@@ -1034,6 +1096,7 @@ export function ChartContainer({
     };
     const onChartPointerEnd = () => {
       chartInteractionActiveRef.current = false;
+      refreshFootprintViewport();
       const deferred = smcDeferredOverlayRef.current;
       if (deferred?.requestId === smcLatestRequestIdRef.current) {
         smcDeferredOverlayRef.current = undefined;
@@ -1098,6 +1161,7 @@ export function ChartContainer({
       host.addEventListener("pointerdown", armHistoryNavigation, { passive: true });
       host.addEventListener("wheel", armHistoryNavigation, { passive: true });
       disposeVisibleRange = port.subscribeVisibleLogicalRange((info) => {
+        refreshFootprintViewport();
         if (
           historyNavigationArmed &&
           info !== null &&
@@ -1148,16 +1212,26 @@ export function ChartContainer({
     const mgr = new DrawingManager();
     const adapter = port as LightweightChartsAdapter;
     if (adapter.chartApi && adapter.candleSeriesApi) {
+      setSyncBinding({ chart: adapter.chartApi, series: adapter.candleSeriesApi, container: host });
       mgr.attach(adapter.chartApi, adapter.candleSeriesApi, host, {
         byIndex: (paneIndex) => adapter.drawingPaneTargetByIndex(paneIndex),
         byId: (paneId) => adapter.drawingPaneTargetById(paneId),
-      });
+      }, () => drawingKeyboardActiveRef.current && !sharedEditingRef.current &&
+        !(document.activeElement instanceof Element && document.activeElement.closest(".shared-chart-sync")));
+
+      const scanDraftPrimitive = new ScanAiDraftPrimitive();
+      adapter.candleSeriesApi.attachPrimitive(scanDraftPrimitive);
+      scanDraftPrimitiveRef.current = scanDraftPrimitive;
     }
     drawingManagerRef.current = mgr;
 
     return () => {
       mgr.dispose();
       drawingManagerRef.current = null;
+      if (adapter.candleSeriesApi && scanDraftPrimitiveRef.current) {
+        adapter.candleSeriesApi.detachPrimitive(scanDraftPrimitiveRef.current);
+      }
+      scanDraftPrimitiveRef.current = null;
       host.removeEventListener("pointerdown", onChartPointerDown);
       host.removeEventListener("wheel", onChartWheel);
       window.removeEventListener("pointerup", onChartPointerEnd);
@@ -1293,8 +1367,37 @@ export function ChartContainer({
   }, [timeframe]);
 
   useEffect(() => {
+    portRef.current?.setDenseOverlayMinBarSpacing?.(denseOverlayMinBarSpacing);
+  }, [denseOverlayMinBarSpacing]);
+
+  useEffect(() => {
+    if (footprintSessionRef.current === footprintSessionKey) return;
+    footprintSessionRef.current = footprintSessionKey;
+    portRef.current?.clearFootprintZoom?.();
+    setLiveZoomFootprints(new Map());
+    setLiveFootprintCandles(undefined);
+    setFootprintInspection(false);
+    setFootprintSelection(undefined);
+    footprintSelectionRef.current = undefined;
+  }, [footprintSessionKey]);
+
+  useEffect(() => {
+    if (!socket || !chartFootprintVisible || suspendRealtime) return;
+    return socket.on("footprint_update", (message) => {
+      if (message.symbol !== symbol || message.contract !== contract || message.tf !== "1m") return;
+      setLiveZoomFootprints((current) => {
+        const next = new Map(current);
+        next.set(message.time, message);
+        if (next.size > 200) next.delete(Math.min(...next.keys()));
+        return next;
+      });
+    });
+  }, [socket, symbol, contract, chartFootprintVisible, suspendRealtime]);
+
+  useEffect(() => {
     portRef.current?.setBarCountdownDuration?.(
       barDurationForTimeframe(timeframe),
+      timeframe,
     );
   }, [timeframe]);
 
@@ -1313,10 +1416,6 @@ export function ChartContainer({
   useEffect(() => {
     portRef.current?.setOutsideBar?.(outsideBar);
   }, [outsideBar]);
-
-  useEffect(() => {
-    portRef.current?.setDenseOverlayMinSpacing?.(denseOverlayMinSpacing);
-  }, [denseOverlayMinSpacing]);
 
   useEffect(() => {
     portRef.current?.setVolumeVisible?.(showVolume);
@@ -1394,10 +1493,6 @@ export function ChartContainer({
   }, [showTduSignals]);
 
   useEffect(() => {
-    portRef.current?.setTduSettings?.(normalizeTduSettings(tduSettings));
-  }, [tduSettings]);
-
-  useEffect(() => {
     const controller = controllerRef.current;
     if (!controller) {
       return;
@@ -1451,6 +1546,15 @@ export function ChartContainer({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [symbol, contract, timeframe, bars, suspendRealtime]);
+
+  useEffect(() => {
+    const hiddenTimes = chartFootprintVisible && footprintViewport
+      ? selectChartDisplayBars(zoomFootprint.bars, footprintViewport)
+        .filter((bar) => bar.rows.some((row) => row.bid > 0 || row.ask > 0))
+        .map((bar) => bar.time)
+      : [];
+    portRef.current?.setHiddenCandleTimes?.(hiddenTimes);
+  }, [chartFootprintVisible, footprintViewport, zoomFootprint.bars, factory]);
 
   // Load or replace the lower volume-delta candle series for this series.
   useEffect(() => {
@@ -1510,9 +1614,12 @@ export function ChartContainer({
   }, [chartBackgroundColor]);
 
   useEffect(() => {
+    if (chartTheme) portRef.current?.setChartTheme?.(chartTheme);
+  }, [chartTheme]);
+
+  useEffect(() => {
     portRef.current?.setTimezoneOffsetMinutes?.(timezoneOffsetMinutes);
   }, [timezoneOffsetMinutes]);
-
 
   useEffect(() => {
     const next = showBigTrades ? displayedBigTrades : [];
@@ -1759,14 +1866,7 @@ export function ChartContainer({
         timer = window.setTimeout(computeWhenIdle, 100);
         return;
       }
-      requestSmcComputation(
-        smcComputationBars(
-          sweepClosedBars(bars ?? [], timeframe),
-          timeframe,
-          smc,
-        ),
-        smc,
-      );
+      requestSmcComputation(bars ?? [], smc);
     };
     timer = window.setTimeout(computeWhenIdle, 100);
     return () => {
@@ -1783,7 +1883,7 @@ export function ChartContainer({
 
   useEffect(() => {
     refreshFootprintViewport();
-  }, [showFootprint, refreshFootprintViewport]);
+  }, [autoFootprint, footprintInspection, timeframe, refreshFootprintViewport]);
 
   // Subscribe to realtime bar_update events and apply them incrementally.
   useEffect(() => {
@@ -1803,6 +1903,10 @@ export function ChartContainer({
         return;
       }
       const outcome = controller.apply(message.bar, message.closed);
+      if (outcome.rendered && chartFootprintVisibleRef.current) {
+        setLiveFootprintCandles({ seriesKey: `${symbol}/${contract}/${timeframe}`, source: footprintInputBarsRef.current, bars: controller.bars });
+        refreshFootprintViewport();
+      }
       realtimeBarRef.current?.(message.bar, message.closed);
 
       // Only schedule order position refresh when there are active order
@@ -1811,15 +1915,22 @@ export function ChartContainer({
         window.requestAnimationFrame(refreshOrderControlPositions);
       }
 
-      // SMC swing/Fib structures are confirmed-bar features. Recompute only on
-      // the close event for the chart's subscribed timeframe (M5 on an M5
-      // chart), and keep the worker input near one chart day.
+      // Throttle SMC overlay recomputation: computeSmcOverlay is O(n) over the
+      // entire bar array, so running it on every realtime tick (multiple per
+      // second) blocks the main thread and causes visible freezing. Debounce to
+      // max once per 500ms during live streaming.
       const smcCfg = smcConfigRef.current;
-      if (message.closed && smcCfg?.enabled) {
-        requestSmcComputation(
-          smcComputationBars(controller.bars, timeframe, smcCfg),
-          smcCfg,
-        );
+      if (outcome.rendered && smcCfg?.enabled) {
+        if (smcThrottleRef.current === undefined) {
+          smcThrottleRef.current = window.setTimeout(() => {
+            smcThrottleRef.current = undefined;
+            const ctrl = controllerRef.current;
+            const cfg = smcConfigRef.current;
+            if (ctrl && cfg?.enabled && !chartInteractionActiveRef.current) {
+              requestSmcComputation(ctrl.bars, cfg);
+            }
+          }, 500);
+        }
       }
 
       if (message.closed && sweepReversalConfigRef.current?.enabled) {
@@ -1964,6 +2075,10 @@ export function ChartContainer({
     return () => {
       dispose();
       disposeDelta();
+      if (smcThrottleRef.current !== undefined) {
+        window.clearTimeout(smcThrottleRef.current);
+        smcThrottleRef.current = undefined;
+      }
     };
   }, [
     socket,
@@ -1978,7 +2093,7 @@ export function ChartContainer({
   useEffect(() => {
     const mgr = drawingManagerRef.current;
     if (!mgr) return;
-    if (activeTool) {
+    if (activeTool && !shareOrdinaryTool) {
       mgr.startDrawing(
         activeTool,
         activeTool === "fixed_range_delta_profile"
@@ -1988,20 +2103,26 @@ export function ChartContainer({
     } else {
       mgr.cancelDrawing();
     }
-  }, [activeTool, fixedRangeProfileMode]);
+  }, [activeTool, fixedRangeProfileMode, shareOrdinaryTool]);
 
   // Notify parent of drawing count changes.
+  const [localDrawingCount, setLocalDrawingCount] = useState(0);
   useEffect(() => {
     const mgr = drawingManagerRef.current;
-    if (!mgr || !onDrawingCountChange) return;
+    if (!mgr) return;
+    let previous: number | undefined;
     return mgr.onCountChange((count) => {
-      onDrawingCountChange(count);
+      setLocalDrawingCount(count);
       // Auto-deselect tool after placement completes
-      if (activeTool) {
+      if (previous !== undefined && count > previous && activeTool && !shareOrdinaryTool) {
         onToolDeselect?.();
       }
+      previous = count;
     });
-  }, [onDrawingCountChange, onToolDeselect, activeTool]);
+  }, [onToolDeselect, activeTool, shareOrdinaryTool]);
+  useEffect(() => {
+    onDrawingCountChange?.(localDrawingCount + (sync?.config?.syncDrawings ? sync.config.drawings.length : 0));
+  }, [localDrawingCount, sync?.config?.drawings, sync?.config?.syncDrawings, onDrawingCountChange]);
 
   // Stream drawing state up to the parent so profile saves include drawings.
   useEffect(() => {
@@ -2024,6 +2145,17 @@ export function ChartContainer({
     }
     appliedDrawingsLoadKey.current = drawingsLoadKey;
   }, [drawingsLoadKey, drawings, fixedRangeDeltaProfiles]);
+
+  useEffect(() => {
+    drawingManagerRef.current?.setExternalPreview(previewDrawing);
+  }, [previewDrawing, factory]);
+
+  useEffect(() => {
+    const manager = drawingManagerRef.current;
+    if (!manager || !onDrawingActionsReady) return;
+    onDrawingActionsReady({ add: (items) => manager.addDrawings(items), undo: () => manager.undo() });
+    return () => onDrawingActionsReady(undefined);
+  }, [factory, onDrawingActionsReady]);
 
   // Delete all drawings when the signal increments.
   const prevDeleteSignal = useRef(deleteAllSignal ?? 0);
@@ -2052,6 +2184,123 @@ export function ChartContainer({
     }
   }, [fixedRangeDeltaProfiles]);
 
+  useEffect(() => {
+    if (!scanDraftPrimitiveRef.current) return;
+    scanDraftPrimitiveRef.current.setSuggestions(
+      scanDrafts?.suggestions ?? [],
+      hoveredDraftNode?.suggestion.id ?? null,
+      scanDrafts?.showTargets ?? true,
+    );
+  }, [scanDrafts?.suggestions, scanDrafts?.showTargets, hoveredDraftNode?.suggestion.id]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!scanDraftPrimitiveRef.current || !scanDrafts?.suggestions?.length) {
+        if (hoveredDraftNode) {
+          if (scanDraftClearTimerRef.current !== null) {
+            window.clearTimeout(scanDraftClearTimerRef.current);
+            scanDraftClearTimerRef.current = null;
+          }
+          setHoveredDraftNode(null);
+        }
+        return;
+      }
+      const rect = host.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const hit = scanDraftPrimitiveRef.current.hitTestSuggestion(x, y, 10);
+      if (hit) {
+        if (scanDraftClearTimerRef.current !== null) {
+          window.clearTimeout(scanDraftClearTimerRef.current);
+          scanDraftClearTimerRef.current = null;
+        }
+        setHoveredDraftNode((prev) => {
+          if (
+            prev &&
+            prev.suggestion.id === hit.suggestion.id &&
+            Math.hypot(prev.point.x - hit.point.x, prev.point.y - hit.point.y) < 40
+          ) {
+            return prev;
+          }
+          return hit;
+        });
+        scanDraftPrimitiveRef.current.setFocusedId(hit.suggestion.id);
+      } else if (!isHoveringNodeRef.current) {
+        if (scanDraftClearTimerRef.current === null) {
+          scanDraftClearTimerRef.current = window.setTimeout(() => {
+            if (!isHoveringNodeRef.current) {
+              setHoveredDraftNode(null);
+              scanDraftPrimitiveRef.current?.setFocusedId(null);
+            }
+            scanDraftClearTimerRef.current = null;
+          }, 300);
+        }
+      }
+    };
+
+    const onPointerLeave = (e: PointerEvent) => {
+      const toNode = (e.relatedTarget as HTMLElement | null)?.closest?.(".scan-ai-onchart-node");
+      if (toNode || isHoveringNodeRef.current) {
+        return;
+      }
+      if (scanDraftClearTimerRef.current === null) {
+        scanDraftClearTimerRef.current = window.setTimeout(() => {
+          if (!isHoveringNodeRef.current) {
+            setHoveredDraftNode(null);
+            scanDraftPrimitiveRef.current?.setFocusedId(null);
+          }
+          scanDraftClearTimerRef.current = null;
+        }, 300);
+      }
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === "touch" && scanDraftPrimitiveRef.current && scanDrafts?.suggestions?.length) {
+        const rect = host.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const hit = scanDraftPrimitiveRef.current.hitTestSuggestion(x, y, 16);
+        if (hit) {
+          if (scanDraftClearTimerRef.current !== null) {
+            window.clearTimeout(scanDraftClearTimerRef.current);
+            scanDraftClearTimerRef.current = null;
+          }
+          setHoveredDraftNode(hit);
+          scanDraftPrimitiveRef.current.setFocusedId(hit.suggestion.id);
+        } else if (!isHoveringNodeRef.current) {
+          setHoveredDraftNode(null);
+          scanDraftPrimitiveRef.current.setFocusedId(null);
+        }
+      }
+    };
+
+    host.addEventListener("pointermove", onPointerMove);
+    host.addEventListener("pointerleave", onPointerLeave);
+    host.addEventListener("pointerdown", onPointerDown);
+
+    return () => {
+      if (scanDraftClearTimerRef.current !== null) {
+        window.clearTimeout(scanDraftClearTimerRef.current);
+        scanDraftClearTimerRef.current = null;
+      }
+      host.removeEventListener("pointermove", onPointerMove);
+      host.removeEventListener("pointerleave", onPointerLeave);
+      host.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [scanDrafts?.suggestions, hoveredDraftNode]);
+
+  const cancelFootprintInspection = () => {
+    portRef.current?.restoreFootprintZoom?.();
+    setFootprintInspection(false);
+    setFootprintSelection(undefined);
+    footprintSelectionRef.current = undefined;
+    onFootprintZoomSelectionComplete?.();
+    refreshFootprintViewport();
+  };
+
   return (
     <div
       className={`chart-container${replaySelecting ? " is-replay-selecting" : ""}`}
@@ -2061,6 +2310,79 @@ export function ChartContainer({
       data-timeframe={timeframe}
     >
       <div ref={hostRef} className="chart-host" />
+      {syncBinding && sync?.config?.groupId && (sync.config.syncViewport || sync.config.syncDrawings) && <ChartSyncLayer
+        {...syncBinding} sync={sync} displayTimeOffsetMs={displayOffsetForTimeframe(timeframe)}
+        externalTool={shareOrdinaryTool ? activeTool ?? undefined : undefined}
+        suspendEditing={footprintZoomSelecting || (!!activeTool && !shareOrdinaryTool)}
+        onToolDeselect={onToolDeselect} deleteAllSignal={deleteAllSignal}
+        onEditingChange={editing => { sharedEditingRef.current = editing; if (editing) drawingManagerRef.current?.cancelDrawing(); }} />}
+      {chartFootprintVisible && footprintViewport && (
+        <FootprintCanvas bars={zoomFootprint.bars} viewport={{ ...footprintViewport, theme: footprintTheme }}
+          settings={footprintSettings} layout="chart" showXKontrol={showXKontrol} xKontrolSettings={xKontrolSettings} />
+      )}
+      {footprintZoomSelecting && <div
+        className="footprint-zoom-selection"
+        aria-label="Select bars for footprint zoom"
+        tabIndex={0}
+        onKeyDown={(event) => { if (event.key === "Escape") cancelFootprintInspection(); }}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          event.currentTarget.focus();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          const rect = event.currentTarget.getBoundingClientRect();
+          const x = Math.max(0, Math.min(footprintViewport?.width ?? rect.width, event.clientX - rect.left));
+          const y = Math.max(0, Math.min(footprintViewport?.height ?? rect.height, event.clientY - rect.top));
+          footprintSelectionRef.current = { x, y, endX: x, endY: y };
+          setFootprintSelection(footprintSelectionRef.current);
+        }}
+        onPointerMove={(event) => {
+          const start = footprintSelectionRef.current;
+          if (!start || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const next = { ...start,
+            endX: Math.max(0, Math.min(footprintViewport?.width ?? rect.width, event.clientX - rect.left)),
+            endY: Math.max(0, Math.min(footprintViewport?.height ?? rect.height, event.clientY - rect.top)),
+          };
+          footprintSelectionRef.current = next;
+          setFootprintSelection(next);
+        }}
+        onPointerCancel={() => { footprintSelectionRef.current = undefined; setFootprintSelection(undefined); }}
+        onPointerUp={(event) => {
+          const selected = footprintSelectionRef.current;
+          if (!selected) return;
+          event.currentTarget.releasePointerCapture(event.pointerId);
+          footprintSelectionRef.current = undefined;
+          setFootprintSelection(undefined);
+          if (Math.abs(selected.endX - selected.x) < 8 || Math.abs(selected.endY - selected.y) < 8) return;
+          const changed = portRef.current?.zoomToFootprintRegion?.({ left: Math.min(selected.x, selected.endX),
+            right: Math.max(selected.x, selected.endX), top: Math.min(selected.y, selected.endY), bottom: Math.max(selected.y, selected.endY) });
+          if (changed) {
+            chartNavigateRef.current?.();
+            setFootprintInspection(true);
+            onFootprintZoomSelectionComplete?.();
+            refreshFootprintViewport();
+          }
+        }}
+      >
+        {footprintSelection && <div className="footprint-zoom-box" style={{ left: Math.min(footprintSelection.x, footprintSelection.endX),
+          top: Math.min(footprintSelection.y, footprintSelection.endY), width: Math.abs(footprintSelection.endX - footprintSelection.x),
+          height: Math.abs(footprintSelection.endY - footprintSelection.y) }} />}
+      </div>}
+      {(footprintZoomSelecting || footprintInspection || chartFootprintVisible) && <div className="footprint-zoom-status" role="status">
+        <span>{footprintZoomSelecting ? "Select a bar range to inspect footprints" : footprintInspection && !chartFootprintVisible ? "Zoom in further to show footprints" : zoomFootprint.loading ? "Loading footprints…"
+          : zoomFootprint.error || (zoomFootprint.bars.size ? "Footprint" : "No footprint data in this range")}</span>
+        {(footprintZoomSelecting || footprintInspection) && <button type="button" onClick={cancelFootprintInspection}>Cancel</button>}
+      </div>}
+      <button
+        type="button"
+        className="chart-auto-fit"
+        aria-label="Auto-fit price scale"
+        title="Auto-fit price scale"
+        onClick={() => { portRef.current?.fitPriceScale?.(); refreshFootprintViewport(); }}
+      >
+        ⇵
+      </button>
       {crosshairTime?.isWhitespace && (
         <div
           className="chart-crosshair-time"
@@ -2085,19 +2407,9 @@ export function ChartContainer({
       )}
       <ChartTimezoneControl
         offsetMinutes={timezoneOffsetMinutes}
+        textColor={chartTheme?.text ?? chartContrastPalette(chartBackgroundColor).text}
         onChange={onTimezoneOffsetChange}
       />
-      {showFootprint &&
-        footprintEnabledForTimeframe(timeframe) &&
-        footprintViewport !== null && (
-        <FootprintCanvas
-          bars={footprintBars ?? new Map()}
-          viewport={footprintViewport}
-          settings={footprintSettings}
-          showXKontrol={showXKontrol}
-          xKontrolSettings={xKontrolSettings}
-        />
-      )}
       {positionedOrderControls.length > 0 && (
         <div className="order-action-rail" aria-label="Open order actions">
           {positionedOrderControls.map((control) => (
@@ -2108,7 +2420,7 @@ export function ChartContainer({
               }${
                 (control.pnlValue ?? 0) < 0 ? " losing" : " winning"
               }`}
-              style={{ top: control.top, right: control.right }}
+              style={{ top: control.top }}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => event.stopPropagation()}
             >
@@ -2139,6 +2451,63 @@ export function ChartContainer({
               ) : null}
             </div>
           ))}
+        </div>
+      )}
+      {hoveredDraftNode && (
+        <div
+          className="scan-ai-onchart-node"
+          role="region"
+          aria-label={`Suggestion ${hoveredDraftNode.suggestion.label}`}
+          style={{
+            position: "absolute",
+            left: hoveredDraftNode.point.x,
+            top: hoveredDraftNode.point.y,
+            transform: "translate(-50%, -100%) translateY(-2px)",
+            zIndex: 35,
+            pointerEvents: "auto",
+          }}
+          onPointerEnter={() => {
+            if (scanDraftClearTimerRef.current !== null) {
+              window.clearTimeout(scanDraftClearTimerRef.current);
+              scanDraftClearTimerRef.current = null;
+            }
+            isHoveringNodeRef.current = true;
+          }}
+          onPointerLeave={(e) => {
+            isHoveringNodeRef.current = false;
+            const toHost = (e.relatedTarget as HTMLElement | null)?.closest?.(".chart-host");
+            if (!toHost) {
+              if (scanDraftClearTimerRef.current !== null) {
+                window.clearTimeout(scanDraftClearTimerRef.current);
+                scanDraftClearTimerRef.current = null;
+              }
+              setHoveredDraftNode(null);
+              scanDraftPrimitiveRef.current?.setFocusedId(null);
+            }
+          }}
+        >
+          <span className="scan-ai-node-badge-icon">●</span>
+          <span className="scan-ai-node-label">{hoveredDraftNode.suggestion.label}</span>
+          <button
+            type="button"
+            className="scan-ai-node-add"
+            aria-label={`Add ${hoveredDraftNode.suggestion.label} to chart`}
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              if (scanDraftClearTimerRef.current !== null) {
+                window.clearTimeout(scanDraftClearTimerRef.current);
+                scanDraftClearTimerRef.current = null;
+              }
+              isHoveringNodeRef.current = false;
+              scanDrafts?.onAddSuggestion(hoveredDraftNode.suggestion);
+              setHoveredDraftNode(null);
+              scanDraftPrimitiveRef.current?.setFocusedId(null);
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            + Add
+          </button>
         </div>
       )}
       {children}

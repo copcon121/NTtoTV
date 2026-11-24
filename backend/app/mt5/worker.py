@@ -7,12 +7,11 @@ constructor so CI/local fake mode does not require the package.
 from __future__ import annotations
 
 import importlib
-import math
 from typing import Any
 
 from ..config import Settings, settings as default_settings
 from ..models.mt5 import Mt5AccountInfo, Mt5OrderResult, Mt5SymbolInfo, Mt5Tick
-from ..models.orders import OrderKind, OrderRecord, OrderSide, OrderSource
+from ..models.orders import OrderKind, OrderRecord, OrderSide
 from ..models.timestamp import now_ms
 
 __all__ = ["RealMt5Backend"]
@@ -194,42 +193,11 @@ class RealMt5Backend:
                 else self._mt5.ORDER_TYPE_SELL
             )
             request["price"] = float(tick.ask if order.side is OrderSide.BUY else tick.bid)
-            if order.source is OrderSource.MARKET_BAR:
-                if order.entry_broker is None:
-                    return Mt5OrderResult(False, "rejected", error_code="no_entry", error_message="Missing market bracket reference")
-                # The REST quote can have moved while waiting for the worker.
-                # Preserve the requested distances using the final broker tick.
-                shift = request["price"] - order.entry_broker
-                tick_size = float(getattr(symbol_info, "trade_tick_size", 0) or getattr(symbol_info, "point", 0.001))
-                digits = int(getattr(symbol_info, "digits", 3))
-                for field in ("sl", "tp"):
-                    if request[field]:
-                        request[field] = round(round((request[field] + shift) / tick_size) * tick_size, digits)
-            direction = 1 if order.side is OrderSide.BUY else -1
-            close_price = float(tick.bid if order.side is OrderSide.BUY else tick.ask)
-            stops_level = float(getattr(symbol_info, "trade_stops_level", 0)) * float(getattr(symbol_info, "point", 0))
-            for field, gap in (
-                ("sl", direction * (close_price - request["sl"])),
-                ("tp", direction * (request["tp"] - close_price)),
-            ):
-                if request[field] and (not math.isfinite(gap) or gap <= 0 or gap + 1e-9 < stops_level):
-                    return Mt5OrderResult(
-                        False, "rejected", error_code="invalid_stops",
-                        error_message=f"{field.upper()} is on the wrong side or inside the current broker spread/stops level",
-                    )
         else:
             request["action"] = self._mt5.TRADE_ACTION_PENDING
             request["type"] = _pending_type(self._mt5, order)
             request["price"] = order.entry_broker
         result = self._mt5.order_send(request)
-        if result is None:
-            code, message = self._mt5.last_error()
-            raise RuntimeError(f"No broker acknowledgement after order_send: {code} {message}")
-        if int(result.retcode) in {
-            getattr(self._mt5, "TRADE_RETCODE_TIMEOUT", 10012),
-            getattr(self._mt5, "TRADE_RETCODE_CONNECTION", 10031),
-        }:
-            raise RuntimeError(f"No definitive broker acknowledgement: {result.retcode} {result.comment}")
         session_result = self._market_session_error_from_invalid_stops(
             order,
             request,
@@ -237,12 +205,7 @@ class RealMt5Backend:
         )
         if session_result is not None:
             return session_result
-        converted = self._result_to_order_result(order, result)
-        if converted.accepted and order.kind is OrderKind.MARKET:
-            converted.submitted_entry_price = request["price"]
-            converted.submitted_sl_price = request["sl"] or None
-            converted.submitted_tp_price = request["tp"] or None
-        return converted
+        return self._result_to_order_result(order, result)
 
     def modify_order(self, order: OrderRecord) -> Mt5OrderResult:
         self._ensure()
@@ -307,19 +270,11 @@ class RealMt5Backend:
 
     def orders(self, user_id: str, account_id: str) -> list[dict]:
         self._ensure()
-        rows = self._mt5.orders_get()
-        if rows is None:
-            code, message = self._mt5.last_error()
-            raise RuntimeError(f"MetaTrader5 orders_get failed: {code} {message}")
-        return [_ticket_dict(order) for order in rows]
+        return [_ticket_dict(order) for order in (self._mt5.orders_get() or ())]
 
     def positions(self, user_id: str, account_id: str) -> list[dict]:
         self._ensure()
-        rows = self._mt5.positions_get()
-        if rows is None:
-            code, message = self._mt5.last_error()
-            raise RuntimeError(f"MetaTrader5 positions_get failed: {code} {message}")
-        return [_ticket_dict(pos) for pos in rows]
+        return [_ticket_dict(pos) for pos in (self._mt5.positions_get() or ())]
 
     def _result_to_order_result(
         self,
@@ -432,6 +387,9 @@ def _match_position_ticket(
         symbol = str(getattr(pos, "symbol", ""))
         if symbol and symbol != order.symbol_broker:
             continue
+        volume = float(getattr(pos, "volume_current", getattr(pos, "volume", 0.0)) or 0.0)
+        if volume > 0 and abs(volume - order.volume_lots) > 1e-9:
+            continue
         type_code = int(getattr(pos, "type", -1) if getattr(pos, "type", -1) is not None else -1)
         if type_code in (0, 1):
             side = OrderSide.BUY if type_code == 0 else OrderSide.SELL
@@ -449,8 +407,12 @@ def _match_position_ticket(
             score += 60.0
         elif expected_suffix and expected_suffix in comment:
             score += 40.0
-        if score <= 0:
-            continue
+        if int(getattr(pos, "magic", 0) or 0) == 240606:
+            score += 20.0
+        if fill_price:
+            open_price = float(getattr(pos, "price_open", 0.0) or 0.0)
+            if open_price:
+                score += max(0.0, 10.0 - min(10.0, abs(open_price - fill_price)))
         timestamp = int(
             getattr(pos, "time_update_msc", 0)
             or getattr(pos, "time_msc", 0)
@@ -462,7 +424,7 @@ def _match_position_ticket(
         return None
     candidates.sort(reverse=True)
     best_score, _, best_ticket = candidates[0]
-    if len(candidates) == 1 or best_score > candidates[1][0]:
+    if best_score > 0 or len(candidates) == 1:
         return best_ticket
     return None
 

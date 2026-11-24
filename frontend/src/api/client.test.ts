@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ApiClient } from "./client";
 import { DEFAULT_EMA_SETTINGS } from "../chart/IndicatorToggles";
-import { AUTH_SESSION_CHECK_EVENT, AUTH_SESSION_STORAGE_KEY } from "../auth/sessionSync";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -13,75 +12,28 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe("ApiClient auth, MT5, and user profile", () => {
-  it("sends BE intent without a GC price for managed and manual positions", async () => {
-    const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      jsonResponse({order: {id: "partial"}, position: {brokerPositionTicket: 7}}));
+  it("uses Exness execution routes and preserves large broker IDs", async () => {
+    const fetchFn = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url) === "/api/execution") return jsonResponse({ enabled: true, mode: "exness", profiles: [] });
+      if (String(url).endsWith("/status")) return jsonResponse({ connected: true, account: { accountId: "18446744073709551000" } });
+      return jsonResponse({});
+    });
     const api = new ApiClient({ fetchFn });
-    await api.patchOrder("partial", {breakEven: true});
-    await api.patchMt5Position(7, {breakEven: true});
-    expect(fetchFn.mock.calls).toHaveLength(2);
-    for (const call of fetchFn.mock.calls) {
-      const options = call[1] as RequestInit;
-      expect(JSON.parse(options.body as string)).toEqual({breakEven: true});
-    }
+    await api.execution();
+    await api.mt5Status();
+    await api.closeMt5Position("18446744073709551001", .05);
+    expect(fetchFn).toHaveBeenCalledWith("/api/execution/status", expect.anything());
+    expect(fetchFn).toHaveBeenCalledWith("/api/execution/positions/18446744073709551001/close", expect.objectContaining({ method: "POST", body: JSON.stringify({ volumeLots: .05 }) }));
+    expect(fetchFn.mock.calls.some(([url]) => String(url).includes("/mt5/"))).toBe(false);
   });
-  it("reports an unauthorized close without retrying the trading mutation", async () => {
-    const onCheck = vi.fn();
-    window.addEventListener(AUTH_SESSION_CHECK_EVENT, onCheck);
-    try {
-      const fetchFn = vi.fn(async () => jsonResponse(
-        { error: { message: "Authentication required" } }, { status: 401 },
-      ));
-      const api = new ApiClient({ fetchFn });
-      await expect(api.closeOrder("ord_test")).rejects.toThrow("Authentication required");
-      expect(fetchFn).toHaveBeenCalledTimes(1);
-      expect(onCheck).toHaveBeenCalledTimes(1);
-    } finally {
-      window.removeEventListener(AUTH_SESSION_CHECK_EVENT, onCheck);
-    }
+  it("keeps execution disabled when the relay capability cannot be loaded", async () => {
+    const api = new ApiClient({ fetchFn: vi.fn(async () => jsonResponse({}, { status: 503 })) });
+    await expect(api.execution()).resolves.toEqual({ enabled: false, profiles: [] });
   });
 
-  it("does not invalidate other tabs when a login password is rejected", async () => {
-    const onCheck = vi.fn();
-    window.addEventListener(AUTH_SESSION_CHECK_EVENT, onCheck);
-    try {
-      const api = new ApiClient({ fetchFn: vi.fn(async () => jsonResponse(
-        { error: { message: "Invalid username or password" } }, { status: 401 },
-      )) });
-      await expect(api.login("alice", "wrong")).rejects.toThrow("Invalid username or password");
-      expect(onCheck).not.toHaveBeenCalled();
-    } finally {
-      window.removeEventListener(AUTH_SESSION_CHECK_EVENT, onCheck);
-    }
-  });
-
-  it("broadcasts a successful login using only a change marker", async () => {
-    window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
-    const api = new ApiClient({ fetchFn: vi.fn(async () => jsonResponse({
-      user: { id: "user_1", username: "alice" },
-    })) });
-    await api.login("alice", "private-test-password");
-    const marker = window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
-    expect(marker).toMatch(/^\d+:[\d.]+$/);
-    expect(marker).not.toContain("alice");
-    expect(marker).not.toContain("private-test-password");
-  });
-
-  it("reports a rejected alert deletion instead of treating it as success", async () => {
-    const fetchFn = vi.fn(async () => jsonResponse(
-      { error: { message: "Alert could not be deleted" } }, { status: 400 },
-    ));
-    const api = new ApiClient({ fetchFn });
-
-    await expect(api.deleteAlert("mp_test", "user-a")).rejects.toThrow("Alert could not be deleted");
-    expect(fetchFn).toHaveBeenCalledWith(
-      "/api/alerts/mp_test?profileId=user-a", { method: "DELETE" },
-    );
-  });
-
-  it("accepts an empty successful alert deletion response", async () => {
-    const api = new ApiClient({ fetchFn: vi.fn(async () => new Response(null, { status: 204 })) });
-    await expect(api.deleteAlert("mp_test", "user-a")).resolves.toBeUndefined();
+  it("loads the two allowed Windows execution profiles", async () => {
+    const api = new ApiClient({ fetchFn: vi.fn(async () => jsonResponse({ enabled: true, profiles: ["hieu", "hai"] })) });
+    await expect(api.execution()).resolves.toEqual({ enabled: true, profiles: ["hieu", "hai"] });
   });
 
   it("registers a user through /auth/register", async () => {
@@ -188,7 +140,7 @@ describe("ApiClient auth, MT5, and user profile", () => {
 
     expect(fetchFn).toHaveBeenNthCalledWith(
       2,
-      "/api/mt5/positions/7",
+      "/api/execution/positions/7",
       expect.objectContaining({
         method: "PATCH",
         credentials: "same-origin",
@@ -197,12 +149,12 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
     expect(fetchFn).toHaveBeenNthCalledWith(
       3,
-      "/api/mt5/positions/7/close",
+      "/api/execution/positions/7/close",
       expect.objectContaining({ method: "POST", credentials: "same-origin" }),
     );
     expect(fetchFn).toHaveBeenNthCalledWith(
       4,
-      "/api/mt5/orders/8",
+      "/api/execution/orders/8",
       expect.objectContaining({
         method: "PATCH",
         credentials: "same-origin",
@@ -211,50 +163,8 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
     expect(fetchFn).toHaveBeenNthCalledWith(
       5,
-      "/api/mt5/orders/8",
+      "/api/execution/orders/8",
       expect.objectContaining({ method: "DELETE", credentials: "same-origin" }),
-    );
-  });
-
-  it("loads and saves automatic mGann trading switches", async () => {
-    const settings = {
-      longEnabled: true,
-      shortEnabled: false,
-      volumeLots: 0.2,
-      updatedAt: 10,
-    };
-    const fetchFn = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ settings }))
-      .mockResolvedValueOnce(jsonResponse({ settings: { ...settings, shortEnabled: true } }));
-    const api = new ApiClient({ fetchFn });
-
-    await expect(api.autoTradeSettings()).resolves.toEqual(settings);
-    await expect(
-      api.updateAutoTradeSettings({
-        longEnabled: true,
-        shortEnabled: true,
-        volumeLots: 0.2,
-      }),
-    ).resolves.toMatchObject({ shortEnabled: true });
-
-    expect(fetchFn).toHaveBeenNthCalledWith(
-      1,
-      "/api/auto-trade",
-      expect.objectContaining({ credentials: "same-origin" }),
-    );
-    expect(fetchFn).toHaveBeenNthCalledWith(
-      2,
-      "/api/auto-trade",
-      expect.objectContaining({
-        method: "PUT",
-        credentials: "same-origin",
-        body: JSON.stringify({
-          longEnabled: true,
-          shortEnabled: true,
-          volumeLots: 0.2,
-        }),
-      }),
     );
   });
 
@@ -362,21 +272,15 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
-  it("patches only the authenticated user's liquidity chart state", async () => {
+  it("saves standalone liquidity chart state via /me/profile/liquidity-chart", async () => {
     const liquidityChart = {
       version: 1 as const,
-      timeframe: "5m" as const,
-      visibleBars: 96,
-      offsetBars: 8,
-      priceScale: 1.25,
-      pricePanPx: -24,
-      filters: {
-        longTerm: true,
-        relative: false,
-        absolute: true,
-        trend1: true,
-        trend2: false,
-      },
+      timeframe: "1m" as const,
+      visibleBars: 240,
+      offsetBars: 0,
+      priceScale: 1,
+      pricePanPx: 0,
+      filters: { longTerm: true, relative: true, absolute: true },
       showVwap: true,
       showBigTrades: true,
       bigTradeSettings: {
@@ -399,6 +303,28 @@ describe("ApiClient auth, MT5, and user profile", () => {
         credentials: "same-origin",
         body: JSON.stringify({ liquidityChart }),
       }),
+    );
+  });
+
+  it("fetches icebergs and si-stops snapshots", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ symbol: "GC", contract: "GC", icebergs: [] }))
+      .mockResolvedValueOnce(jsonResponse({ symbol: "GC", contract: "GC", chains: [] }));
+    const api = new ApiClient({ fetchFn });
+
+    await api.getIcebergs({ symbol: "GC", contract: "GC", limit: 100 });
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      1,
+      "/api/orderflow/icebergs?symbol=GC&contract=GC&limit=100&min_volume=1",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+
+    await api.getSiStops({ symbol: "GC", contract: "GC", limit: 500 });
+    expect(fetchFn).toHaveBeenNthCalledWith(
+      2,
+      "/api/orderflow/si-stops?symbol=GC&contract=GC&limit=500",
+      expect.objectContaining({ credentials: "same-origin" }),
     );
   });
 
@@ -448,6 +374,16 @@ describe("ApiClient auth, MT5, and user profile", () => {
 
     expect(fetchFn).toHaveBeenCalledWith(
       "/api/orderflow/footprint?symbol=GC&contract=GC&from=1000",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("bounds chart footprint history at the visible end time", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ symbol: "GC", contract: "GC", tf: "1m", bars: [] }));
+    const api = new ApiClient({ fetchFn });
+    await api.footprintDetails("GC", "GC", { from: 1_000, to: 2_000 });
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orderflow/footprint?symbol=GC&contract=GC&from=1000&to=2000",
       expect.objectContaining({ credentials: "same-origin" }),
     );
   });
@@ -644,20 +580,6 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
-  it("requests 30s FVG Signal Grader colors", async () => {
-    const fetchFn = vi.fn(async () =>
-      jsonResponse({ symbol: "GC", contract: "GC", tf: "30s", signals: [] }),
-    );
-    const api = new ApiClient({ fetchFn });
-
-    await api.fvgSignals("GC", "GC", 100, undefined, "30s");
-
-    expect(fetchFn).toHaveBeenCalledWith(
-      "/api/orderflow/fvg-signals?symbol=GC&contract=GC&tf=30s&limit=100",
-      expect.objectContaining({ credentials: "same-origin" }),
-    );
-  });
-
   it("loads TDU momentum and delta-divergence rows", async () => {
     const fetchFn = vi.fn(async () =>
       jsonResponse({
@@ -670,7 +592,6 @@ describe("ApiClient auth, MT5, and user profile", () => {
             momentumDirection: -1,
             momentumLevel: 3,
             deltaDivergence: 1,
-            momentumSamples: [[35, 10, -1]],
           },
         ],
       }),
@@ -687,7 +608,6 @@ describe("ApiClient auth, MT5, and user profile", () => {
         momentumDirection: -1,
         momentumLevel: 3,
         deltaDivergence: 1,
-        momentumSamples: [[35, 10, -1]],
       },
     ]);
 
@@ -777,134 +697,90 @@ describe("ApiClient auth, MT5, and user profile", () => {
     );
   });
 
-  it("loads latest analyst report and triggers a manual analyst run", async () => {
-    const report = {
-      reportId: "r-1",
-      snapshotId: "s-1",
-      symbol: "GC",
-      contract: "GC",
-      createdAt: 1,
-      bias: "bullish",
-      decision: "buy_candidate",
-      confidence: 0.68,
-      reason: ["H1 bullish"],
-      invalidIf: "M5 close below support",
-      nextConfirmation: "M1 positive CVD flip",
-      riskState: "candidate",
-      allowedToAlert: true,
-      allowedToAutoTrade: false,
-    };
-    const fetchFn = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse({ report }))
-      .mockResolvedValueOnce(
-        jsonResponse({
-          snapshot: { snapshotId: "s-2" },
-          report,
-          llmEnabled: true,
-          error: null,
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          available: false,
-          enabled: false,
-          reason: "30-minute auto analyst has been replaced by event-driven POI scanner",
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          available: false,
-          enabled: false,
-          reason: "30-minute auto analyst has been replaced by event-driven POI scanner",
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          available: true,
-          enabled: false,
-          profileId: "desk",
-          providerMode: "real",
-          llmEnabled: true,
-          reason: null,
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          available: true,
-          enabled: true,
-          profileId: "desk",
-          providerMode: "real",
-          llmEnabled: true,
-          reason: null,
-        }),
-      );
+  it("passes idempotencyKey in closeMt5Position, patchMt5Position, and cancelMt5Order", async () => {
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/positions/123/close")) {
+        return jsonResponse({ ok: true });
+      }
+      if (url.includes("/positions/123")) {
+        return jsonResponse({ position: { ticket: 123, slGc: 2650.5, tpGc: 2660.0 } });
+      }
+      if (url.includes("/orders/456")) {
+        return jsonResponse({ ok: true });
+      }
+      return jsonResponse({});
+    });
     const api = new ApiClient({ fetchFn });
 
-    await expect(api.analystLatest("GC", "GC")).resolves.toMatchObject({
-      decision: "buy_candidate",
-    });
-    await expect(api.runAnalyst("GC", "GC", "desk")).resolves.toMatchObject({
-      report: { reportId: "r-1" },
-      llmEnabled: true,
-    });
-    await expect(api.analystAutoSend()).resolves.toMatchObject({
-      available: false,
-      enabled: false,
-    });
-    await expect(api.setAnalystAutoSend(false)).resolves.toMatchObject({
-      available: false,
-      enabled: false,
-    });
-    await expect(api.analystEventAi("desk")).resolves.toMatchObject({
-      available: true,
-      enabled: false,
-      profileId: "desk",
-    });
-    await expect(api.setAnalystEventAi(true, "desk")).resolves.toMatchObject({
-      enabled: true,
-      providerMode: "real",
-    });
-
-    expect(fetchFn).toHaveBeenNthCalledWith(
-      1,
-      "/api/analyst/latest?symbol=GC&contract=GC",
-      expect.objectContaining({ credentials: "same-origin" }),
-    );
-    expect(fetchFn).toHaveBeenNthCalledWith(
-      2,
-      "/api/analyst/run?symbol=GC&contract=GC&profileId=desk",
+    // closeMt5Position
+    await api.closeMt5Position(123, 0.5, "close-123-key");
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/execution/positions/123/close",
       expect.objectContaining({
         method: "POST",
-        credentials: "same-origin",
+        body: JSON.stringify({ volumeLots: 0.5, idempotencyKey: "close-123-key" }),
       }),
     );
-    expect(fetchFn).toHaveBeenNthCalledWith(
-      3,
-      "/api/analyst/auto-send",
-      expect.objectContaining({ credentials: "same-origin" }),
-    );
-    expect(fetchFn).toHaveBeenNthCalledWith(
-      4,
-      "/api/analyst/auto-send",
+
+    // patchMt5Position
+    await api.patchMt5Position(123, { slGc: 2650.5, tpGc: 2660.0, idempotencyKey: "edit-123-key" });
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/execution/positions/123",
       expect.objectContaining({
-        method: "PUT",
-        credentials: "same-origin",
-        body: JSON.stringify({ enabled: false }),
+        method: "PATCH",
+        body: JSON.stringify({ slGc: 2650.5, tpGc: 2660.0, idempotencyKey: "edit-123-key" }),
       }),
     );
-    expect(fetchFn).toHaveBeenNthCalledWith(
-      5,
-      "/api/analyst/event-ai?profileId=desk",
-      expect.objectContaining({ credentials: "same-origin" }),
-    );
-    expect(fetchFn).toHaveBeenNthCalledWith(
-      6,
-      "/api/analyst/event-ai?profileId=desk",
+
+    // cancelMt5Order
+    await api.cancelMt5Order(456, "cancel-456-key");
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/execution/orders/456",
       expect.objectContaining({
-        method: "PUT",
-        credentials: "same-origin",
-        body: JSON.stringify({ enabled: true }),
+        method: "DELETE",
+        body: JSON.stringify({ idempotencyKey: "cancel-456-key" }),
+      }),
+    );
+  });
+
+  it("passes idempotencyKey in closeOrder, patchOrder, and cancelOrder", async () => {
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/close")) {
+        return jsonResponse({ order: { id: "o-1", status: "closed" } });
+      }
+      return jsonResponse({ order: { id: "o-1", status: "open" } });
+    });
+    const api = new ApiClient({ fetchFn });
+
+    // closeOrder
+    await api.closeOrder("o-1", 1.0, "close-o1-key");
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orders/o-1/close",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ volumeLots: 1.0, idempotencyKey: "close-o1-key" }),
+      }),
+    );
+
+    // patchOrder
+    await api.patchOrder("o-1", { slGc: 2640, idempotencyKey: "patch-o1-key" });
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orders/o-1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ slGc: 2640, idempotencyKey: "patch-o1-key" }),
+      }),
+    );
+
+    // cancelOrder
+    await api.cancelOrder("o-1", "cancel-o1-key");
+    expect(fetchFn).toHaveBeenCalledWith(
+      "/api/orders/o-1",
+      expect.objectContaining({
+        method: "DELETE",
+        body: JSON.stringify({ idempotencyKey: "cancel-o1-key" }),
       }),
     );
   });

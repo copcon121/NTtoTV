@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { type Bar } from "../cache/types";
 import type { FvgSignalUpdateMessage } from "../socket/messages";
 import {
-  VOLUME_OVERLAY_PRICE_SCALE_ID,
   LightweightChartsAdapter,
+  VOLUME_OVERLAY_PRICE_SCALE_ID,
   VOLUME_OVERLAY_SCALE_MARGINS,
   VOLUME_DELTA_OVERLAY_PRICE_SCALE_ID,
   VOLUME_DELTA_OVERLAY_SCALE_MARGINS,
@@ -35,43 +35,20 @@ import {
   toGcPushMomentumSignalLine,
   toSupertrendSignalDot,
   toUtcTimestamp,
+  toVolumeColor,
+  toVolumeHistogram,
+  toVolumePalette,
+  VOLUME_BAR_OPACITY,
+  VOLUME_UP_COLOR,
+  VOLUME_DOWN_COLOR,
 } from "./lightweightChartsAdapter";
+import { DEFAULT_THEME, normalizeTheme, THEME_PRESETS } from "../workspace/themes";
 import type { GcPushMomentumPoint } from "./gcPushMomentum";
 import type {
   GcPushMomentumDivergence,
   GcPushMomentumEarlyDivergence,
 } from "./gcPushMomentumDivergence";
 import { DEFAULT_OUTSIDE_BAR_SETTINGS } from "./outsideBar";
-
-describe("order line updates during dragging", () => {
-  it("preserves the dragged stop while applying background updates to the other levels", () => {
-    const stopOptions = vi.fn();
-    const targetOptions = vi.fn();
-    const meta = new Map([
-      ["o1:slGc", { price: 3918.7, orderId: "o1", field: "slGc" }],
-      ["o1:tpGc", { price: 3910, orderId: "o1", field: "tpGc" }],
-    ]);
-    // Exercise the adapter's public update path with only its price-line port.
-    const adapter: LightweightChartsAdapter = Object.assign(
-      Object.create(LightweightChartsAdapter.prototype), {
-        orderLinesById: new Map([
-          ["o1:slGc", { applyOptions: stopOptions }],
-          ["o1:tpGc", { applyOptions: targetOptions }],
-        ]),
-        orderLineMeta: meta, pendingOrderLineCommits: new Map(),
-        priceLineDragHandles: new Map(),
-        draggingPriceLine: { kind: "order", id: "o1:slGc", pointerId: 1 },
-      },
-    );
-    adapter.setOrderLines([
-      { id: "o1:slGc", orderId: "o1", field: "slGc", price: 3923.4, side: "sell", status: "filled", title: "SL" },
-      { id: "o1:tpGc", orderId: "o1", field: "tpGc", price: 3908.4, side: "sell", status: "filled", title: "TP" },
-    ]);
-    expect(stopOptions).toHaveBeenLastCalledWith(expect.objectContaining({ price: 3918.7 }));
-    expect(targetOptions).toHaveBeenLastCalledWith(expect.objectContaining({ price: 3908.4 }));
-    expect(meta.get("o1:slGc")?.price).toBe(3918.7);
-  });
-});
 
 function bar(time: number, open: number, high: number, low: number, close: number): Bar {
   return { time, open, high, low, close, volume: 1 };
@@ -97,6 +74,37 @@ function signal(
   };
 }
 
+it("keeps footprint-covered OHLC data hidden in both bulk and incremental candle rendering", () => {
+  const bars = [bar(3_600_000, 100, 102, 99, 101), bar(3_660_000, 101, 103, 100, 102)];
+  const first = bars[0];
+  const fvg = signal(1);
+  const update = vi.fn();
+  const setData = vi.fn();
+  const adapter = Object.assign(Object.create(LightweightChartsAdapter.prototype), {
+    candleBars: bars,
+    candleSeries: { update, setData },
+    hiddenCandleTimes: new Set<number>(),
+    deferredBarTimes: new Set<number>(),
+    fvgSignalsByTime: new Map([[first.time, fvg]]),
+    fvgGraderVisible: true,
+    displayTimeOffsetMs: 0,
+    outsideBar: DEFAULT_OUTSIDE_BAR_SETTINGS,
+    volumeDeltaByTime: new Map(),
+    mgannImpulseColors: new Map(),
+    barCountdownDurationMs: 60_000,
+  });
+  const normal = toCandle(first, 0, undefined, DEFAULT_OUTSIDE_BAR_SETTINGS, {}, fvg);
+  const hidden = { ...normal, color: "transparent", borderColor: "transparent", wickColor: "transparent" };
+  adapter.setHiddenCandleTimes([first.time]);
+  expect(update).toHaveBeenCalledWith(hidden, true);
+  adapter.renderCandleSeries();
+  expect(setData).toHaveBeenCalledWith([hidden, toCandle(bars[1], 0)]);
+  adapter.setHiddenCandleTimes([first.time]);
+  expect(update).toHaveBeenCalledTimes(1);
+  adapter.setHiddenCandleTimes([]);
+  expect(update).toHaveBeenLastCalledWith(normal, true);
+});
+
 describe("lightweightChartsAdapter time conversion", () => {
   it("converts raw ms timestamps to Lightweight UTC seconds with display offset", () => {
     expect(toUtcTimestamp(1_234, 1_000)).toBe(2);
@@ -104,7 +112,7 @@ describe("lightweightChartsAdapter time conversion", () => {
 
   it("anchors BigTrade marker time to the active bar bucket", () => {
     // 12:34:27.500 in a 1m chart belongs on the 12:35:00 displayed candle,
-    // matching NinjaTrader's BarIndex-based BigTrade placement.
+    // matching bar-index-based BigTrade placement.
     const base = Date.UTC(2026, 5, 3, 12, 34, 0);
     const tradeTime = base + 27_500;
     expect(toBarDisplayTimestamp(tradeTime, 60_000, 60_000)).toBe(
@@ -158,6 +166,130 @@ describe("lightweightChartsAdapter volume overlay", () => {
       top: 0.76,
       bottom: 0,
     });
+  });
+
+  it("converts hex and rgb colors to volume colors with 0.50 opacity", () => {
+    expect(VOLUME_BAR_OPACITY).toBe(0.5);
+    expect(toVolumeColor("#35d6b0")).toBe("rgba(53, 214, 176, 0.5)");
+    expect(toVolumeColor("#ff637d")).toBe("rgba(255, 99, 125, 0.5)");
+    expect(toVolumeColor("#fff")).toBe("rgba(255, 255, 255, 0.5)");
+    expect(toVolumeColor("rgb(10, 20, 30)")).toBe("rgba(10, 20, 30, 0.5)");
+    expect(toVolumeColor("invalid", 0.5, "fallback")).toBe("fallback");
+  });
+
+  it("creates volume palettes from theme rise and fall colors", () => {
+    const palette = toVolumePalette(DEFAULT_THEME.rise, DEFAULT_THEME.fall);
+    expect(palette.up).toBe("rgba(53, 214, 176, 0.5)");
+    expect(palette.down).toBe("rgba(255, 99, 125, 0.5)");
+
+    const fallbackPalette = toVolumePalette(undefined, undefined);
+    expect(fallbackPalette.up).toBe(VOLUME_UP_COLOR);
+    expect(fallbackPalette.down).toBe(VOLUME_DOWN_COLOR);
+  });
+
+  it("colors volume histogram bars by bar direction using the active palette", () => {
+    const palette = toVolumePalette("#14996a", "#d94a55");
+    const upBar = bar(3_600_000, 100, 102, 99, 101);
+    const flatBar = bar(3_660_000, 101, 103, 100, 101);
+    const downBar = bar(3_720_000, 101, 102, 98, 99);
+
+    const upHist = toVolumeHistogram(upBar, 0, palette);
+    const flatHist = toVolumeHistogram(flatBar, 0, palette);
+    const downHist = toVolumeHistogram(downBar, 0, palette);
+
+    expect(upHist.color).toBe("rgba(20, 153, 106, 0.5)");
+    expect(flatHist.color).toBe("rgba(20, 153, 106, 0.5)");
+    expect(downHist.color).toBe("rgba(217, 74, 85, 0.5)");
+
+    const defaultHist = toVolumeHistogram(upBar, 0);
+    expect(defaultHist.color).toBe(VOLUME_UP_COLOR);
+  });
+
+  it("produces distinct valid volume colors for every real theme preset", () => {
+    for (const preset of THEME_PRESETS) {
+      const palette = toVolumePalette(preset.rise, preset.fall);
+      expect(palette.up).toMatch(/^rgba\(\d+,\s*\d+,\s*\d+,\s*0\.5\)$/);
+      expect(palette.down).toMatch(/^rgba\(\d+,\s*\d+,\s*\d+,\s*0\.5\)$/);
+      expect(palette.up).not.toBe(palette.down);
+    }
+  });
+
+  it("recolors historical and realtime volume data when theme preset changes", () => {
+    const bars = [
+      bar(3_600_000, 100, 102, 99, 101),
+      bar(3_660_000, 101, 102, 98, 99),
+    ];
+    const volumeSetData = vi.fn();
+    const volumeUpdate = vi.fn();
+    const volumeApplyOptions = vi.fn();
+    const candleApplyOptions = vi.fn();
+    const chartApplyOptions = vi.fn();
+
+    const adapter = Object.assign(Object.create(LightweightChartsAdapter.prototype), {
+      chartTheme: { ...DEFAULT_THEME },
+      chartBackgroundColor: DEFAULT_THEME.background,
+      candleBars: bars,
+      displayTimeOffsetMs: 0,
+      chart: { applyOptions: chartApplyOptions },
+      candleSeries: { applyOptions: candleApplyOptions },
+      volumeSeries: {
+        setData: volumeSetData,
+        update: volumeUpdate,
+        applyOptions: volumeApplyOptions,
+      },
+      renderSmcOverlay: vi.fn(),
+    });
+
+    adapter.renderVolumeSeries();
+    expect(volumeSetData).toHaveBeenCalledWith([
+      expect.objectContaining({ color: "rgba(53, 214, 176, 0.5)" }),
+      expect.objectContaining({ color: "rgba(255, 99, 125, 0.5)" }),
+    ]);
+
+    adapter.updateVolumeAt(1);
+    expect(volumeUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ color: "rgba(255, 99, 125, 0.5)" }),
+      false,
+    );
+
+    const goldRush = THEME_PRESETS.find((t) => t.preset === "Gold Rush")!;
+    adapter.setChartTheme(goldRush);
+
+    expect(candleApplyOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        upColor: goldRush.rise,
+        downColor: goldRush.fall,
+        borderUpColor: goldRush.rise,
+        borderDownColor: goldRush.fall,
+        wickUpColor: goldRush.rise,
+        wickDownColor: goldRush.fall,
+      }),
+    );
+
+    expect(volumeApplyOptions).toHaveBeenCalledWith({
+      color: "rgba(142, 209, 107, 0.5)",
+    });
+
+    expect(volumeSetData).toHaveBeenLastCalledWith([
+      expect.objectContaining({ color: "rgba(142, 209, 107, 0.5)" }),
+      expect.objectContaining({ color: "rgba(231, 104, 85, 0.5)" }),
+    ]);
+
+    adapter.updateVolumeAt(0);
+    expect(volumeUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ color: "rgba(142, 209, 107, 0.5)" }),
+      true,
+    );
+
+    const custom = normalizeTheme({ ...DEFAULT_THEME, preset: "My desk", rise: "#abcdef", fall: "#fedcba" });
+    adapter.setChartTheme(custom);
+    expect(candleApplyOptions).toHaveBeenLastCalledWith(expect.objectContaining({ upColor: "#abcdef", downColor: "#fedcba" }));
+    expect(volumeSetData).toHaveBeenLastCalledWith([
+      expect.objectContaining({ color: "rgba(171, 205, 239, 0.5)" }),
+      expect.objectContaining({ color: "rgba(254, 220, 186, 0.5)" }),
+    ]);
+    adapter.updateVolumeAt(1);
+    expect(volumeUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ color: "rgba(254, 220, 186, 0.5)" }), false);
   });
 });
 

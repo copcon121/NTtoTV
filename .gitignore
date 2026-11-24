@@ -25,6 +25,7 @@ dist-ssr/
 coverage/
 .vite/
 *.local
+!/deploy/linux/fail2ban-sshd.local
 *.tsbuildinfo
 
 # .NET / NinjaTrader build outputs
@@ -73,3 +74,7 @@ Thumbs.db
 
 # Local SSH material
 /VPS oracle/
+/_oracle_stage/
+
+# Local Orchestrator session files and attachments
+/.ao/

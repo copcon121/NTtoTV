@@ -39,7 +39,7 @@ function payload(ticks?: number): ChartProfilePayload {
 }
 
 function mockWorkspace(ticks?: number) {
-  const state = { user: "workspace-a", ticks };
+  const state = { user: "user-a", ticks };
   const requests: URL[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: string) => {
     const url = new URL(input, "http://localhost");
@@ -51,8 +51,19 @@ function mockWorkspace(ticks?: number) {
         id: state.user, name: state.user, payload: payload(state.ticks), createdAt: 1, updatedAt: 1,
       } });
     }
-    if (url.pathname === "/api/mt5/status") return Response.json({ connected: false });
-    if (url.pathname === "/api/mt5/terminals") return Response.json({ terminals: [] });
+    if (url.pathname === "/api/execution") {
+      return Response.json({ enabled: false, mode: "disabled", profiles: [] });
+    }
+    if (url.pathname === "/api/workspaces") {
+      return Response.json({ workspaces: [{
+        id: `${state.user}-workspace`, name: "GC Workspace", createdAt: 1, updatedAt: 1,
+        payload: {
+          version: 1, template: "essentials", useChartProfile: true,
+          tradingAccountInitialized: true,
+          panels: [{ id: "main-chart", type: "chart", timeframe: "1m" }],
+        },
+      }] });
+    }
     if (url.pathname === "/api/orderflow/delta-profile") {
       requests.push(url);
       return Response.json({ rows: [], rowTicks: Number(url.searchParams.get("rowTicks")) });
@@ -68,23 +79,24 @@ function mockWorkspace(ticks?: number) {
   return { state, requests };
 }
 
-function openSettings() {
-  fireEvent.click(screen.getByLabelText("Indicators"));
+async function openSettings() {
+  fireEvent.click(await screen.findByLabelText("Indicators"));
   fireEvent.click(screen.getByLabelText("Volume Profile settings"));
-  return screen.getByLabelText("Volume Profile ticks per row");
+  return screen.getByLabelText("Volume Profile tick size");
 }
 
 function lastRequest(requests: URL[]) {
   return requests[requests.length - 1];
 }
 
-describe("Volume Profile indicator requests and workspace persistence", () => {
-  it("refetches edited row ticks and restores each workspace independently", async () => {
+describe("Volume Profile indicator requests and user profile persistence", () => {
+  it("refetches edited row ticks and restores each user's profile independently", async () => {
     const { state, requests } = mockWorkspace(3);
     const first = render(<LiveApp />);
     await waitFor(() => expect(lastRequest(requests)?.searchParams.get("rowTicks")).toBe("3"));
-    const input = openSettings();
+    const input = await openSettings();
     fireEvent.change(input, { target: { value: "7" } });
+    fireEvent.blur(input);
     await waitFor(() => expect(lastRequest(requests)?.searchParams.get("rowTicks")).toBe("7"));
     expect(lastRequest(requests)?.searchParams.get("source")).toBe("footprint_cache");
     expect(lastRequest(requests)?.searchParams.get("contract")).toBe("GC");
@@ -92,24 +104,24 @@ describe("Volume Profile indicator requests and workspace persistence", () => {
     await waitFor(() => expect(readProfileHotSnapshot(state.user)?.payload.dailyVolumeProfileRowTicks).toBe(7));
     first.unmount();
 
-    state.user = "workspace-b";
+    state.user = "user-b";
     state.ticks = 10;
     const second = render(<LiveApp />);
     await waitFor(() => expect(lastRequest(requests)?.searchParams.get("rowTicks")).toBe("10"));
-    expect(openSettings()).toHaveValue(10);
+    expect(await openSettings()).toHaveValue(10);
     second.unmount();
 
-    state.user = "workspace-a";
+    state.user = "user-a";
     state.ticks = 3;
     render(<LiveApp />);
     await waitFor(() => expect(lastRequest(requests)?.searchParams.get("rowTicks")).toBe("7"));
-    expect(openSettings()).toHaveValue(7);
+    expect(await openSettings()).toHaveValue(7);
   });
 
-  it.each([undefined, 0, 1.5])("requests legacy default for saved row ticks %s", async (ticks) => {
+  it.each([[undefined, 2], [0, 1], [1.5, 2]])("normalizes saved row ticks %s to %s", async (ticks, expected) => {
     const { requests } = mockWorkspace(ticks);
     render(<LiveApp />);
-    await waitFor(() => expect(lastRequest(requests)?.searchParams.get("rowTicks")).toBe("2"));
-    expect(openSettings()).toHaveValue(2);
+    await waitFor(() => expect(lastRequest(requests)?.searchParams.get("rowTicks")).toBe(String(expected)));
+    expect(await openSettings()).toHaveValue(expected);
   });
 });

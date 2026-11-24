@@ -46,7 +46,7 @@ export function SettingHelp({ label, text }: { label: string; text: string }) {
 
   return <span className="liquidity-setting-help">
     <button ref={button} type="button" className="liquidity-setting-help-button"
-      aria-label={`Giải thích ${label}`} aria-describedby={open ? tooltipId : undefined}
+      aria-label={`Help for ${label}`} aria-describedby={open ? tooltipId : undefined}
       aria-expanded={open} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
       onPointerEnter={(event) => { if (event.pointerType === "mouse") setOpen(true); }}
       onPointerLeave={() => { if (document.activeElement !== button.current) setOpen(false); }}

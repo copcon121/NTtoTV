@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { anchorToCoordinate, anchorToLogical } from "./coordinates";
+import { anchorFromPoint, anchorToCoordinate, anchorToLogical, coordinateForLogical, logicalForCoordinate } from "./coordinates";
 import type { AnchorPoint } from "./types";
 
 function makeChart(
@@ -8,8 +8,8 @@ function makeChart(
   timeIndexes = new Map<number, number>(),
 ) {
   const timeScale = {
-    coordinateToLogical: (x: number) => x / 10,
-    logicalToCoordinate: (logical: number) => logical * 10,
+    coordinateToLogical: (x: number) => Math.ceil(x / 10),
+    logicalToCoordinate: (logical: number) => Number.isInteger(logical) ? logical * 10 : 0,
     timeToCoordinate: (time: number) => exactCoordinateTimes.get(time) ?? null,
     timeToIndex: (time: number) => timeIndexes.get(time) ?? null,
   };
@@ -26,6 +26,24 @@ function makeSeries(times: readonly number[]) {
 }
 
 describe("drawing coordinate anchors", () => {
+  it("interpolates native integer coordinates for fractional, negative and future positions", () => {
+    const chart = makeChart();
+    for (const logical of [-1.75, -0.5, 0, 0.5, 2.25, 100.5]) {
+      expect(coordinateForLogical(chart as never, logical)).toBeCloseTo(logical * 10);
+      expect(logicalForCoordinate(chart as never, logical * 10)).toBeCloseTo(logical);
+    }
+    expect(coordinateForLogical(chart as never, undefined)).toBeNull();
+    expect(coordinateForLogical(chart as never, NaN)).toBeNull();
+    expect(coordinateForLogical({ timeScale: () => ({ logicalToCoordinate: () => null }) } as never, 0.5)).toBeNull();
+    expect(logicalForCoordinate(chart as never, Infinity)).toBeNull();
+  });
+  it("roundtrips fractional anchors across gaps and global indicator-only logical positions", () => {
+    const times = [1000, 1060, 1600], indices = new Map([[1000, 0], [1060, 2], [1600, 4]]);
+    const chart = makeChart(new Map(), indices), series = makeSeries(times);
+    const anchor = anchorFromPoint(chart as never, series as never, { x: 25, y: 10 })!;
+    expect(anchor.time).toBe(1195);
+    expect(anchorToCoordinate(chart as never, series as never, anchor)).toBe(25);
+  });
   it("prefers timestamp coordinates over stale logical indexes", () => {
     const times = [0, 60, 120, 180, 240, 300, 360];
     const chart = makeChart(new Map([[300, 555]]), indexesForTimes(times));

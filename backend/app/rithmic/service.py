@@ -1,11 +1,10 @@
-"""Always-on, read-only Rithmic Ticker Plant shadow connector."""
+"""Always-on, read-only Rithmic Ticker Plant connector."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import logging
-import platform
 import time
 import uuid
 from collections import Counter
@@ -33,6 +32,7 @@ from .protocol import (
     UPDATE_ORDER_BOOK,
     build_dbo_snapshot_request,
     build_dbo_updates_request,
+    build_front_month_contract_request,
     build_get_instrument_by_underlying_request,
     build_heartbeat_request,
     build_login_request,
@@ -70,11 +70,6 @@ class RithmicSink(Protocol):
     async def on_rithmic_stops(self, events: list[dict[str, Any]]) -> None: ...
 
 
-def _host_mac() -> str:
-    value = uuid.getnode()
-    return ":".join(f"{(value >> shift) & 0xFF:02X}" for shift in range(40, -1, -8))
-
-
 @dataclass(slots=True)
 class RithmicServiceConfig:
     uri: str
@@ -87,12 +82,18 @@ class RithmicServiceConfig:
     exchange: str
     wire_symbol: str
     contract: str
+    template_version: str = "5.55"
+    user_message: str = "nttotv-probe"
+    mac_addresses: tuple[str, ...] = ("B5:8F:D4:CC:FE:11",)
+    os_platform: str = "linux"
+    os_version: str = "10.0.17763"
     logical_symbol: str = "GC"
     modes: frozenset[str] = frozenset({"l1", "l2", "mbo"})
     aggregated_quotes: bool = False
     connect_timeout_s: float = 15.0
     reconnect_min_s: float = 1.0
     reconnect_max_s: float = 30.0
+    front_month_poll_s: int = 21_600
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RithmicServiceConfig":
@@ -104,14 +105,21 @@ class RithmicServiceConfig:
             system_name=settings.rithmic_system_name,
             app_name=settings.rithmic_app_name,
             app_version=settings.rithmic_app_version,
+            template_version=settings.rithmic_template_version,
+            user_message=settings.rithmic_user_message,
+            mac_addresses=settings.rithmic_mac_addresses,
+            os_platform=settings.rithmic_os_platform,
+            os_version=settings.rithmic_os_version,
             exchange=settings.rithmic_exchange,
             wire_symbol=settings.rithmic_symbol,
             contract=settings.rithmic_contract,
             logical_symbol=settings.supported_symbols[0],
             modes=frozenset(settings.rithmic_modes),
+            aggregated_quotes=settings.rithmic_aggregated_quotes,
             connect_timeout_s=settings.rithmic_connect_timeout_s,
             reconnect_min_s=settings.rithmic_reconnect_min_s,
             reconnect_max_s=settings.rithmic_reconnect_max_s,
+            front_month_poll_s=settings.rithmic_front_month_poll_s,
         )
 
     def validate(self) -> None:
@@ -130,8 +138,8 @@ class RithmicMarketDataService:
     """Reconnect a Ticker Plant session and normalize L1 into NTtoTV models.
 
     The service never constructs or sends an order-entry template. L2/MBO stay
-    in memory. Compact L2 liquidity and native iceberg lifecycle events pass
-    to the pipeline, which owns their publication policy.
+    in memory; only compact liquidity events derived from L2 may be persisted
+    when Rithmic owns market-data arbitration.
     """
 
     def __init__(self, config: RithmicServiceConfig, sink: RithmicSink) -> None:
@@ -162,6 +170,10 @@ class RithmicMarketDataService:
         self._websocket: Any | None = None
         self._option_probe_lock = asyncio.Lock()
         self._option_waiters: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+        self._front_month_candidate: str | None = None
+        self._front_month_observations = 0
+        self._front_month_checked_at: int | None = None
+        self._next_front_month_poll = 0.0
 
     @classmethod
     def from_settings(
@@ -339,7 +351,7 @@ class RithmicMarketDataService:
             ssl_context_from_archive(self.config.archive_path)
         except Exception as exc:
             reason = self._safe_reason(exc)
-            logger.error("Rithmic shadow connector disabled: %s", reason)
+            logger.error("Rithmic connector disabled: %s", reason)
             await self.sink.on_rithmic_disconnect(reason)
             return
 
@@ -352,7 +364,7 @@ class RithmicMarketDataService:
                 raise
             except Exception as exc:
                 reason = self._safe_reason(exc)
-                logger.warning("Rithmic shadow connection ended: %s", reason)
+                logger.warning("Rithmic connection ended: %s", reason)
                 self._stops.reset()
                 await self._emit_icebergs(
                     self._icebergs.invalidate(now_ms(), new_session=False)
@@ -399,15 +411,18 @@ class RithmicMarketDataService:
                     app_name=self.config.app_name,
                     app_version=self.config.app_version,
                     system_name=self.config.system_name,
-                    mac_addresses=(_host_mac(),),
-                    os_version=platform.version(),
-                    os_platform=platform.system(),
+                    mac_addresses=self.config.mac_addresses,
+                    os_version=self.config.os_version,
+                    os_platform=self.config.os_platform,
                     aggregated_quotes=self.config.aggregated_quotes,
+                    template_version=self.config.template_version,
+                    user_message=self.config.user_message,
                 )
             )
             login = await self._receive_login(websocket)
             heartbeat_interval = max(1.0, float(login.get("heartbeatInterval") or 3.0))
             await self._subscribe(websocket)
+            await self._request_front_month(websocket)
             self._websocket = websocket
             await self.sink.on_rithmic_connect(self._status_details())
 
@@ -515,6 +530,10 @@ class RithmicMarketDataService:
         }:
             self._route_option_response(message)
             await self._publish_health()
+            return
+        if message_type == "front_month_contract":
+            self._observe_front_month(message)
+            await self._publish_health(force=True)
             return
         if message_type == "market_data_subscription":
             if not message.get("ok"):
@@ -630,8 +649,6 @@ class RithmicMarketDataService:
         await self._publish_health()
 
     async def _emit_icebergs(self, events: list[dict[str, Any]]) -> None:
-        # Keep older sinks/test adapters usable while the optional compact
-        # iceberg event stream is introduced.
         callback = getattr(self.sink, "on_rithmic_icebergs", None)
         if events and callback is not None:
             await callback(events)
@@ -996,7 +1013,35 @@ class RithmicMarketDataService:
         while not self._stopping.is_set():
             await asyncio.sleep(interval)
             await websocket.send(build_heartbeat_request())
+            if time.monotonic() >= self._next_front_month_poll:
+                await self._request_front_month(websocket)
             await self._publish_health(force=True)
+
+    async def _request_front_month(self, websocket) -> None:
+        await websocket.send(
+            build_front_month_contract_request(
+                symbol=self.config.logical_symbol,
+                exchange=self.config.exchange,
+            )
+        )
+        self._next_front_month_poll = (
+            time.monotonic() + max(300, self.config.front_month_poll_s)
+        )
+
+    def _observe_front_month(self, message: dict[str, Any]) -> None:
+        candidate = str(message.get("tradingSymbol") or "").strip()
+        if not candidate:
+            return
+        self._front_month_checked_at = now_ms()
+        if candidate == self.config.wire_symbol:
+            self._front_month_candidate = None
+            self._front_month_observations = 0
+            return
+        if candidate == self._front_month_candidate:
+            self._front_month_observations += 1
+        else:
+            self._front_month_candidate = candidate
+            self._front_month_observations = 1
 
     async def _publish_health(self, *, force: bool = False) -> None:
         current = time.monotonic()
@@ -1006,9 +1051,18 @@ class RithmicMarketDataService:
         await self.sink.on_rithmic_health(self._status_details())
 
     def _status_details(self) -> dict[str, Any]:
+        roll_pending = None
+        if self._front_month_candidate is not None:
+            roll_pending = {
+                "current": self.config.wire_symbol,
+                "candidate": self._front_month_candidate,
+                "observations": self._front_month_observations,
+                "confirmed": self._front_month_observations >= 2,
+                "checkedAt": self._front_month_checked_at,
+            }
         return {
-            "shadow": True,
-            "selectable": False,
+            "shadow": False,
+            "selectable": True,
             "infraType": "TICKER_PLANT",
             "system": self.config.system_name,
             "exchange": self.config.exchange,
@@ -1021,6 +1075,7 @@ class RithmicMarketDataService:
             "mboLastUpdateTime": self._last_mbo_update_time,
             "tradeFrameCounts": dict(self._trade_frame_counts),
             "reconnects": self._reconnects,
+            "rollPending": roll_pending,
             **self.book.metrics(),
             **self._icebergs.metrics(),
             **self._stops.metrics(),

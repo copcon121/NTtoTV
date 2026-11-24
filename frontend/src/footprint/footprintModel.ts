@@ -1,3 +1,4 @@
+import type { WorkspaceTheme } from "../workspace/types";
 // footprint module — pure footprint display model.
 //
 // The testable core of the FootprintCanvas (design.md "Frontend Modules":
@@ -31,6 +32,11 @@ export interface FootprintViewport {
   height: number;
   /** Contrast text color selected from the chart background. */
   textColor?: string;
+  theme?: WorkspaceTheme;
+  /** Pixel x at a bar's canonical timestamp, used by chart-aligned ladders. */
+  timeToX?: (time: number) => number | null;
+  /** Horizontal distance between bars in CSS pixels. */
+  barSpacing?: number;
 }
 
 /**
@@ -82,6 +88,47 @@ export function selectDisplayBars(
   return sorted.slice(Math.max(0, sorted.length - count));
 }
 
+/** Select only ladders intersecting the chart, including either edge bar. */
+export function selectChartDisplayBars(
+  bars: ReadonlyMap<number, FootprintBar>,
+  viewport: FootprintViewport,
+): FootprintBar[] {
+  const { timeToX, barSpacing, width } = viewport;
+  if (!timeToX || !barSpacing || !Number.isFinite(barSpacing) || barSpacing <= 0 || width <= 0) return [];
+  const halfWidth = barSpacing / 2;
+  const limit = Math.min(200, Math.ceil(width / barSpacing) + 2);
+  return [...bars.values()]
+    .sort((left, right) => left.time - right.time)
+    .filter((bar) => {
+      const x = timeToX(bar.time);
+      return x !== null && Number.isFinite(x) && x >= -halfWidth && x <= width + halfWidth;
+    })
+    .slice(0, limit);
+}
+
+/** Combine adjacent price ticks while keeping both sides' executed volume. */
+export function groupFootprintRows(
+  bar: FootprintBar,
+  priceStep: number,
+  ticksPerRow: number,
+): FootprintBar {
+  if (!Number.isFinite(priceStep) || priceStep <= 0 || !Number.isInteger(ticksPerRow) || ticksPerRow <= 1) return bar;
+  const rows = new Map<number, FootprintBar["rows"][number]>();
+  for (const row of bar.rows) {
+    const tick = Math.round(row.price / priceStep);
+    const groupTick = Math.floor(tick / ticksPerRow) * ticksPerRow + (ticksPerRow - 1) / 2;
+    const price = Math.round(groupTick * priceStep * 1e10) / 1e10;
+    const current = rows.get(price);
+    if (current) {
+      current.bid += row.bid;
+      current.ask += row.ask;
+    } else {
+      rows.set(price, { price, bid: row.bid, ask: row.ask, imbalance: null });
+    }
+  }
+  return { ...bar, rows: [...rows.values()].sort((left, right) => right.price - left.price) };
+}
+
 /** A snapshot of what drives the canvas rendering, for change detection. */
 export interface FootprintRenderInputs {
   /** The selected display bars (identity per-bar from the merged map). */
@@ -97,7 +144,7 @@ export interface FootprintRenderInputs {
   /** Vertical offset into the standalone virtual scroller. */
   scrollTopPx?: number;
   /** Overlay mode draws the compact chart panel; standalone fills its shell. */
-  layout?: "overlay" | "standalone";
+  layout?: "overlay" | "standalone" | "chart";
   /** Stable key for display settings that affect drawing. */
   settingsKey?: string;
 }
@@ -123,6 +170,9 @@ export function shouldRedraw(
     pv.width !== nv.width ||
     pv.height !== nv.height ||
     pv.textColor !== nv.textColor ||
+    pv.theme !== nv.theme ||
+    pv.timeToX !== nv.timeToX ||
+    pv.barSpacing !== nv.barSpacing ||
     pv.priceToY !== nv.priceToY
   ) {
     return true;

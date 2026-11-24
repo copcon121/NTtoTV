@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { MarketDataStatusMessage } from "../socket/messages";
 import { HistorySyncRefreshTracker } from "./historySync";
 
-const status = (state: string, at: number | null): MarketDataStatusMessage => ({
-  type: "market_data_status", symbol: "GC", time: 1, preferredSource: "bookmap", sources: {},
+const status = (state: NonNullable<MarketDataStatusMessage["historySync"]>["state"], at: number | null): MarketDataStatusMessage => ({
+  type: "market_data_status", symbol: "GC", time: 1, preferredSource: "rithmic", sources: {},
   historySync: { state, connected: true, lastSuccessAt: at },
 });
 

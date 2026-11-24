@@ -4,7 +4,6 @@ import {
   displayOffsetForTimeframe,
   fixedRangeMsFromAnchors,
   footprintEnabledForTimeframe,
-  fvgGraderEnabledForTimeframe,
   gcPushMomentumEnabledForTimeframe,
   tduSignalsEnabledForTimeframe,
 } from "./timeframeRange";
@@ -59,21 +58,12 @@ describe("fixedRangeMsFromAnchors", () => {
 });
 
 describe("footprintEnabledForTimeframe", () => {
-  it("allows footprint on 15s, 30s and 1m charts", () => {
-    expect(footprintEnabledForTimeframe("15s")).toBe(true);
-    expect(footprintEnabledForTimeframe("30s")).toBe(true);
+  it("allows the M1 footprint overlay on both 15s and 1m charts", () => {
+    expect(footprintEnabledForTimeframe("15s")).toBe(false);
+    expect(footprintEnabledForTimeframe("30s")).toBe(false);
     expect(footprintEnabledForTimeframe("1m")).toBe(true);
-    expect(footprintEnabledForTimeframe("5m")).toBe(false);
-    expect(footprintEnabledForTimeframe("1D")).toBe(false);
-  });
-});
-
-describe("fvgGraderEnabledForTimeframe", () => {
-  it("supports 30s and 1m finalized footprints", () => {
-    expect(fvgGraderEnabledForTimeframe("30s")).toBe(true);
-    expect(fvgGraderEnabledForTimeframe("1m")).toBe(true);
-    expect(fvgGraderEnabledForTimeframe("15s")).toBe(false);
-    expect(fvgGraderEnabledForTimeframe("5m")).toBe(false);
+    expect(footprintEnabledForTimeframe("5m")).toBe(true);
+    expect(footprintEnabledForTimeframe("1D")).toBe(true);
   });
 });
 

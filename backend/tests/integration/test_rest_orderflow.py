@@ -122,7 +122,7 @@ def test_volume_delta_chart_contract_alias_is_accepted(env):
 
 
 @pytest.mark.integration
-def test_volume_delta_cache_miss_rebuilds_active_bookmap_source_only(tmp_path):
+def test_volume_delta_cache_miss_rebuilds_active_rithmic_source_only(tmp_path):
     settings = Settings(
         data_dir=tmp_path,
         supported_symbols=(_SYMBOL,),
@@ -131,7 +131,7 @@ def test_volume_delta_cache_miss_rebuilds_active_bookmap_source_only(tmp_path):
     cache = CacheStore(tmp_path / "app.sqlite")
     state = ContractStateStore(cache, settings=settings)
     tick_store = TickStore(tmp_path / "ticks")
-    status = SimpleNamespace(active_source="bookmap", preferred_source="bookmap")
+    status = SimpleNamespace(active_source="rithmic", preferred_source="rithmic")
     pipeline = SimpleNamespace(market_data_status_message=lambda: status)
     app = create_app(lifespan=False)
     app.state.contract_state = state
@@ -168,7 +168,7 @@ def test_volume_delta_cache_miss_rebuilds_active_bookmap_source_only(tmp_path):
                     best_bid=None,
                     best_ask=None,
                     sequence=sequence,
-                    source="bookmap",
+                    source="rithmic",
                     side=side,
                 )
             )
@@ -266,35 +266,7 @@ def test_fvg_signals_returns_confirmed_chart_contract_rows(env):
 
 
 @pytest.mark.integration
-def test_fvg_signals_returns_30s_rows(env):
-    client, cache = env
-    cache.upsert_fvg_signal(
-        FvgSignalRecord(
-            symbol=_SYMBOL,
-            contract=_SYMBOL,
-            timeframe="30s",
-            time=_BASE_MS,
-            direction=-1,
-            level=3,
-            pulse=-3,
-            top=2346.0,
-            bottom=2345.5,
-            breakout_ratio=1.7,
-        )
-    )
-
-    resp = client.get(
-        "/api/orderflow/fvg-signals",
-        params={"symbol": _SYMBOL, "contract": _SYMBOL, "tf": "30s"},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["tf"] == "30s"
-    assert resp.json()["signals"][0]["pulse"] == -3
-
-
-@pytest.mark.integration
-def test_fvg_signals_rejects_unsupported_timeframe(env):
+def test_fvg_signals_rejects_non_m1_timeframe(env):
     client, _ = env
     resp = client.get(
         "/api/orderflow/fvg-signals",
@@ -305,8 +277,7 @@ def test_fvg_signals_rejects_unsupported_timeframe(env):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("samples", [None, [], [(30, 8.0, -1), (10, 0.0, 1)]])
-def test_tdu_signals_returns_chart_contract_rows(env, samples):
+def test_tdu_signals_returns_chart_contract_rows(env):
     client, cache = env
     cache.upsert_tdu_signal(
         TduSignalRecord(
@@ -317,7 +288,6 @@ def test_tdu_signals_returns_chart_contract_rows(env, samples):
             momentum_direction=-1,
             momentum_level=2,
             delta_divergence=1,
-            momentum_samples=samples,
         )
     )
 
@@ -337,18 +307,17 @@ def test_tdu_signals_returns_chart_contract_rows(env, samples):
                 "momentumDirection": -1,
                 "momentumLevel": 2,
                 "deltaDivergence": 1,
-                **({"momentumSamples": [list(sample) for sample in samples]} if samples is not None else {}),
             }
         ],
     }
 
 
-def _seed_footprint_bar(cache: CacheStore, time_ms: int, timeframe: str = "1m") -> None:
+def _seed_footprint_bar(cache: CacheStore, time_ms: int) -> None:
     cache.upsert_footprint_bar(
         FootprintBarRecord(
             symbol=_SYMBOL,
             contract=_ACTIVE,
-            timeframe=timeframe,
+            timeframe="1m",
             time=time_ms,
             poc=100.1,
             bar_delta=5,
@@ -363,7 +332,7 @@ def _seed_footprint_bar(cache: CacheStore, time_ms: int, timeframe: str = "1m") 
             FootprintLevelRecord(
                 symbol=_SYMBOL,
                 contract=_ACTIVE,
-                timeframe=timeframe,
+                timeframe="1m",
                 time=time_ms,
                 price=100.1,
                 bid_volume=2,
@@ -373,7 +342,7 @@ def _seed_footprint_bar(cache: CacheStore, time_ms: int, timeframe: str = "1m") 
             FootprintLevelRecord(
                 symbol=_SYMBOL,
                 contract=_ACTIVE,
-                timeframe=timeframe,
+                timeframe="1m",
                 time=time_ms,
                 price=100.0,
                 bid_volume=4,
@@ -404,25 +373,6 @@ def test_footprint_returns_last_count_bars_with_ladders(env):
     rows = first["rows"]
     assert [r["price"] for r in rows] == [100.1, 100.0]
     assert rows[0]["imbalance"] == "ask"
-
-
-@pytest.mark.integration
-def test_footprint_returns_30s_bars_when_requested(env):
-    client, cache = env
-    _seed_footprint_bar(cache, _BASE_MS, "30s")
-    _seed_footprint_bar(cache, _BASE_MS + 30_000, "30s")
-
-    resp = client.get(
-        "/api/orderflow/footprint",
-        params={"symbol": "GC", "tf": "30s", "count": 2},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["tf"] == "30s"
-    assert [bar["time"] for bar in resp.json()["bars"]] == [
-        _BASE_MS,
-        _BASE_MS + 30_000,
-    ]
 
 
 @pytest.mark.integration
@@ -593,6 +543,8 @@ def test_big_trades_default_load_uses_cache_when_available(env):
             best_bid=None,
             best_ask=None,
             sequence=1,
+            source="rithmic",
+            side=Side.BUY,
         )
     )
 
@@ -681,6 +633,8 @@ def test_big_trades_rebuilds_from_ticks_when_raw_ticks_exist(env):
             best_bid=None,
             best_ask=None,
             sequence=1,
+            source="rithmic",
+            side=Side.BUY,
         )
     )
     tick_store.record_trade(
@@ -695,6 +649,8 @@ def test_big_trades_rebuilds_from_ticks_when_raw_ticks_exist(env):
             best_bid=None,
             best_ask=None,
             sequence=2,
+            source="rithmic",
+            side=Side.BUY,
         )
     )
 
@@ -712,7 +668,7 @@ def test_big_trades_rebuilds_from_ticks_when_raw_ticks_exist(env):
             "price": 100.1,
             "volume": 35,
             "side": "buy",
-            "source": "nt",
+            "source": "rithmic",
         }
     ]
     refreshed = cache.read_big_trades(_SYMBOL, _ACTIVE, _BASE_MS, _BASE_MS + 2_000)

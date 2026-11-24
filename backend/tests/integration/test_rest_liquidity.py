@@ -18,7 +18,7 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
             "contract": "GC",
             "sourceContract": "GCZ6.COMEX@RITHMIC",
             "sequence": 1,
-            "time": 325_123,
+            "time": 310_123,
             "eventKind": "relative",
             "action": "added",
             "side": "bid",
@@ -128,20 +128,6 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
                     "to": 600_000,
                 },
             )
-            response_30s = client.get(
-                "/api/liquidity",
-                params={
-                    "symbol": "GC",
-                    "contract": "GC",
-                    "tf": "30s",
-                    "from": 0,
-                    "to": 600_000,
-                },
-            )
-            response_15s = client.get(
-                "/api/liquidity",
-                params={"symbol": "GC", "contract": "GC", "tf": "15s", "from": 0, "to": 600_000},
-            )
             bad = client.get("/api/liquidity", params={"tf": "15m"})
     finally:
         store.close()
@@ -160,13 +146,6 @@ def test_liquidity_history_returns_markers_lines_and_timeframe_bucket(tmp_path):
     assert body["lines"][0]["samples"] == [
         {"time": 330_000, "size": 650, "active": True}
     ]
-    assert response_30s.status_code == 200
-    assert response_30s.json()["tf"] == "30s"
-    assert response_30s.json()["events"][0]["bucketTime"] == 300_000
-    assert response_15s.status_code == 200
-    assert response_15s.json()["tf"] == "15s"
-    assert [event["bucketTime"] for event in response_15s.json()["events"]] == [315_000, 330_000]
-    assert response_15s.json()["lines"] == body["lines"]
     assert bad.status_code == 400
     assert bad.json()["error"]["field"] == "tf"
 
@@ -251,7 +230,7 @@ def test_liquidity_settings_are_validated_and_persisted(tmp_path):
     assert updated.json()["settings"]["relativeTrigger"] == 425
     assert updated.json()["settings"]["absoluteTrigger"] == 500
     assert updated.json()["settings"]["longTermMinAgeSeconds"] == 45
-    assert updated.json()["sentToBookmap"] is False
+    assert updated.json()["appliedTo"] == ["rithmic"]
     assert updated.json()["historyCleared"] == []
     assert updated.json()["historyRefiltered"] == ["relative", "long_term"]
     assert updated.json()["historyDeleted"] == {"events": 0, "lines": 0}

@@ -2,8 +2,8 @@ import { useId } from "react";
 import { normalizeSiStopSettings, type SiStopSettings } from "./siStops";
 import { SettingFieldLabel } from "./SettingHelp";
 
-export function SiStopSettingsEditor({ settings, onChange }: {
-  settings: SiStopSettings; onChange: (settings: SiStopSettings) => void;
+export function SiStopSettingsEditor({ settings, onChange, hidden = false }: {
+  settings: SiStopSettings; onChange: (settings: SiStopSettings) => void; hidden?: boolean;
 }) {
   const id = useId();
   const patch = (change: Partial<SiStopSettings>) => onChange(normalizeSiStopSettings({ ...settings, ...change }));
@@ -25,28 +25,28 @@ export function SiStopSettingsEditor({ settings, onChange }: {
     </div>
   );
   return (
-    <fieldset className="liquidity-settings-group si-stops-settings-group">
+    <fieldset className="liquidity-settings-group si-stops-settings-group" hidden={hidden}>
       <legend>SI Stops</legend>
-      {check("enabled", "Show SI Stops", "Hiển thị các chuỗi khớp lệnh được SI suy luận là hoạt động stop. Chỉ chain đã hoàn tất mới có marker; đây không phải xác nhận loại lệnh từ sàn.")}
+      {check("enabled", "Show SI Stops", "Show execution chains inferred by SI as stop activity. Only completed chains receive markers; the exchange has not confirmed the order type.")}
       <p className="si-stops-settings-help">Filter each chain first. The marker number is the total contracts after grouping.</p>
       <div className="si-stops-settings-columns">
         <section aria-label="SI Stops chain filter">
           <h4>Chain filter</h4>
           <div className={settings.enabled ? "liquidity-settings-fields" : "liquidity-settings-fields is-disabled"}>
-            {check("automatic", "Automatic size filter", "Tự tính ngưỡng từ các chain hoàn tất trong khoảng lấy mẫu, cập nhật mỗi phút. Khi bật, Auto thay thế ngưỡng cố định Minimum executed volume.", !settings.enabled)}
+            {check("automatic", "Automatic size filter", "Calculate the threshold from completed chains in the sample window, updating each minute. Auto replaces the fixed Minimum executed volume threshold.", !settings.enabled)}
             {number("minVolume", "Minimum executed volume", 0, 10_000_000,
-              "Số contracts đã khớp tối thiểu của TỪNG chain trước khi gộp. Min 50 loại chain dưới 50, dù nhiều chain nhỏ cộng lại đạt 50. Giao dịch dùng làm seed ban đầu không tính vào volume.", !settings.enabled || settings.automatic)}
+              "Minimum executed contracts for EACH chain before grouping. A minimum of 50 excludes chains under 50, even if several small chains total 50. The initial seed trade is excluded from volume.", !settings.enabled || settings.automatic)}
             {number("intervalMinutes", "Sample interval (minutes)", 1, 2880,
-              "Số phút nhìn lại để Auto lấy mẫu các chain hoàn tất đã tải. Ví dụ 60 là một giờ gần nhất, không phụ thuộc mức zoom của chart.", !settings.enabled || !settings.automatic)}
+              "Lookback in minutes for Auto to sample loaded completed chains. For example, 60 uses the last hour, independently of chart zoom.", !settings.enabled || !settings.automatic)}
             {number("standardDeviations", "Standard deviations", 0, 10,
-              "Auto = trung bình volume + hệ số này × độ lệch chuẩn, làm tròn xuống và không vượt mẫu lớn nhất. Hệ số cao hơn thường lọc khắt khe hơn; chưa có mẫu thì ngưỡng là 0.", !settings.enabled || !settings.automatic, 0.1)}
+              "Auto = mean volume + this factor × standard deviation, rounded down and capped at the largest sample. Higher factors generally filter more strictly; with no samples, the threshold is 0.", !settings.enabled || !settings.automatic, 0.1)}
             {check("throughPriceLevelsOnly", "Through price levels only",
-              "Chỉ hiện chain có ít nhất hai bản ghi khớp và giá khớp đầu khác giá khớp cuối. Tắt để nhận cả chain khớp tại cùng một mức giá.", !settings.enabled)}
+              "Show only chains with at least two execution records and different first and last execution prices. Turn off to include chains executed at a single price.", !settings.enabled)}
             {(["buyColor", "sellColor"] as const).map((key) => {
               const label = key === "buyColor" ? "Buy SI Stops" : "Sell SI Stops";
               return <div key={key} className="liquidity-settings-field market-explorer-color-field">
                 <SettingFieldLabel label={label} htmlFor={`${id}-${key}`}
-                  help={key === "buyColor" ? "Màu marker của chain chủ động mua. Chỉ đổi cách hiển thị, không đổi logic nhận diện." : "Màu marker của chain chủ động bán. Chỉ đổi cách hiển thị, không đổi logic nhận diện."} />
+                  help={key === "buyColor" ? "Marker color for aggressive buy chains. Changes appearance without changing detection logic." : "Marker color for aggressive sell chains. Changes appearance without changing detection logic."} />
                 <input id={`${id}-${key}`} type="color" value={settings[key]} disabled={!settings.enabled}
                   onChange={(e) => patch({ [key]: e.target.value })} />
               </div>;
@@ -56,21 +56,21 @@ export function SiStopSettingsEditor({ settings, onChange }: {
         <section aria-label="SI Stops grouping and alerts">
           <h4>Grouping &amp; alerts</h4>
           <div className="liquidity-settings-fields">
-            {check("aggregate", "Aggregate nearby chains", "Gộp marker gần nhau và cùng chiều Buy/Sell. Số trên marker là tổng contracts của nhóm; tooltip ghi riêng số chain và số bản ghi khớp. Không gộp danh tính hay cảnh báo của chain.", !settings.enabled)}
+            {check("aggregate", "Aggregate nearby chains", "Group nearby markers on the same Buy/Sell side. The marker shows total group contracts; the tooltip lists chain count and execution-record count separately. Chain identities and alerts remain separate.", !settings.enabled)}
             {number("aggregateMinVolume", "Aggregate minimum volume", 0, 10_000_000,
-              "Ngưỡng tổng contracts của nhóm, áp dụng SAU khi lọc từng chain và gộp. Không thể dùng các chain bị loại để cộng đủ ngưỡng. 0 bỏ qua ngưỡng phụ này.", !settings.enabled)}
+              "Minimum total group contracts, applied AFTER filtering individual chains and grouping. Excluded chains cannot contribute to the threshold. 0 disables this additional threshold.", !settings.enabled)}
             {number("timeArea", "Aggregation time area", 0, 1000,
-              "Khoảng gộp theo chiều ngang màn hình, không phải số giây. 10 xấp xỉ một bề rộng marker; tăng để gộp xa hơn. Nhóm có thể thay đổi khi zoom.", !settings.enabled || !settings.aggregate)}
+              "Horizontal grouping distance on screen rather than seconds. 10 is about one marker width; increase to group farther apart. Groups may change with zoom.", !settings.enabled || !settings.aggregate)}
             {number("priceArea", "Aggregation price area", 0, 1000,
-              "Khoảng gộp theo chiều dọc màn hình, không phải số ticks. 10 xấp xỉ một chiều cao marker; tăng để gộp các giá xa nhau hơn. Nhóm có thể thay đổi khi zoom.", !settings.enabled || !settings.aggregate)}
-            {check("showFiltered", "Show filtered markers", "Hiện mờ các marker không đạt bộ lọc thay vì ẩn hẳn. Các marker đạt và không đạt được gộp riêng.", !settings.enabled)}
+              "Vertical grouping distance on screen rather than ticks. 10 is about one marker height; increase to group more distant prices. Groups may change with zoom.", !settings.enabled || !settings.aggregate)}
+            {check("showFiltered", "Show filtered markers", "Fade markers that fail the filters instead of hiding them. Passing and filtered markers form separate groups.", !settings.enabled)}
             {number("filteredOpacity", "Filtered opacity", 0, 1,
-              "Độ rõ của marker không đạt bộ lọc: 0 là trong suốt, 1 là rõ hoàn toàn. Ví dụ 0.15 tương đương 15%. Chỉ dùng khi Show filtered markers bật.", !settings.enabled || !settings.showFiltered, 0.05)}
+              "Filtered marker opacity: 0 is transparent; 1 is fully visible. For example, 0.15 means 15%. Used only when Show filtered markers is enabled.", !settings.enabled || !settings.showFiltered, 0.05)}
             {number("alertMinVolume", "Alert minimum volume", 0, 10_000_000,
-              "Ngưỡng contracts của từng chain mới để phát âm hoặc popup. Độc lập với bộ lọc hiển thị và tổng volume của nhóm; chỉnh min hiển thị không tự đổi ngưỡng này.", !settings.enabled)}
+              "Contracts threshold per new chain for sounds or popups. Independent of display filters and total group volume; changing the display minimum does not change this threshold.", !settings.enabled)}
             {check("alertThroughPriceLevelsOnly", "Alert through price levels only",
-              "Chỉ cảnh báo khi chain có ít nhất hai bản ghi khớp, giá đầu khác giá cuối. Đây là điều kiện riêng cho cảnh báo, không thay đổi marker.", !settings.enabled)}
-            {check("showToast", "Popup notification", "Hiện thông báo cho chain mới hoàn tất đủ ngưỡng cảnh báo. Mỗi chain báo tối đa một lần; tải lịch sử hoặc reconnect không báo lại.", !settings.enabled)}
+              "Alert only for chains with at least two execution records and different first and last prices. This separate alert condition does not change markers.", !settings.enabled)}
+            {check("showToast", "Popup notification", "Show a popup for a newly completed chain meeting the alert threshold. Each chain alerts at most once; loading history or reconnecting does not repeat it.", !settings.enabled)}
           </div>
         </section>
       </div>

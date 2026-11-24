@@ -105,7 +105,7 @@ def trade_event_key(
     """Return the stable storage key for a raw trade event.
 
     The stream ``sequence`` is included but is not the sole key. Playback,
-    reconnects, and NT export imports can reset sequence numbering; including
+    reconnects and exchange replay can reset sequence numbering; including
     timestamp and payload prevents unrelated rows from overwriting each other.
     Exact replays of the same event still collapse to one row.
     """
@@ -135,7 +135,7 @@ def _stored_trade_event_key(t: NormalizedTrade) -> str:
         t.best_ask,
         t.time_ticks,
     )
-    if t.source == "nt":
+    if t.source == "rithmic":
         return legacy
     return _event_key(
         "trade-source",
@@ -168,7 +168,7 @@ def _stored_quote_event_key(q: NormalizedQuote) -> str:
         q.bid_size,
         q.ask_size,
     )
-    if q.source == "nt":
+    if q.source == "rithmic":
         return legacy
     return _event_key("quote-source", q.source, legacy)
 
@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS ticks (
     best_bid   REAL,
     best_ask   REAL,
     time_ticks INTEGER,
-    source     TEXT    NOT NULL DEFAULT 'nt',
+    source     TEXT    NOT NULL DEFAULT 'rithmic',
     source_time_nanos INTEGER,
     bridge_time INTEGER,
     received_at INTEGER,
@@ -209,7 +209,7 @@ CREATE TABLE IF NOT EXISTS quotes (
     ask        REAL,
     bid_size   INTEGER,
     ask_size   INTEGER,
-    source     TEXT    NOT NULL DEFAULT 'nt',
+    source     TEXT    NOT NULL DEFAULT 'rithmic',
     bridge_time INTEGER,
     received_at INTEGER,
     PRIMARY KEY (event_key)
@@ -376,7 +376,7 @@ class TickStore:
     # -- reads ----------------------------------------------------------------
 
     def read_range(
-        self, contract: str, frm: int, to: int, *, source: str | None = "nt"
+        self, contract: str, frm: int, to: int, *, source: str | None = "rithmic"
     ) -> Iterator[NormalizedTrade]:
         """Yield recorded trades for ``contract`` in ``[frm, to]`` (inclusive).
 
@@ -407,7 +407,7 @@ class TickStore:
                     else "NULL AS time_ticks"
                 )
                 optional = {
-                    "source": "source" if "source" in tick_columns else "'nt' AS source",
+                    "source": "source" if "source" in tick_columns else "'rithmic' AS source",
                     "source_time_nanos": (
                         "source_time_nanos"
                         if "source_time_nanos" in tick_columns
@@ -443,7 +443,7 @@ class TickStore:
                     "otc": "otc" if "otc" in tick_columns else "0 AS otc",
                 }
                 has_source = "source" in tick_columns
-                if source is not None and not has_source and source != "nt":
+                if source is not None and not has_source and source != "rithmic":
                     continue
                 source_clause = "" if source is None or not has_source else " AND source = ?"
                 params: tuple[object, ...] = (
@@ -492,7 +492,7 @@ class TickStore:
         frm: int,
         to: int,
         *,
-        source: str | None = "bookmap",
+        source: str | None = "rithmic",
     ) -> Iterator[tuple[int, float, float, float, float]]:
         """Yield exact one-second trade OHLC rows for fast engine warm-up.
 
@@ -516,7 +516,7 @@ class TickStore:
             try:
                 columns = self._table_columns(conn, "ticks")
                 has_source = "source" in columns
-                if source is not None and not has_source and source != "nt":
+                if source is not None and not has_source and source != "rithmic":
                     continue
                 source_clause = "" if source is None or not has_source else " AND source = ?"
                 params: tuple[object, ...] = (
@@ -568,7 +568,7 @@ class TickStore:
                 )
 
     def read_quotes(
-        self, contract: str, frm: int, to: int, *, source: str | None = "nt"
+        self, contract: str, frm: int, to: int, *, source: str | None = "rithmic"
     ) -> Iterator[NormalizedQuote]:
         """Yield recorded quotes for ``contract`` in ``[frm, to]`` (inclusive).
 
@@ -591,9 +591,9 @@ class TickStore:
             try:
                 columns = self._table_columns(conn, "quotes")
                 has_source = "source" in columns
-                if source is not None and not has_source and source != "nt":
+                if source is not None and not has_source and source != "rithmic":
                     continue
-                source_expr = "source" if has_source else "'nt' AS source"
+                source_expr = "source" if has_source else "'rithmic' AS source"
                 bridge_expr = (
                     "bridge_time" if "bridge_time" in columns else "NULL AS bridge_time"
                 )
@@ -850,7 +850,7 @@ class TickStore:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ticks_sequence ON ticks(sequence)")
 
     def _migrate_tick_time_ticks(self, writer: SingleWriter) -> None:
-        """Add optional NT DateTime tick precision to existing tick shards."""
+        """Add optional source tick precision to existing tick shards."""
 
         def op(conn) -> None:
             columns = self._table_columns(conn, "ticks")
@@ -861,7 +861,7 @@ class TickStore:
 
     def _migrate_tick_source_fields(self, writer: SingleWriter) -> None:
         columns = {
-            "source": "TEXT NOT NULL DEFAULT 'nt'",
+            "source": "TEXT NOT NULL DEFAULT 'rithmic'",
             "source_time_nanos": "INTEGER",
             "bridge_time": "INTEGER",
             "received_at": "INTEGER",
@@ -883,7 +883,7 @@ class TickStore:
 
     def _migrate_quote_source_fields(self, writer: SingleWriter) -> None:
         columns = {
-            "source": "TEXT NOT NULL DEFAULT 'nt'",
+            "source": "TEXT NOT NULL DEFAULT 'rithmic'",
             "bridge_time": "INTEGER",
             "received_at": "INTEGER",
         }

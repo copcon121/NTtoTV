@@ -75,7 +75,7 @@ describe("live order line dragging", () => {
     pointer(container, "pointerup", target);
     expect(onCommitBatch).toHaveBeenCalledTimes(1);
     expect(onCommitBatch).toHaveBeenCalledWith([
-      { id: `ord:${field}`, price: target },
+      { id: `ord:${field}`, price: target, startPrice: start },
     ]);
 
     // Once released, confirmed broker updates can move the level normally.

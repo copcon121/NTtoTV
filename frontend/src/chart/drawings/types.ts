@@ -157,14 +157,15 @@ export interface DrawingOptions {
   fillColor?: string;
   /** For Fib retracement: editable horizontal retracement/extension levels. */
   fibLevels?: FibRetracementLevel[];
+  fibDirectional?: boolean;
+  fibExtendRight?: boolean;
+  anchorLabels?: readonly string[];
   /** For Fib retracement: show or hide the diagonal anchor line. */
   fibTrendLineVisible?: boolean;
   /** For Fib retracement: color of the diagonal anchor line. */
   fibTrendLineColor?: string;
   /** For fixed range profile: bid/ask split or total volume rows. */
   fixedRangeProfileMode?: FixedRangeProfileMode;
-  /** GC ticks per row, shared by volume and delta modes; positive integer. */
-  fixedRangeProfileRowTicks?: number;
   /** For fixed range profile: keep the right edge pinned to the latest bar. */
   fixedRangeProfileExtendRight?: boolean;
   /** For fixed range profile: fit the vertical frame to the loaded price ladder. */
@@ -236,6 +237,9 @@ export interface IDrawingManager {
 
   /** Remove a specific drawing by id. */
   removeDrawing(id: string): void;
+
+  /** Remove the currently selected drawing, if one exists. */
+  removeSelectedDrawing(): void;
 
   /** Remove all drawings. */
   removeAllDrawings(): void;

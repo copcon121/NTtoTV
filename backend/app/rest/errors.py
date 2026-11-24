@@ -66,6 +66,8 @@ class ErrorCode:
 
     BAD_REQUEST = "BAD_REQUEST"
     UNAUTHORIZED = "UNAUTHORIZED"
+    FORBIDDEN = "FORBIDDEN"
+    PASSWORD_CHANGE_REQUIRED = "PASSWORD_CHANGE_REQUIRED"
     NOT_FOUND = "NOT_FOUND"
     CONFLICT = "CONFLICT"
     VALIDATION_ERROR = "VALIDATION_ERROR"
@@ -77,6 +79,7 @@ class ErrorCode:
 _STATUS_TO_CODE: dict[int, str] = {
     HTTPStatus.BAD_REQUEST: ErrorCode.BAD_REQUEST,            # 400
     HTTPStatus.UNAUTHORIZED: ErrorCode.UNAUTHORIZED,          # 401
+    HTTPStatus.FORBIDDEN: ErrorCode.FORBIDDEN,                # 403
     HTTPStatus.NOT_FOUND: ErrorCode.NOT_FOUND,                # 404
     HTTPStatus.CONFLICT: ErrorCode.CONFLICT,                  # 409
     HTTPStatus.UNPROCESSABLE_ENTITY: ErrorCode.VALIDATION_ERROR,  # 422

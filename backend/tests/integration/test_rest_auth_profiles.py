@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,8 +8,6 @@ from fastapi.testclient import TestClient
 from app.app import create_app
 from app.config import Settings
 from app.engines.basis_engine import BasisEngine
-from app.engines.alert_engine import Alert, AlertEngine
-from app.engines.smc_fail_break import SMC_FAIL_BREAK_RETEST
 from app.rest import auth as auth_routes
 from app.rest.profiles import (
     MGANN_BREAK_SETTINGS_VERSION,
@@ -61,21 +58,45 @@ def test_register_creates_session_and_duplicate_conflicts(app_client: TestClient
 
 
 @pytest.mark.integration
-def test_saved_smc_length_refreshes_dependent_fail_break_alert(app_client: TestClient):
-    assert app_client.post("/api/auth/register", json={"username": "smc-test", "password": "secret"}).status_code == 200
-    saved = app_client.put("/api/me/profile", json={"payload": {"smc": {"swingLength": 20}}})
-    assert saved.status_code == 200
-    profile_id = saved.json()["profile"]["id"]
+def test_forced_owner_password_change_blocks_app_until_completed(
+    app_client: TestClient,
+):
+    assert app_client.post(
+        "/api/auth/login", json={"username": "original", "password": "old-password"}
+    ).status_code == 200
     cache = app_client.app.state.contract_state.cache
-    engine = AlertEngine(cache)
-    app_client.app.state.runtime = SimpleNamespace(pipeline=SimpleNamespace(alert_engine=engine))
-    engine.upsert(Alert(id="follow-profile", profile_id=profile_id, symbol="GC", type=SMC_FAIL_BREAK_RETEST,
-                        params={"swingLength": 50, "repeat": True}))
-    assert engine._fail_break_state["follow-profile"].params["swingLength"] == 20
-    changed = app_client.put("/api/me/profile", json={"payload": {"smc": {"swingLength": 35}}})
+    reset = cache.users.reset_first_user_credentials(
+        "admin", "temporary-password", require_password_change=True
+    )
+    assert reset.username == "admin"
+    assert reset.must_change_password is True
+
+    login = app_client.post(
+        "/api/auth/login", json={"username": "admin", "password": "temporary-password"}
+    )
+    assert login.status_code == 200
+    assert login.json()["user"]["mustChangePassword"] is True
+    assert app_client.get("/api/me/profile").status_code == 403
+    assert app_client.get("/api/me/profile").json()["error"]["code"] == "PASSWORD_CHANGE_REQUIRED"
+
+    changed = app_client.post(
+        "/api/auth/password",
+        json={
+            "currentPassword": "temporary-password",
+            "newPassword": "new-secure-password",
+        },
+    )
     assert changed.status_code == 200
-    assert engine._fail_break_state["follow-profile"].params["swingLength"] == 35
-    assert cache.read_alert_events("follow-profile") == []
+    assert changed.json()["user"]["mustChangePassword"] is False
+    assert app_client.get("/api/me/profile").status_code == 200
+
+    app_client.post("/api/auth/logout")
+    assert app_client.post(
+        "/api/auth/login", json={"username": "admin", "password": "temporary-password"}
+    ).status_code == 401
+    assert app_client.post(
+        "/api/auth/login", json={"username": "admin", "password": "new-secure-password"}
+    ).status_code == 200
 
 
 @pytest.mark.integration
@@ -95,18 +116,6 @@ def test_session_cookie_uses_configured_ttl(
 
     assert registered.status_code == 200
     assert "Max-Age=604800" in registered.headers["set-cookie"]
-
-
-@pytest.mark.integration
-def test_auth_rejection_logs_cookie_presence_without_credentials(app_client: TestClient, caplog):
-    with caplog.at_level("WARNING", logger="app.rest.auth"):
-        assert app_client.put("/api/me/profile", json={"payload": {}}).status_code == 401
-        assert "session_cookie=missing cookie_count=0" in caplog.text
-        caplog.clear()
-        app_client.cookies.set("nttotv_session", "invalid-session-example")
-        assert app_client.put("/api/me/profile", json={"payload": {}}).status_code == 401
-        assert "session_cookie=invalid cookie_count=1" in caplog.text
-        assert "invalid-session-example" not in caplog.text
 
 
 @pytest.mark.integration
@@ -181,61 +190,6 @@ def test_me_profile_requires_auth_and_is_scoped_by_user(app_client: TestClient):
         "mgannBreak": _default_mgann_break_settings(),
         "mgannBreakSettingsVersion": MGANN_BREAK_SETTINGS_VERSION,
     }
-
-
-@pytest.mark.integration
-def test_liquidity_chart_patch_preserves_chart_profile_and_survives_main_save(
-    app_client: TestClient,
-):
-    assert app_client.post(
-        "/api/auth/register", json={"username": "alice", "password": "pw"}
-    ).status_code == 200
-    assert app_client.put(
-        "/api/me/profile",
-        json={"payload": {"timeframe": "1m", "drawings": []}},
-    ).status_code == 200
-
-    liquidity_chart = {
-        "version": 1,
-        "timeframe": "5m",
-        "visibleBars": 96,
-        "offsetBars": 12,
-        "priceScale": 1.4,
-        "pricePanPx": -30,
-        "filters": {
-            "longTerm": True,
-            "relative": False,
-            "absolute": True,
-            "trend1": True,
-            "trend2": False,
-        },
-        "showVwap": True,
-        "showBigTrades": True,
-        "bigTradeSettings": {
-            "minVolume": 40,
-            "maxVisible": 250,
-            "soundEnabled": True,
-            "sessionMinVolumes": {"asia": 40, "eu": 60, "us": 120},
-        },
-    }
-    patched = app_client.patch(
-        "/api/me/profile/liquidity-chart",
-        json={"liquidityChart": liquidity_chart},
-    )
-    assert patched.status_code == 200
-    assert patched.json()["liquidityChart"] == liquidity_chart
-
-    payload = app_client.get("/api/me/profile").json()["profile"]["payload"]
-    assert payload["timeframe"] == "1m"
-    assert payload["liquidityChart"] == liquidity_chart
-    assert payload["bigTradeSettings"] == liquidity_chart["bigTradeSettings"]
-
-    saved = app_client.put(
-        "/api/me/profile",
-        json={"payload": {"timeframe": "15m", "drawings": []}},
-    )
-    assert saved.status_code == 200
-    assert saved.json()["profile"]["payload"]["liquidityChart"] == liquidity_chart
 
 
 @pytest.mark.integration

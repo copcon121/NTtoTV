@@ -7,7 +7,14 @@ import { LiquidityPage } from "./liquidity/LiquidityPage";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { routeForPathname } from "./routes";
 import { registerServiceWorker } from "./webPush";
+import { RithmicAdminPage } from "./admin/RithmicAdminPage";
 import "./styles.css";
+import "./chart/theme.css";
+import "./workspace/workspace.css";
+import { initializeWorkspaceTheme } from "./workspace/themes";
+import "./orderflow/orderflow.css";
+
+if (routeForPathname(window.location.pathname) !== "admin") initializeWorkspaceTheme();
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
@@ -25,6 +32,8 @@ const app =
     <MarketProfilePage />
   ) : route === "liquidity" ? (
     <LiquidityPage />
+  ) : route === "admin" ? (
+    <RithmicAdminPage />
   ) : (
     <LiveApp />
   );

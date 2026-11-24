@@ -168,7 +168,7 @@ def test_record_and_read_range_round_trip(store: TickStore):
 
 
 @pytest.mark.unit
-def test_record_and_read_range_preserves_nt_time_ticks(store: TickStore):
+def test_record_and_read_range_preserves_source_time_ticks(store: TickStore):
     contract = "GC 08-26"
     time_ticks = 638858610886080001
     trade = _trade(
@@ -189,15 +189,15 @@ def test_record_and_read_range_preserves_nt_time_ticks(store: TickStore):
 def test_quotes_are_isolated_by_source(store: TickStore) -> None:
     contract = "GC 12-26"
     timestamp = _ms(2026, 8, 1, 12)
-    nt_quote = _quote(contract, timestamp, 1)
+    archive_quote = _quote(contract, timestamp, 1)
+    archive_quote.source = "archive"
     rithmic_quote = _quote(contract, timestamp, 1)
-    rithmic_quote.source = "rithmic"
 
-    store.record_quote(nt_quote)
+    store.record_quote(archive_quote)
     store.record_quote(rithmic_quote)
 
     assert [q.source for q in store.read_quotes(contract, timestamp, timestamp)] == [
-        "nt"
+        "rithmic"
     ]
     assert [
         q.source
@@ -205,10 +205,16 @@ def test_quotes_are_isolated_by_source(store: TickStore) -> None:
             contract, timestamp, timestamp, source="rithmic"
         )
     ] == ["rithmic"]
+    assert [
+        q.source
+        for q in store.read_quotes(
+            contract, timestamp, timestamp, source="archive"
+        )
+    ] == ["archive"]
     assert sorted(
         q.source
         for q in store.read_quotes(contract, timestamp, timestamp, source=None)
-    ) == ["nt", "rithmic"]
+    ) == ["archive", "rithmic"]
 
 @pytest.mark.unit
 def test_read_second_ohlc_preserves_tick_order_and_filters_source(store: TickStore):
@@ -221,10 +227,9 @@ def test_read_second_ohlc_preserves_tick_order_and_filters_source(store: TickSto
             sequence=sequence,
             price=price,
         )
-        trade.source = "bookmap"
         store.record_trade(trade)
     ignored = _trade("GC 12-26", start + 50, sequence=9, price=500.0)
-    ignored.source = "nt"
+    ignored.source = "archive"
     store.record_trade(ignored)
 
     rows = list(
@@ -232,14 +237,14 @@ def test_read_second_ohlc_preserves_tick_order_and_filters_source(store: TickSto
             "GC 12-26",
             start,
             start + 999,
-            source="bookmap",
+            source="rithmic",
         )
     )
     assert rows == [(start, 100.0, 101.0, 99.0, 100.5)]
 
 
 @pytest.mark.unit
-def test_read_range_accepts_legacy_shard_without_nt_time_ticks(tmp_path: Path):
+def test_read_range_accepts_legacy_shard_without_source_time_ticks(tmp_path: Path):
     store = TickStore(ticks_dir=tmp_path / "ticks")
     contract = "GC 08-26"
     time_ms = _ms(2026, 8, 1, 10)
@@ -395,13 +400,13 @@ def test_read_range_respects_inclusive_bounds(store: TickStore):
 
 
 @pytest.mark.unit
-def test_raw_trades_are_isolated_by_source_and_preserve_bookmap_metadata(
+def test_raw_trades_are_isolated_by_source_and_preserve_direct_feed_metadata(
     store: TickStore,
 ):
     contract = "GC 08-26"
     time_ms = _ms(2026, 8, 1, 12)
-    nt = _trade(contract, time_ms, sequence=1, volume=3)
-    bookmap = NormalizedTrade(
+    rithmic = _trade(contract, time_ms, sequence=1, volume=3)
+    archive = NormalizedTrade(
         symbol="GC",
         contract=contract,
         time=time_ms,
@@ -412,7 +417,7 @@ def test_raw_trades_are_isolated_by_source_and_preserve_bookmap_metadata(
         best_bid=None,
         best_ask=None,
         sequence=1,
-        source="bookmap",
+        source="archive",
         source_time_nanos=time_ms * 1_000_000 + 123,
         bridge_time=time_ms + 5,
         received_at=time_ms + 8,
@@ -422,25 +427,25 @@ def test_raw_trades_are_isolated_by_source_and_preserve_bookmap_metadata(
         execution_start=True,
         otc=True,
     )
-    store.record_trade(nt)
-    store.record_trade(bookmap)
+    store.record_trade(rithmic)
+    store.record_trade(archive)
 
     assert [trade.source for trade in store.read_range(contract, time_ms, time_ms)] == [
-        "nt"
+        "rithmic"
     ]
-    bookmap_rows = list(
-        store.read_range(contract, time_ms, time_ms, source="bookmap")
+    archive_rows = list(
+        store.read_range(contract, time_ms, time_ms, source="archive")
     )
-    assert len(bookmap_rows) == 1
-    assert bookmap_rows[0].volume == 7
-    assert bookmap_rows[0].source_time_nanos == bookmap.source_time_nanos
-    assert bookmap_rows[0].side is Side.BUY
-    assert bookmap_rows[0].aggressor_order_id == "aggr-1"
-    assert bookmap_rows[0].execution_start is True
-    assert bookmap_rows[0].otc is True
+    assert len(archive_rows) == 1
+    assert archive_rows[0].volume == 7
+    assert archive_rows[0].source_time_nanos == archive.source_time_nanos
+    assert archive_rows[0].side is Side.BUY
+    assert archive_rows[0].aggressor_order_id == "aggr-1"
+    assert archive_rows[0].execution_start is True
+    assert archive_rows[0].otc is True
 
     combined = list(store.read_range(contract, time_ms, time_ms, source=None))
-    assert {trade.source for trade in combined} == {"nt", "bookmap"}
+    assert {trade.source for trade in combined} == {"rithmic", "archive"}
 
 
 @pytest.mark.unit

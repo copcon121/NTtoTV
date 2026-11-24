@@ -5,7 +5,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 
 from ..config import settings as default_settings
-from ..ingest.bookmap_endpoint import get_bookmap_control
 from ..liquidity_settings import (
     LiquiditySettingsError,
     load_liquidity_settings,
@@ -171,10 +170,9 @@ async def update_liquidity_settings(request: Request) -> dict:
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is not None:
         runtime.pipeline.configure_liquidity(updated)
-    sent = await get_bookmap_control(request.app).send_liquidity_settings(updated)
     return {
         "settings": updated,
-        "sentToBookmap": sent,
+        "appliedTo": ["rithmic"],
         "historyCleared": [],
         "historyRefiltered": changed_kinds,
         "historyDeleted": {

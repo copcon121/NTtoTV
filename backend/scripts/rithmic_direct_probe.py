@@ -65,6 +65,17 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="prompt without echo instead of reading NTTOTV_RITHMIC_* variables",
     )
+    plants = subparsers.add_parser(
+        "plants", help="login to Ticker Plant and History Plant concurrently"
+    )
+    plants.add_argument("--system", default=None)
+    plants.add_argument("--app-name", default=None)
+    plants.add_argument("--app-version", default=None)
+    plants.add_argument(
+        "--prompt-credentials",
+        action="store_true",
+        help="prompt without echo instead of reading NTTOTV_RITHMIC_* variables",
+    )
     return result
 
 
@@ -94,6 +105,8 @@ async def run(args: argparse.Namespace) -> dict:
         login.app_name = args.app_name
     if args.app_version:
         login.app_version = args.app_version
+    if args.command == "plants":
+        return await client.probe_plant_logins(login)
     modes = {value.strip().lower() for value in args.modes.split(",") if value.strip()}
     return await client.probe_market_data(
         login=login,

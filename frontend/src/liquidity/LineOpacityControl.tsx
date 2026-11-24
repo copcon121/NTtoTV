@@ -6,11 +6,11 @@ export function LineOpacityControl({ value, onChange }: {
 }) {
   const percent = Math.round(value * 100);
   return (
-    <label className="liquidity-line-opacity" title="0%: ẩn line; 100%: mặc định; 200%: đậm gấp đôi">
-      <span>Độ đậm line</span>
+    <label className="liquidity-line-opacity" title="0%: hide lines; 100%: default; 200%: twice the intensity">
+      <span>Line intensity</span>
       <input
         type="range"
-        aria-label="Độ đậm line thanh khoản"
+        aria-label="Liquidity line intensity"
         aria-valuetext={`${percent}%`}
         min={0}
         max={200}

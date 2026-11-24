@@ -1,7 +1,7 @@
 """Ingestion coordinator: validate → record raw tick before throttling → degraded seam (task 6.4).
 
 This module ties together the pieces produced by tasks 6.1 and 6.2 and adds the
-behavior required by Requirements 4.4 and 4.5 on the `/ws/nt` ingestion path:
+behavior required by the Rithmic ingestion path:
 
 * **Record every accepted tick before throttling (Req 4.5).** Each decoded
   trade/quote frame is run through the :class:`~app.ingest.sequence_validator.
@@ -41,7 +41,6 @@ from ..models.canonical import NormalizedQuote, NormalizedTrade
 from ..models.messages import ChartStatusEvent, StatusState
 from ..models.timestamp import CanonicalTimestamp, now_ms
 from ..storage.tick_store import TickStore
-from .endpoint import IngestHandlers
 from .sequence_validator import SeqDecision, SeqOutcome, SequenceValidator, StreamId
 
 logger = logging.getLogger(__name__)
@@ -77,7 +76,7 @@ async def _maybe_await(result: Awaitable[None] | None) -> None:
 class IngestionCoordinator:
     """Coordinates per-frame validation, raw recording, and the degraded seam.
 
-    For each decoded `/ws/nt` data frame the coordinator:
+    For each decoded Rithmic data frame the coordinator:
 
     1. resolves the frame's Stream ``(symbol, contract, channel)``,
     2. runs :meth:`SequenceValidator.evaluate` (dedup / out-of-order / accept /
@@ -117,17 +116,6 @@ class IngestionCoordinator:
     def validator(self) -> SequenceValidator:
         """The per-Stream sequence validator used by this coordinator."""
         return self._validator
-
-    def handlers(self) -> IngestHandlers:
-        """Return the :class:`IngestHandlers` bundle for the ingestion endpoint.
-
-        Wires :meth:`on_trade` / :meth:`on_quote` so an
-        :class:`~app.ingest.endpoint.IngestEndpoint` routes decoded frames
-        through validation + recording + the degraded seam. Status and
-        heartbeat handling are left to other seams (status forwarding is task
-        20.1; the liveness watchdog is task 6.6).
-        """
-        return IngestHandlers(on_trade=self.on_trade, on_quote=self.on_quote)
 
     async def on_trade(self, trade: NormalizedTrade) -> SeqDecision:
         """Validate, record (if accepted), and emit degraded on gap. (Req 4.4, 4.5)

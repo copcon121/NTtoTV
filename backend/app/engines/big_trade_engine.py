@@ -2,14 +2,14 @@
 
 The BigTrade_Engine reconstructs the trade tape in **simple mode** (no iceberg
 detection, DOM pressure, or DOM support - Req 15.1), classifies each trade's
-side using the ordered rule set from the local NinjaTrader BigTradeIndicator,
-merges adjacent fragments the same way that indicator's ``currentTrade`` merge
+side using the reference ordered classification rule set,
+merges adjacent fragments using the reference ``currentTrade`` merge
 does, and emits a :class:`~app.models.messages.BigTrade` for each merged entry
 that passes the volume filter. (Requirements 15.1-15.4)
 
 Merge (Req 15.2)
 ----------------
-NinjaTrader's BigTradeIndicator merges only when ``ReconstructTape`` is enabled
+The reference algorithm merges only when tape reconstruction is enabled
 and the incoming print is adjacent to the current group with the exact same
 timestamp and side. A same-timestamp opposite-side print finalizes the current
 group; if the original side appears again at that timestamp it becomes a new
@@ -109,10 +109,10 @@ class BigTradeEngine:
         last_side: Side | None,
         prev_price: float | None,
     ) -> Side | None:
-        """Classify a trade as buy/sell by the NT BigTrade rule set.
+        """Classify a trade as buy/sell by the reference BigTrade rule set.
 
         The first print can be unclassified when there is no quote snapshot,
-        prior price, or prior side. NinjaTrader's BigTradeIndicator returns
+        prior price, or prior side. The reference algorithm returns
         Unknown in that case and drops the print, so this method returns None.
         """
         if ask is not None and ask > 0 and trade_price >= ask:
@@ -239,12 +239,11 @@ class BigTradeEngine:
 
     @staticmethod
     def _merge_time_key(t: NormalizedTrade) -> int:
-        """Timestamp equality key for NT ReconstructTape grouping.
+        """Timestamp equality key for high-resolution tape grouping.
 
-        NinjaTrader's BigTradeIndicator compares ``MarketDataEventArgs.Time``
-        directly. The chart still uses canonical milliseconds, but when the NT
-        bridge provides UTC ``DateTime.Ticks`` we must use that higher-precision
-        value for merge equality so distinct NT event times inside one
+        The reference algorithm compares the source event time directly. The
+        chart still uses canonical milliseconds, but when a feed provides a
+        higher-precision value we use it for merge equality so distinct event times inside one
         millisecond do not collapse into one synthetic BigTrade.
         """
         return t.time_ticks if t.time_ticks is not None else t.time
@@ -305,16 +304,15 @@ class BigTradeEngine:
     def _dedup_repeated_tick_run(ticks: list[tuple[float, int]]) -> tuple[int, float]:
         """Collapse duplicate subscription replays inside a timestamp.
 
-        A leaked NT MarketData handler can replay the same same-timestamp tape
+        A duplicated data handler can replay the same same-timestamp tape
         run N times (commonly 2x). That turns, for example, 33 one-lot prints
-        into a synthetic 66-lot BigTrade that the chart-side NinjaTrader
-        indicator never sees.
+        into a synthetic 66-lot BigTrade that the reference feed never sees.
 
         Detection strategy (checked in order):
 
         1. **Exact Nx**: the tick list consists of N identical copies of a
            sub-sequence (N = 2, 3, ...), including a single large print replayed
-           with the same NT timestamp. The first copy is kept.
+           with the same source timestamp. The first copy is kept.
         2. **Near 2x**: the first half equals the second half after removing
            one straggler tick at the boundary (count is odd, ``count-1`` is
            even, and the two ``(count-1)/2`` halves match). This handles an

@@ -10,6 +10,7 @@ TestClient against a temporary Cache_Store and Tick_Store.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -18,10 +19,11 @@ from fastapi.testclient import TestClient
 from app.app import create_app
 from app.config import Settings
 from app.models import NormalizedTrade
+from app.models.timestamp import from_iso8601
 from app.rest.contract_state import ContractStateStore
 from app.rest.routes import HISTORY_CACHE_CAP
 from app.storage.cache_store import CacheStore
-from app.storage.records import BarRecord
+from app.storage.records import BarRecord, VolumeDeltaRecord
 from app.storage.tick_store import TickStore
 
 _SYMBOL = "GC"
@@ -71,7 +73,14 @@ def _bar(time_ms: int, *, close: float, volume: int) -> BarRecord:
     )
 
 
-def _trade(time_ms: int, *, price: float, volume: int, seq: int) -> NormalizedTrade:
+def _trade(
+    time_ms: int,
+    *,
+    price: float,
+    volume: int,
+    seq: int,
+    source: str = "rithmic",
+) -> NormalizedTrade:
     return NormalizedTrade(
         symbol=_SYMBOL,
         contract=_ACTIVE,
@@ -83,10 +92,57 @@ def _trade(time_ms: int, *, price: float, volume: int, seq: int) -> NormalizedTr
         best_bid=price - 0.1,
         best_ask=price + 0.1,
         sequence=seq,
+        source=source,
     )
 
 
 # -- cache path (Req 11.4) ----------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("timeframe", "last_open", "first_open"),
+    [
+        ("1W", "2024-03-10T22:00:00Z", "2024-03-03T23:00:00Z"),
+        ("1M", "2024-02-29T23:00:00Z", "2024-01-31T23:00:00Z"),
+    ],
+)
+def test_calendar_history_and_delta_roll_up_existing_gc_days(env, timeframe, last_open, first_open):
+    client, cache, _ = env
+    previous = from_iso8601(first_open)
+    opening = from_iso8601(last_open)
+    # Use dates in the same week/month after the bucket opens, including
+    # the Sunday open following the change to daylight-saving time.
+    first = opening if timeframe == "1W" else from_iso8601("2024-03-03T23:00:00Z")
+    second = first + 24 * 60 * 60_000
+    rows = [
+        replace(_bar(previous, close=98, volume=3), timeframe="1D", contract="GC"),
+        replace(_bar(first, close=104, volume=10), timeframe="1D", contract="GC", open=100, high=108, low=99),
+        replace(_bar(second, close=102, volume=12), timeframe="1D", contract="GC", high=107, low=96),
+    ]
+    cache.upsert_bars(rows)
+    cache.upsert_volume_deltas([
+        VolumeDeltaRecord("GC", "GC", "1D", first, 10, 7, 3, 4, 6, -1, 0, 4),
+        VolumeDeltaRecord("GC", "GC", "1D", second, 12, 3, 9, -6, 3, -8, 0, -6),
+    ])
+    params = {"symbol": "GC", "contract": "GC", "tf": timeframe}
+    bars = client.get("/api/history", params=params).json()["bars"]
+    assert [bar["time"] for bar in bars] == [previous, opening]
+    assert bars[-1] == {
+        "time": opening, "open": 100, "high": 108, "low": 96, "close": 102,
+        "volume": 22, "closed": True, "source": "legacy",
+    }
+    # Range filters and limits select by candle open, while the OHLCV still
+    # includes all daily sessions in the selected calendar candle.
+    response = client.get("/api/history", params={**params, "to": opening, "limit": 1})
+    assert response.json()["bars"] == bars[-1:]
+    response = client.get("/api/history", params={**params, "from": opening + 1, "to": second})
+    assert response.json()["bars"] == []
+    delta = client.get("/api/orderflow/volume-delta", params=params).json()["bars"]
+    assert delta == [{
+        "time": opening, "volume": 22, "buyVolume": 10, "sellVolume": 12,
+        "delta": -2, "deltaHigh": 7, "deltaLow": -4, "openDelta": 0, "closeDelta": -2,
+    }]
 
 
 @pytest.mark.integration
@@ -158,6 +214,26 @@ def test_history_limit_is_capped_to_5000(env):
 
 
 @pytest.mark.integration
+def test_calendar_cache_miss_uses_in_session_ticks(env):
+    client, _, tick_store = env
+    opening = from_iso8601("2024-03-10T22:00:00Z")
+    tick_store.record_trade(_trade(opening - 1000, price=90, volume=8, seq=1))
+    tick_store.record_trade(_trade(opening + 1000, price=100, volume=3, seq=2))
+    tick_store.record_trade(_trade(opening + 2000, price=99, volume=2, seq=3))
+    params = {"symbol": "GC", "tf": "1W", "from": opening - 2000, "to": opening + 3000}
+
+    history = client.get("/api/history", params=params).json()
+    assert history["source"] == "rebuild"
+    assert history["bars"] == [{
+        "time": opening, "open": 100, "high": 100, "low": 99, "close": 99,
+        "volume": 5, "source": "rithmic", "closed": False,
+    }]
+    delta = client.get("/api/orderflow/volume-delta", params=params).json()
+    assert delta["source"] == "rebuild"
+    assert [(row["time"], row["delta"]) for row in delta["bars"]] == [(opening, 1)]
+
+
+@pytest.mark.integration
 def test_history_cache_miss_rebuilds_from_ticks(env):
     client, _, tick_store = env
     # No cached bars; record raw ticks across two 1m buckets.
@@ -185,7 +261,7 @@ def test_history_cache_miss_rebuilds_from_ticks(env):
     assert first["low"] == 2344.0
     assert first["close"] == 2344.0
     assert first["volume"] == 10
-    assert first["source"] == "nt"
+    assert first["source"] == "rithmic"
     # Second bucket has a single tick.
     assert bars[1] == {
         "time": bucket1,
@@ -194,7 +270,7 @@ def test_history_cache_miss_rebuilds_from_ticks(env):
         "low": 2347.0,
         "close": 2347.0,
         "volume": 4,
-        "source": "nt",
+        "source": "rithmic",
         "closed": True,
     }
 
@@ -222,7 +298,7 @@ def test_history_rebuild_marks_last_partial_bucket_open(env):
 
 
 @pytest.mark.integration
-def test_history_alias_rebuild_uses_active_bookmap_source_only(tmp_path):
+def test_history_alias_rebuild_uses_active_rithmic_source_only(tmp_path):
     settings = Settings(
         data_dir=tmp_path,
         supported_symbols=(_SYMBOL,),
@@ -231,7 +307,7 @@ def test_history_alias_rebuild_uses_active_bookmap_source_only(tmp_path):
     cache = CacheStore(tmp_path / "app.sqlite")
     state = ContractStateStore(cache, settings=settings)
     tick_store = TickStore(tmp_path / "ticks")
-    status = SimpleNamespace(active_source="bookmap", preferred_source="bookmap")
+    status = SimpleNamespace(active_source="rithmic", preferred_source="rithmic")
     pipeline = SimpleNamespace(market_data_status_message=lambda: status)
     app = create_app(lifespan=False)
     app.state.contract_state = state
@@ -239,7 +315,7 @@ def test_history_alias_rebuild_uses_active_bookmap_source_only(tmp_path):
     app.state.runtime = SimpleNamespace(pipeline=pipeline)
     try:
         tick_store.record_trade(
-            _trade(_BASE_MS + 1_000, price=2300.0, volume=99, seq=1)
+            _trade(_BASE_MS + 1_000, price=2300.0, volume=99, seq=1, source="nt")
         )
         tick_store.record_trade(
             NormalizedTrade(
@@ -253,7 +329,7 @@ def test_history_alias_rebuild_uses_active_bookmap_source_only(tmp_path):
                 best_bid=None,
                 best_ask=None,
                 sequence=1,
-                source="bookmap",
+                source="rithmic",
                 source_time_nanos=(_BASE_MS + 1_000) * 1_000_000,
                 received_at=_BASE_MS + 1_005,
             )
@@ -273,7 +349,7 @@ def test_history_alias_rebuild_uses_active_bookmap_source_only(tmp_path):
         body = response.json()
         assert body["contract"] == _SYMBOL
         assert [(bar["close"], bar["volume"], bar["source"]) for bar in body["bars"]] == [
-            (2400.0, 7, "bookmap")
+            (2400.0, 7, "rithmic")
         ]
     finally:
         tick_store.close()

@@ -1,57 +1,75 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { TimeframeSelector, TIMEFRAMES } from "./TimeframeSelector";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { TimeframeSelector } from "./TimeframeSelector";
+
+function openSelector() {
+  const trigger = screen.getByRole("button", { name: /Timeframe selector/ });
+  fireEvent.click(trigger);
+  return trigger;
+}
+
+afterEach(() => localStorage.clear());
 
 describe("TimeframeSelector", () => {
-  it("renders the full supported timeframe set in order (Req 9.1)", () => {
-    render(<TimeframeSelector value="1m" onChange={() => {}} />);
-    const labels = screen.getAllByRole("radio").map((b) => b.textContent);
-    expect(labels).toEqual([
-      "15s",
-      "30s",
-      "1m",
-      "3m",
-      "5m",
-      "15m",
-      "30m",
-      "1h",
-      "4h",
-      "1D",
-    ]);
-    expect(TIMEFRAMES).toHaveLength(10);
-  });
-
-  it("marks the active timeframe as checked", () => {
+  it("groups the presets and marks the active timeframe", () => {
     render(<TimeframeSelector value="15m" onChange={() => {}} />);
-    expect(screen.getByRole("radio", { name: "15m" })).toHaveAttribute(
-      "aria-checked",
-      "true",
+    const trigger = openSelector();
+    const menu = screen.getByRole("group", { name: "Timeframes" });
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    for (const label of ["Seconds", "Minutes", "Hours", "Days"]) {
+      expect(within(menu).getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    expect(within(menu).getByRole("button", { name: "15 Minutes" })).toHaveAttribute(
+      "aria-pressed", "true",
     );
-    expect(screen.getByRole("radio", { name: "1m" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
+    expect(within(menu).getByRole("button", { name: "1 Week" })).toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: "1 Month" })).toBeInTheDocument();
   });
 
-  it("calls onChange with the selected timeframe (Req 19.1)", () => {
+  it("changes to the chosen timeframe and closes the menu", () => {
     const onChange = vi.fn();
     render(<TimeframeSelector value="1m" onChange={onChange} />);
-    fireEvent.click(screen.getByRole("radio", { name: "1h" }));
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith("1h");
+    const trigger = openSelector();
+    fireEvent.click(screen.getByRole("button", { name: "1 Week" }));
+    expect(onChange.mock.calls).toEqual([["1W"]]);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
   });
 
-  it("does not emit a change when the active timeframe is clicked", () => {
+  it("keeps the selection when the active timeframe is clicked", () => {
     const onChange = vi.fn();
     render(<TimeframeSelector value="1D" onChange={onChange} />);
-    fireEvent.click(screen.getByRole("radio", { name: "1D" }));
+    openSelector();
+    fireEvent.click(screen.getByRole("button", { name: "1 Day" }));
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("honors a custom timeframe set", () => {
+  it("collapses groups and limits options to the supplied set", () => {
     render(
       <TimeframeSelector value="5m" onChange={() => {}} timeframes={["5m", "1h"]} />,
     );
-    expect(screen.getAllByRole("radio")).toHaveLength(2);
+    openSelector();
+    expect(screen.queryByRole("button", { name: "Days" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Minutes" }));
+    expect(screen.queryByRole("button", { name: "5 Minutes" })).toBeNull();
+    expect(screen.getByRole("button", { name: "1 Hour" })).toBeInTheDocument();
+  });
+
+  it("remembers pins and lets Escape dismiss the menu", () => {
+    const view = render(<TimeframeSelector value="1m" onChange={() => {}} />);
+    const trigger = openSelector();
+    const pin = screen.getByRole("button", { name: "Pin 1 Month" });
+    fireEvent.click(pin);
+    expect(pin).toHaveAttribute("aria-pressed", "true");
+    fireEvent.keyDown(pin, { key: "Escape" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+    view.unmount();
+
+    const onChange = vi.fn();
+    render(<TimeframeSelector value="1m" onChange={onChange} />);
+    const favorites = screen.getByRole("group", { name: "Pinned timeframes" });
+    fireEvent.click(within(favorites).getByRole("button", { name: "1 Month" }));
+    expect(onChange.mock.calls).toEqual([["1M"]]);
   });
 });

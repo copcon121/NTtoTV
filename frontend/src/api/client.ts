@@ -14,7 +14,6 @@ import {
   type WebPushSendResult,
 } from "../alerts/types";
 import type { AlertEventMessage } from "../socket/messages";
-import { notifyAuthSessionChanged, requestAuthSessionCheck } from "../auth/sessionSync";
 import {
   type ChartProfile,
   type ChartProfilePayload,
@@ -34,8 +33,55 @@ import {
   type StackedImbalance,
   type TradingOrder,
   type TradingPosition,
+  type PnlPerPriceUnit,
   type Timeframe,
 } from "../socket/messages";
+import type { Workspace, WorkspacePayload } from "../workspace/types";
+
+export interface Instrument {
+  id: string;
+  symbol: string;
+  displaySymbol: string;
+  venue: string;
+  assetClass: string;
+  provider: string;
+  contractMode: string;
+  activeContract?: string;
+  readOnly: boolean;
+}
+
+export interface AiScanCandidate {
+  id: string;
+  type: "trendline" | "fibonacci_retracement" | "fibonacci_extension" | "elliott_wave";
+  label: string;
+  anchors: { time: number; price: number }[];
+  technicalScore: number;
+  score: number;
+  explanation: string;
+  invalidIf: string;
+  note?: string | null;
+}
+
+export interface AiScanResponse {
+  scanId: string;
+  instrumentId: string;
+  symbol: string;
+  displaySymbol: string;
+  venue: string;
+  contract: string;
+  timeframe: string;
+  depth: "short" | "medium" | "deep";
+  density?: string;
+  strength?: string;
+  aiAvailable: boolean;
+  rankingSource: "ai" | "technical-fallback";
+  candidates: AiScanCandidate[];
+  suggestions?: import("../chart/scanAi/types").ScanAiSuggestion[];
+  summary?: {
+    totalSuggestions: number;
+    groupCounts: Record<string, number>;
+  };
+}
 
 export interface ContractsResponse {
   symbol: string;
@@ -75,9 +121,9 @@ export interface FootprintRestBar {
 }
 
 export interface FootprintQuery {
-  timeframe?: Timeframe;
   count?: number;
   from?: number;
+  to?: number;
   at?: number;
   context?: number;
 }
@@ -118,7 +164,6 @@ export interface TduSignalRestRow {
   momentumDirection: number;
   momentumLevel: number;
   deltaDivergence: number;
-  momentumSamples?: TduSignalUpdateMessage["momentumSamples"];
 }
 
 export interface BigTradeRestRow {
@@ -168,11 +213,12 @@ export interface ApiClientOptions {
 export interface AuthUser {
   id: string;
   username: string;
+  mustChangePassword?: boolean;
 }
 
 export interface Mt5Account {
   accountId: string;
-  login: number;
+  login: number | string;
   server: string;
   symbolBroker?: string;
   terminalPath?: string;
@@ -182,6 +228,25 @@ export interface Mt5Account {
   equity?: number;
   margin?: number;
   freeMargin?: number;
+  floatingPnl?: number | null;
+  accountStateAt?: number;
+  accountStateStale?: boolean;
+  provider?: "exness";
+  connected?: boolean;
+  gateway?: string;
+  credentialsStored?: boolean;
+  error?: string | null;
+  uncertainActions?: { key: string; action: string; createdAt: number }[];
+}
+
+export type BrokerTicket = number | string;
+
+export interface ExnessConnectInput {
+  accountId: string;
+  apiKey: string;
+  apiSecret: string;
+  gateway?: string;
+  symbolBroker?: string;
 }
 
 export interface Mt5Symbol {
@@ -195,32 +260,17 @@ export interface Mt5Symbol {
   pipValue: number;
 }
 
-export interface Mt5ConnectInput {
-  login: number;
-  password: string;
-  server: string;
-  symbolBroker?: string;
-  terminalPath?: string;
-}
-
 export interface Mt5Status {
   connected: boolean;
   account: Mt5Account | null;
   error?: string;
 }
 
-export interface Mt5Terminal {
-  path: string;
-  login: number | null;
-  server: string | null;
-  title: string;
-  label?: string;
-}
-
 export interface OrderSubmitInput {
   source: "chart_bracket" | "market_bar" | "api";
   side: "buy" | "sell";
   kind: "market" | "limit" | "stop";
+  autoPendingKind?: boolean;
   volumeLots: number;
   entryGc?: number;
   referenceGc?: number;
@@ -229,7 +279,6 @@ export interface OrderSubmitInput {
   slDistanceGc?: number;
   tpDistanceGc?: number;
   takeProfit1rEnabled?: boolean;
-  takeProfitR?: number;
   autoSupertrendAfter1rEnabled?: boolean;
   trailingTimeframe?: Timeframe;
   trailingPeriod?: number;
@@ -240,17 +289,10 @@ export interface OrderSubmitInput {
   idempotencyKey: string;
 }
 
-export interface AutoTradeSettings {
-  longEnabled: boolean;
-  shortEnabled: boolean;
-  volumeLots: number;
-  updatedAt: number;
-}
-
 export interface SupertrendTrailing {
   targetType: "order" | "position";
   targetId: string;
-  brokerPositionTicket: number;
+  brokerPositionTicket: BrokerTicket;
   side: Side;
   timeframe: Timeframe;
   period: number;
@@ -272,7 +314,7 @@ export interface SupertrendTrailingInput {
 }
 
 export interface Mt5PendingOrder {
-  brokerOrderTicket: number;
+  brokerOrderTicket: BrokerTicket;
   orderId?: string | null;
   symbolBroker: string;
   side: Side;
@@ -285,6 +327,8 @@ export interface Mt5PendingOrder {
   slGc?: number | null;
   tpGc?: number | null;
   basisStale?: boolean;
+  actionPending?: boolean;
+  pnlPerPriceUnit?: PnlPerPriceUnit;
   updatedAt: number;
 }
 
@@ -294,58 +338,19 @@ export interface Mt5OpenTrades {
 }
 
 export interface Mt5TradePatchInput {
-  breakEven?: boolean;
   entryGc?: number | null;
   slGc?: number | null;
   tpGc?: number | null;
+  priceDeltas?: Partial<Record<"entryGc" | "slGc" | "tpGc", number>>;
+  breakEven?: boolean;
 }
 
-export interface AnalystReport {
-  reportId: string;
-  snapshotId: string;
-  symbol: string;
-  contract: string;
-  createdAt: number;
-  bias: string;
-  decision:
-    | "no_trade"
-    | "wait_for_buy"
-    | "wait_for_sell"
-    | "buy_candidate"
-    | "sell_candidate";
-  confidence: number;
-  reason: string[];
-  invalidIf: string;
-  nextConfirmation: string;
-  riskState: string;
-  allowedToAlert: boolean;
-  allowedToAutoTrade: false;
-  rawResponse?: Record<string, unknown>;
-}
-
-export interface AnalystRunResponse {
-  snapshot: Record<string, unknown>;
-  report: AnalystReport | null;
-  llmEnabled: boolean;
-  error: string | null;
-  telegram?: { sent: boolean; reason?: string };
-}
-
-export interface AnalystAutoSendState {
-  available: boolean;
-  enabled: boolean;
-  running?: boolean;
-  intervalSeconds?: number;
-  reason?: string;
-}
-
-export interface AnalystEventAiState {
-  available: boolean;
-  enabled: boolean;
-  profileId: string;
-  providerMode: "real";
-  llmEnabled: boolean;
-  reason?: string | null;
+export interface ExnessExecutionState {
+  account: Mt5Account | null;
+  trades: Mt5OpenTrades;
+  orders: TradingOrder[];
+  trailings: SupertrendTrailing[];
+  actionError?: string | null;
 }
 
 function footprintRestBarToMessage(
@@ -379,20 +384,23 @@ function footprintRestBarToMessage(
 }
 
 export class ApiClient {
+  private readonly brokerPath = "/execution";
+
+  async execution(): Promise<{ enabled: boolean; profiles: string[]; mode?: string }> {
+    try {
+      const result = await this.getJson<{ enabled: boolean; profiles: string[]; mode?: string }>("/execution");
+      return result;
+    } catch {
+      return { enabled: false, profiles: [] };
+    }
+  }
+
   private readonly basePath: string;
   private readonly fetchFn: typeof fetch;
 
   constructor(options: ApiClientOptions = {}) {
     this.basePath = options.basePath ?? "/api";
-    const fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
-    this.fetchFn = async (input, init) => {
-      const response = await fetchFn(input, init);
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (response.status === 401 && !/\/auth\/(login|register|me)(?:[?#]|$)/.test(url)) {
-        requestAuthSessionCheck();
-      }
-      return response;
-    };
+    this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
   }
 
   async login(username: string, password: string): Promise<AuthUser> {
@@ -406,7 +414,6 @@ export class ApiClient {
       throw new Error(await this.errorMessage(res, "POST /auth/login"));
     }
     const body = (await res.json()) as { user: AuthUser };
-    notifyAuthSessionChanged();
     return body.user;
   }
 
@@ -425,14 +432,12 @@ export class ApiClient {
       throw new Error(await this.errorMessage(res, "POST /auth/register"));
     }
     const body = (await res.json()) as { user: AuthUser };
-    notifyAuthSessionChanged();
     return body.user;
   }
 
   async me(): Promise<AuthUser | undefined> {
     const res = await this.fetchFn(`${this.basePath}/auth/me`, {
       credentials: "same-origin",
-      cache: "no-store",
     });
     if (res.status === 401) return undefined;
     if (!res.ok) throw new Error(await this.errorMessage(res, "GET /auth/me"));
@@ -446,54 +451,54 @@ export class ApiClient {
       credentials: "same-origin",
     });
     if (!res.ok) throw new Error(await this.errorMessage(res, "POST /auth/logout"));
-    notifyAuthSessionChanged();
-  }
-
-  async connectMt5(input: Mt5ConnectInput): Promise<Mt5Account> {
-    const res = await this.fetchFn(`${this.basePath}/mt5/connect`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify(input),
-    });
-    if (!res.ok) throw new Error(await this.errorMessage(res, "POST /mt5/connect"));
-    const body = (await res.json()) as { account: Mt5Account };
-    return body.account;
   }
 
   async mt5Status(): Promise<Mt5Status> {
-    return this.getJson<Mt5Status>("/mt5/status");
+    return this.getJson<Mt5Status>(`${this.brokerPath}/status`);
+  }
+
+  async connectExness(input: ExnessConnectInput): Promise<Mt5Account> {
+    const res = await this.fetchFn(`${this.basePath}/execution/connect`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(await this.errorMessage(res, "Connect Exness"));
+    return ((await res.json()) as { account: Mt5Account }).account;
+  }
+
+  async acknowledgeUncertainExecution(key: string): Promise<Mt5Account> {
+    const res = await this.fetchFn(`${this.basePath}/execution/acknowledge-uncertain`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
+      body: JSON.stringify({ key }),
+    });
+    if (!res.ok) throw new Error(await this.errorMessage(res, "Review execution"));
+    return ((await res.json()) as { account: Mt5Account }).account;
   }
 
   async mt5Account(): Promise<Mt5Account> {
-    const body = await this.getJson<{ account: Mt5Account }>("/mt5/account");
+    const body = await this.getJson<{ account: Mt5Account }>(`${this.brokerPath}/account`);
     return body.account;
   }
 
   async mt5Symbol(): Promise<Mt5Symbol> {
-    const body = await this.getJson<{ symbol: Mt5Symbol }>("/mt5/symbol");
+    const body = await this.getJson<{ symbol: Mt5Symbol }>(`${this.brokerPath}/symbol`);
     return body.symbol;
   }
 
-  async mt5Terminals(): Promise<Mt5Terminal[]> {
-    try {
-      const body = await this.getJson<{ terminals: Mt5Terminal[] }>("/mt5/terminals");
-      return body.terminals;
-    } catch {
-      return [];
-    }
+  async mt5OpenTrades(): Promise<Mt5OpenTrades> {
+    return this.getJson<Mt5OpenTrades>(`${this.brokerPath}/open-trades`);
   }
 
-  async mt5OpenTrades(): Promise<Mt5OpenTrades> {
-    return this.getJson<Mt5OpenTrades>("/mt5/open-trades");
+  async exnessState(): Promise<ExnessExecutionState> {
+    return this.getJson<ExnessExecutionState>("/execution/state");
   }
 
   async patchMt5Position(
-    brokerPositionTicket: number,
-    input: Pick<Mt5TradePatchInput, "slGc" | "tpGc" | "breakEven">,
+    brokerPositionTicket: BrokerTicket,
+    input: Omit<Mt5TradePatchInput, "entryGc"> & { idempotencyKey?: string },
   ): Promise<TradingPosition> {
     const res = await this.fetchFn(
-      `${this.basePath}/mt5/positions/${encodeURIComponent(String(brokerPositionTicket))}`,
+      `${this.basePath}${this.brokerPath}/positions/${encodeURIComponent(String(brokerPositionTicket))}`,
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -501,27 +506,34 @@ export class ApiClient {
         body: JSON.stringify(input),
       },
     );
-    if (!res.ok) throw new Error(await this.errorMessage(res, "PATCH /mt5/positions"));
+    if (!res.ok) throw new Error(await this.errorMessage(res, "PATCH /execution/positions"));
     const body = (await res.json()) as { position: TradingPosition };
     return body.position;
   }
 
-  async closeMt5Position(brokerPositionTicket: number, volumeLots?: number): Promise<void> {
-    const body = volumeLots !== undefined ? JSON.stringify({ volumeLots }) : undefined;
+  async closeMt5Position(
+    brokerPositionTicket: BrokerTicket,
+    volumeLots?: number,
+    idempotencyKey?: string,
+  ): Promise<void> {
+    const payload: { volumeLots?: number; idempotencyKey?: string } = {};
+    if (volumeLots !== undefined) payload.volumeLots = volumeLots;
+    if (idempotencyKey !== undefined) payload.idempotencyKey = idempotencyKey;
+    const body = Object.keys(payload).length > 0 ? JSON.stringify(payload) : undefined;
     const headers = body ? { "Content-Type": "application/json" } : undefined;
     const res = await this.fetchFn(
-      `${this.basePath}/mt5/positions/${encodeURIComponent(String(brokerPositionTicket))}/close`,
+      `${this.basePath}${this.brokerPath}/positions/${encodeURIComponent(String(brokerPositionTicket))}/close`,
       { method: "POST", headers, credentials: "same-origin", body },
     );
-    if (!res.ok) throw new Error(await this.errorMessage(res, "POST /mt5/positions/close"));
+    if (!res.ok) throw new Error(await this.errorMessage(res, "POST /execution/positions/close"));
   }
 
   async patchMt5Order(
-    brokerOrderTicket: number,
-    input: Mt5TradePatchInput,
+    brokerOrderTicket: BrokerTicket,
+    input: Mt5TradePatchInput & { idempotencyKey?: string },
   ): Promise<Mt5PendingOrder> {
     const res = await this.fetchFn(
-      `${this.basePath}/mt5/orders/${encodeURIComponent(String(brokerOrderTicket))}`,
+      `${this.basePath}${this.brokerPath}/orders/${encodeURIComponent(String(brokerOrderTicket))}`,
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -529,17 +541,19 @@ export class ApiClient {
         body: JSON.stringify(input),
       },
     );
-    if (!res.ok) throw new Error(await this.errorMessage(res, "PATCH /mt5/orders"));
+    if (!res.ok) throw new Error(await this.errorMessage(res, "PATCH /execution/orders"));
     const body = (await res.json()) as { order: Mt5PendingOrder };
     return body.order;
   }
 
-  async cancelMt5Order(brokerOrderTicket: number): Promise<void> {
+  async cancelMt5Order(brokerOrderTicket: BrokerTicket, idempotencyKey?: string): Promise<void> {
+    const body = idempotencyKey ? JSON.stringify({ idempotencyKey }) : undefined;
+    const headers = body ? { "Content-Type": "application/json" } : undefined;
     const res = await this.fetchFn(
-      `${this.basePath}/mt5/orders/${encodeURIComponent(String(brokerOrderTicket))}`,
-      { method: "DELETE", credentials: "same-origin" },
+      `${this.basePath}${this.brokerPath}/orders/${encodeURIComponent(String(brokerOrderTicket))}`,
+      { method: "DELETE", headers, credentials: "same-origin", body },
     );
-    if (!res.ok) throw new Error(await this.errorMessage(res, "DELETE /mt5/orders"));
+    if (!res.ok) throw new Error(await this.errorMessage(res, "DELETE /execution/orders"));
   }
 
   async orders(openOnly = true): Promise<TradingOrder[]> {
@@ -560,27 +574,6 @@ export class ApiClient {
     if (!res.ok) throw new Error(await this.errorMessage(res, "POST /orders"));
     const body = (await res.json()) as { order: TradingOrder };
     return body.order;
-  }
-
-  async autoTradeSettings(): Promise<AutoTradeSettings> {
-    const body = await this.getJson<{ settings: AutoTradeSettings }>("/auto-trade");
-    return body.settings;
-  }
-
-  async updateAutoTradeSettings(input: {
-    longEnabled: boolean;
-    shortEnabled: boolean;
-    volumeLots: number;
-  }): Promise<AutoTradeSettings> {
-    const res = await this.fetchFn(`${this.basePath}/auto-trade`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify(input),
-    });
-    if (!res.ok) throw new Error(await this.errorMessage(res, "PUT /auto-trade"));
-    const body = (await res.json()) as { settings: AutoTradeSettings };
-    return body.settings;
   }
 
   async supertrendTrailings(): Promise<SupertrendTrailing[]> {
@@ -628,7 +621,7 @@ export class ApiClient {
 
   async patchOrder(
     orderId: string,
-    input: { entryGc?: number; slGc?: number; tpGc?: number; expectedVersion?: number; breakEven?: boolean },
+    input: Mt5TradePatchInput & { expectedVersion?: number; idempotencyKey?: string },
   ): Promise<TradingOrder> {
     const res = await this.fetchFn(
       `${this.basePath}/orders/${encodeURIComponent(orderId)}`,
@@ -644,18 +637,27 @@ export class ApiClient {
     return body.order;
   }
 
-  async cancelOrder(orderId: string): Promise<TradingOrder> {
+  async cancelOrder(orderId: string, idempotencyKey?: string): Promise<TradingOrder> {
+    const requestBody = idempotencyKey ? JSON.stringify({ idempotencyKey }) : undefined;
+    const headers = requestBody ? { "Content-Type": "application/json" } : undefined;
     const res = await this.fetchFn(
       `${this.basePath}/orders/${encodeURIComponent(orderId)}`,
-      { method: "DELETE", credentials: "same-origin" },
+      { method: "DELETE", headers, credentials: "same-origin", body: requestBody },
     );
     if (!res.ok) throw new Error(await this.errorMessage(res, "DELETE /orders"));
     const body = (await res.json()) as { order: TradingOrder };
     return body.order;
   }
 
-  async closeOrder(orderId: string, volumeLots?: number): Promise<TradingOrder> {
-    const requestBody = volumeLots !== undefined ? JSON.stringify({ volumeLots }) : undefined;
+  async closeOrder(
+    orderId: string,
+    volumeLots?: number,
+    idempotencyKey?: string,
+  ): Promise<TradingOrder> {
+    const payload: { volumeLots?: number; idempotencyKey?: string } = {};
+    if (volumeLots !== undefined) payload.volumeLots = volumeLots;
+    if (idempotencyKey !== undefined) payload.idempotencyKey = idempotencyKey;
+    const requestBody = Object.keys(payload).length > 0 ? JSON.stringify(payload) : undefined;
     const headers = requestBody ? { "Content-Type": "application/json" } : undefined;
     const res = await this.fetchFn(
       `${this.basePath}/orders/${encodeURIComponent(orderId)}/close`,
@@ -664,76 +666,6 @@ export class ApiClient {
     if (!res.ok) throw new Error(await this.errorMessage(res, "POST /orders/close"));
     const responseBody = (await res.json()) as { order: TradingOrder };
     return responseBody.order;
-  }
-
-  async analystLatest(
-    symbol = "GC",
-    contract = "GC",
-  ): Promise<AnalystReport | null> {
-    const params = new URLSearchParams({ symbol, contract });
-    const body = await this.getJson<{ report: AnalystReport | null }>(
-      `/analyst/latest?${params.toString()}`,
-    );
-    return body.report;
-  }
-
-  async runAnalyst(
-    symbol = "GC",
-    contract = "GC",
-    profileId?: string,
-  ): Promise<AnalystRunResponse> {
-    const params = new URLSearchParams({ symbol, contract });
-    if (profileId) params.set("profileId", profileId);
-    const res = await this.fetchFn(
-      `${this.basePath}/analyst/run?${params.toString()}`,
-      { method: "POST", credentials: "same-origin" },
-    );
-    if (!res.ok) {
-      throw new Error(await this.errorMessage(res, "POST /analyst/run"));
-    }
-    return (await res.json()) as AnalystRunResponse;
-  }
-
-  async analystAutoSend(): Promise<AnalystAutoSendState> {
-    return this.getJson<AnalystAutoSendState>("/analyst/auto-send");
-  }
-
-  async setAnalystAutoSend(enabled: boolean): Promise<AnalystAutoSendState> {
-    const res = await this.fetchFn(`${this.basePath}/analyst/auto-send`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({ enabled }),
-    });
-    if (!res.ok) {
-      throw new Error(await this.errorMessage(res, "PUT /analyst/auto-send"));
-    }
-    return (await res.json()) as AnalystAutoSendState;
-  }
-
-  async analystEventAi(profileId = "default"): Promise<AnalystEventAiState> {
-    return this.getJson<AnalystEventAiState>(
-      `/analyst/event-ai?${this.profileQuery(profileId)}`,
-    );
-  }
-
-  async setAnalystEventAi(
-    enabled: boolean,
-    profileId = "default",
-  ): Promise<AnalystEventAiState> {
-    const res = await this.fetchFn(
-      `${this.basePath}/analyst/event-ai?${this.profileQuery(profileId)}`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ enabled }),
-      },
-    );
-    if (!res.ok) {
-      throw new Error(await this.errorMessage(res, "PUT /analyst/event-ai"));
-    }
-    return (await res.json()) as AnalystEventAiState;
   }
 
   /** List the available symbols (Req 18.1). v1: `["GC"]`. */
@@ -747,6 +679,84 @@ export class ApiClient {
     return this.getJson<ContractsResponse>(
       `/contracts?symbol=${encodeURIComponent(symbol)}`,
     );
+  }
+
+  async history(
+    symbol: string,
+    contract: string,
+    timeframe: string,
+    limit = 1_500,
+  ): Promise<import("../cache/types").Bar[]> {
+    const params = new URLSearchParams({ symbol, contract, tf: timeframe, limit: String(limit) });
+    const body = await this.getJson<{ bars: import("../cache/types").Bar[] }>(`/history?${params}`);
+    return body.bars;
+  }
+
+  async instruments(): Promise<Instrument[]> {
+    const body = await this.getJson<{ instruments: Instrument[] }>("/instruments");
+    return body.instruments;
+  }
+
+  async aiScan(input: {
+    instrumentId?: string;
+    symbol?: string;
+    contract?: string;
+    timeframe: string;
+    depth?: "short" | "medium" | "deep";
+    density?: "auto" | "less" | "normal" | "more";
+    strength?: "all" | "moderate" | "strong";
+    states?: string[];
+    groups?: string[];
+    patterns?: string[];
+    targetsAndStop?: boolean;
+    analyses?: string[];
+    endTime?: number;
+    from?: number;
+    to?: number;
+  }): Promise<AiScanResponse> {
+    const res = await this.fetchFn(`${this.basePath}/ai-scan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(await this.errorMessage(res, "POST /ai-scan"));
+    return (await res.json()) as AiScanResponse;
+  }
+
+  async workspaces(): Promise<Workspace[]> {
+    const body = await this.getJson<{ workspaces: Workspace[] }>("/workspaces");
+    return body.workspaces;
+  }
+
+  async createWorkspace(input: { name: string; payload: WorkspacePayload; bootstrap?: boolean }): Promise<Workspace> {
+    const res = await this.fetchFn(`${this.basePath}/workspaces`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(await this.errorMessage(res, "POST /workspaces"));
+    return ((await res.json()) as { workspace: Workspace }).workspace;
+  }
+
+  async saveWorkspace(workspaceId: string, input: { name: string; payload: WorkspacePayload }): Promise<Workspace> {
+    const res = await this.fetchFn(`${this.basePath}/workspaces/${encodeURIComponent(workspaceId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(await this.errorMessage(res, "PUT /workspaces"));
+    return ((await res.json()) as { workspace: Workspace }).workspace;
+  }
+
+  async deleteWorkspace(workspaceId: string): Promise<void> {
+    const res = await this.fetchFn(`${this.basePath}/workspaces/${encodeURIComponent(workspaceId)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+    if (!res.ok) throw new Error(await this.errorMessage(res, "DELETE /workspaces"));
   }
 
   /** Pin the Active_Contract (manual override, Req 18.3). */
@@ -841,6 +851,42 @@ export class ApiClient {
       liquidityChart: LiquidityChartProfileState;
     };
     return body.liquidityChart;
+  }
+
+  /** Fetch native iceberg order snapshot. */
+  async getIcebergs(params: {
+    symbol?: string;
+    contract?: string;
+    limit?: number;
+    min_volume?: number;
+  } = {}): Promise<import("../orderflow/nativeIcebergs").NativeIcebergSnapshot> {
+    const query = new URLSearchParams({
+      symbol: params.symbol ?? "GC",
+      contract: params.contract ?? "GC",
+      limit: String(params.limit ?? 1000),
+      min_volume: String(params.min_volume ?? 1),
+    });
+    return this.getJson(`/orderflow/icebergs?${query}`);
+  }
+
+  /** Fetch completed SI stop chains history. */
+  async getSiStops(params: {
+    symbol?: string;
+    contract?: string;
+    limit?: number;
+  } = {}): Promise<{
+    source: string;
+    symbol: string;
+    contract: string;
+    connected: boolean;
+    chains: import("../socket/messages").SiStopChain[];
+  }> {
+    const query = new URLSearchParams({
+      symbol: params.symbol ?? "GC",
+      contract: params.contract ?? "GC",
+      limit: String(params.limit ?? 5000),
+    });
+    return this.getJson(`/orderflow/si-stops?${query}`);
   }
 
   /** Load Telegram notification config for the active alert profile. */
@@ -1075,9 +1121,8 @@ export class ApiClient {
     symbol: string,
     contract: string,
     count = 5,
-    timeframe: Timeframe = "1m",
   ): Promise<FootprintUpdateMessage[]> {
-    const body = await this.footprintDetails(symbol, contract, { count, timeframe });
+    const body = await this.footprintDetails(symbol, contract, { count });
     return body.bars;
   }
 
@@ -1091,14 +1136,14 @@ export class ApiClient {
       symbol,
       contract,
     });
-    if (query.timeframe !== undefined) {
-      params.set("tf", query.timeframe);
-    }
     if (query.count !== undefined) {
       params.set("count", String(query.count));
     }
     if (query.from !== undefined) {
       params.set("from", String(query.from));
+    }
+    if (query.to !== undefined) {
+      params.set("to", String(query.to));
     }
     if (query.at !== undefined) {
       params.set("at", String(query.at));
@@ -1120,18 +1165,17 @@ export class ApiClient {
     };
   }
 
-  /** Confirmed FVG Signal Grader candle colors. */
+  /** Confirmed M1 FVG Signal Grader candle colors. */
   async fvgSignals(
     symbol: string,
     contract: string,
     limit?: number,
     range?: { from?: number; to?: number },
-    timeframe: Timeframe = "1m",
   ): Promise<FvgSignalUpdateMessage[]> {
     const params = new URLSearchParams({
       symbol,
       contract,
-      tf: timeframe,
+      tf: "1m",
     });
     if (limit !== undefined) {
       params.set("limit", String(limit));
@@ -1187,7 +1231,6 @@ export class ApiClient {
       momentumDirection: signal.momentumDirection,
       momentumLevel: signal.momentumLevel,
       deltaDivergence: signal.deltaDivergence,
-      ...(signal.momentumSamples === undefined ? {} : { momentumSamples: signal.momentumSamples }),
     }));
   }
 
@@ -1356,15 +1399,12 @@ export class ApiClient {
 
   /** Delete an alert (Req 18.11). */
   async deleteAlert(id: string, profileId = "default"): Promise<void> {
-    const res = await this.fetchFn(
+    await this.fetchFn(
       `${this.basePath}/alerts/${encodeURIComponent(id)}?${this.profileQuery(profileId)}`,
       {
         method: "DELETE",
       },
     );
-    if (!res.ok) {
-      throw new Error(await this.errorMessage(res, "DELETE /alerts"));
-    }
   }
 
   private async getJson<T>(path: string, init: RequestInit = {}): Promise<T> {

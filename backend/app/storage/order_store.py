@@ -22,7 +22,7 @@ __all__ = ["OrderStore"]
 _ORDER_COLUMNS = (
     "id, user_id, account_id, source, symbol_internal, contract_internal, "
     "source_contract, symbol_broker, side, kind, volume_lots, gc_anchored, "
-    "take_profit_1r_enabled, take_profit_r, auto_supertrend_after_1r_enabled, "
+    "take_profit_1r_enabled, auto_supertrend_after_1r_enabled, "
     "trailing_timeframe, trailing_period, trailing_multiplier, "
     "trailing_atr_method, trailing_source, status, idempotency_key, created_at, "
     "updated_at, version, entry_gc, sl_gc, "
@@ -49,7 +49,6 @@ def _row_to_order(row: sqlite3.Row) -> OrderRecord:
         volume_lots=float(row["volume_lots"]),
         gc_anchored=bool(row["gc_anchored"]),
         take_profit_1r_enabled=bool(row["take_profit_1r_enabled"]),
-        take_profit_r=float(row["take_profit_r"]),
         auto_supertrend_after_1r_enabled=bool(
             row["auto_supertrend_after_1r_enabled"]
         ),
@@ -103,7 +102,6 @@ def _order_params(o: OrderRecord) -> tuple[object, ...]:
         o.volume_lots,
         1 if o.gc_anchored else 0,
         1 if o.take_profit_1r_enabled else 0,
-        o.take_profit_r,
         1 if o.auto_supertrend_after_1r_enabled else 0,
         o.trailing_timeframe,
         o.trailing_period,
@@ -152,17 +150,6 @@ class OrderStore:
             _order_params(order),
         )
         return order
-
-    def create_once(self, order: OrderRecord) -> bool:
-        """Claim a submission atomically, including across concurrent requests."""
-        params = _order_params(order)
-        placeholders = ", ".join("?" for _ in params)
-        cursor = self._writer.execute(
-            f"INSERT INTO orders ({_ORDER_COLUMNS}) VALUES ({placeholders}) "
-            "ON CONFLICT(user_id, idempotency_key) DO NOTHING",
-            params,
-        )
-        return cursor.rowcount == 1
 
     def read(self, order_id: str, user_id: str | None = None) -> OrderRecord | None:
         conn = self._reader()

@@ -1,13 +1,3 @@
-/** Keep legacy defaults until a drawing has an explicit shared row size. */
-export function fixedRangeProfileRowTicks(
-  value: number | undefined,
-  mode: "volume" | "delta",
-): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1
-    ? value
-    : mode === "delta" ? 2 : 1;
-}
-
 export interface DeltaProfileRow {
   price: number;
   bidVolume: number;

@@ -181,31 +181,6 @@ class AlertStore:
 
     # -- alert events (audit log) ---------------------------------------------
 
-    def retire_mp_alert(self, alert_id: str, at: int, *, fired: bool = False) -> None:
-        """Hide a consumed MP alert and clear its history atomically.
-
-        Retain only a disabled definition so durable plan links cannot rearm it
-        after a refresh or restart. Manual alerts and their history are untouched.
-        """
-        def write(conn):
-            row = conn.execute("SELECT params,enabled FROM alerts WHERE id=?", (alert_id,)).fetchone()
-            if row is None:
-                return
-            params = json.loads(row["params"])
-            if params.get("source") != "mp_plan":
-                return
-            already_deleted = bool(params.get("mpDeletedAt"))
-            params.setdefault("mpDeletedAt", at)
-            params.pop("mpPaused", None)
-            if fired:
-                params["mpFiredAt"] = at
-            if not already_deleted or row["enabled"] or fired:
-                conn.execute("UPDATE alerts SET enabled=0,params=?,updated_at=? WHERE id=?",
-                             (json.dumps(params, sort_keys=True), at, alert_id))
-            conn.execute("DELETE FROM alert_events WHERE alert_id=?", (alert_id,))
-
-        self._writer.write(write)
-
     def insert_alert_event(self, event: AlertEventRecord) -> int:
         """Persist an alert-event audit row; return its assigned id. (Req 17.3)"""
         cur = self._writer.execute(

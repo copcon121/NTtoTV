@@ -161,21 +161,6 @@ def test_bull_fvg_signal_previews_confirms_and_exhaustion_upgrades_to_ultimate()
 
 
 @pytest.mark.unit
-def test_30s_engine_emits_30s_signal_contract():
-    engine = FvgSignalEngine(timeframe="30s")
-    feeder = _Feeder(engine)
-    events = _warmup(feeder, [0, 5, 0, 5, 0, 5, 0, 5, -30, -10])
-    events += feeder.bar(10, 100.0, 100.5, 10)
-    events += feeder.bar(11, 100.6, 101.0, 100)
-    events += feeder.bar(12, 100.7, 100.8, 5)
-    events += feeder.bar(13, 100.8, 100.9, 5)
-
-    confirmed = [event for event in events if event.phase == "confirmed"][-1]
-    assert confirmed.tf == "30s"
-    assert confirmed.pulse == 5
-
-
-@pytest.mark.unit
 def test_bear_fvg_signal_can_upgrade_to_negative_ultimate():
     engine = FvgSignalEngine()
     feeder = _Feeder(engine)

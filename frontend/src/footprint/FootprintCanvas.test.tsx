@@ -1,6 +1,7 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_THEME } from "../workspace/themes";
 import { DEFAULT_FOOTPRINT_SETTINGS } from "../chart/IndicatorToggles";
 import { type FootprintUpdateMessage } from "../socket/messages";
 import {
@@ -9,7 +10,7 @@ import {
   calculateOrderflowGapSignals,
   drawFootprint,
 } from "./FootprintCanvas";
-import { type FootprintViewport } from "./footprintModel";
+import { type FootprintViewport, type FootprintBar } from "./footprintModel";
 
 afterEach(() => {
   cleanup();
@@ -50,6 +51,7 @@ function makeCtx() {
     fillRectCalls: 0,
     fillTextCalls: 0,
     texts: [] as string[],
+    textPositions: [] as Array<{ text: string; x: number; y: number; font?: string }>,
     fillStyle: "",
     strokeStyle: "",
     font: "",
@@ -70,19 +72,23 @@ function makeCtx() {
     fillCalls: 0,
     arcCalls: [] as Array<{ x: number; y: number; radius: number }>,
     fillStyles: [] as string[],
+    textStyles: [] as string[],
     clearRect() {
       this.clearRectCalls += 1;
     },
     fillRect() {
       this.fillRectCalls += 1;
+      this.fillStyles.push(this.fillStyle);
     },
     fill() {
       this.fillCalls += 1;
       this.fillStyles.push(this.fillStyle);
     },
-    fillText(text: string) {
+    fillText(text: string, x = 0, y = 0) {
+      this.textStyles.push(this.fillStyle);
       this.fillTextCalls += 1;
       this.texts.push(text);
+      this.textPositions.push({ text, x, y, font: this.font });
     },
     strokeRect(_x = 0, _y = 0, width = 0, height = 0) {
       this.strokeRectCalls += 1;
@@ -150,6 +156,28 @@ const viewport: FootprintViewport = {
 };
 
 describe("drawFootprint (Req 14.2, 19.4)", () => {
+  it("aligns every visible footprint ladder to the chart's time and price coordinates", () => {
+    const ctx = makeCtx();
+    const bars = Array.from({ length: 9 }, (_, index) => fp(index * 60_000));
+    const positions = new Map(bars.slice(0, 6).map((bar, index) => [bar.time, 80 + index * 80]));
+    const chartViewport: FootprintViewport = {
+      width: 550,
+      height: 200,
+      barSpacing: 80,
+      timeToX: (time) => positions.get(time) ?? null,
+      priceToY: (price) => 100 - (price - 100) * 200,
+      theme: DEFAULT_THEME,
+    };
+    drawFootprint(ctx as unknown as CanvasRenderingContext2D, { bars, viewport: chartViewport, layout: "chart" });
+    const bids = ctx.textPositions.filter((entry) => entry.text === "2");
+    expect(bids).toHaveLength(6);
+    expect(bids.map((entry) => entry.x)).toEqual([58, 138, 218, 298, 378, 458]);
+    for (const bid of bids) expect(bid.y).toBeCloseTo(80);
+    expect(ctx.textPositions.filter((entry) => entry.text === "4").every((entry) => entry.y === 100)).toBe(true);
+    expect(ctx.textStyles).toContain(DEFAULT_THEME.text);
+    expect(ctx.fillStyles).toContain(DEFAULT_THEME.buy);
+  });
+
   it("calculates XKontrol with ladder volume and honors level visibility", () => {
     const bars = new Map<number, FootprintUpdateMessage>();
     for (let index = 0; index < 20; index += 1) {
@@ -524,6 +552,21 @@ describe("FootprintCanvas component (Req 14.6, 14.7, 14.8)", () => {
     expect(canvas).toHaveStyle({ height: "849px" });
   });
 
+  it("repaints the standalone background when only its theme changes", () => {
+    const bars = new Map<number, FootprintUpdateMessage>();
+    let clock = 0;
+    const now = () => clock;
+    const { rerender } = render(
+      <FootprintCanvas bars={bars} viewport={{ ...viewport, theme: DEFAULT_THEME }} now={now} layout="standalone" />,
+    );
+    expect(ctx.fillStyles).toContain(DEFAULT_THEME.background);
+    clock = 200;
+    const nextTheme = { ...DEFAULT_THEME, background: "#f4f6f8" };
+    rerender(<FootprintCanvas bars={bars} viewport={{ ...viewport, theme: nextTheme }} now={now} layout="standalone" />);
+    expect(ctx.clearRectCalls).toBe(2);
+    expect(ctx.fillStyles[ctx.fillStyles.length - 1]).toBe(nextTheme.background);
+  });
+
   it("retains the rendering when bars/viewport are unchanged (Req 14.6, 14.7)", () => {
     const bars = new Map([[0, fp(0)]]);
     const { rerender } = render(
@@ -558,5 +601,99 @@ describe("FootprintCanvas component (Req 14.6, 14.7, 14.8)", () => {
     vi.advanceTimersByTime(60);
     expect(ctx.clearRectCalls).toBe(2);
     vi.useRealTimers();
+  });
+
+  it("ensures embedded footprint at maximum zoom matches standalone row height and legibility without rendering zero cells", () => {
+    const bar: FootprintBar = {
+      type: "footprint_update",
+      symbol: "GC",
+      contract: "GC",
+      tf: "1m",
+      time: 60_000,
+      open: 4200.0,
+      high: 4201.0,
+      low: 4199.0,
+      close: 4200.5,
+      poc: 4200.0,
+      pocVolume: 50,
+      vah: 4200.8,
+      val: 4199.2,
+      barDelta: 10,
+      buyPct: 0.6,
+      sellPct: 0.4,
+      stackedImbalance: [],
+      unfinishedAuction: { high: false, low: false },
+      rows: [
+        { price: 4200.8, bid: 0, ask: 15, imbalance: "ask" },
+        { price: 4200.5, bid: 12, ask: 18, imbalance: null },
+        { price: 4200.0, bid: 30, ask: 20, imbalance: null },
+        { price: 4199.5, bid: 25, ask: 0, imbalance: "bid" },
+      ],
+    };
+    const bars = new Map([[60_000, bar]]);
+
+    // Embedded layout with mobile viewport and maximum horizontal zoom (barSpacing: 180)
+    const mobileChartViewport: FootprintViewport = {
+      width: 390,
+      height: 400,
+      barSpacing: 180,
+      timeToX: (t) => (t === 60_000 ? 195 : null),
+      priceToY: (p) => 200 - (p - 4200.0) * 10, // 10px per 1.0 point => 1px per 0.1 tick
+      textColor: "#ffffff",
+      theme: DEFAULT_THEME,
+    };
+
+    render(
+      <FootprintCanvas
+        bars={bars}
+        viewport={mobileChartViewport}
+        layout="chart"
+        rowHeightPx={18}
+        now={() => 0}
+      />,
+    );
+
+    // Font size should be at least 12px (not collapsed to 6-8px)
+    const textFonts = ctx.textPositions.map((t) => t.font ?? "").filter(Boolean);
+    const fontSizes = textFonts.map((f) => {
+      const match = f.match(/(\d+)px/);
+      return match ? Number(match[1]) : 0;
+    });
+    expect(fontSizes.length).toBeGreaterThan(0);
+    for (const size of fontSizes) {
+      expect(size).toBeGreaterThanOrEqual(12);
+    }
+
+    // Grouped into single row at pixelsPerTick=1: total bid 67, total ask 53
+    const paintedTexts = ctx.textPositions.map((t) => t.text);
+    expect(paintedTexts).not.toContain("0");
+    expect(paintedTexts).toEqual(["67", "53"]);
+
+    // Colors should include buy and sell theme colors
+    expect(ctx.fillStyles).toContain(DEFAULT_THEME.buy);
+    expect(ctx.fillStyles).toContain(DEFAULT_THEME.sell);
+
+    // Now test with expanded price scale (e.g. 18px per 0.1 tick => pixelsPerTick = 18px)
+    ctx.textPositions = [];
+    ctx.fillStyles = [];
+    const zoomedPriceViewport: FootprintViewport = {
+      ...mobileChartViewport,
+      priceToY: (p) => 200 - (p - 4200.0) * 180, // 180px per 1.0 point => 18px per 0.1 tick
+    };
+
+    render(
+      <FootprintCanvas
+        bars={bars}
+        viewport={zoomedPriceViewport}
+        layout="chart"
+        rowHeightPx={18}
+        now={() => 100}
+      />,
+    );
+
+    const zoomedTexts = ctx.textPositions.map((t) => t.text);
+    expect(zoomedTexts).not.toContain("0");
+    expect(zoomedTexts).toContain("15");
+    expect(zoomedTexts).toContain("25");
   });
 });

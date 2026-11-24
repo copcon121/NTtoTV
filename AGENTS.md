@@ -1,863 +1,180 @@
 # AGENTS.md
 
-Huong dan always-on cho agent/dev moi trong repo `NTtoTV`. Doc file nay truoc
-khi quet codebase. Muc tieu la nam du kien truc, lenh chay/test, du lieu
-runtime, va cac vung can tranh de khong phai scan lai tu dau moi session.
+Huong dan always-on cho agent/dev trong project NTtoTV-linux-rithmic.
+Doc file nay truoc khi quet codebase. Ban nay thay the baseline Windows cu.
 
-## Tong Quan
+## Baseline hien tai (2026-11-24)
 
-Day la GC Chart Platform: mot chart web local kieu TradingView cho GC futures.
-He thong gom 3 phan:
+- Project chinh: C:/Users/Administrator/Desktop/NTtoTV-linux-rithmic.
+- Oracle Ubuntu ARM64: https://oracle.gcflowpy.xyz.
+- Release da doi chieu: /opt/nttotv/releases/20261124-risk-currency-22.
+  Luon kiem tra /opt/nttotv/current vi release co the thay doi sau ngay nay.
+- Market data GC chi tu Rithmic: Ticker Plant L1/L2/MBO va History Plant.
+- Thuc thi lenh CHI qua Exness API truc tiep, theo tai khoan cua tung user.
+  Khong dung MT5 terminal, Windows relay, NinjaTrader hay Bookmap de dat lenh.
+- NTTOTV_EXECUTION_MODE mac dinh la exness; disabled tat execution.
+  Gia tri windows cu fail closed thanh disabled; khong tu fallback sang MT5.
+- Chua duoc phep thay doi Windows live tai C:/Users/Administrator/Desktop/NTtoTV
+  khi tac vu chi lien quan project Oracle.
 
-- `backend/`: Python FastAPI, nhan stream Level 1 tu NinjaTrader AddOn qua
-  `/ws/nt`, ghi raw tick/quote, build bar/order-flow/cache, phat realtime qua
-  `/ws/chart`, va cung cap REST API.
-- `frontend/`: Vite + React + TypeScript, ve chart `GC`, indicators,
-  footprint, alerts, profiles, drawings, va status.
-- `nt-addon/`: C#/.NET + NinjaScript bridge cho NinjaTrader 8, subscribe Level
-  1 trade/quote GC va forward sang backend.
+## Kien truc va thu muc
 
-Current Windows workflow (user clarification 2026-10-29): live market data now
-comes directly from Rithmic. Bookmap SI 2.08 is a logic reference for LQ ICE/
-SI Stops, not a required live connection. Older Bookmap-primary sections below
-describe the existing arbitration/fallback architecture and historical setup.
+- backend/app/app.py: FastAPI app va REST/WebSocket routers.
+- backend/app/runtime.py: pipeline, stores, registry va runtime lifecycle.
+- backend/app/rithmic/: connector, Ticker/History Plant va recovery.
+- backend/app/execution/: Exness gateway, credentials, account/instrument
+  metadata, sizing, REST/event reconciliation va theo doi lenh.
+- backend/app/execution/routes.py: API execution; frontend goi same-origin.
+- backend/app/engines/, storage/, liquidity_store.py: bars, order flow,
+  profiles, ICE, SI Stops va SQLite.
+- frontend/src/LiveApp.tsx: chart GC, history, profiles va realtime.
+- frontend/src/orders/: ket noi Exness, order ticket va quan ly lenh.
+- frontend/src/liquidity/, marketProfile/, footprint/: cac trang chart.
+- backend/tests/, frontend/src/**/*.test.ts(x), test-fixtures/: regression.
+- deploy/: Linux/systemd/Caddy va immutable-release tooling.
+- README-LINUX-RITHMIC.md va EXNESS-EXECUTION.md: huong dan hien hanh.
 
-Windows source isolation (user instruction 2026-10-30): use Rithmic ONLY.
-`scripts/Run-BackendProcess.ps1` sets `NTTOTV_MARKET_DATA_RITHMIC_ONLY=1`:
-BM/NT websocket ingress and NT native-bar HTTP ingress are disabled, and source
-arbitration cannot fall back to BM/NT. Keep Bookmap running independently with
-Rithmic GC/SI 2 for the next ICE comparison; do not reconnect its NTtoTV bridge
-or the NT source unless the user requests it.
+Mot so file/type van co ten mt5 hoac windows_execution de tuong thich noi bo
+va de giu source khop release da test. Ten cu KHONG cho phep bat MT5 execution.
+Khong xoa/doi ten cac module nay chi dua vao ten file. API /api/mt5/* va
+/api/auto-trade khong duoc mount trong Oracle Exness mode.
 
-Symbol hien tai la `GC`. Frontend chart dung logical chart contract `GC`, khong
-con contract selector tren UI. NT source contract thuc te co the la
-`GC 12-26`, `GC 10-26`, etc.; backend normalize derived chart/cache ve key
-`contract="GC"` trong khi raw tick van giu contract that.
+## Exness, USD/USC va Amount Risk
 
-## Trang Thai Contract Hien Tai
+- Moi user ket noi bang Exness API key, API secret va platform account ID cua
+  chinh ho. Account snapshot va instrument metadata quyet dinh currency,
+  contract size, pip/tick value, min lot va lot step.
+- Tu nhan dien USD/USC tu account metadata sau connect. Khong hard-code USD.
+- Amount Risk dung CUNG don vi voi balance/PnL cua tai khoan ket noi.
+  Tai khoan USC: Risk 10 la 10 USC. Khong nhan frontend Risk len 100 lan.
+- Sizing dua tren gia Exness, khoang SL va metadata instrument, roi lam tron
+  lot theo broker step. Khong sao chep GC futures multiplier sang Exness gold.
+- Vi du fixture USC da test: contractSize=1, pipValue=0.1, tickSize=0.001,
+  minLot=lotStep=0.01; Risk 10 USC voi SL 5 cho 0.02 lot.
+- Giu margin checks, account isolation, stale-basis checks va live gates.
+  Loi TRADING_RULE_INSUFFICIENT_MARGIN phai duoc hien thi ro; khong bypass
+  broker rule hay tu tang lot de khac phuc.
+- Credential Exness duoc ma hoa trong execution.sqlite; master key nam ngoai
+  release. Khong in key/secret, copy DB credential hay dua vao fixture/archive.
+- HTTP 202/ACK khong dong nghia fill. Doi REST/event xac nhan trang thai cuoi;
+  khong tu retry mutation co the gay duplicate order.
+- 1R partial-close phai duoc xac nhan truoc khi trailing chay.
+- Khong dat/sua/dong lenh live chi de test. Dung fake gateway va fixture.
 
-- Backend default candidates nam trong `backend/app/config.py`:
-  `("GC 06-26", "GC 08-26", "GC 10-26", "GC 12-26")`.
-- Bookmap bridge dung GCZ6 (GC 12-26) lam source contract.
-- NT AddOn dung GC 12-26 lam source contract.
-- `nt-addon/ninjascript/gc-chart-bridge.json` pin
-  `"manualContractOverride": "GC 12-26"`.
-- Pipeline chi chart/cache realtime mot source contract active. Trade/quote tu
-  contract khac van co the duoc raw-record, nhung khong duoc dua vao
-  bar/delta/footprint chart neu khong phai source active.
-- Neu source active im lang hon 15 giay va contract khac co trade moi, pipeline
-  co the switch source de ho tro doi contract ben NT.
+## Du lieu va networking
 
-Quan trong: dung key `contract=GC` khi doc chart history/order-flow tu
-frontend/cache. Dung contract thuc (`GC 12-26`) khi doc raw tick shards.
+- Chart symbol va logical contract la GC. Cache/history/order flow dung
+  contract=GC; raw tick shards dung physical contract (vi du GC 12-26).
+- Raw tick ghi truoc chart filter/throttle. Khong luu raw full-depth/MBO.
+- LQ/ICE/SI Stops dung compact history; xem RITHMIC-ICEBERGS.md, SI-STOPS.md.
+- Rithmic repair/history: xem RITHMIC-HISTORY.md; khong import NT export.
+- Browser dung same-origin /api va /ws/chart; khong hard-code backend port.
+- GC chart price va Exness executable quote la hai instrument khac nhau.
+  Giu basis freshness va quy tac chuyen gia hien tai.
+- Runtime data /var/lib/nttotv tach khoi source/release. Khong wipe database,
+  history, settings, execution state hay backup khi don ma nguon.
 
-## Thu Muc Chinh
+## Lenh local va verification
 
-Root:
+Backend tests (dung Python env hien co, khong ket noi tai khoan live):
 
-- `backend/`: FastAPI backend.
-- `frontend/`: React frontend.
-- `nt-addon/`: C# core/addon + NinjaScript self-contained AddOn.
-- `scripts/`: PowerShell utilities import/reset data.
-- `export data/`: NT historical export `.Last/.Bid/.Ask.txt`.
-- `_data_backups/`, `_import_logs/`, `_import_test/`: generated/runtime data.
-- `IMPORT_NT_EXPORT.cmd`: GUI import NT export.
-- `IMPORT_TODAY_LAST_TO_CHART.cmd`: one-click Last-only import into chart cache.
-- `RESET_MARKET_DATA.cmd`: reset backend market data with backup/restart.
+    cd backend
+    python -m pytest tests/unit/test_execution_mode.py tests/unit/test_oracle_exness_isolation.py
 
-Non-project/ad-hoc root files include MT5 artifacts (`SMC_LuxAlgo_*.mq5/.ex5`,
-`SMCStrategyCore.mqh`, `smc_lux.py`). Do not refactor or delete them unless the
-user explicitly asks.
+Property tests: dat GC_PBT_EXAMPLES=100 khi kiem tra property suite.
+Backend dung pytest/Hypothesis; frontend dung Vitest/fast-check.
+Sau thay doi TypeScript/UI:
 
-## Backend Layout
-
-`backend/app/`:
-
-- `app.py`: FastAPI app factory, includes REST routers and `/ws/nt`, `/ws/chart`.
-- `runtime.py`: owns long-lived singletons: `CacheStore`, `TickStore`,
-  `ContractResolver`, `WebSocketRegistry`, `Pipeline`; starts flush/heartbeat
-  loops and raw retention loop.
-- `config.py`: default ports, data dirs, GC candidates, tick retention, resolver
-  scoring constants.
-- `pipeline.py`: ingest -> raw record -> source filter -> engines -> cache ->
-  websocket registry. This is the key realtime wiring file.
-- `models/`: canonical trade/quote/timestamp and websocket message schemas.
-- `ingest/`: `/ws/nt`, sequence validator, liveness watchdog, control plane.
-- `engines/`: bar aggregator, volume delta, footprint, big trade, contract
-  resolver, alert engine.
-- `storage/`: SQLite stores.
-  - `tick_store.py`: raw tick/quote day shards under `backend/data/ticks`.
-  - `cache_store.py`, `keyed_store.py`: derived cache DB `backend/data/app.sqlite`.
-- `liquidity_store.py`: compact active-source depth signals in
-    `backend/data/liquidity.sqlite`; raw full-depth frames are never stored.
-  - `profile_store.py`, `alert_store.py`: profiles/alerts in cache DB.
-- `registry/`: `/ws/chart` endpoint and throttled websocket registry.
-- `rest/`: REST API for health/symbols/contracts/history/orderflow/big-trades,
-  alerts, profiles, notifications.
-- `backfill/nt_export.py`: NT export parser/importer.
-
-Backend storage:
-
-- Default data dir is relative to backend working directory: `backend/data/`.
-- `backend/data/app.sqlite`: derived bars, order-flow, alerts, profiles,
-  metadata.
-- `backend/data/ticks/GC/<contract>/<YYYY-MM-DD>.sqlite`: raw trade/quote shards.
-- `backend/data/liquidity.sqlite`: relative/absolute liquidity markers and
-  long-term line lifecycles, retained for 24 hours by default.
-  Compact native iceberg states persist here for 48 hours across restarts;
-  old-session active orders are shown as invalidated historical traces until
-  fresh MBO establishes a new identity. Raw MBO is never stored. The LQ candle
-  and Volume Delta viewport supports 48 hours to match iceberg history.
-  Iceberg display/sound minimums are saved per profile: fixed UTC+7 US
-  19:00-04:00 defaults to 10, other hours default to 5. Each iceberg uses its
-  detectedTime session; these windows are independent of New York/DST.
-- Raw tick retention is 90 calendar UTC days by default, including today.
-  `NTTOTV_TICK_RETENTION_DAYS` controls it; the Windows runtime pins 90.
-- Footprint cache remains persistent; increasing raw retention does not delete
-  older footprint rows. Rithmic history download/recovery: see
-  `RITHMIC-HISTORY.md` and `scripts/Download-RithmicHistory.ps1`.
-- Historical/deep imports should generally write bars + volume delta only; do
-  not import full raw Bid/Ask history unless explicitly needed.
-
-Key REST endpoints:
-
-- `GET /api/health`
-- `GET /api/symbols`
-- `GET /api/contracts?symbol=GC`
-- `POST /api/contracts/active`
-- `GET /api/history?symbol=GC&contract=GC&tf=1m&limit=...`
-- `GET /api/orderflow/volume-delta?symbol=GC&contract=GC&tf=1m&limit=...`
-- `GET /api/orderflow/footprint?symbol=GC&contract=GC&count=...`
-- `GET /api/big-trades?symbol=GC&contract=GC&limit=...`
-- `GET /api/liquidity?symbol=GC&contract=GC&tf=1m|5m&from=...&to=...`
-
-## Frontend Layout
-
-Stack:
-
-- Vite + React 18 + TypeScript strict.
-- `lightweight-charts` for chart rendering.
-- Vitest + jsdom + fast-check.
-
-`frontend/src/`:
-
-- `LiveApp.tsx`: main live chart application, profiles, alerts, socket, history.
-  Constants: `SYMBOL = "GC"`, `CHART_CONTRACT = SYMBOL`.
-- `chart/`: chart container, toolbar, timeframe selector, drawing toolbar,
-  indicators, SMC/outside bar/EMA, lightweight-charts adapter.
-- `socket/`: `/ws/chart` client and message types.
-- `cache/`: history loader, memory cache, range patcher.
-- `footprint/`: footprint canvas/model.
-- `alerts/`: alert panel/types.
-- `status/`: connection status indicator.
-- `profiles/`: profile payload types.
-- `liquidity/`: standalone `/lq` M1/M5 liquidity timing chart.
-- `test/`: fast-check setup and property helpers.
-- `styles.css`: global layout and responsive/mobile toolbar styles.
-
-Networking rule:
-
-- In dev, Vite proxies `/api` and `/ws` to backend.
-- Browser should use same-origin `/api` and `/ws/chart`, not hard-code `:8000`
-  in frontend code, or REST and websocket can split across different backend
-  processes.
-- Current browser/public entrypoint is `https://gcflowpy.xyz/`. Do not assume
-  local port `9999` is in use; that was the old Vite dev URL.
-- Vite can still run locally for development if explicitly started, but production
-  traffic is served through Caddy on `gcflowpy.xyz`.
-- Important: after frontend/UI changes that must appear on the public domain,
-  run `cd frontend; npm run build` so `frontend/dist` is updated. Then verify
-  `https://gcflowpy.xyz/` references the new `/assets/index-*.js` bundle; a
-  source-only change will not show up on the domain.
-
-User deployment preference:
-
-- For requested changes affecting the website, update `https://gcflowpy.xyz/`
-  immediately as part of completing the task. Do not ask for deployment
-  confirmation again unless the user explicitly restricts the task to local work.
-- Preserve current production changes when integrating from a worker worktree;
-  never overwrite newer source or deploy an older worktree build wholesale.
-  Build the integrated frontend and verify the public bundle and changed behavior.
-
-## NT AddOn Layout
-
-`nt-addon/`:
-
-- `NtAddOn.sln`: .NET solution.
-- `src/NtAddOn.Core/`: platform-agnostic code, testable without NinjaTrader.
-  Config, buffering, normalizer, websocket worker, reconnect, control plane.
-- `src/NtAddOn.NinjaTrader/`: NinjaTrader-coupled project (`net48`).
-- `tests/NtAddOn.Tests/`: xUnit + FsCheck tests.
-- `ninjascript/GcChartBridgeAddOn.cs`: self-contained NinjaScript AddOn used
-  for deployment by copying into NinjaTrader custom AddOns.
-- `ninjascript/NTtoTVNativeDiagnostics.cs`: chart-side native bridge/diagnostic
-  indicator. It uses chart OHLCV plus NT Volumetric data and posts finalized
-  1m bars to `POST /api/nt/native-bar`. Those delta/footprint rows are accepted
-  only while NT is the active fallback; NT native footprint remains the FVG
-  grader input.
-- `ninjascript/gc-chart-bridge.json`: matching config, currently pins
-  `GC 12-26`.
-
-Deployed NT paths used on this machine:
-
-- AddOn source:
-  `%USERPROFILE%\Documents\NinjaTrader 8\bin\Custom\AddOns\GcChartBridgeAddOn.cs`
-- Config:
-  `%USERPROFILE%\Documents\NinjaTrader 8\gc-chart-bridge.json`
-
-If editing `nt-addon/ninjascript/GcChartBridgeAddOn.cs` or config and the user
-wants it live in NT, copy the repo file to those deployed paths, then NinjaTrader
-must compile (`F5` in NinjaScript Editor) or restart.
-
-Current NinjaScript behavior:
-
-- Startup subscribes only the active source (manual override if set, otherwise
-  first candidate).
-- Backend also sends control-plane subscribe/unsubscribe commands on `/ws/nt`
-  connect to keep stale multi-contract subscriptions from merging into chart.
-- The AddOn tick stream remains warm for raw ticks and the automatic NT fallback.
-  While Bookmap is active, NT ticks are raw-recorded but cannot overwrite shared
-  chart/order-flow cache keys.
-- Bookmap is the primary realtime source for OHLCV, BigTrade, Volume Delta, and
-  Footprint. Its exchange-side trades update delta/footprint tick by tick; full
-  1m ladder snapshots reconcile reconnects and transport gaps.
-- The Bookmap bridge reduces full-depth updates in-process into TTW-style
-  Relative/Absolute events and persistent long-term liquidity lines. Direct
-  Rithmic L2 is reduced to the same compact contract inside the backend when
-  Rithmic owns arbitration. Raw full-depth frames are never stored; `/lq`
-  follows the active Bookmap/Rithmic source over M1/M5 candles.
-- The native chart indicator supplies finalized 1m delta/footprint only while NT
-  is the selected fallback. Default behavior posts realtime closed bars, not
-  historical reloads, to avoid a large startup burst.
-- FVG Signal Grader candle colors are driven by finalized active-source
-  footprints: Bookmap/Rithmic provide 30s and 1m grading, while NT native
-  provides 1m grading during NT fallback. The live AddOn tick pipeline does not
-  emit chart FVG updates, preventing old bid/ask-snapshot signals from racing
-  the finalized footprint source. Its tick FVG engine may still run internally
-  for existing breakout/FVG confluence alert context.
-- Expected NT fallback native-bridge latency is one finalized-bar update per minute:
-  localhost HTTP + SQLite upsert + websocket broadcast after NT closes the bar.
-  Bookmap-primary footprint/delta is tick-by-tick internally and UI-broadcast
-  through the normal websocket throttle.
-
-## Commands
-
-Backend setup/run:
-
-```powershell
-cd backend
-.venv\Scripts\python.exe -m uvicorn app.app:app --host 0.0.0.0 --port 8000
-```
-
-Backend health:
-
-```powershell
-Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/api/health
-```
-
-Production runtime check/restart:
-
-```powershell
-$root = "C:\Users\Administrator\Desktop\NTtoTV"
-
-# Check backend and public frontend first. If both are OK, leave processes alone.
-Invoke-RestMethod -Uri http://127.0.0.1:8000/api/health -TimeoutSec 5
-$r = Invoke-WebRequest -UseBasicParsing -Uri https://gcflowpy.xyz/ -TimeoutSec 8
-[pscustomobject]@{
-    StatusCode = $r.StatusCode
-    Asset = ([regex]::Match($r.Content, '/assets/index-[^"'']+\.js').Value)
-}
-
-# Inspect listeners. 80/443 should be Caddy; 8000 should be uvicorn/backend.
-Get-NetTCPConnection -LocalPort 8000,80,443 -ErrorAction SilentlyContinue |
-    Select-Object LocalAddress,LocalPort,State,OwningProcess
-Get-CimInstance Win32_Process |
-    Where-Object {
-        $_.CommandLine -match 'caddy\.exe' -or
-        ($_.Name -eq 'python.exe' -and $_.CommandLine -match 'uvicorn' -and $_.CommandLine -match 'app\.app:app')
-    } |
-    Select-Object ProcessId,Name,CommandLine
-```
-
-Backend detached restart, so closing IDE/terminal does not stop it:
-
-```powershell
-cd C:\Users\Administrator\Desktop\NTtoTV
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Restart-Backend.ps1
-```
-
-Backend runtime scripts:
-
-- `scripts\Start-Backend.ps1`: starts backend only if `/api/health` is not OK.
-- `scripts\Start-Backend.ps1 -Force`: stops existing backend runtime and starts
-  a clean detached backend.
-- `scripts\Stop-Backend.ps1`: stops uvicorn plus child MT5 worker processes.
-- `scripts\Restart-Backend.ps1`: the standard restart command for agents.
-- `scripts\Show-RuntimeLoad.ps1`: shows backend/frontend/IDE/NT runtime load.
-- `scripts\Stop-FrontendDev.ps1`: stops local Vite dev server on `5173` when
-  public Caddy/dist is being used.
-
-Important: do not hand-roll backend restart with a broad
-`Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'uvicorn' }`
-pipeline. That pattern can match the PowerShell command doing the restart and
-kill itself mid-run. Use the runtime scripts above; they filter by process name,
-port, parent/child process tree, and health-check the result.
-
-Public frontend/Caddy restart:
-
-```powershell
-$root = "C:\Users\Administrator\Desktop\NTtoTV"
-
-# Rebuild first only when frontend source changes need to appear on gcflowpy.xyz.
-Push-Location (Join-Path $root "frontend")
-try {
+    cd frontend
+    npm run typecheck
+    npm test
     npm run build
-} finally {
-    Pop-Location
-}
 
-powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\Stop-HttpsProxy.ps1")
-powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\Start-HttpsProxy.ps1")
+Local backend phai dung port rieng, vi du 18001, va tat live integrations.
+Dat NTTOTV_RITHMIC_ENABLED=0; khong nap production env.
+Dat NTTOTV_EXECUTION_MODE=disabled, NTTOTV_TRADING_ENABLED=0 va
+NTTOTV_LIVE_TRADING_ENABLED=0 truoc khi chay local server.
+Khong restart Windows backend/Caddy hay dung script Windows cu cho Oracle.
 
-$r = Invoke-WebRequest -UseBasicParsing -Uri https://gcflowpy.xyz/ -TimeoutSec 10
-[pscustomobject]@{
-    StatusCode = $r.StatusCode
-    Asset = ([regex]::Match($r.Content, '/assets/index-[^"'']+\.js').Value)
-}
-```
+## Oracle VPS: truy cap va bao mat bat buoc
 
-Operational notes:
+SSH de kiem tra service, technical logs, health va deploy duoc phep trong
+pham vi tac vu. Quyen SSH KHONG dong nghia quyen doc Admin config.
 
-- `frontend/dist` is what Caddy serves on `https://gcflowpy.xyz/`; `npm run dev`
-  is only for local development.
-- `backend\start_backend.cmd` is useful for a visible console session, but for
-  production-like runtime prefer `scripts\Restart-Backend.ps1`.
-- Backend detached logs go to `_run_logs\backend\backend.stdout.log` and
-  `_run_logs\backend\backend.stderr.log`; runtime state goes to
-  `_run_logs\backend\backend-runtime.json`; Caddy logs go to `_run_logs\caddy\`.
-- Do not restart Caddy when only backend is down; Caddy proxies to backend on
-  loopback and can keep serving the already-built frontend.
-- Backend runtime must inherit live MT5 env:
-  `NTTOTV_MT5_BACKEND=real`, `NTTOTV_TRADING_ENABLED=1`,
-  `NTTOTV_LIVE_TRADING_ENABLED=1`, `NTTOTV_INVITE_CODE=join-9999`,
-  `NTTOTV_MARKET_DATA_PREFERRED_SOURCE=bookmap`.
-  `scripts\Run-BackendProcess.ps1` sets these values before launching uvicorn.
-- The direct Rithmic Paper connector is enabled and may participate in fallback
-  arbitration after 65 seconds of continuous L1 qualification. Source priority
-  remains `Bookmap > Rithmic > NT`; Rithmic is not preferred while Bookmap is
-  healthy. Its credential is stored outside the repo as the current Windows
-  user with DPAPI at
-  `%LOCALAPPDATA%\NTtoTV\rithmic.credential.xml`. Rotate it interactively with
-  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Set-RithmicCredential.ps1`,
-  then restart the backend.
-- If the machine feels heavy, first run `scripts\Show-RuntimeLoad.ps1`. If port
-  `5173` is listening and public `https://gcflowpy.xyz/` is in use, run
-  `scripts\Stop-FrontendDev.ps1` to stop Vite/node/esbuild. Do not kill
-  NinjaTrader, active MT5 terminals, Caddy, backend, or Antigravity IDE unless
-  the user explicitly asks.
-- Current expected public runtime listeners are Caddy on `80/443` and backend
-  on `8000`. Vite `5173` should normally be stopped unless doing local frontend
-  development.
+Neu nguoi dung chua cho phep ro rang trong tac vu HIEN TAI, khong duoc:
 
-Frontend run:
-
-```powershell
-cd frontend
-npm run dev
-```
-
-Current browser URL:
-
-```text
-https://gcflowpy.xyz/
-```
-
-Backend tests:
-
-```powershell
-cd backend
-.venv\Scripts\python.exe -m pytest
-.venv\Scripts\python.exe -m pytest -m property
-```
-
-Focused backend tests commonly used for recent contract/import work:
-
-```powershell
-cd backend
-.venv\Scripts\python.exe -m pytest tests\unit\test_contract_resolver.py tests\unit\test_control_plane.py tests\unit\test_nt_export_backfill.py tests\integration\test_pipeline_wiring.py tests\integration\test_rest_contracts.py
-```
-
-Frontend checks:
-
-```powershell
-cd frontend
-npm run typecheck
-npm test
-npm run build
-```
-
-NT AddOn tests/build, only if .NET SDK is installed:
-
-```powershell
-cd nt-addon
-dotnet build src\NtAddOn.Core\NtAddOn.Core.csproj
-dotnet test tests\NtAddOn.Tests\NtAddOn.Tests.csproj
-```
-
-Full NT project may require NinjaTrader local install:
-
-```powershell
-dotnet build NtAddOn.sln -p:NinjaTraderBinDir="$env:USERPROFILE\Documents\NinjaTrader 8\bin"
-```
-
-Note: this machine previously did not have a .NET SDK available, so `dotnet
-test` can fail with "No .NET SDKs were found".
-
-## Import / Reset Workflows
-
-GUI import:
-
-```powershell
-.\IMPORT_NT_EXPORT.cmd
-```
-
-Last-only import for current `GC 12-26-5-6.Last.txt`:
-
-```powershell
-.\IMPORT_TODAY_LAST_TO_CHART.cmd
-```
-
-Direct Last-only import:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Import-TodayLastToChart.ps1
-```
-
-What this does:
-
-- Defaults to `export data\GC 12-26-5-6.Last.txt`.
-- Infers source contract from filename (`GC 12-26`).
-- Writes derived chart cache under `contract=GC`.
-- Skips raw Bid/Ask import.
-- Clears existing bars + volume delta in the imported range unless `-NoClear`
-  is supplied.
-- This direct cache import is independent of live source arbitration, so it
-  remains the supported way to repair missing history while Bookmap is primary.
-  The normal Last-only workflow does not reconstruct historical footprint rows.
-
-General NT gap import:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Import-NtGap.ps1 -Contract "GC 12-26" -Last "<path.Last.txt>" -SkipRecentRaw -ClearDerivedRange
-```
-
-Raw recent import only happens when a complete Last/Bid/Ask set is present and
-the export touches the recent retention window. Use `-SkipRecentRaw` for
-history/gap imports that should remain bars + delta only.
-
-Reset market data:
-
-```powershell
-.\RESET_MARKET_DATA.cmd
-```
-
-This runs `scripts/Reset-MarketData.ps1 -StopBackend -RestartBackend`, backs up
-`backend/data` into `_data_backups` by default, recreates clean data, then
-restarts backend through `scripts\Start-Backend.ps1` / the shared backend runtime
-helper. Treat as destructive and only run when requested.
-
-## Testing Conventions
-
-Backend:
-
-- `pytest` markers: `unit`, `integration`, `property`, `smoke`.
-- Property tests use Hypothesis profile with at least 100 examples.
-- Each property test must include exact tag comment:
-  `Feature: gc-chart-platform, Property {n}: {property_text}`.
-
-Frontend:
-
-- Vitest tests live beside source as `*.test.ts(x)` / property tests.
-- fast-check is globally configured in `frontend/src/test/fast-check.setup.ts`.
-- Use `propertyTest` / `propertyTag` helpers from `frontend/src/test/property.ts`.
-
-NT AddOn:
-
-- xUnit + FsCheck property tests.
-- Core project should remain testable without NinjaTrader assemblies.
-- NinjaTrader-coupled code belongs only under `NtAddOn.NinjaTrader` or the
-  self-contained `ninjascript` file.
-
-## Coding Rules For This Repo
-
-- Prefer existing patterns and local helpers. Do not introduce new frameworks.
-- Keep edits scoped; this repo can have dirty/generated runtime files.
-- Use `rg` / `rg --files` for search.
-- Use `apply_patch` for manual edits.
-- Avoid destructive git commands. Never reset or checkout user changes unless
-  explicitly requested.
-- Use ASCII by default for code/docs unless the file already requires Unicode.
-- Do not commit generated runtime data, logs, caches, build outputs, exports,
-  SQLite DBs, or NinjaTrader dumps.
-
-Backend-specific:
-
-- `NormalizedTrade`/`NormalizedQuote` use canonical ms UTC timestamps.
-- Raw tick writes happen before chart throttling/filtering.
-- Derived chart cache should use logical contract `GC`.
-- Raw tick shards should use real source contract.
-- If changing source/contract logic, update resolver/control-plane/pipeline
-  tests together.
-- Be careful with SQLite writer concurrency; use existing store methods.
-
-Frontend-specific:
-
-- Shared UI theme decision (2026-10-29): LQ is the visual reference for Chart,
-  MP and FP. Use its dark surfaces and turquoise accent consistently for
-  settings, primary actions, checked controls, focus rings and active selections.
-  Canonical tokens live in `frontend/src/styles.css`: `--gc-accent: #35d6b0`,
-  `--gc-accent-ink: #061b16`, `--gc-background: #0b0f14`, `--gc-panel: #111a23`,
-  `--gc-control: #0d141b`, `--gc-text: #dbe7f3`, `--gc-muted: #9eacbb`,
-  `--gc-border: #334657`. Reuse these tokens in future Chart/MP/FP theme work;
-  do not create a separate blue/green settings palette for each page. Preserve
-  meaningful buy/sell and indicator colors and user chart-color preferences.
-  This task applies the reference to LQ; the Chart/MP/FP migration is subsequent
-  work, not an instruction to rewrite unrelated pages during every UI change.
-  All LQ settings groups, including ICE and BigTrade, use the same panel surface,
-  border and turquoise controls. Keep current Buy/Sell chart colors unchanged
-  (user clarification 2026-10-29). Each settings option needs a Vietnamese `?`
-  explanation of its meaning, units and filter order where relevant. Reuse
-  `frontend/src/liquidity/SettingHelp.tsx`: hover, keyboard focus and mobile tap;
-  hints stay accessible for disabled inputs and fit outside scrolling panels.
-- LQ SI Stops replace legacy Market Volume Stop markers/settings/alerts. They
-  use direct Rithmic trades plus accepted MBO/MBP boundaries, publish completed
-  inferred chains only, and persist compact history for 48 hours. See
-  `SI-STOPS.md`; Bookmap SI 2.08 is an algorithm reference, not a data dependency.
-  Use one SI Stops settings group. Default display minimum is 50 contracts per
-  chain with Auto off; settings v2 migrates the initial saved zero-minimum
-  preset once. Filter chains before visual grouping. Marker quantity is the
-  group's total contracts; chain count and trade-print count are separate.
-
-- Keep REST and websocket same-origin through Vite proxy.
-- Keep mobile toolbar responsive; prior issue was toolbar controls covering the
-  menu on mobile, fixed by two-row mobile layout in `styles.css`.
-- Do not reintroduce a contract selector unless the user explicitly asks.
-- `CHART_CONTRACT` is `GC`.
-- Run `npm run typecheck` or `npm run build` after TypeScript/UI changes.
-- For user-visible frontend changes on `https://gcflowpy.xyz/`, prefer
-  `npm run build` over typecheck alone, because Caddy serves the built
-  `frontend/dist` bundle.
-
-NT-specific:
-
-- Core C# code can use modern C# as project code.
-- `nt-addon/ninjascript/GcChartBridgeAddOn.cs` targets NinjaScript compiler and
-  intentionally avoids newer C# syntax such as expression-bodied members,
-  null-conditional operators, string interpolation, `nameof`, and out-var.
-- If changing deployed NinjaScript, copy to the Documents NinjaTrader path and
-  tell the user to compile/restart NT.
-
-## Do Not Touch Unless Asked
-
-- `backend/data/`, `data/`: active runtime SQLite stores.
-- `_data_backups/`, `_import_logs/`, `_import_test/`: generated backup/import
-  areas.
-- `export data/`: user NT exports; do not delete or overwrite.
-- `frontend/node_modules/`, `frontend/dist/`, `*.tsbuildinfo`.
-- `backend/.venv/`, `.pytest_cache/`, `.hypothesis/`.
-- `*.sqlite`, `*.sqlite-wal`, `*.sqlite-shm`, `*.log`, `*_out.txt`.
-- Deployed NinjaTrader files under Documents unless the task is specifically
-  about deployment.
-- Root MT5/trading artifacts unless explicitly requested.
-
-## Quick Diagnosis Checklist
-
-Frontend frozen / no data:
-
-1. Check backend: `GET /api/health`.
-2. Check public frontend/domain: `https://gcflowpy.xyz/`.
-3. Check `/api/contracts?symbol=GC`; active should normally be `GC 12-26`.
-4. Check `/api/history?symbol=GC&contract=GC&tf=1m&limit=5`.
-5. Check backend log for `/ws/nt` and `/ws/chart` accepted connections.
-6. If NT source changed, ensure NT AddOn config/manual override and backend
-   active source agree.
-
-Bar stream looks wrong:
-
-1. Suspect multiple source contracts merging.
-2. Verify active source is `GC 12-26`.
-3. Raw shards may still receive quotes from old contracts; that is acceptable
-   if chart/cache only moves with active source.
-4. If cache already has bad rows, clear or re-import only affected bar/delta
-   range; do not wipe raw data unless requested.
-
-Gap/history import:
-
-1. If only `.Last.txt` is available, import bars + volume delta only.
-2. Use `Import-TodayLastToChart.ps1` or `Import-NtGap.ps1 -SkipRecentRaw`.
-3. Only use raw Last/Bid/Ask import within the configured raw retention window when
-   complete files exist.
-
-## Current Known Good Baseline
-
-After the latest fixes:
-
-- Backend process runs on port `8000`.
-- Frontend/public browser entrypoint is `https://gcflowpy.xyz/`.
-- Port `9999` is no longer the active user-facing frontend route; only use it
-  if a local Vite dev server was explicitly started for development.
-- Caddy serves the frontend/domain and proxies `/api` and `/ws` to backend
-  loopback.
-- Frontend source changes are not visible on `https://gcflowpy.xyz/` until
-  `frontend/dist` is rebuilt with `npm run build`; confirm the domain's
-  `index.html` points to the new hashed asset.
-- Backend port `8000` has an inbound Windows Firewall block rule:
-  `NTtoTV Block Backend 8000 Inbound`. Local loopback still works for the
-  Caddy proxy and health checks.
-- Current real MT5 backend runtime env uses live trading enabled and invite-code
-  gated self-registration:
-  `NTTOTV_MT5_BACKEND=real`, `NTTOTV_TRADING_ENABLED=1`,
-  `NTTOTV_LIVE_TRADING_ENABLED=1`, `NTTOTV_INVITE_CODE=join-9999`,
-  `NTTOTV_MARKET_DATA_PREFERRED_SOURCE=bookmap`.
-- Realtime OHLCV, BigTrade, volume delta, and footprint prefer Bookmap; NT stays
-  warm and owns those shared keys only while selected as the automatic fallback.
-  FVG grading uses finalized Bookmap/Rithmic 30s and 1m footprints, or finalized
-  NT native 1m rows while NT is the selected fallback.
-- Direct Rithmic Paper L1/L2/MBO is enabled as the first fallback below Bookmap.
-  Windows also runs a read-only History Plant worker: startup/reconnect/sequence
-  gaps trigger repair, and the trailing 24 hours are audited every 300 seconds.
-  Closed M1 bars/delta/footprint and larger rollups are repaired under the source
-  lock; Bookmap/NT rows and live bars are preserved. `/api/market-data/status`
-  exposes `historySync`, and chart/LQ refresh after success. Native second-bar
-  replay also repairs 15s/30s candles and final delta independently of M1
-  coverage; it does not reconstruct their footprint ladders or MBO/icebergs.
-  See `RITHMIC-HISTORY.md`.
-  It becomes selectable only after a 65-second continuous warm-up, and falls
-  back to NT on disconnect/staleness. Credentials are DPAPI-encrypted outside
-  the repository; do not put them in source, logs, or runtime-state JSON.
-- Bookmap active source is GCZ6 (`GC 12-26`); NT active source is `GC 12-26`;
-  chart cache key is `GC`.
-- Last-only file `export data\GC 12-26-5-6.Last.txt` was imported into chart
-  cache as bars + volume delta.
-- Backend focused tests passed: resolver, control-plane, NT export backfill,
-  pipeline wiring, REST contracts.
-- Frontend `npm run build` passed.
-
-## Oracle VPS Rithmic-only: Quyen Truy Cap Va Van Hanh
-
-Phan nay co hieu luc cho moi tac vu lien quan Oracle VPS va repo
-"C:\Users\Administrator\Desktop\NTtoTV-linux-rithmic". Neu co mau thuan voi
-baseline Windows o tren, phan nay duoc uu tien chi trong pham vi Oracle.
-
-### Ranh gioi bao mat bat buoc
-
-Agent duoc phep SSH vao VPS de kiem tra service, log ky thuat, health, deploy
-release va sua ha tang khi nguoi dung yeu cau. Quyen SSH khong dong nghia voi
-quyen doc cau hinh trong Admin.
-
-Neu nguoi dung chua cho phep ro rang trong yeu cau hien tai, agent khong duoc:
-
-- Dang nhap https://oracle.gcflowpy.xyz/admin, dung session/cookie Admin, reset
-  mat khau owner, hoac goi endpoint /api/admin/* va /api/auth/login.
-- Doc, in, copy, grep, tai ve hoac suy dien noi dung
+- Dang nhap /admin, dung Admin cookie/session, reset owner password, goi
+  /api/admin/* hay /api/auth/login.
+- Doc, in, copy, grep, tai ve hoac suy dien noi dung:
   /var/lib/nttotv/config/rithmic.json, /var/lib/nttotv/secrets/*,
-  /etc/nttotv/credentials/* hay /etc/nttotv/nttotv.env.
-- Dump environment cua process/service (systemctl show ... Environment,
-  /proc/<pid>/environ) hoac query SQLite row/table co auth, owner, password,
-  token hay Rithmic settings.
-- Dua credential/config Admin vao command output, log, source, release archive,
-  test fixture hoac cau tra loi.
-- Thay doi Rithmic user/password, app identity, MAC, entitlement, auto-connect,
-  History Plant settings hay bat/tat connector qua API/GUI.
+  /etc/nttotv/credentials/*, /etc/nttotv/nttotv.env.
+- Dump process/service environment (systemctl show Environment,
+  /proc/<pid>/environ); query SQLite auth/owner/password/token/settings.
+- Thay doi Rithmic username/password, app identity, MAC, entitlement,
+  auto-connect, History Plant settings hoac bat/tat connector qua API/GUI.
+- Dua credential/Admin config vao command output, log, source, release,
+  archive, test fixture hay cau tra loi.
 
-Cho phep phai la chi dan ro rang cua nguoi dung cho tac vu hien tai. Quyen chung
-chung nhu "connect VPS", "kiem tra VPS" hay "deploy" khong phai la quyen doc
-Admin config. Neu chan doan bat buoc can gia tri trong Admin, dung lai va xin
-phep truoc. Co the sua source trang Admin va test bang fake/sanitized config ma
-khong doc runtime config that.
+Quyen "connect VPS", "kiem tra VPS", "deploy" khong phai quyen doc Admin config.
+Neu chan doan can gia tri bi bao ve, xin phep ro rang truoc. Co the sua Admin
+source va test bang fake/sanitized config ma khong doc runtime config that.
+Neu log bat ngo chua secret, dung xem, khong lap lai va bao user de rotate.
 
-Cac kiem tra read-only sau duoc phep ma khong can doc Admin config:
+Cac kiem tra technical read-only khong can doc Admin config:
 
     GET https://oracle.gcflowpy.xyz/health
     GET https://oracle.gcflowpy.xyz/ready
-    GET /api/market-data/status
-    systemctl status/is-active
-    journalctl cua service (khong dump env va khong tim credential)
-    ss, df, free, readlink, caddy validate
+    GET https://oracle.gcflowpy.xyz/api/market-data/status
+    systemctl is-active nttotv.service caddy.service
+    journalctl, ss, df, free, readlink, caddy validate
 
-Neu log bat ngo chua secret, khong lap lai secret trong output; dung xem, bao
-nguoi dung va de nghi rotate.
+Khong grep credential trong log. /ready co the 503 khi market data chua ready;
+khong sua readiness hay connector config chi de lam check xanh.
 
-### Dia chi va kien truc Oracle
+## Dia chi va van hanh
 
-- Host alias: oracle-a1
-- IP: 129.221.134.238
-- SSH user: ubuntu
-- Domain staging HTTPS: https://oracle.gcflowpy.xyz
-- NTtoTV: 127.0.0.1:8001, service nttotv.service
-- Sample app: 127.0.0.1:8000, service python-app.service
-- Public: chi 22/80/443; 8000/8001 phai tiep tuc bind loopback.
-- Caddy: caddy.service; active config /etc/caddy/Caddyfile.
-- Release: /opt/nttotv/releases/<release-id>.
-- Symlink active: /opt/nttotv/current.
-- Runtime data: /var/lib/nttotv (khong doc config/secret theo rule tren).
-- Source Oracle rieng: C:\Users\Administrator\Desktop\NTtoTV-linux-rithmic.
-- Windows live source: C:\Users\Administrator\Desktop\NTtoTV.
+- SSH alias oracle-a1; ubuntu@129.221.134.238.
+- nttotv.service: 127.0.0.1:8001; Caddy: 80/443.
+- Sample python-app.service: 127.0.0.1:8000; giu nguyen.
+- Chi public 22/80/443; 8000/8001 tiep tuc bind loopback.
+- /opt/nttotv/releases/<release-id>: immutable releases.
+- /opt/nttotv/current: symlink active; /var/lib/nttotv: runtime data.
+- /etc/caddy/Caddyfile: active Caddy config.
 
-Khong sua/build/restart Windows live khi tac vu chi noi ve Oracle. Khong sua
-file truc tiep trong /opt/nttotv/current hay release cu; tao immutable release
-moi. Cho toi cutover duoc nguoi dung yeu cau ro rang, giu Windows public live va
-giu sample app Oracle.
+Windows OpenSSH (khong doc private key hay noi dung ssh_config):
 
-### SSH an toan tu Windows
+    $sshExe = "$env:WINDIR/System32/OpenSSH/ssh.exe"
+    $scpExe = "$env:WINDIR/System32/OpenSSH/scp.exe"
+    $sshConfig = 'C:/Users/Administrator/Desktop/NTtoTV-linux-rithmic/_oracle_stage/ssh_config'
+    & $sshExe -F $sshConfig oracle-a1 'sudo readlink -f /opt/nttotv/current'
 
-Dung Windows OpenSSH va config da pin key/fingerprint:
+Host fingerprint da pin:
+SHA256:VJw2HPTPxdFFvpqvyJOADEppTTXWC+InY49678FGgY4.
+Khong dung StrictHostKeyChecking=no. Giu thu muc VPS oracle va ssh_config.
+Multiline remote script: single-quoted here-string, bo CR truoc khi pipe vao
+ssh 'sudo bash -s'; ket thuc script bang comment de tranh trailing CR.
 
-    $ssh = "$env:WINDIR\System32\OpenSSH\ssh.exe"
-    $scp = "$env:WINDIR\System32\OpenSSH\scp.exe"
-    $linuxRepo = "C:\Users\Administrator\Desktop\NTtoTV-linux-rithmic"
-    $sshConfig = Join-Path $linuxRepo "_oracle_stage\ssh_config"
-    & $ssh -F $sshConfig oracle-a1
+Deploy khi tac vu yeu cau website thay doi: build integrated source hien tai,
+tao immutable release moi, kiem tra, doi symlink va restart nttotv.service.
+Khong sua truc tiep current/release cu; khong deploy worktree cu de de len
+production moi. Verify public hashed JS asset sau frontend build/deploy.
+Giu config, secrets, SQLite va rollback releases. Khong DNS cutover, tat
+sample app hay thay doi Windows live neu chua duoc yeu cau ro rang.
 
-Chay mot lenh non-interactive:
+## Coding va don project
 
-    & $ssh -F $sshConfig oracle-a1 "systemctl is-active nttotv caddy python-app"
-
-Upload file:
-
-    & $scp -F $sshConfig <local-file> "oracle-a1:/tmp/<safe-name>"
-
-_oracle_stage/ssh_config tro toi private key va known-hosts local trong
-"C:\Users\Administrator\Desktop\NTtoTV-linux-rithmic\VPS oracle". Thu muc
-nay bi `/VPS oracle/` trong `.gitignore`; khong add/commit private key, dua vao
-release, copy len VPS hay output. Khong dung StrictHostKeyChecking=no.
-Fingerprint ky vong:
-
-    SHA256:VJw2HPTPxdFFvpqvyJOADEppTTXWC+InY49678FGgY4
-
-Neu host key thay doi, dung lai va doi chieu qua Oracle Console; khong tu dong
-chap nhan key moi.
-
-### Kiem tra VPS khong cham Admin config
-
-    & $ssh -F $sshConfig oracle-a1 "readlink -f /opt/nttotv/current"
-    & $ssh -F $sshConfig oracle-a1 "systemctl is-active nttotv caddy python-app fail2ban"
-    & $ssh -F $sshConfig oracle-a1 "curl -fsS http://127.0.0.1:8001/api/health"
-    & $ssh -F $sshConfig oracle-a1 "curl -sS -i http://127.0.0.1:8001/api/ready"
-    & $ssh -F $sshConfig oracle-a1 "ss -lnt"
-    & $ssh -F $sshConfig oracle-a1 "df -h / /var/lib/nttotv; free -h"
-    & $ssh -F $sshConfig oracle-a1 "sudo journalctl -u nttotv -u caddy -n 100 --no-pager"
-
-/api/health=200 la liveness. /api/ready=503 la binh thuong trong luc Rithmic
-chua duoc duyet/ket noi; khong sua readiness de ep thanh 200.
-
-Kiem tra public:
-
-    curl.exe -sS -o NUL -w "%{http_code}" https://oracle.gcflowpy.xyz/health
-    curl.exe -sS -o NUL -w "%{http_code}" https://oracle.gcflowpy.xyz/admin
-    curl.exe -sS -o NUL -w "%{http_code}" https://oracle.gcflowpy.xyz/ready
-    curl.exe -sS -o NUL -w "%{http_code}" https://oracle.gcflowpy.xyz/ws/nt
-
-Ky vong staging khi chua connect: 200, 200, 503, 404. Viec kiem tra HTTP status
-cua /admin khong cho phep agent dang nhap hay doc config da render.
-
-### Quy trinh sua code va deploy release
-
-1. Sua trong NTtoTV-linux-rithmic, khong sua Windows live. Dung apply_patch va
-   giu cac thay doi cua nguoi dung.
-2. Neu sua frontend, chay:
-
-       cd frontend
-       npm run typecheck
-       npm test
-       npm run build
-
-3. Neu sua backend, chay:
-
-       cd backend
-       .venv\Scripts\python.exe -m pytest
-       .venv\Scripts\python.exe -m pytest -m property
-
-4. Tao archive nho; khong dong goi database, secret, .venv, logs, node_modules
-   hay runtime data:
-
-       Set-Location "C:\Users\Administrator\Desktop\NTtoTV-linux-rithmic"
-       $releaseId = Get-Date -Format "yyyyMMdd-HHmmss"
-       $archive = "_oracle_stage\nttotv-$releaseId.tar.gz"
-       tar --exclude="__pycache__" --exclude="*.pyc" --exclude=".pytest_cache" --exclude=".hypothesis" --exclude=".venv" --exclude="backend/data" --exclude="frontend/node_modules" -czf $archive backend/app backend/scripts backend/requirements.txt backend/requirements-linux-arm64.lock backend/pyproject.toml frontend/dist deploy README-LINUX-RITHMIC.md RProtocolAPI.zip
-
-5. Upload, extract vao release moi va activate qua installer:
-
-       & $scp -F $sshConfig $archive "oracle-a1:/tmp/nttotv-$releaseId.tar.gz"
-       & $ssh -F $sshConfig oracle-a1 "sudo install -d -o root -g root -m 0750 /opt/nttotv/releases/$releaseId"
-       & $ssh -F $sshConfig oracle-a1 "sudo tar -xzf /tmp/nttotv-$releaseId.tar.gz -C /opt/nttotv/releases/$releaseId"
-       & $ssh -F $sshConfig oracle-a1 "sudo bash /opt/nttotv/releases/$releaseId/deploy/linux/install-release.sh /opt/nttotv/releases/$releaseId"
-       & $ssh -F $sshConfig oracle-a1 "rm -f /tmp/nttotv-$releaseId.tar.gz"
-
-6. Verify symlink, service, loopback bind, health, HTTPS va cac endpoint da xoa.
-   Khong xem deploy thanh cong neu nttotv crash-loop hoac public route sai.
-7. Khong disable python-app va khong doi DNS gcflowpy.xyz/www neu nguoi dung
-   chua yeu cau cutover va preflight chua qua.
-
-### Caddy, rollback va release recovery
-
-Staging HTTPS source la deploy/caddy/Caddyfile.staging-https. Truoc khi thay
-active Caddyfile, tao backup, validate truoc reload:
-
-    & $ssh -F $sshConfig oracle-a1 "sudo cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.backup-manual"
-    & $ssh -F $sshConfig oracle-a1 "sudo caddy validate --config /etc/caddy/Caddyfile"
-    & $ssh -F $sshConfig oracle-a1 "sudo systemctl reload caddy"
-
-Khong restart Caddy khi chi backend thay doi. Neu production Caddy can quay ve
-staging:
-
-    & $ssh -F $sshConfig oracle-a1 "sudo /opt/nttotv/current/deploy/linux/rollback-staging.sh"
-
-Neu release moi loi, lay <previous-release> tu /opt/nttotv/releases, xac minh
-dung path cu the, roi atomic switch:
-
-    sudo ln -sfn /opt/nttotv/releases/<previous-release> /opt/nttotv/current.new
-    sudo mv -Tf /opt/nttotv/current.new /opt/nttotv/current
-    sudo systemctl restart nttotv
-
-Khong xoa release cu trong cung task deploy. Khong copy truc tiep SQLite dang
-co WAL. Backup/restore phai dung SQLite online backup workflow co san.
-
-### Optional Oracle Windows MT5 execution relay (2026-10-25)
-
-Oracle can relay manual trading to the Windows backend over a private SSH
-tunnel. Preserve both existing profiles: `hieu` owns
-`C:\Program Files\MetaTrader 5\terminal64.exe`; `Hai` owns
-`C:\MT5Hai\terminal64.exe`. Windows retains sessions, profiles, account
-bindings, broker credentials and order records. Oracle owner/Admin auth and
-Rithmic settings stay local; all access restrictions above still apply.
-
-Windows startup task: `NTtoTV Oracle MT5 private tunnel`. Manage it with
-`scripts/Start-OracleMt5Tunnel.ps1` / `scripts/Stop-OracleMt5Tunnel.ps1`.
-Oracle `127.0.0.1:18080` forwards to Windows `127.0.0.1:8000`; keep it private.
-Oracle enables the relay using the optional `30-windows-execution.conf` systemd
-drop-in, without changing its protected runtime env file. `/api/execution`
-reports capabilities. See `WINDOWS-EXECUTION.md` in the Linux repository.
-Read-only verification: `backend/scripts/verify_oracle_mt5_bridge.py` here.
-The relay uses its own `nttotv_windows_session` cookie and never retries an
-uncertain trading mutation. Automatic-entry controls remain disabled on Oracle.
-Windows/backend/both MT5 terminals must stay online. Do not send a real order
-as a connectivity test.
-
-### Dieu kien cutover con lai
-
-Khi Rithmic duoc duyet, chinh nguoi dung se config/connect trong Admin, tru khi
-ho cho phep agent ro rang. Chi cutover sau khi:
-
-- /api/ready tra 200.
-- Ticker + History Plant, L1/L2/MBO va MBO snapshot da synchronized.
-- preflight-production.sh pass.
-- Soak/recovery test duoc chap nhan.
-
-Lenh production co guard:
-
-    sudo /opt/nttotv/current/deploy/linux/preflight-production.sh
-    sudo /opt/nttotv/current/deploy/linux/activate-production.sh --confirm
-
-Khong chay activate-production.sh, khong doi DNS production va khong dung
-Rithmic Windows neu nguoi dung chi yeu cau kiem tra/deploy staging.
+- Dung rg/rg --files; scope thay doi theo tac vu, prefer helper hien co.
+- Manual edits dung apply_patch; khong reset/clean user changes.
+- Khong commit runtime DB/log/cache/build/node_modules/venv/export/secret.
+- SQLite single writer: dung store methods hien co, tranh writer concurrency.
+- Theme Chart/MP/FP/LQ dung token trong frontend/src/styles.css:
+  --gc-accent #35d6b0, --gc-background #0b0f14, --gc-panel #111a23.
+  Giu Buy/Sell colors va user preferences; reuse liquidity/SettingHelp.tsx
+  cho tooltip tieng Viet, keyboard/mobile accessible.
+- Khong them contract selector neu user chua yeu cau.
+- Don ban source/package staging cu duoc user yeu cau; doi chieu release
+  active truoc. Giu regression tests/tooling con dung cho source hien tai.
+- Tranh xoa runtime data, SSH material, personal MQL5/reference files,
+  research docs, worktree cua session khac va remote rollback releases.
+- Truoc recursive delete/move Windows, resolve va kiem tra path nam trong
+  target duoc phep; dung native PowerShell voi -LiteralPath.

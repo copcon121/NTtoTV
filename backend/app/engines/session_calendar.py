@@ -13,6 +13,9 @@ from datetime import date, datetime, time, timedelta, timezone
 from app.models.timestamp import from_canonical_ms, to_canonical_ms
 
 DAILY_TF = "1D"
+WEEKLY_TF = "1W"
+MONTHLY_TF = "1M"
+CALENDAR_TFS = (WEEKLY_TF, MONTHLY_TF)
 SESSION_ANCHORED_TFS = frozenset({"4h", DAILY_TF})
 GC_SESSION_START_HOUR_CT = 17
 GC_SESSION_BREAK_START_HOUR_CT = 16
@@ -29,14 +32,23 @@ TF_MS: dict[str, int] = {
     "4h": 4 * 60 * 60_000,
     DAILY_TF: 24 * 60 * 60_000,
 }
+CHART_TFS = frozenset((*TF_MS, *CALENDAR_TFS))
 
 
 def timeframe_bucket_start(ts_ms: int, tf: str) -> int:
     """Floor ``ts_ms`` to the start of ``tf``.
 
-    Intraday buckets remain epoch-aligned UTC intervals. The daily bucket is the
-    GC session start timestamp in UTC.
+    Most intraday buckets use UTC intervals. GC session-aligned buckets,
+    including the weekly and monthly trading periods, use Central Time.
     """
+
+    if tf in CALENDAR_TFS:
+        trading_day = gc_trading_day(ts_ms)
+        if tf == WEEKLY_TF:
+            first_day = trading_day - timedelta(days=trading_day.weekday())
+        else:
+            first_day = trading_day.replace(day=1)
+        return central_session_start_ms(first_day - timedelta(days=1))
 
     try:
         interval = TF_MS[tf]
@@ -49,14 +61,25 @@ def timeframe_bucket_start(ts_ms: int, tf: str) -> int:
     return (ts_ms // interval) * interval
 
 
+def calendar_bucket_end(bucket_ms: int, tf: str) -> int:
+    """Return the exclusive end of a weekly or monthly GC bucket."""
+    first_day = gc_trading_day(bucket_ms)
+    if tf == WEEKLY_TF:
+        next_day = first_day + timedelta(days=7)
+    else:
+        next_day = (first_day.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return central_session_start_ms(next_day - timedelta(days=1))
+
+
+def gc_trading_day(ts_ms: int) -> date:
+    local = central_datetime_from_utc_ms(ts_ms)
+    return local.date() + timedelta(days=local.hour >= GC_SESSION_START_HOUR_CT)
+
+
 def gc_session_bucket_start(ts_ms: int) -> int:
     """Return the UTC ms timestamp for the GC session containing ``ts_ms``."""
 
-    central_dt = central_datetime_from_utc_ms(ts_ms)
-    session_date = central_dt.date()
-    if central_dt.time() < time(GC_SESSION_START_HOUR_CT):
-        session_date -= timedelta(days=1)
-    return central_session_start_ms(session_date)
+    return central_session_start_ms(gc_trading_day(ts_ms) - timedelta(days=1))
 
 
 def gc_session_intraday_bucket_start(ts_ms: int, interval_ms: int) -> int:

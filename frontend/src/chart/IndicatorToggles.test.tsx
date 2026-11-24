@@ -12,9 +12,7 @@ import { DEFAULT_MGANN_SWING_SETTINGS } from "./mgannSwing";
 import { DEFAULT_MGANN_BREAK_SETTINGS } from "./mgannBreak";
 import { DEFAULT_OUTSIDE_BAR_SETTINGS } from "./outsideBar";
 import { DEFAULT_SMC_SETTINGS, type SmcSettings } from "./smc";
-import { DEFAULT_GC_PUSH_MOMENTUM_SETTINGS } from "./gcPushMomentum";
 import { DEFAULT_XKONTROL_DISPLAY_SETTINGS } from "./xKontrol";
-import { DEFAULT_TDU_SETTINGS } from "./tduSettings";
 
 afterEach(() => {
   cleanup();
@@ -28,103 +26,38 @@ function open() {
 }
 
 describe("IndicatorToggles", () => {
-  it("keeps the liquidity-page iceberg control out of the main-chart menu", () => {
-    render(<IndicatorToggles footprint={false} bigTrades={false} ema={EMA} smc={SMC}
+  it("edits the dense overlay auto-hide spacing and rejects invalid input", () => {
+    const onSpacingChange = vi.fn();
+    render(<IndicatorToggles
+      bigTrades={false} ema={EMA} smc={SMC}
       footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
+      onBigTradesChange={() => {}}
+      onEmaChange={() => {}} onSmcChange={() => {}}
       onFootprintSettingsChange={() => {}}
-      onFootprintChange={() => {}} onBigTradesChange={() => {}}
-      onEmaChange={() => {}} onSmcChange={() => {}} />);
+      onDenseOverlayMinBarSpacingChange={onSpacingChange}
+    />);
     open();
-    expect(screen.queryByText(/Native Icebergs/i)).not.toBeInTheDocument();
-  });
-
-  it("lets users lower the zoom threshold or always show dense indicators", () => {
-    const onChange = vi.fn();
-    render(
-      <IndicatorToggles
-        footprint={false}
-        bigTrades
-        ema={EMA}
-        smc={SMC}
-        onFootprintChange={() => {}}
-        onBigTradesChange={() => {}}
-        onEmaChange={() => {}}
-        onSmcChange={() => {}}
-        onFootprintSettingsChange={() => {}}
-        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
-        onDenseOverlayMinSpacingChange={onChange}
-      />,
-    );
-    open();
-    const input = screen.getByLabelText("Indicator minimum candle spacing");
-    expect((input as HTMLInputElement).value).toBe("6");
-    fireEvent.change(input, { target: { value: "3" } });
-    fireEvent.blur(input);
-    expect(onChange).toHaveBeenLastCalledWith(3);
+    const input = screen.getByLabelText("Auto-hide below (px)");
+    expect(input).toHaveValue(6);
+    fireEvent.change(input, { target: { value: "9.5" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSpacingChange).toHaveBeenLastCalledWith(9.5);
     fireEvent.change(input, { target: { value: "0" } });
     fireEvent.blur(input);
-    expect(onChange).toHaveBeenLastCalledWith(0);
-    fireEvent.change(input, { target: { value: "" } });
-    fireEvent.change(input, { target: { value: "2.5" } });
+    expect(onSpacingChange).toHaveBeenLastCalledWith(0);
+    fireEvent.change(input, { target: { value: "-1" } });
     fireEvent.blur(input);
-    expect(onChange).toHaveBeenLastCalledWith(2.5);
-  });
-
-  it("configures all three TDU levels and the candle filter", () => {
-    const onSettings = vi.fn();
-    const props = {
-      footprint: false, bigTrades: false, ema: EMA, smc: SMC,
-      footprintSettings: DEFAULT_FOOTPRINT_SETTINGS,
-      onFootprintChange: vi.fn(), onBigTradesChange: vi.fn(),
-      onEmaChange: vi.fn(), onSmcChange: vi.fn(), onFootprintSettingsChange: vi.fn(),
-      onTduSettingsChange: onSettings,
-    };
-    const { rerender } = render(<IndicatorToggles {...props} />);
-    open();
-    fireEvent.click(screen.getByLabelText("TDU settings"));
-    const level1 = screen.getByLabelText("TDU Level 1 sigma threshold");
-    const level2 = screen.getByLabelText("TDU Level 2 sigma threshold");
-    const level3 = screen.getByLabelText("TDU Level 3 sigma threshold");
-    expect(level1).toHaveValue(4);
-    expect(level2).toHaveValue(5);
-    expect(level3).toHaveValue(6);
-    fireEvent.change(level1, { target: { value: "3" } });
-    fireEvent.change(level2, { target: { value: "4" } });
-    fireEvent.change(level3, { target: { value: "5" } });
-    fireEvent.blur(level3);
-    expect(onSettings).toHaveBeenLastCalledWith({ ...DEFAULT_TDU_SETTINGS, level1Sigma: 3, level2Sigma: 4, level3Sigma: 5 });
-    onSettings.mockClear();
-    fireEvent.change(level1, { target: { value: "9" } });
-    fireEvent.blur(level1);
-    expect(onSettings).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert")).toHaveTextContent("Level 1 < Level 2 < Level 3");
-    for (const level of [1, 2, 3]) {
-      expect(screen.getByLabelText(`TDU Level ${level}`)).toBeChecked();
-      fireEvent.click(screen.getByLabelText(`TDU Level ${level}`));
-      expect(onSettings).toHaveBeenLastCalledWith({ ...DEFAULT_TDU_SETTINGS, [`showLevel${level}`]: false });
-    }
-    fireEvent.change(screen.getByLabelText("TDU minimum body percent"), { target: { value: "50" } });
-    expect(onSettings).toHaveBeenLastCalledWith({ ...DEFAULT_TDU_SETTINGS, minBodyPercent: 50 });
-    fireEvent.click(screen.getByLabelText("TDU filter small-body candles"));
-    expect(onSettings).toHaveBeenLastCalledWith({ ...DEFAULT_TDU_SETTINGS, filterSmallBody: false });
-    rerender(<IndicatorToggles {...props} tduSettings={{ filterSmallBody: false, showLevel1: false }} />);
-    expect(screen.getByLabelText("TDU Level 1")).not.toBeChecked();
-    expect(screen.getByLabelText("TDU minimum body percent")).toBeDisabled();
-    rerender(<IndicatorToggles {...props} tduSettings={{ level1Sigma: 2, level2Sigma: 3, level3Sigma: 4 }} />);
-    expect(level1).toHaveValue(2);
-    expect(level2).toHaveValue(3);
-    expect(level3).toHaveValue(4);
+    expect(input).toHaveValue(6);
+    expect(onSpacingChange).toHaveBeenCalledTimes(2);
   });
 
   it("configures the optional Orderflows Gaps swing filter", () => {
     const onSettings = vi.fn();
     render(
       <IndicatorToggles
-        footprint
         bigTrades={false}
         ema={EMA}
         smc={SMC}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -150,12 +83,10 @@ describe("IndicatorToggles", () => {
       <IndicatorToggles
         xKontrol
         xKontrolSettings={DEFAULT_XKONTROL_DISPLAY_SETTINGS}
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
         onXKontrolSettingsChange={onSettings}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -191,7 +122,6 @@ describe("IndicatorToggles", () => {
   it("opens the dropdown and toggles each indicator", () => {
     const onVolumeDelta = vi.fn();
     const onMgannSwing = vi.fn();
-    const onFootprint = vi.fn();
     const onFvgGrader = vi.fn();
     const onMgannBreak = vi.fn();
     const onBigTrades = vi.fn();
@@ -200,13 +130,11 @@ describe("IndicatorToggles", () => {
     const onOutsideBar = vi.fn();
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades
         ema={EMA}
         smc={SMC}
         onVolumeDeltaChange={onVolumeDelta}
         onMgannSwingChange={onMgannSwing}
-        onFootprintChange={onFootprint}
         onFvgGraderChange={onFvgGrader}
         onMgannBreakChange={onMgannBreak}
         onBigTradesChange={onBigTrades}
@@ -227,7 +155,6 @@ describe("IndicatorToggles", () => {
     fireEvent.click(screen.getByLabelText("MGannSwing"));
     fireEvent.click(screen.getByLabelText("EMA/OSB"));
     fireEvent.click(screen.getByLabelText("SMC"));
-    fireEvent.click(screen.getByLabelText("Footprint"));
     fireEvent.click(screen.getByLabelText("FVG Grader"));
     fireEvent.click(screen.getByLabelText("mGann Break L/S"));
     fireEvent.click(screen.getByLabelText("BigTrade"));
@@ -244,7 +171,6 @@ describe("IndicatorToggles", () => {
       enabled: false,
     });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, enabled: true });
-    expect(onFootprint).toHaveBeenCalledWith(true);
     expect(onFvgGrader).toHaveBeenCalledWith(true);
     expect(onMgannBreak).toHaveBeenCalledWith(false);
     expect(onBigTrades).toHaveBeenCalledWith(false);
@@ -257,13 +183,11 @@ describe("IndicatorToggles", () => {
       <IndicatorToggles
         mgannSwing={false}
         mgannSwingSettings={DEFAULT_MGANN_SWING_SETTINGS}
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
         onMgannSwingChange={onMgannSwing}
         onMgannSwingSettingsChange={onMgannSwingSettings}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -340,20 +264,12 @@ describe("IndicatorToggles", () => {
     });
   });
 
-  it("toggles and edits GC Push Momentum settings", () => {
-    const onEnabled = vi.fn();
-    const onSettings = vi.fn();
+  it("keeps GC Push Momentum out of the indicator menu", () => {
     render(
       <IndicatorToggles
-        gcPushMomentum={false}
-        gcPushMomentumSettings={DEFAULT_GC_PUSH_MOMENTUM_SETTINGS}
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
-        onGcPushMomentumChange={onEnabled}
-        onGcPushMomentumSettingsChange={onSettings}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -363,112 +279,9 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    fireEvent.click(screen.getByLabelText("GC Push Momentum"));
-    fireEvent.click(screen.getByLabelText("GC Push Momentum settings"));
-    fireEvent.change(screen.getByLabelText("GC Push Momentum horizon bars"), {
-      target: { value: "5" },
-    });
-    fireEvent.blur(screen.getByLabelText("GC Push Momentum horizon bars"));
-    fireEvent.change(
-      screen.getByLabelText("GC Push Momentum push smoothing bars"),
-      { target: { value: "6" } },
-    );
-    fireEvent.blur(
-      screen.getByLabelText("GC Push Momentum push smoothing bars"),
-    );
-    fireEvent.change(
-      screen.getByLabelText("GC Push Momentum signal smoothing bars"),
-      { target: { value: "7" } },
-    );
-    fireEvent.blur(
-      screen.getByLabelText("GC Push Momentum signal smoothing bars"),
-    );
-    fireEvent.change(
-      screen.getByLabelText("GC Push Momentum volatility half-life"),
-      { target: { value: "90" } },
-    );
-    fireEvent.blur(
-      screen.getByLabelText("GC Push Momentum volatility half-life"),
-    );
-    fireEvent.change(
-      screen.getByLabelText("GC Push Momentum strong percentile"),
-      { target: { value: "95" } },
-    );
-    fireEvent.blur(
-      screen.getByLabelText("GC Push Momentum strong percentile"),
-    );
-    const linesToggle = screen.getByLabelText(
-      "GC Push Momentum Push and Signal lines",
-    );
-    expect(linesToggle).not.toBeChecked();
-    fireEvent.click(linesToggle);
-    const divergenceToggle = screen.getByLabelText(
-      "GC Push Momentum confirmed divergence",
-    );
-    expect(divergenceToggle).toBeChecked();
-    fireEvent.click(divergenceToggle);
-    const displayMode = screen.getByLabelText(
-      "GC Push Momentum display mode",
-    );
-    expect(displayMode).toHaveValue("mgann_wave");
-    fireEvent.change(displayMode, { target: { value: "native" } });
-
-    expect(onEnabled).toHaveBeenCalledWith(true);
-    expect(onSettings).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ horizonBars: 5 }),
-    );
-    expect(onSettings).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ pushSmoothingBars: 6 }),
-    );
-    expect(onSettings).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({ signalSmoothingBars: 7 }),
-    );
-    expect(onSettings).toHaveBeenNthCalledWith(
-      4,
-      expect.objectContaining({ volatilityHalfLifeBars: 90 }),
-    );
-    expect(onSettings).toHaveBeenNthCalledWith(
-      5,
-      expect.objectContaining({ strongPercentile: 0.95 }),
-    );
-    expect(onSettings).toHaveBeenNthCalledWith(
-      6,
-      expect.objectContaining({ showLines: true }),
-    );
-    expect(onSettings).toHaveBeenNthCalledWith(
-      7,
-      expect.objectContaining({ showDivergence: false }),
-    );
-    expect(onSettings).toHaveBeenNthCalledWith(
-      8,
-      expect.objectContaining({ displayMode: "native" }),
-    );
-  });
-
-  it("disables GC Push Momentum outside M1 and M5", () => {
-    render(
-      <IndicatorToggles
-        gcPushMomentum
-        gcPushMomentumDisabled
-        footprint={false}
-        bigTrades={false}
-        ema={EMA}
-        smc={SMC}
-        onFootprintChange={() => {}}
-        onBigTradesChange={() => {}}
-        onEmaChange={() => {}}
-        onSmcChange={() => {}}
-        footprintSettings={DEFAULT_FOOTPRINT_SETTINGS}
-        onFootprintSettingsChange={() => {}}
-      />,
-    );
-
-    open();
-    expect(screen.getByLabelText("GC Push Momentum")).toBeDisabled();
-    expect(screen.getByLabelText("GC Push Momentum settings")).toBeDisabled();
+    expect(screen.queryByLabelText("GC Push Momentum")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("GC Push Momentum settings")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("TDU Buy/Sell Momentum")).toBeEnabled();
   });
 
   it("disables TDU Buy/Sell Momentum outside M1 and M5", () => {
@@ -476,11 +289,9 @@ describe("IndicatorToggles", () => {
       <IndicatorToggles
         tduSignals
         tduSignalsDisabled
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -491,7 +302,6 @@ describe("IndicatorToggles", () => {
 
     open();
     expect(screen.getByLabelText("TDU Buy/Sell Momentum")).toBeDisabled();
-    expect(screen.getByLabelText("TDU settings")).toBeDisabled();
   });
 
   it("can disable MGannSwing independently", () => {
@@ -500,12 +310,10 @@ describe("IndicatorToggles", () => {
       <IndicatorToggles
         mgannSwing
         mgannSwingDisabled
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
         onMgannSwingChange={onMgannSwing}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -526,22 +334,23 @@ describe("IndicatorToggles", () => {
 
   it("edits Volume Profile display settings", () => {
     const onWidth = vi.fn();
-    const onRowTicks = vi.fn();
     const onDevelopingPoc = vi.fn();
+    const onRowTicks = vi.fn();
+    const onDays = vi.fn();
     render(
       <IndicatorToggles
         dailyVolumeProfile
         dailyVolumeProfileWidth={84}
-        dailyVolumeProfileRowTicks={5}
         dailyVolumeProfileDevelopingPoc
-        footprint={false}
+        dailyVolumeProfileRowTicks={2}
+        dailyVolumeProfileDays={1}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
         onDailyVolumeProfileWidthChange={onWidth}
-        onDailyVolumeProfileRowTicksChange={onRowTicks}
         onDailyVolumeProfileDevelopingPocChange={onDevelopingPoc}
-        onFootprintChange={() => {}}
+        onDailyVolumeProfileRowTicksChange={onRowTicks}
+        onDailyVolumeProfileDaysChange={onDays}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -552,20 +361,6 @@ describe("IndicatorToggles", () => {
 
     open();
     fireEvent.click(screen.getByLabelText("Volume Profile settings"));
-    expect(screen.getByLabelText("Volume Profile ticks per row")).toHaveValue(5);
-    expect(screen.getByText("0.5 price / row")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Volume Profile ticks per row"), {
-      target: { value: "10" },
-    });
-    expect(onRowTicks).toHaveBeenLastCalledWith(10);
-    for (const value of ["", "0", "-1", "1.5"]) {
-      fireEvent.change(screen.getByLabelText("Volume Profile ticks per row"), {
-        target: { value },
-      });
-    }
-    expect(onRowTicks).toHaveBeenCalledTimes(1);
-    fireEvent.blur(screen.getByLabelText("Volume Profile ticks per row"));
-    expect(screen.getByLabelText("Volume Profile ticks per row")).toHaveValue(5);
     fireEvent.change(screen.getByLabelText("Volume Profile width"), {
       target: { value: "96" },
     });
@@ -573,19 +368,28 @@ describe("IndicatorToggles", () => {
       screen.getByLabelText("Volume Profile developing POC and value area"),
     );
 
+    const tickSizeInput = screen.getByLabelText("Volume Profile tick size");
+    expect(tickSizeInput).toHaveValue(2);
+    fireEvent.change(tickSizeInput, { target: { value: "5" } });
+    fireEvent.keyDown(tickSizeInput, { key: "Enter" });
+
+    const daysInput = screen.getByLabelText("Volume Profile days");
+    expect(daysInput).toHaveValue(1);
+    fireEvent.change(daysInput, { target: { value: "3" } });
+    fireEvent.blur(daysInput);
+
     expect(onWidth).toHaveBeenCalledWith(96);
     expect(onDevelopingPoc).toHaveBeenCalledWith(false);
+    expect(onRowTicks).toHaveBeenCalledWith(5);
+    expect(onDays).toHaveBeenCalledWith(3);
   });
 
-  it("can disable footprint independently", () => {
+  it("offers footprint settings in place of the five-bar toggle", () => {
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
-        footprintDisabled
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -595,7 +399,8 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    expect(screen.getByLabelText("Footprint")).toBeDisabled();
+    expect(screen.queryByRole("checkbox", { name: "Footprint" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Footprint settings" })).toBeEnabled();
     expect(screen.getByLabelText("FVG Grader")).not.toBeDisabled();
     expect(screen.getByLabelText("BigTrade")).not.toBeDisabled();
     expect(screen.getByLabelText("EMA/OSB")).not.toBeDisabled();
@@ -605,13 +410,11 @@ describe("IndicatorToggles", () => {
   it("can disable FVG Grader independently", () => {
     render(
       <IndicatorToggles
-        footprint={false}
         fvgGrader={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
         fvgGraderDisabled
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -622,7 +425,7 @@ describe("IndicatorToggles", () => {
 
     open();
     expect(screen.getByLabelText("FVG Grader")).toBeDisabled();
-    expect(screen.getByLabelText("Footprint")).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Footprint settings" })).toBeEnabled();
     expect(screen.getByLabelText("BigTrade")).not.toBeDisabled();
   });
 
@@ -630,14 +433,12 @@ describe("IndicatorToggles", () => {
     const onLimit = vi.fn();
     render(
       <IndicatorToggles
-        footprint={false}
         fvgGrader
         fvgSignalLimit={100}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
         onFvgSignalLimitChange={onLimit}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -660,7 +461,6 @@ describe("IndicatorToggles", () => {
     const onLimit = vi.fn();
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
@@ -668,7 +468,6 @@ describe("IndicatorToggles", () => {
         mgannBreakSignalLimit={500}
         onMgannBreakSignalHistoryBarsChange={onHistoryBars}
         onMgannBreakSignalLimitChange={onLimit}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -695,14 +494,12 @@ describe("IndicatorToggles", () => {
     const onCreateAlert = vi.fn();
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
         mgannBreakSettings={DEFAULT_MGANN_BREAK_SETTINGS}
         onMgannBreakSettingsChange={onSettings}
         onCreateMgannBreakAlert={onCreateAlert}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -738,12 +535,10 @@ describe("IndicatorToggles", () => {
   it("can disable BigTrade independently", () => {
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
         bigTradeDisabled
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -753,7 +548,7 @@ describe("IndicatorToggles", () => {
     );
 
     open();
-    expect(screen.getByLabelText("Footprint")).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Footprint settings" })).toBeEnabled();
     expect(screen.getByLabelText("BigTrade")).toBeDisabled();
     expect(screen.getByLabelText("EMA/OSB")).not.toBeDisabled();
     expect(screen.getByLabelText("SMC")).not.toBeDisabled();
@@ -762,11 +557,9 @@ describe("IndicatorToggles", () => {
   it("shows a count badge of active indicators", () => {
     render(
       <IndicatorToggles
-        footprint
         bigTrades
         ema={{ ...EMA, enabled: true }}
         smc={SMC}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -774,16 +567,14 @@ describe("IndicatorToggles", () => {
         onFootprintSettingsChange={() => {}}
       />,
     );
-    expect(screen.getByText("6")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
   });
 
   it("shows the master visibility state without putting the toggle in the menu", () => {
     const props = {
-      footprint: true,
       bigTrades: true,
       ema: { ...EMA, enabled: true },
       smc: SMC,
-      onFootprintChange: () => {},
       onBigTradesChange: () => {},
       onEmaChange: () => {},
       onSmcChange: () => {},
@@ -799,7 +590,7 @@ describe("IndicatorToggles", () => {
 
     rerender(<IndicatorToggles {...props} indicatorsVisible={false} />);
     expect(screen.getByText("Off")).toBeInTheDocument();
-    expect(screen.getByLabelText("Footprint")).toBeChecked();
+    expect(screen.queryByRole("checkbox", { name: "Footprint" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("BigTrade")).toBeChecked();
   });
 
@@ -807,12 +598,10 @@ describe("IndicatorToggles", () => {
     const onOutsideBar = vi.fn();
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
         outsideBar={DEFAULT_OUTSIDE_BAR_SETTINGS}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -851,12 +640,10 @@ describe("IndicatorToggles", () => {
     };
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
         outsideBar={outsideBar}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}
@@ -888,11 +675,9 @@ describe("IndicatorToggles", () => {
     const onEma = vi.fn();
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={onEma}
         onSmcChange={() => {}}
@@ -914,11 +699,9 @@ describe("IndicatorToggles", () => {
     const onEma = vi.fn();
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={onEma}
         onSmcChange={() => {}}
@@ -938,11 +721,9 @@ describe("IndicatorToggles", () => {
     const onSmc = vi.fn();
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={onSmc}
@@ -965,9 +746,6 @@ describe("IndicatorToggles", () => {
     const fvgFactor = screen.getByLabelText("SMC FVG threshold multiplier");
     const fvgVolume = screen.getByLabelText("FVG volume confirmation");
     const showPd = screen.getByLabelText("Show PD");
-    const showSwingFib = screen.getByLabelText(
-      "SMC show confirmed swing Fib levels",
-    );
     fireEvent.change(swing, { target: { value: "21" } });
     fireEvent.blur(swing);
     fireEvent.change(internal, { target: { value: "3" } });
@@ -985,9 +763,6 @@ describe("IndicatorToggles", () => {
     fireEvent.change(fvgLimit, { target: { value: "4" } });
     fireEvent.blur(fvgLimit);
     fireEvent.click(showPd);
-    fireEvent.click(showSwingFib);
-    fireEvent.click(screen.getByLabelText("SMC show swing labels"));
-    expect(onSmc).toHaveBeenCalledWith({ ...SMC, showSwingLabels: false });
 
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, swingLength: 21 });
     expect(onSmc).toHaveBeenCalledWith({ ...SMC, internalLength: 3 });
@@ -1005,21 +780,15 @@ describe("IndicatorToggles", () => {
       ...SMC,
       showPremiumDiscount: false,
     });
-    expect(onSmc).toHaveBeenCalledWith({
-      ...SMC,
-      showSwingFibLevels: true,
-    });
   });
 
   it("changes the EMA color from a preset swatch", () => {
     const onEma = vi.fn();
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={onEma}
         onSmcChange={() => {}}
@@ -1039,11 +808,9 @@ describe("IndicatorToggles", () => {
     const onEma = vi.fn();
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades={false}
         ema={EMA}
         smc={SMC}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={onEma}
         onSmcChange={() => {}}
@@ -1066,11 +833,9 @@ describe("IndicatorToggles", () => {
     const onBigTradeSettings = vi.fn();
     render(
       <IndicatorToggles
-        footprint={false}
         bigTrades
         ema={EMA}
         smc={SMC}
-        onFootprintChange={() => {}}
         onBigTradesChange={() => {}}
         onEmaChange={() => {}}
         onSmcChange={() => {}}

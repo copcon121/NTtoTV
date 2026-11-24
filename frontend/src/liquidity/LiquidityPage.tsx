@@ -82,6 +82,12 @@ import { DEFAULT_SI_STOP_SETTINGS, normalizeSiStopSettings, siStopAutoThreshold,
 import { drawSiStops } from "./drawSiStops";
 import { SiStopSettingsEditor } from "./SiStopSettingsEditor";
 import { SettingHelp, SettingFieldLabel } from "./SettingHelp";
+import { useWorkspaceTheme } from "../workspace/useWorkspaceTheme";
+import { useWidgetSync } from "../chart/shared/useWidgetSync";
+import { CanvasChartHost, type HostNavigation } from "../chart/shared/CanvasChartHost";
+import type { ChartSyncConnection } from "../chart/shared/sync";
+import type { SharedChartProjection } from "../chart/shared/ChartSyncLayer";
+import { workspaceColors, type WorkspaceColors } from "../workspace/themes";
 
 const SYMBOL = "GC";
 const CONTRACT = "GC";
@@ -96,6 +102,19 @@ const LIQUIDITY_PROFILE_STORAGE_KEY = "gc-chart-platform.liquidity-chart";
 const LIQUIDITY_PROFILE_SAVE_DELAY_MS = 1_200;
 const PRICE_AXIS_WIDTH = 78;
 const TIME_AXIS_HEIGHT = 28;
+const SETTINGS_SECTIONS = [
+  ["heatmap", "Liquidity Heatmap"],
+  ["relative", "Relative Liquidity"],
+  ["absolute", "Absolute Liquidity"],
+  ["longTerm", "Long-term Lines"],
+  ["siStops", "SI Stops"],
+  ["volumeSpike", "Volume Spike"],
+  ["absorption", "Absorption"],
+  ["bigTrade", "BigTrade"],
+  ["iceberg", "Iceberg"],
+  ["sounds", "Alert sounds"],
+] as const;
+type SettingsSection = typeof SETTINGS_SECTIONS[number][0];
 const MIN_PRICE_SCALE = 0.25;
 const MAX_PRICE_SCALE = 12;
 const MAX_FUTURE_SPACE_RATIO = 0.75;
@@ -555,6 +574,9 @@ export function LiquidityPage() {
   const socket = useMemo(() => new ChartSocket({ url: endpoints.ws }), [endpoints.ws]);
   const requestSequence = useRef(0);
   const [tf, setTf] = useState<LiquidityTimeframe>("1m");
+  const sync = useWidgetSync({ symbol: SYMBOL, contract: CONTRACT, timeframe: tf });
+  const [linkedNavigation, setLinkedNavigation] = useState<HostNavigation>({ revision: 0 });
+  const linked = !!sync.config?.groupId && (sync.config.syncViewport || sync.config.syncDrawings);
   const [bars, setBars] = useState<Bar[]>([]);
   const [events, setEvents] = useState<LiquidityEvent[]>([]);
   const [lines, setLines] = useState<Map<string, LiquidityLine>>(new Map());
@@ -643,6 +665,7 @@ export function LiquidityPage() {
     useState<MarketExplorerSettings>(() => cloneMarketExplorerSettings());
   const marketExplorerSettingsRef = useRef(marketExplorerSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("heatmap");
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
@@ -1042,11 +1065,12 @@ export function LiquidityPage() {
   const maxVisible = maxLiquidityVisibleBars(tf);
   const zoom = useCallback(
     (factor: number) => {
+      if (linked) { setLinkedNavigation(current => ({ revision: current.revision + 1, factor })); return; }
       setVisibleBars((current) =>
         clamp(Math.round(current * factor), MIN_VISIBLE_BARS, maxVisible),
       );
     },
-    [maxVisible],
+    [maxVisible, linked],
   );
 
   const openSettings = () => {
@@ -1151,7 +1175,7 @@ export function LiquidityPage() {
           <a href="/mp">MP</a>
         </nav>
         <div className="liquidity-title">
-          <span>GC Liquidity + Market Explorer</span>
+          <span>GC Liquidity</span>
           <span>Liquidity Heatmap + Volume Delta, SI Stops, Volume Spike and Absorption</span>
         </div>
         <div className="liquidity-segmented" aria-label="Timeframe">
@@ -1180,10 +1204,10 @@ export function LiquidityPage() {
         <div className="liquidity-actions">
           <button type="button" title="Zoom out" onClick={() => zoom(1.25)}>−</button>
           <button type="button" title="Zoom in" onClick={() => zoom(0.8)}>+</button>
-          <button type="button" onClick={() => setOffsetBars(0)}>Latest</button>
-          <button type="button" onClick={openSettings}>Settings</button>
-          <button type="button" onClick={() => setReloadKey((value) => value + 1)}>
-            Reload
+          <button type="button" onClick={() => { if (linked) setLinkedNavigation(current => ({ revision: current.revision + 1, latest: true })); else setOffsetBars(0); }}>Latest</button>
+          <button type="button" className="liquidity-icon-button" title="Settings" aria-label="Settings" onClick={openSettings}>⚙</button>
+          <button type="button" className="liquidity-icon-button" title="Reload" aria-label="Reload" onClick={() => setReloadKey((value) => value + 1)}>
+            ↻
           </button>
         </div>
         <div className={`liquidity-connection is-${connection}`}>
@@ -1208,25 +1232,31 @@ export function LiquidityPage() {
           >
             <header>
               <div>
-                <strong>Liquidity + Market Explorer Settings</strong>
-                <span>Live liquidity, completed SI Stops and aggressor volume</span>
+                <strong>LQ Settings</strong>
               </div>
               <button type="button" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
                 ×
               </button>
             </header>
 
+            <label className="liquidity-settings-category">
+              Category
+              <select value={settingsSection} onChange={(event) => setSettingsSection(event.currentTarget.value as SettingsSection)}>
+                {SETTINGS_SECTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+
             <div className="liquidity-settings-groups">
-              <fieldset className="liquidity-settings-group">
+              <fieldset className="liquidity-settings-group" hidden={settingsSection !== "heatmap"}>
                 <legend>Liquidity Heatmap</legend>
                 <LayerSetting label="Enable Heatmap" checked={filtersDraft.longTerm}
-                  help="Hiện hoặc ẩn heatmap thanh khoản trên chart. Ngưỡng tuổi và độ đậm bên dưới chỉ đổi cách hiển thị các line đã thu thập."
+                  help="Show or hide the liquidity heatmap on the chart. The age and intensity settings below affect only the display of collected lines."
                   onChange={(longTerm) => setFiltersDraft((current) => ({ ...current, longTerm }))} />
                 <div className="liquidity-settings-fields">
                   <SettingNumber
                     label="Minimum lifetime (seconds)"
                     disabled={false}
-                    help="Chỉ hiện thanh khoản tồn tại ít nhất số giây này. Mặc định 60 giây giúp bỏ các lần xuất hiện chớp nhoáng; 0 tắt lọc tuổi. Đoạn line quá nhỏ dưới 3 pixel vẫn được ẩn."
+                    help="Show only liquidity that has lasted at least this many seconds. The 60-second default filters brief appearances; 0 disables the age filter. Line segments shorter than 3 pixels remain hidden."
                     value={heatmapDraft.minDurationSeconds}
                     min={0} max={600}
                     onChange={(value) => setHeatmapDraft((current) => normalizeHeatmapSettings({ ...current, minDurationSeconds: value }))}
@@ -1234,7 +1264,7 @@ export function LiquidityPage() {
                   <SettingNumber
                     label="Full intensity (x trigger)"
                     disabled={false}
-                    help="Size đạt bội số này của Trigger liquidity sẽ có màu đậm nhất. Ví dụ trigger 10 và hệ số 4 thì size 40 đạt độ đậm tối đa. Size tăng/giảm chỉ làm sáng/tối đoạn line mới."
+                    help="Size at this multiple of Trigger liquidity reaches maximum intensity. For example, trigger 10 with factor 4 gives maximum intensity at size 40. Size changes brighten or darken only new line segments."
                     value={heatmapDraft.saturationMultiple}
                     min={2} max={20}
                     onChange={(value) => setHeatmapDraft((current) => normalizeHeatmapSettings({ ...current, saturationMultiple: value }))}
@@ -1250,20 +1280,21 @@ export function LiquidityPage() {
                 </div>
               </fieldset>
               <LiquiditySettingsGroup
+                hidden={settingsSection !== "relative"}
                 title="Relative Liquidity Change"
-                help="So sánh size hiện tại với lần cập nhật trước tại cùng mức giá để đánh dấu thanh khoản được thêm hoặc rút. Khi giá giao dịch đúng tại một Short/Long-term line rồi line biến mất, phần size bị rút cũng hiện bằng marker Relative âm."
-                enableHelp="Tắt mục này sẽ ngừng tạo marker Relative mới. Marker cũ trong lịch sử 24 giờ vẫn được giữ lại."
+                help="Compare the current size with the previous update at the same price to mark added or removed liquidity. When a trade hits a Short/Long-term line and the line disappears, the removed size also appears as a negative Relative marker."
+                enableHelp="Turning this off stops new Relative markers. Existing markers in the 24-hour history are retained."
                 enabled={settingsDraft.relativeEnabled}
                 onEnabledChange={(relativeEnabled) =>
                   setSettingsDraft((current) => ({ ...current, relativeEnabled }))
                 }
               >
                 <LayerSetting label="Show Relative on chart" checked={filtersDraft.relative}
-                  help="Hiện hoặc ẩn marker thay đổi thanh khoản tương đối đã nhận. Chỉ đổi lớp hiển thị, không tắt bộ theo dõi Relative."
+                  help="Show or hide received Relative liquidity-change markers. This changes the display layer without disabling the Relative tracker."
                   onChange={(relative) => setFiltersDraft((current) => ({ ...current, relative }))} />
                 <SettingNumber
                   label="Trigger liquidity"
-                  help="Độ thay đổi tối thiểu của size tại một mức giá. TTW GC gốc dùng 50 contracts; marker hiển thị chênh lệch có dấu, ví dụ +50 hoặc -50. Giảm ngưỡng sẽ nhạy hơn nhưng nhiều nhiễu hơn."
+                  help="Minimum size change at one price level. The original TTW GC setting uses 50 contracts. Markers show the signed change, such as +50 or -50. Lower thresholds are more sensitive but produce more noise."
                   value={settingsDraft.relativeTrigger}
                   min={1}
                   max={1_000_000}
@@ -1272,7 +1303,7 @@ export function LiquidityPage() {
                 />
                 <SettingNumber
                   label="DOM level from"
-                  help="Khoảng cách gần nhất tính từ best bid hoặc best ask. Mức 0 là giá mua/bán tốt nhất; mức 20 bắt đầu theo dõi từ vị trí cách thị trường 20 ticks."
+                  help="Nearest distance from the best bid or ask. Level 0 is the best price; level 20 starts tracking 20 ticks away from the market."
                   value={settingsDraft.relativeDomFrom}
                   min={0}
                   max={5_000}
@@ -1281,7 +1312,7 @@ export function LiquidityPage() {
                 />
                 <SettingNumber
                   label="DOM level to"
-                  help="Khoảng cách xa nhất được theo dõi. Chỉ các mức DOM từ From đến To mới tạo tín hiệu. Tăng giá trị sẽ quét sâu hơn nhưng có thể thu thêm thanh khoản ít liên quan đến timing hiện tại."
+                  help="Farthest tracked distance. Only DOM levels from From to To generate signals. Larger values scan deeper but may include liquidity less relevant to current timing."
                   value={settingsDraft.relativeDomTo}
                   min={0}
                   max={5_000}
@@ -1291,20 +1322,21 @@ export function LiquidityPage() {
               </LiquiditySettingsGroup>
 
               <LiquiditySettingsGroup
+                hidden={settingsSection !== "absolute"}
                 title="Absolute Liquidity Change"
-                help="Theo dõi tổng size đang nằm tại mỗi mức giá và báo khi size vượt qua một ngưỡng tuyệt đối, không phụ thuộc mức thay đổi của lần cập nhật."
-                enableHelp="Tắt mục này sẽ ngừng tạo marker Absolute mới. Dữ liệu đã ghi trong lịch sử 24 giờ không bị xóa."
+                help="Track the total resting size at each price level and signal when it crosses an absolute threshold, regardless of the size change in the latest update."
+                enableHelp="Turning this off stops new Absolute markers. Recorded 24-hour history is retained."
                 enabled={settingsDraft.absoluteEnabled}
                 onEnabledChange={(absoluteEnabled) =>
                   setSettingsDraft((current) => ({ ...current, absoluteEnabled }))
                 }
               >
                 <LayerSetting label="Show Absolute on chart" checked={filtersDraft.absolute}
-                  help="Hiện hoặc ẩn marker mức thanh khoản đạt ngưỡng tuyệt đối. Chỉ đổi lớp hiển thị, không tắt bộ theo dõi Absolute."
+                  help="Show or hide markers for liquidity reaching the absolute threshold. This changes the display layer without disabling the Absolute tracker."
                   onChange={(absolute) => setFiltersDraft((current) => ({ ...current, absolute }))} />
                 <SettingNumber
                   label="Trigger liquidity"
-                  help="Tổng size tối thiểu tại một mức giá để tạo tín hiệu Absolute. Ví dụ 500 nghĩa là tín hiệu xuất hiện khi size đi từ dưới 500 lên 500 contracts hoặc cao hơn. Tín hiệu được tái kích hoạt sau khi size giảm xuống dưới khoảng 90% ngưỡng."
+                  help="Minimum total size at one price level to trigger an Absolute signal. For example, 500 triggers when size rises from below 500 to at least 500 contracts. The signal rearms after size drops below about 90% of the threshold."
                   value={settingsDraft.absoluteTrigger}
                   min={1}
                   max={1_000_000}
@@ -1313,7 +1345,7 @@ export function LiquidityPage() {
                 />
                 <SettingNumber
                   label="DOM level from"
-                  help="Mức DOM gần nhất được kiểm tra, tính từ best bid/best ask. Mức 0 là giá tốt nhất; đặt 1 sẽ bỏ qua chính best bid và best ask."
+                  help="Nearest DOM level checked, measured from the best bid or ask. Level 0 is the best price; 1 excludes the best bid and ask themselves."
                   value={settingsDraft.absoluteDomFrom}
                   min={0}
                   max={5_000}
@@ -1322,7 +1354,7 @@ export function LiquidityPage() {
                 />
                 <SettingNumber
                   label="DOM level to"
-                  help="Mức DOM xa nhất được kiểm tra. Khoảng nhỏ tập trung gần giá hiện tại; khoảng lớn nhìn sâu hơn vào order book nhưng thường có nhiều lệnh xa giá."
+                  help="Farthest DOM level checked. A small range focuses near the current price; a large range looks deeper into the order book and often includes more distant orders."
                   value={settingsDraft.absoluteDomTo}
                   min={0}
                   max={5_000}
@@ -1332,9 +1364,10 @@ export function LiquidityPage() {
               </LiquiditySettingsGroup>
 
               <LiquiditySettingsGroup
+                hidden={settingsSection !== "longTerm"}
                 title="Long-term Liquidity Lines"
-                help="Liquidity line vẫn hiển thị ngay khi đạt ngưỡng như trước. Hệ thống theo dõi tuổi ngầm; chỉ line tồn tại liên tục đủ thời gian cấu hình mới hiện label Long-term và phát âm báo khi giá khớp vào dải."
-                enableHelp="Tắt mục này sẽ ngừng theo dõi và tạo liquidity line mới. Các line đang hoạt động sẽ được kết thúc khi cấu hình được áp dụng."
+                help="Liquidity lines appear as soon as the size threshold is reached. Age is tracked in the background; only lines lasting continuously for the configured duration receive a Long-term label and sound when trades hit the band."
+                enableHelp="Turning this off stops tracking and creating new liquidity lines. Active lines end when the settings are applied."
                 enabled={settingsDraft.longTermEnabled}
                 onEnabledChange={(longTermEnabled) =>
                   setSettingsDraft((current) => ({ ...current, longTermEnabled }))
@@ -1346,7 +1379,7 @@ export function LiquidityPage() {
                   onSoundChange={(longTerm) => setAlertSoundsDraft((current) => ({ ...current, longTerm }))} />
                 <SettingNumber
                   label="Trigger liquidity"
-                  help="Size tối thiểu để một mức giá bắt đầu tạo liquidity line. Cách hiển thị line không đổi; tuổi line chỉ quyết định label Long-term và âm báo."
+                  help="Minimum size at a price level to start a liquidity line. Display behavior is unchanged; line age determines only the Long-term label and sound."
                   value={settingsDraft.longTermTrigger}
                   min={1}
                   max={1_000_000}
@@ -1355,7 +1388,7 @@ export function LiquidityPage() {
                 />
                 <SettingNumber
                   label="DOM level from"
-                  help="Khoảng cách gần nhất từ best bid/best ask mà liquidity-line tracker bắt đầu quan sát. Mức 0 bao gồm giá tốt nhất hiện tại."
+                  help="Nearest distance from the best bid or ask observed by the liquidity-line tracker. Level 0 includes the current best price."
                   value={settingsDraft.longTermDomFrom}
                   min={0}
                   max={5_000}
@@ -1364,7 +1397,7 @@ export function LiquidityPage() {
                 />
                 <SettingNumber
                   label="DOM level to"
-                  help="Khoảng cách xa nhất từ best bid/best ask mà liquidity-line tracker quan sát. Chỉ các mức nằm trong khoảng From–To mới có thể tạo đường."
+                  help="Farthest distance from the best bid or ask observed by the liquidity-line tracker. Only levels within the From–To range can create lines."
                   value={settingsDraft.longTermDomTo}
                   min={0}
                   max={5_000}
@@ -1373,7 +1406,7 @@ export function LiquidityPage() {
                 />
                 <SettingNumber
                   label="Long-term after (hours)"
-                  help="Số giờ line phải tồn tại liên tục trước khi được gọi là Long-term. Mặc định 4 giờ. Nếu size giảm dưới khoảng 90% ngưỡng, line kết thúc và lần xuất hiện sau sẽ tính tuổi lại từ đầu."
+                  help="Hours a line must last continuously to qualify as Long-term. Default: 4 hours. If size drops below about 90% of the threshold, the line ends and its next appearance starts with age zero."
                   value={settingsDraft.longTermMinAgeSeconds / 3_600}
                   min={0.25}
                   max={24}
@@ -1384,8 +1417,9 @@ export function LiquidityPage() {
                   }
                 />
               </LiquiditySettingsGroup>
-              <SiStopSettingsEditor settings={siStopDraft} onChange={setSiStopDraft} />
+              <SiStopSettingsEditor settings={siStopDraft} onChange={setSiStopDraft} hidden={settingsSection !== "siStops"} />
               <MarketExplorerSettingsEditor
+                section={settingsSection}
                 settings={marketExplorerDraft}
                 onVolumeSpikeChange={(patch) =>
                   setMarketExplorerDraft((current) => ({
@@ -1400,16 +1434,16 @@ export function LiquidityPage() {
                   }))
                 }
               />
-              <fieldset className="liquidity-settings-group">
+              <fieldset className="liquidity-settings-group" hidden={settingsSection !== "bigTrade"}>
                 <legend>BigTrade</legend>
                 <LayerSetting label="Enable BigTrade" checked={showBigTradesDraft} onChange={setShowBigTradesDraft}
-                  help="Hiện hoặc ẩn bubble giao dịch lớn. Ngưỡng volume và trạng thái bật/tắt dùng chung với BigTrade trên chart chính; không phải tín hiệu stop hay iceberg." />
+                  help="Show or hide large-trade bubbles. The volume threshold and enabled state are shared with BigTrade on the main chart. These are large trades rather than stop or iceberg signals." />
                 <div className="liquidity-settings-fields">
                   {BIG_TRADE_SESSIONS.map(({ key, label }) => (
                     <SettingNumber
                       key={key}
                       label={`${label} min volume`}
-                      help={`Volume đã khớp tối thiểu để hiện BigTrade trong phiên ${label}, tính theo giờ New York như chart chính. Đây là số contracts, không phải số giao dịch. Các khung giờ này khác lịch UTC+7 của Iceberg.`}
+                      help={`Minimum executed volume to show a BigTrade in the ${label} session, using New York time as on the main chart. The unit is contracts rather than trade count. These windows differ from the Iceberg UTC+7 schedule.`}
                       value={normalizeBigTradeSessionMinVolumes(bigTradeDraft)[key]}
                       min={0}
                       max={100_000}
@@ -1419,7 +1453,7 @@ export function LiquidityPage() {
                   ))}
                   <SettingNumber
                     label="Display limit"
-                    help="Số bubble BigTrade mới nhất được giữ để hiển thị. Ví dụ 100 chỉ giữ tối đa 100 bubble; đây không phải ngưỡng volume của giao dịch."
+                    help="Number of recent BigTrade bubbles retained for display. For example, 100 retains up to 100 bubbles; this does not set a trade volume threshold."
                     value={bigTradeDraft.maxVisible}
                     min={1}
                     max={MAX_BIG_TRADE_VISIBLE}
@@ -1437,22 +1471,22 @@ export function LiquidityPage() {
                     onSoundChange={(bigTrade) => setAlertSoundsDraft((current) => ({ ...current, bigTrade }))} />
                 </div>
               </fieldset>
-              <fieldset className="liquidity-settings-group">
+              <fieldset className="liquidity-settings-group" hidden={settingsSection !== "iceberg"}>
                 <legend>Iceberg</legend>
                 <LayerSetting label="Enable Iceberg" checked={icebergDraft.enabled}
-                  help="Hiện hoặc ẩn ICE nhận diện từ Rithmic MBO. Mỗi ICE có trạng thái và tổng volume đã khớp riêng. Tắt Iceberg cũng ngừng cảnh báo ICE trên trang này."
+                  help="Show or hide ICE detected from Rithmic MBO. Each ICE has its own state and total executed volume. Turning Iceberg off also stops ICE alerts on this page."
                   onChange={(enabled) => setIcebergDraft((current) => ({ ...current, enabled }))} />
                 <div className="liquidity-settings-fields">
                   <LayerSetting label="Auto volume threshold" checked={icebergDraft.filters.automatic}
-                    help="Tự tính min volume từ ICE đã executed/canceled trong khoảng nhìn lại, cập nhật mỗi phút. Khi bật, Auto thay thế ngưỡng US và Other sessions bên dưới."
+                    help="Calculate minimum volume automatically from executed/canceled ICE in the lookback window, updating each minute. Auto replaces the US and Other sessions thresholds below."
                     onChange={(automatic) => setIcebergDraft((current) => ({ ...current, filters: { ...current.filters, automatic } }))} />
                   <SettingNumber label="Auto lookback (minutes)"
-                    help="Số phút nhìn lại để Auto lấy mẫu ICE đã executed/canceled và được phát hiện trong khoảng đó. Không lấy mẫu active hoặc invalidated. Ngưỡng cập nhật mỗi phút."
+                    help="Lookback in minutes for sampling executed/canceled ICE detected during that window. Active and invalidated ICE are excluded. The threshold updates each minute."
                     value={icebergDraft.filters.lookbackMinutes} min={1} max={2880}
                     disabled={!icebergDraft.enabled || !icebergDraft.filters.automatic}
                     onChange={(lookbackMinutes) => setIcebergDraft((current) => ({ ...current, filters: { ...current.filters, lookbackMinutes } }))} />
                   <SettingNumber label="Auto SD multiplier"
-                    help="Min từng ICE = trung bình volume + hệ số này × độ lệch chuẩn, làm tròn xuống và không vượt mẫu lớn nhất. Hệ số cao thường lọc khắt khe hơn. Chưa có mẫu thì ngưỡng là 0."
+                    help="Minimum for each ICE = mean volume + this factor × standard deviation, rounded down and capped at the largest sample. Higher factors generally filter more strictly. With no samples, the threshold is 0."
                     value={icebergDraft.filters.standardDeviations} min={0} max={10} step={0.1}
                     disabled={!icebergDraft.enabled || !icebergDraft.filters.automatic}
                     onChange={(standardDeviations) => setIcebergDraft((current) => ({ ...current, filters: { ...current.filters, standardDeviations } }))} />
@@ -1462,7 +1496,7 @@ export function LiquidityPage() {
                     ["other", "Other sessions min (04:00-19:00)"],
                   ] as const).map(([session, label]) => (
                     <SettingNumber key={session} label={label}
-                      help="Min contracts đã khớp của từng ICE khi Auto tắt. Chọn phiên theo thời điểm ICE được phát hiện, dùng giờ UTC+7 cố định: US 19:00-04:00, các giờ còn lại 04:00-19:00. Auto bật sẽ thay thế các ngưỡng này."
+                      help="Minimum executed contracts per ICE when Auto is off. The session uses detection time in fixed UTC+7: US 19:00–04:00; other hours 04:00–19:00. Auto replaces these thresholds when enabled."
                       value={icebergDraft.sessionMinVolumes[session]} min={1} max={1_000_000} disabled={!icebergDraft.enabled || icebergDraft.filters.automatic}
                       onChange={(value) => {
                         if (Number.isFinite(value)) setIcebergDraft((current) => ({ ...current,
@@ -1472,27 +1506,27 @@ export function LiquidityPage() {
                   ))}
                   <span className="liquidity-sound-hint">UTC+7. The session follows when each iceberg first appears. Defaults: US 10, other sessions 5.</span>
                   {([
-                    ["applyToActive", "Apply volume threshold to active ICE", "Áp dụng min volume cả với ICE còn active. Tắt để thấy sớm ICE đang hoạt động dù volume đã khớp còn nhỏ."],
-                    ["aggregate", "Group nearby same-side icons", "Gộp icon ICE gần nhau và cùng bên bid/ask để chart dễ đọc. Số trên nhóm là tổng volume; danh tính và trạng thái của từng ICE vẫn độc lập."],
-                    ["showFiltered", "Show below-threshold icons faded", "Hiện mờ ICE không đạt bộ lọc thay vì ẩn. ICE không đạt được gộp riêng và không làm tăng tổng của nhóm đạt ngưỡng."],
-                    ["showActive", "Show active ICE", "Hiện ICE còn được theo dõi trong phiên MBO đang đồng bộ. Volume là lượng đã khớp tính đến hiện tại, không phải toàn bộ size ẩn."],
-                    ["showExecuted", "Show executed ICE", "Hiện dấu lịch sử của ICE đã kết thúc ở trạng thái khớp hết lượng đang theo dõi."],
-                    ["showCanceled", "Show canceled ICE", "Hiện dấu lịch sử của ICE đã kết thúc do hủy. Volume vẫn là lượng đã khớp trước khi hủy, không phải lượng bị hủy."],
-                    ["showInvalidated", "Show invalidated historical ICE", "Hiện ICE lịch sử không còn đủ dữ kiện để theo dõi tiếp, như đổi phiên, reconnect hoặc mất tính nhất quán. Invalidated không đồng nghĩa sàn xác nhận lệnh đã hủy."],
+                    ["applyToActive", "Apply volume threshold to active ICE", "Apply minimum volume to active ICE too. Turn off to see active ICE early, even when executed volume is still small."],
+                    ["aggregate", "Group nearby same-side icons", "Group nearby ICE icons on the same bid/ask side for readability. The group label shows total volume; each ICE keeps its own identity and state."],
+                    ["showFiltered", "Show below-threshold icons faded", "Fade ICE that fail the filters instead of hiding them. Filtered ICE form separate groups and do not contribute to groups that pass the threshold."],
+                    ["showActive", "Show active ICE", "Show ICE still being tracked in the synchronized MBO session. Volume is the quantity executed so far rather than the entire hidden size."],
+                    ["showExecuted", "Show executed ICE", "Show historical traces of ICE that ended after executing all of the tracked quantity."],
+                    ["showCanceled", "Show canceled ICE", "Show historical traces of canceled ICE. Volume remains the quantity executed before cancellation rather than the canceled quantity."],
+                    ["showInvalidated", "Show invalidated historical ICE", "Show historical ICE that can no longer be tracked reliably, such as after a session change, reconnect, or consistency loss. Invalidated does not mean the exchange confirmed cancellation."],
                   ] as const).map(([key, label, help]) => (
                     <LayerSetting key={key} label={label} help={help} checked={icebergDraft.filters[key]}
                       onChange={(checked) => setIcebergDraft((current) => ({ ...current, filters: { ...current.filters, [key]: checked } }))} />
                   ))}
-                  <SettingNumber label="Group minimum volume" help="Min tổng contracts sau khi lọc từng ICE rồi gộp. ICE bị loại không được cộng vào nhóm đạt ngưỡng. 0 bỏ qua ngưỡng phụ này."
+                  <SettingNumber label="Group minimum volume" help="Minimum total contracts after filtering individual ICE and grouping. Excluded ICE cannot contribute to passing groups. 0 disables this additional threshold."
                     value={icebergDraft.filters.aggregateMinVolume} min={0} max={1_000_000} disabled={!icebergDraft.enabled}
                     onChange={(aggregateMinVolume) => setIcebergDraft((current) => ({ ...current, filters: { ...current.filters, aggregateMinVolume } }))} />
-                  <SettingNumber label="Group time area" help="Khoảng gộp theo chiều ngang màn hình, không phải số giây. 10 xấp xỉ một bề rộng icon. Tăng để gộp xa hơn; nhóm có thể thay đổi khi zoom. Icon vẫn neo vào giữa nến."
+                  <SettingNumber label="Group time area" help="Horizontal grouping distance on screen rather than seconds. 10 is about one icon width. Increase to group farther apart; groups may change with zoom. Icons stay anchored to candle centers."
                     value={icebergDraft.filters.timeArea} min={0} max={1000} disabled={!icebergDraft.enabled || !icebergDraft.filters.aggregate}
                     onChange={(timeArea) => setIcebergDraft((current) => ({ ...current, filters: { ...current.filters, timeArea } }))} />
-                  <SettingNumber label="Group price area" help="Khoảng gộp theo chiều dọc màn hình, không phải số ticks. 10 xấp xỉ một chiều cao icon. Chỉ cộng tổng để hiển thị; từng ICE vẫn giữ danh tính và trạng thái riêng."
+                  <SettingNumber label="Group price area" help="Vertical grouping distance on screen rather than ticks. 10 is about one icon height. Totals are combined for display only; each ICE retains its identity and state."
                     value={icebergDraft.filters.priceArea} min={0} max={1000} disabled={!icebergDraft.enabled || !icebergDraft.filters.aggregate}
                     onChange={(priceArea) => setIcebergDraft((current) => ({ ...current, filters: { ...current.filters, priceArea } }))} />
-                  <SettingNumber label="Filtered opacity (%)" help="Độ rõ của ICE không đạt ngưỡng: 0% trong suốt, 100% rõ hoàn toàn. Chỉ dùng khi bật hiện icon dưới ngưỡng. Độ mờ theo trạng thái ICE vẫn được áp dụng riêng."
+                  <SettingNumber label="Filtered opacity (%)" help="Opacity of below-threshold ICE: 0% is transparent; 100% is fully visible. Used only when faded below-threshold icons are enabled. State-specific opacity still applies separately."
                     value={Math.round(icebergDraft.filters.filteredOpacity * 100)} min={0} max={100} disabled={!icebergDraft.enabled || !icebergDraft.filters.showFiltered}
                     onChange={(value) => setIcebergDraft((current) => ({ ...current, filters: { ...current.filters, filteredOpacity: value / 100 } }))} />
                   <SoundSetting event="iceberg" label="ICE volume reached" enabled={alertSoundsDraft.icebergEnabled}
@@ -1502,7 +1536,7 @@ export function LiquidityPage() {
                   <span className="liquidity-sound-hint">Voice reads “Iceberg”. If speech is unavailable, a chime is used. Sounds follow the volume filter while Iceberg is enabled.</span>
                 </div>
               </fieldset>
-              <fieldset className="liquidity-settings-group">
+              <fieldset className="liquidity-settings-group" hidden={settingsSection !== "sounds"}>
                 <legend>Market Explorer sounds</legend>
                 <div className="liquidity-settings-fields">
                   {([
@@ -1526,7 +1560,7 @@ export function LiquidityPage() {
 
             <footer>
               <div className={settingsError ? "is-error" : "is-ok"}>
-                {settingsError ?? settingsNotice ?? "Save & Apply để áp dụng các thay đổi."}
+                {settingsError ?? settingsNotice}
               </div>
               <button
                 type="button"
@@ -1558,6 +1592,8 @@ export function LiquidityPage() {
       ) : null}
 
       <LiquidityCanvas
+        navigation={linkedNavigation}
+        sync={sync}
         bars={bars}
         icebergs={chartIcebergs}
         icebergFilter={icebergFilter}
@@ -1599,6 +1635,8 @@ export function LiquidityPage() {
 }
 
 function LiquidityCanvas({
+  navigation,
+  sync,
   bars,
   icebergs,
   icebergFilter,
@@ -1629,6 +1667,8 @@ function LiquidityCanvas({
   onVisibleBarsChange,
   onZoom,
 }: {
+  navigation: HostNavigation;
+  sync: ChartSyncConnection;
   bars: Bar[];
   icebergs: readonly NativeIcebergState[];
   icebergFilter: IcebergFilterContext;
@@ -1659,6 +1699,8 @@ function LiquidityCanvas({
   onVisibleBarsChange: (value: number) => void;
   onZoom: (factor: number) => void;
 }) {
+  const theme = useWorkspaceTheme();
+  const colors = useMemo(() => workspaceColors(theme), [theme]);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -1690,6 +1732,7 @@ function LiquidityCanvas({
     const canvas = canvasRef.current;
     if (!canvas || size.width <= 0 || size.height <= 0) return;
     drawLiquidityChart(canvas, size, {
+      colors,
       bars,
       icebergs,
       icebergFilter,
@@ -1717,6 +1760,7 @@ function LiquidityCanvas({
       hover,
     });
   }, [
+    colors,
     bars,
     icebergs,
     icebergFilter,
@@ -1842,6 +1886,13 @@ function LiquidityCanvas({
         : "idle";
   const cursorMode = interaction === "idle" ? idleAxis : interaction;
 
+  if (sync.config?.groupId && (sync.config.syncViewport || sync.config.syncDrawings)) return <CanvasChartHost title="Liquidity" bars={bars} sync={sync} bottomMargin={0.3} navigation={navigation}>
+    {projection => <LinkedLiquidityPlot projection={projection} data={{ colors, bars, icebergs, icebergFilter, siStops, siStopSettings,
+      siStopThreshold, events, lines, volumeDelta, marketVolumeSignals, marketExplorerSettings, showVwap, bigTrades, showBigTrades,
+      bigTradeSettings, trackerSettings, heatmapSettings, tf, filters, visibleBars, offsetBars: safeOffset, priceScale, pricePanPx,
+      now: Math.max(now, Date.now()), hover: null }} />}
+  </CanvasChartHost>;
+
   return (
     <main
       ref={hostRef}
@@ -1862,6 +1913,14 @@ function LiquidityCanvas({
       ) : null}
     </main>
   );
+}
+
+function LinkedLiquidityPlot({ data, projection }: { data: Parameters<typeof drawLiquidityChart>[2]; projection: SharedChartProjection }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useLayoutEffect(() => {
+    if (ref.current) drawLiquidityChart(ref.current, { width: projection.width, height: projection.height }, data, projection);
+  }, [data, projection]);
+  return <canvas ref={ref} style={{ width: projection.width, height: projection.height }} aria-label="GC liquidity event overlay" />;
 }
 
 function marketExplorerSignalStyle(
@@ -1921,6 +1980,7 @@ function drawTtwVolumeSpikeSignal(
   plotRight: number,
   plotTop: number,
   plotBottom: number,
+  textColor: string,
 ) {
   const label = ttwVolumeSpikeLabel(signal);
   const isBuy = signal.side === "buy";
@@ -1959,7 +2019,7 @@ function drawTtwVolumeSpikeSignal(
   const titleY = labelTop + 7;
   context.fillStyle = sideColor;
   context.fillText(titlePrefix, labelLeft, titleY);
-  context.fillStyle = "#d9e0e6";
+  context.fillStyle = textColor;
   context.fillText(
     ` at ${signal.price.toFixed(1)}`,
     labelLeft + context.measureText(titlePrefix).width,
@@ -1976,7 +2036,7 @@ function drawTtwVolumeSpikeSignal(
   context.fillStyle = style.buyColor;
   context.fillText(label.buyVolume, labelLeft + labelWidth, labelTop + 36);
   const buyWidth = context.measureText(label.buyVolume).width;
-  context.fillStyle = "#d9e0e6";
+  context.fillStyle = textColor;
   context.fillText(" / ", labelLeft + labelWidth - buyWidth, labelTop + 36);
   const slashWidth = context.measureText(" / ").width;
   context.fillStyle = style.sellColor;
@@ -2052,6 +2112,7 @@ function drawLiquidityChart(
   canvas: HTMLCanvasElement,
   size: CanvasSize,
   data: {
+    colors: WorkspaceColors;
     bars: Bar[];
     icebergs: readonly NativeIcebergState[];
     icebergFilter: IcebergFilterContext;
@@ -2078,6 +2139,7 @@ function drawLiquidityChart(
     now: number;
     hover: HoverPoint | null;
   },
+  projection?: SharedChartProjection,
 ) {
   const ratio = Math.max(1, window.devicePixelRatio || 1);
   const bitmapWidth = Math.round(size.width * ratio);
@@ -2089,13 +2151,13 @@ function drawLiquidityChart(
   const context = canvas.getContext("2d");
   if (!context) return;
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  context.fillStyle = "#0b0f14";
-  context.fillRect(0, 0, size.width, size.height);
+  context.clearRect(0, 0, size.width, size.height);
+  if (!projection) { context.fillStyle = data.colors.background; context.fillRect(0, 0, size.width, size.height); }
 
-  const left = 14;
-  const right = PRICE_AXIS_WIDTH;
-  const top = 18;
-  const bottom = TIME_AXIS_HEIGHT;
+  const left = projection ? 0 : 14;
+  const right = projection ? 0 : PRICE_AXIS_WIDTH;
+  const top = projection ? 0 : 18;
+  const bottom = projection ? 0 : TIME_AXIS_HEIGHT;
   const plotWidth = Math.max(1, size.width - left - right);
   const plotHeight = Math.max(1, size.height - top - bottom);
   const stopPaneHeight = clamp(plotHeight * 0.24, 88, 170);
@@ -2108,13 +2170,13 @@ function drawLiquidityChart(
   const endIndex = Math.max(0, data.bars.length - pastOffset);
   const occupiedSlots = Math.max(1, data.visibleBars - futureSlots);
   const startIndex = Math.max(0, endIndex - occupiedSlots);
-  const visible = data.bars.slice(startIndex, endIndex);
+  const visible = projection ? data.bars.filter(bar => bar.time + tfMs >= projection.viewport.fromUtcMs && bar.time <= projection.viewport.toUtcMs) : data.bars.slice(startIndex, endIndex);
   if (visible.length === 0) return;
   const latestBar = data.bars[data.bars.length - 1];
   const showCurrentPrice = endIndex === data.bars.length && latestBar !== undefined;
   const currentPrice = latestBar?.close;
-  const timeFrom = visible[0].time;
-  const timeTo = visible[visible.length - 1].time + tfMs * (futureSlots + 1);
+  const timeFrom = projection?.viewport.fromUtcMs ?? visible[0].time;
+  const timeTo = projection?.viewport.toUtcMs ?? visible[visible.length - 1].time + tfMs * (futureSlots + 1);
   const markerEvents = data.events.filter(
     (event) =>
       event.time >= timeFrom &&
@@ -2166,36 +2228,36 @@ function drawLiquidityChart(
     (clamp(data.pricePanPx, -pricePlotHeight * 3, pricePlotHeight * 3) /
       pricePlotHeight) *
     scaledSpan;
-  const priceMin = centerPrice - scaledSpan / 2;
-  const priceMax = centerPrice + scaledSpan / 2;
+  const priceMin = projection?.yToPrice(pricePlotHeight) ?? centerPrice - scaledSpan / 2;
+  const priceMax = projection?.yToPrice(top) ?? centerPrice + scaledSpan / 2;
   const priceSpan = priceMax - priceMin;
-  const xAt = (time: number) => left + ((time - timeFrom) / (timeTo - timeFrom)) * plotWidth;
+  const xAt = (time: number) => projection ? projection.timeToX(time) ?? -1e6 : left + ((time - timeFrom) / (timeTo - timeFrom)) * plotWidth;
   const yAt = (price: number) =>
-    top + ((priceMax - price) / priceSpan) * pricePlotHeight;
+    projection ? projection.priceToY(price) : top + ((priceMax - price) / priceSpan) * pricePlotHeight;
 
   context.font = "11px Segoe UI, sans-serif";
   context.textBaseline = "middle";
-  for (let index = 0; index <= 5; index += 1) {
+  for (let index = 0; !projection && index <= 5; index += 1) {
     const y = top + (pricePlotHeight * index) / 5;
     const price = priceMax - (priceSpan * index) / 5;
-    context.strokeStyle = "#1d2732";
+    context.strokeStyle = data.colors.grid;
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(left, Math.round(y) + 0.5);
     context.lineTo(left + plotWidth, Math.round(y) + 0.5);
     context.stroke();
-    context.fillStyle = "#8d9aaa";
+    context.fillStyle = data.colors.text;
     context.fillText(price.toFixed(1), left + plotWidth + 7, y);
   }
-  for (let index = 0; index <= 6; index += 1) {
+  for (let index = 0; !projection && index <= 6; index += 1) {
     const x = left + (plotWidth * index) / 6;
     const time = timeFrom + ((timeTo - timeFrom) * index) / 6;
-    context.strokeStyle = "#151e27";
+    context.strokeStyle = data.colors.grid;
     context.beginPath();
     context.moveTo(Math.round(x) + 0.5, top);
     context.lineTo(Math.round(x) + 0.5, top + plotHeight);
     context.stroke();
-    context.fillStyle = "#718093";
+    context.fillStyle = data.colors.text;
     context.textAlign = index === 0 ? "left" : index === 6 ? "right" : "center";
     context.fillText(formatTime(time), x, top + plotHeight + 17);
   }
@@ -2259,7 +2321,7 @@ function drawLiquidityChart(
   );
 
   if (
-    showCurrentPrice &&
+    !projection && showCurrentPrice &&
     currentPrice !== undefined &&
     currentPrice >= priceMin &&
     currentPrice <= priceMax
@@ -2292,6 +2354,7 @@ function drawLiquidityChart(
         left + plotWidth,
         top,
         top + pricePlotHeight,
+        data.colors.text,
       );
       continue;
     }
@@ -2399,6 +2462,7 @@ function drawLiquidityChart(
       xAt(trade.time),
       yAt(trade.price),
       bubbleRadius(trade.volume, maxBigTradeVolume, 13, 30),
+      data.colors,
     );
   }
 
@@ -2436,9 +2500,9 @@ function drawLiquidityChart(
   }
 
   if (stopPaneHeight > 0) {
-    context.fillStyle = "#0a1118";
+    context.fillStyle = data.colors.panel;
     context.fillRect(left, stopPaneTop, plotWidth, stopPaneHeight);
-    context.strokeStyle = "#40505f";
+    context.strokeStyle = data.colors.border;
     context.lineWidth = 1;
     context.beginPath();
     context.moveTo(left, stopPaneTop - paneGap / 2 + 0.5);
@@ -2448,7 +2512,7 @@ function drawLiquidityChart(
     const stopY = (value: number) =>
       stopPaneTop + ((volumeExtent - value) / (volumeExtent * 2)) * stopPaneHeight;
     const zeroY = stopY(0);
-    context.strokeStyle = "#52616d";
+    context.strokeStyle = data.colors.crosshair;
     context.setLineDash([4, 4]);
     context.beginPath();
     context.moveTo(left, zeroY + 0.5);
@@ -2472,7 +2536,7 @@ function drawLiquidityChart(
 
     context.font = "bold 11px Segoe UI, sans-serif";
     context.textAlign = "left";
-    context.fillStyle = "#c7d2dc";
+    context.fillStyle = data.colors.text;
     context.fillText(
       `Volume Delta (${data.tf})`,
       left + 7,
@@ -2480,7 +2544,7 @@ function drawLiquidityChart(
     );
     context.font = "10px Segoe UI, sans-serif";
     context.textAlign = "left";
-    context.fillStyle = "#7f8e9c";
+    context.fillStyle = data.colors.muted;
     context.fillText(formatCompactVolume(volumeExtent), left + plotWidth + 6, stopPaneTop + 6);
     context.fillText("0", left + plotWidth + 6, zeroY);
     context.fillText(
@@ -2495,7 +2559,7 @@ function drawLiquidityChart(
     deltaTop: stopPaneTop, deltaHeight: stopPaneHeight,
     from: timeFrom, to: timeTo, tfMs, priceMin, priceMax,
     deltaExtent: volumeExtent,
-  }, visibleVolumeDelta, formatDateTime, formatCompactVolume);
+  }, visibleVolumeDelta, formatDateTime, formatCompactVolume, data.colors);
 
 }
 
@@ -2566,6 +2630,7 @@ function drawBigTradeBubble(
   x: number,
   y: number,
   radius: number,
+  colors: WorkspaceColors,
 ) {
   const isBuy = trade.side === "buy";
   context.save();
@@ -2587,9 +2652,9 @@ function drawBigTradeBubble(
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.lineWidth = 2;
-  context.strokeStyle = "rgba(0, 0, 0, 0.32)";
+  context.strokeStyle = colors.background;
   context.strokeText(label, x, y);
-  context.fillStyle = "#ffffff";
+  context.fillStyle = colors.text;
   context.fillText(label, x, y);
   context.restore();
 }
@@ -2732,12 +2797,12 @@ function SoundSetting({ event, label, enabled, sound, onEnabledChange, onSoundCh
   onEnabledChange: (enabled: boolean) => void; onSoundChange: (sound: LiquiditySound) => void;
 }) {
   const help = {
-    longTerm: "Phát âm khi giá khớp chạm liquidity line đã đủ tuổi Long-term. Line còn trẻ chưa phát cảnh báo này.",
-    volumeStop: "Phát âm cho SI chain mới hoàn tất đủ Alert minimum volume và điều kiện cảnh báo. Không theo tổng volume của nhóm marker; lịch sử không phát lại.",
-    volumeSpike: "Phát âm khi có Volume Spike mới và bộ Volume Spike đang bật.",
-    absorption: "Phát âm khi có Absorption mới và bộ Absorption đang bật.",
-    bigTrade: "Phát âm cho BigTrade mới đủ ngưỡng volume của phiên hiện tại. Có khoảng nghỉ giữa các âm để tránh phát dồn; ngưỡng dùng chung với BigTrade trên chart.",
-    iceberg: "Phát âm khi ICE mới vượt ngưỡng volume đang áp dụng và Iceberg bật. Mỗi ICE được theo dõi riêng; tải lịch sử không báo lại.",
+    longTerm: "Play a sound when a trade hits a liquidity line old enough to qualify as Long-term. Younger lines do not trigger this alert.",
+    volumeStop: "Play a sound for a newly completed SI chain that meets Alert minimum volume and the alert conditions. Uses each chain rather than grouped marker volume. Historical chains are not replayed.",
+    volumeSpike: "Play a sound for a new Volume Spike while Volume Spike is enabled.",
+    absorption: "Play a sound for new Absorption while Absorption is enabled.",
+    bigTrade: "Play a sound for a new BigTrade meeting the current session volume threshold. A cooldown prevents overlapping sounds; the threshold is shared with BigTrade on the chart.",
+    iceberg: "Play a sound when a new ICE crosses the applicable volume threshold while Iceberg is enabled. Each ICE is tracked separately; loading history does not repeat alerts.",
   }[event];
   return (
     <div className="liquidity-sound-setting">
@@ -2754,9 +2819,9 @@ function SoundSetting({ event, label, enabled, sound, onEnabledChange, onSoundCh
           onChange={(e) => onSoundChange(e.currentTarget.value as LiquiditySound)}>
           {SOUND_OPTIONS.map(([value, name]) => <option key={value} value={value}>{name}</option>)}
         </select>
-        <SettingHelp label={`${label} sound type`} text="Chọn kiểu âm báo: Chime là tiếng chuông, Voice đọc tên tín hiệu. Nếu trình duyệt không đọc được giọng nói sẽ dùng chuông. Nút Test chỉ nghe thử âm." />
+        <SettingHelp label={`${label} sound type`} text="Choose the alert sound: Chime plays a bell; Voice reads the signal name. If speech is unavailable, the browser uses a chime. Test previews the sound only." />
         <button type="button" aria-label={`Preview ${label} sound`}
-          title="Nghe thử âm đã chọn; không tạo tín hiệu hay bật cảnh báo."
+          title="Preview the selected sound without creating a signal or enabling alerts."
           onClick={() => { unlockAlertAudio(); playLiquiditySound(event, sound, true); }}>Test</button>
       </div>
     </div>
@@ -2785,10 +2850,12 @@ function FilterToggle({
 }
 
 function MarketExplorerSettingsEditor({
+  section,
   settings,
   onVolumeSpikeChange,
   onAbsorptionChange,
 }: {
+  section: SettingsSection;
   settings: MarketExplorerSettings;
   onVolumeSpikeChange: (patch: Partial<VolumeSpikeSettings>) => void;
   onAbsorptionChange: (patch: Partial<AbsorptionSettings>) => void;
@@ -2797,38 +2864,38 @@ function MarketExplorerSettingsEditor({
   const absorption = settings.absorption;
   return (
     <>
-      <fieldset className="liquidity-settings-group market-explorer-settings-group">
+      <fieldset className="liquidity-settings-group market-explorer-settings-group" hidden={section !== "volumeSpike"}>
         <legend>Volume Spike Signal</legend>
         <MarketExplorerEnableRow
           checked={spike.enabled}
           label="Volume Spike Signal"
-          help="Nhận diện đợt mua hoặc bán chủ động tăng mạnh: đủ volume, quãng giá và tỷ lệ với chiều đối diện. Marker được chốt tại cực trị của đợt sau khi giá lùi lại."
+          help="Detect a surge of aggressive buying or selling meeting the volume, price range, and opposite-side ratio thresholds. The marker is finalized at the surge extreme after price pulls back."
           onChange={(enabled) => onVolumeSpikeChange({ enabled })}
         />
         <div className={spike.enabled ? "liquidity-settings-fields" : "liquidity-settings-fields is-disabled"}>
           <MarketExplorerColorField label="Buy Volume Spike Signal" value={spike.buyColor} disabled={!spike.enabled} onChange={(buyColor) => onVolumeSpikeChange({ buyColor })} />
           <MarketExplorerColorField label="Sell Volume Spike Signal" value={spike.sellColor} disabled={!spike.enabled} onChange={(sellColor) => onVolumeSpikeChange({ sellColor })} />
-          <SettingNumber label="Trigger Volume" help="Tổng contracts chủ động cùng chiều tối thiểu trong cửa sổ thời gian của đợt. Không phải volume của một lệnh riêng lẻ." value={spike.triggerVolume} min={1} max={10_000_000} disabled={!spike.enabled} onChange={(triggerVolume) => onVolumeSpikeChange({ triggerVolume })} />
-          <SettingNumber label="Maximum Duration [s]" help="Độ dài cửa sổ cuốn của đợt tính bằng giây, kiểm tra mỗi 100 ms. Ví dụ 1 là volume và chuyển động trong một giây gần nhất." value={spike.maximumDurationSeconds} min={0.1} max={60} disabled={!spike.enabled} onChange={(maximumDurationSeconds) => onVolumeSpikeChange({ maximumDurationSeconds })} />
-          <SettingNumber label="Price Range [ticks/cents]" help="Quãng giá đi tối thiểu theo chiều đợt trong cửa sổ thời gian, tính bằng ticks. Với GC, 1 tick = 0.1 giá; đây không phải số nến." value={spike.priceRangeTicks} min={1} max={100_000} disabled={!spike.enabled} onChange={(priceRangeTicks) => onVolumeSpikeChange({ priceRangeTicks })} />
-          <SettingNumber label="Ratio greater / equal" help="Tỷ lệ volume đỉnh cùng chiều chia cho volume chiều đối diện. Ví dụ 3 yêu cầu bên chủ động mạnh ít nhất gấp 3 lần bên đối diện." value={spike.ratioGreaterEqual} min={1} max={1_000_000} disabled={!spike.enabled} onChange={(ratioGreaterEqual) => onVolumeSpikeChange({ ratioGreaterEqual })} />
+          <SettingNumber label="Trigger Volume" help="Minimum total contracts executed aggressively on the same side within the surge window, rather than the volume of one order." value={spike.triggerVolume} min={1} max={10_000_000} disabled={!spike.enabled} onChange={(triggerVolume) => onVolumeSpikeChange({ triggerVolume })} />
+          <SettingNumber label="Maximum Duration [s]" help="Rolling surge window in seconds, checked every 100 ms. For example, 1 measures volume and movement over the most recent second." value={spike.maximumDurationSeconds} min={0.1} max={60} disabled={!spike.enabled} onChange={(maximumDurationSeconds) => onVolumeSpikeChange({ maximumDurationSeconds })} />
+          <SettingNumber label="Price Range [ticks/cents]" help="Minimum price movement in the surge direction during the window, in ticks. For GC, 1 tick = 0.1 price units. This is a price range rather than a candle count." value={spike.priceRangeTicks} min={1} max={100_000} disabled={!spike.enabled} onChange={(priceRangeTicks) => onVolumeSpikeChange({ priceRangeTicks })} />
+          <SettingNumber label="Ratio greater / equal" help="Peak same-side volume divided by opposite-side volume. For example, 3 requires the aggressive side to be at least three times stronger than the opposite side." value={spike.ratioGreaterEqual} min={1} max={1_000_000} disabled={!spike.enabled} onChange={(ratioGreaterEqual) => onVolumeSpikeChange({ ratioGreaterEqual })} />
           <MarketExplorerAppearanceFields buyLabel="Buy Volume Spike Signal" sellLabel="Sell Volume Spike Signal" settings={spike} disabled={!spike.enabled} hideColors onChange={onVolumeSpikeChange} />
         </div>
       </fieldset>
 
-      <fieldset className="liquidity-settings-group market-explorer-settings-group">
+      <fieldset className="liquidity-settings-group market-explorer-settings-group" hidden={section !== "absorption"}>
         <legend>Absorption Signal</legend>
         <MarketExplorerEnableRow
           checked={absorption.enabled}
           label="Absorption Signal"
-          help="Nhận diện volume chủ động lớn nhưng giá bị giữ trong vùng hẹp dưới hai ticks. Marker chốt ở đỉnh cụm khi cụm kết thúc hoặc yếu đi; biểu thị sự hấp thụ, không phải xác nhận iceberg."
+          help="Detect large aggressive volume held within a narrow range under two ticks. The marker is finalized at the cluster peak when the cluster ends or weakens. This indicates absorption without confirming an iceberg."
           onChange={(enabled) => onAbsorptionChange({ enabled })}
         />
         <div className={absorption.enabled ? "liquidity-settings-fields" : "liquidity-settings-fields is-disabled"}>
           <MarketExplorerColorField label="Buy Absorption Signal" value={absorption.buyColor} disabled={!absorption.enabled} onChange={(buyColor) => onAbsorptionChange({ buyColor })} />
           <MarketExplorerColorField label="Sell Absorption Signal" value={absorption.sellColor} disabled={!absorption.enabled} onChange={(sellColor) => onAbsorptionChange({ sellColor })} />
-          <SettingNumber label="Trigger Volume" help="Tổng contracts chủ động cùng chiều tối thiểu bị giữ trong vùng hấp thụ dưới hai ticks. Không phải size chờ trên DOM." value={absorption.triggerVolume} min={1} max={10_000_000} disabled={!absorption.enabled} onChange={(triggerVolume) => onAbsorptionChange({ triggerVolume })} />
-          <SettingNumber label="Maximum Duration [s]" help="Độ dài cửa sổ cuốn để tính volume hấp thụ, đơn vị giây; kiểm tra mỗi 100 ms. Cửa sổ dài hơn có thể tích lũy nhiều volume hơn." value={absorption.maximumDurationSeconds} min={0.1} max={60} disabled={!absorption.enabled} onChange={(maximumDurationSeconds) => onAbsorptionChange({ maximumDurationSeconds })} />
+          <SettingNumber label="Trigger Volume" help="Minimum total aggressive contracts on the same side held in an absorption range under two ticks, rather than resting DOM size." value={absorption.triggerVolume} min={1} max={10_000_000} disabled={!absorption.enabled} onChange={(triggerVolume) => onAbsorptionChange({ triggerVolume })} />
+          <SettingNumber label="Maximum Duration [s]" help="Rolling window for measuring absorption volume, in seconds, checked every 100 ms. Longer windows can accumulate more volume." value={absorption.maximumDurationSeconds} min={0.1} max={60} disabled={!absorption.enabled} onChange={(maximumDurationSeconds) => onAbsorptionChange({ maximumDurationSeconds })} />
           <MarketExplorerAppearanceFields buyLabel="Buy Absorption Signal" sellLabel="Sell Absorption Signal" settings={absorption} disabled={!absorption.enabled} hideColors onChange={onAbsorptionChange} />
         </div>
       </fieldset>
@@ -2888,17 +2955,17 @@ function MarketExplorerAppearanceFields({
       ) : null}
       <MarketExplorerSelectField
         label="Marker shape"
-        help="Chọn hình marker trên chart: tam giác, mũi tên, hình tròn hoặc cờ. Không thay đổi điều kiện tạo tín hiệu."
+        help="Choose the chart marker shape: triangle, arrow, circle, or flag. This does not change signal conditions."
         value={settings.markerShape}
         disabled={disabled}
         options={[["triangle", "Triangle"], ["arrow", "Arrow"], ["circle", "Circle"], ["flag", "Flag"]]}
         onChange={(markerShape) => onChange({ markerShape: markerShape as MarketExplorerMarkerShape })}
       />
-      <SettingNumber label="Marker size" help="Kích thước cơ bản của marker, từ 1 nhỏ đến 5 lớn. Không phải ngưỡng volume hay mức độ tin cậy của tín hiệu." value={settings.markerSize} min={1} max={5} disabled={disabled} onChange={(markerSize) => onChange({ markerSize })} />
-      <MarketExplorerCheckField label="Variable marker size" help="Cho kích thước marker thay đổi theo cường độ tín hiệu. Tắt để mọi marker dùng cùng kích thước cơ bản." checked={settings.variableSize} disabled={disabled} onChange={(variableSize) => onChange({ variableSize })} />
+      <SettingNumber label="Marker size" help="Base marker size, from 1 (small) to 5 (large). This does not set a volume threshold or signal confidence." value={settings.markerSize} min={1} max={5} disabled={disabled} onChange={(markerSize) => onChange({ markerSize })} />
+      <MarketExplorerCheckField label="Variable marker size" help="Vary marker size with signal strength. Turn off to give every marker the same base size." checked={settings.variableSize} disabled={disabled} onChange={(variableSize) => onChange({ variableSize })} />
       <MarketExplorerSelectField
         label="Bookmap Alert Message"
-        help="Tùy chọn thông báo của bridge Bookmap cũ. Không áp dụng cho nguồn Rithmic trực tiếp hiện tại; âm cảnh báo LQ được cấu hình riêng trong Market Explorer sounds."
+        help="Notification option for the legacy Bookmap bridge. It does not apply to the current direct Rithmic source; LQ sounds are configured separately under Market Explorer sounds."
         value={settings.bookmapAlertMessage}
         disabled={disabled}
         options={[["disabled", "Disabled"], ["enabled", "Enabled"]]}
@@ -2923,7 +2990,7 @@ function MarketExplorerColorField({
   return (
     <div className="liquidity-settings-field market-explorer-color-field">
       <SettingFieldLabel label={label} htmlFor={inputId}
-        help={`Màu marker ${label} trên chart. Màu chỉ giúp phân biệt chiều giao dịch, không thay đổi volume hay điều kiện nhận diện.`} />
+        help={`Marker color for ${label} on the chart. Colors distinguish trade direction without changing volume or detection conditions.`} />
       <input
         id={inputId}
         type="color"
@@ -2995,6 +3062,7 @@ function MarketExplorerCheckField({
 }
 
 function LiquiditySettingsGroup({
+  hidden,
   title,
   help,
   enableHelp,
@@ -3002,6 +3070,7 @@ function LiquiditySettingsGroup({
   onEnabledChange,
   children,
 }: {
+  hidden: boolean;
   title: string;
   help: string;
   enableHelp: string;
@@ -3010,7 +3079,7 @@ function LiquiditySettingsGroup({
   children: ReactNode;
 }) {
   return (
-    <fieldset className="liquidity-settings-group">
+    <fieldset className="liquidity-settings-group" hidden={hidden}>
       <legend>
         <span className="liquidity-settings-label-with-help">
           <span>{title}</span>

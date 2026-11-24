@@ -1,8 +1,0 @@
-{
-  "jar": "C:\\Users\\Administrator\\Desktop\\NTtoTV\\analysis\\iceberg-refill-audit-20261030\\si2-subscriber\\NTtoTV-SI2-Diagnostic-Capture-v2.jar",
-  "sha256": "eb7fba148fd8e0e38b1bf188d5e103227aebb2eb3623bef9df8abdb57cd56085",
-  "originalSiSha256": "317e2a8b45e3290e2d4fd41a371e06f08f71b9f3c2fc1072f91b3eb682a215ab",
-  "lookbackMinutes": 90,
-  "crossLoaderTest": "passed",
-  "runtimeLoaded": false
-}

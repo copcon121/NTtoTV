@@ -1,23 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useOrderSubmissionLock } from "./orders/useOrderSubmissionLock";
-import { useAuthSessionSync } from "./auth/useAuthSessionSync";
-import { fixedRangeProfileRowTicks } from "./orderflow/deltaProfile";
 import type { UTCTimestamp } from "lightweight-charts";
-import { DEFAULT_TDU_SETTINGS, normalizeTduSettings, type TduSettings } from "./chart/tduSettings";
 
 import {
   ApiClient,
   type AlertSignalRestRow,
-  type AnalystEventAiState,
-  type AnalystReport,
-  type AutoTradeSettings,
+  type AiScanCandidate,
   type AuthUser,
   type Mt5Account,
-  type Mt5ConnectInput,
+  type ExnessConnectInput,
+  type BrokerTicket,
   type Mt5OpenTrades,
   type Mt5PendingOrder,
   type Mt5Symbol,
-  type Mt5Terminal,
+  type Mt5TradePatchInput,
   type SupertrendTrailing,
   type VolumeDeltaBar,
 } from "./api/client";
@@ -28,8 +23,9 @@ import {
   type TelegramNotificationInput,
   type WebPushNotificationConfig,
 } from "./alerts/types";
-import { ChartContainer, type OrderControl } from "./chart/ChartContainer";
+import { ChartContainer, type ChartDrawingActions, type OrderControl } from "./chart/ChartContainer";
 import { DrawingToolbar } from "./chart/DrawingToolbar";
+import { DEFAULT_CHART_BACKGROUND } from "./chart/theme";
 import {
   IndicatorToggles,
   DEFAULT_BIG_TRADE_SETTINGS,
@@ -49,9 +45,8 @@ import type {
   EmaSettings,
   FootprintSettings,
 } from "./chart/IndicatorToggles";
-import { TimeframeSelector } from "./chart/TimeframeSelector";
+import { TIMEFRAMES, TimeframeSelector } from "./chart/TimeframeSelector";
 import { SymbolContractLabel } from "./chart/SymbolContractLabel";
-import { Toolbar } from "./chart/Toolbar";
 import {
   BarReplayControls,
   type BarReplayPhase,
@@ -65,8 +60,7 @@ import {
   timedValuesBefore,
   type BarReplaySpeed,
 } from "./chart/barReplay";
-import { useBarReplaySession, type ReplayHistoryRange } from "./chart/useBarReplaySession";
-import { barDurationForTimeframe } from "./chart/barCountdown";
+import { barEndForTimeframe } from "./chart/barCountdown";
 import {
   type BigTradeMarker,
   reduceBigTradesCapped,
@@ -90,11 +84,6 @@ import {
   type MgannBreakSettings,
 } from "./chart/mgannBreak";
 import {
-  DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
-  normalizeGcPushMomentumSettings,
-  type GcPushMomentumSettings,
-} from "./chart/gcPushMomentum";
-import {
   DEFAULT_XKONTROL_DISPLAY_SETTINGS,
   normalizeXKontrolDisplaySettings,
   XKONTROL_HISTORY_BARS,
@@ -116,8 +105,11 @@ import {
 import {
   DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
   DEFAULT_SESSION_VOLUME_PROFILE_ROW_TICKS,
-  normalizeSessionVolumeProfileRowTicks,
+  DEFAULT_SESSION_VOLUME_PROFILE_DAYS,
   normalizeSessionVolumeProfileWidth,
+  normalizeSessionVolumeProfileRowTicks,
+  normalizeSessionVolumeProfileDays,
+  computeSessionVolumeProfileFromMs,
 } from "./chart/sessionVolumeProfileSettings";
 import {
   HistoryLoader,
@@ -125,7 +117,6 @@ import {
   type HistoryResponse,
 } from "./cache/historyLoader";
 import { MemoryCache } from "./cache/memoryCache";
-import { HistorySyncRefreshTracker } from "./cache/historySync";
 import { type Bar } from "./cache/types";
 import { AuthDialog, type AuthDialogMode } from "./auth/AuthDialog";
 import {
@@ -137,6 +128,7 @@ import {
   type AlertLine,
   type AlertSignalMarker,
   type OrderLine,
+  type OrderLineDragUpdate,
   type OrderLineField,
   type SmcAiSignalMarker,
 } from "./chart/lightweightChartsAdapter";
@@ -145,9 +137,13 @@ import {
   type MarketOrderRow,
   type MarketOrderSettings,
 } from "./orders/MarketOrderBar";
-import { Mt5AccountDialog } from "./orders/Mt5AccountDialog";
-import { createTradingStateRefresh } from "./orders/tradingStateRefresh";
-import { projectBrokerOrder, useBrokerChartPositions } from "./orders/brokerChartLevels";
+import { ExnessAccountDialog } from "./orders/ExnessAccountDialog";
+import {
+  applyOrderDragPreviews,
+  reconcileOrderDragPreviews,
+  type OrderDragPreview,
+  type OrderDragPrices,
+} from "./orders/orderDragPreview";
 import { ChartSocket } from "./socket/ChartSocket";
 import {
   type AccountPositionUpdate,
@@ -157,10 +153,10 @@ import {
   type FootprintUpdateMessage,
   type FvgSignalUpdateMessage,
   type TduSignalUpdateMessage,
-  type MarketDataStatusMessage,
   type TradingAccount,
   type TradingOrder,
   type TradingPosition,
+  type PnlPerPriceUnit,
   type Timeframe,
 } from "./socket/messages";
 import type { ChartProfilePayload } from "./profiles/types";
@@ -169,11 +165,6 @@ import type {
   DeltaProfileLoadState,
   DeltaProfileSource,
 } from "./orderflow/deltaProfile";
-import { StatusIndicator, type ConnectionState } from "./status/StatusIndicator";
-import {
-  persistDenseOverlayMinSpacing,
-  readDenseOverlayMinSpacing,
-} from "./chart/zoomVisibility";
 import type {
   DrawingState,
   DrawingToolType,
@@ -182,9 +173,7 @@ import type {
 import {
   displayOffsetForTimeframe,
   footprintEnabledForTimeframe,
-  fvgGraderEnabledForTimeframe,
   fixedRangeMsFromAnchors,
-  gcPushMomentumEnabledForTimeframe,
   tduSignalsEnabledForTimeframe,
 } from "./chart/timeframeRange";
 import {
@@ -198,38 +187,52 @@ import {
   unsubscribeBrowserWebPush,
 } from "./webPush";
 
+import { AiScanPanel } from "./workspace/AiScanPanel";
+import { ScanAiSparkleIcon } from "./chart/scanAi/ScanAiIcon";
+import { ScanAiSettingsPopover } from "./chart/scanAi/ScanAiSettingsPopover";
+import { loadScanSettings, saveScanSettings, scanSettingsScope, SCAN_SETTINGS_EVENT, type ScanSettings } from "./chart/scanAi/settings";
+import { alreadyDrawn, prepareSuggestions, similarScanGeometry } from "./chart/scanAi/geometry";
+import type {
+  ScanAiDensity,
+  ScanAiDepth,
+  ScanAiGroup,
+  ScanAiState,
+  ScanAiStrength,
+  ScanAiSuggestion,
+} from "./chart/scanAi/types";
+import { DEFAULT_INSTRUMENT } from "./workspace/instruments";
+import { MiniChartPanel } from "./workspace/MiniChartPanel";
+import { scanDrawing } from "./workspace/scanDrawing";
+import { DEFAULT_THEME, applyWorkspaceTheme, resolveWorkspaceTheme } from "./workspace/themes";
+import type { WorkspacePanel, WorkspacePanelType } from "./workspace/types";
+import { chartPanel, MAIN_CHART, useWorkspaces } from "./workspace/useWorkspaces";
+import { PANEL_NAMES, WorkspaceBoard } from "./workspace/WorkspaceBoard";
+import { WorkspaceToolbar } from "./workspace/WorkspaceToolbar";
+import { WidgetFrame } from "./workspace/WidgetFrame";
+import { WidgetLinkMenu } from "./workspace/WidgetLinkMenu";
+import { canLinkPanel } from "./workspace/syncSettings";
+import { useWorkspaceSync } from "./workspace/useWorkspaceSync";
+import { normalizeDenseOverlayBarSpacing } from "./chart/zoomVisibility";
+
 export { resolveEndpoints } from "./endpoints";
 
 const SYMBOL = "GC";
 export const CHART_CONTRACT = SYMBOL;
 const DEFAULT_PROFILE_ID = "default";
 const ACTIVE_PROFILE_STORAGE_KEY = "gc-chart-platform.active-profile";
+const DENSE_OVERLAY_SPACING_STORAGE_KEY = "gc-chart-platform.dense-overlay-spacing";
 const PROFILE_HOT_SNAPSHOT_STORAGE_KEY = "gc-chart-platform.profile-hot-snapshot";
 const PROFILE_HOT_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
-const LEGACY_DEFAULT_CHART_BACKGROUND = "#101010";
-const DEFAULT_CHART_BACKGROUND = "#d3d3d3";
+const LEGACY_DEFAULT_CHART_BACKGROUNDS = new Set(["#101010", "#d3d3d3"]);
 const SOCKET_IDLE_TIMEOUT_MS = 45_000;
 const SOCKET_TRANSITION_TIMEOUT_MS = 10_000;
-const DISCONNECT_STATUS_DEBOUNCE_MS = 1_500;
-const DEGRADED_STATUS_TTL_MS = 8_000;
-const PROFILE_TIMEFRAMES = new Set<Timeframe>([
-  "15s",
-  "30s",
-  "1m",
-  "3m",
-  "5m",
-  "15m",
-  "30m",
-  "1h",
-  "4h",
-  "1D",
-]);
+const PROFILE_TIMEFRAMES = new Set(TIMEFRAMES);
 
 function normalizeChartBackgroundColor(value: unknown): string {
   if (typeof value !== "string") {
     return DEFAULT_CHART_BACKGROUND;
   }
-  return value.trim().toLowerCase() === LEGACY_DEFAULT_CHART_BACKGROUND
+  return LEGACY_DEFAULT_CHART_BACKGROUNDS.has(value.trim().toLowerCase())
     ? DEFAULT_CHART_BACKGROUND
     : value;
 }
@@ -245,14 +248,14 @@ const TIMEFRAME_RANK: Record<Timeframe, number> = {
   "1h": 60,
   "4h": 240,
   "1D": 1440,
+  "1W": 10080,
+  "1M": 44640,
 };
 export const GLOBAL_SUBSCRIBED_EVENTS: ChartEventType[] = [
   "quote_update",
-  "market_data_status",
   "alert_event",
   "order_update",
   "account_update",
-  "status",
 ];
 export const BIG_TRADE_SUBSCRIBED_EVENTS: ChartEventType[] = ["big_trade"];
 export const TIMEFRAME_SUBSCRIBED_EVENTS: ChartEventType[] = [
@@ -292,10 +295,11 @@ const INITIAL_VOLUME_DELTA_LIMIT = 2_000;
 // to render up to its 500-marker display budget.
 const INITIAL_BIG_TRADE_LIMIT = 500;
 const DRAWINGS_AUTOSAVE_DELAY_MS = 90_000;
-const SESSION_VP_START_UTC_HOUR = 22;
+const VOLUME_PROFILE_ROW_TICKS = 1;
+const DELTA_PROFILE_ROW_TICKS = 2;
 const DELTA_PROFILE_VALUE_AREA_PCT = 68;
 const DELTA_PROFILE_REFRESH_DELAY_MS = 1_000;
-const ORDER_REFRESH_INTERVAL_MS = 5_000;
+const ORDER_REFRESH_INTERVAL_MS = 1_000;
 const ENABLE_REALTIME_FOOTPRINT_UPDATES = true;
 // Match the chart/canvas cadence so a backend burst cannot force an extra
 // React render halfway between two visible frames.
@@ -317,25 +321,17 @@ interface BarReplayDataset {
   alertSignals: readonly AlertSignalMarker[];
 }
 const BIG_TRADE_SOUND_COOLDOWN_MS = 250;
-const MARKET_STATUS_RENDER_INTERVAL_MS = 5_000;
 const MARKET_ORDER_SETTINGS_STORAGE_KEY = "gc-chart-platform.market-order-settings";
 const DEFAULT_MARKET_ORDER_SETTINGS: MarketOrderSettings = {
   volumeLots: 0.1,
   slDistanceGc: 3,
   tpDistanceGc: 6,
   takeProfit1rEnabled: true,
-  takeProfitR: 1,
   autoSupertrendAfter1rEnabled: false,
   sizingMode: "lots",
   riskAmount: 100,
 };
 const EMPTY_MT5_OPEN_TRADES: Mt5OpenTrades = { positions: [], orders: [] };
-const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
-  longEnabled: false,
-  shortEnabled: false,
-  volumeLots: DEFAULT_MARKET_ORDER_SETTINGS.volumeLots,
-  updatedAt: 0,
-};
 
 /** Play a short beep via the Web Audio API when a big trade arrives. */
 function playBigTradeSound(): void {
@@ -370,7 +366,6 @@ export interface ChartLimitOrderDraft {
   tpGc: number;
   gcAnchored: true;
   takeProfit1rEnabled: boolean;
-  takeProfitR: number;
   autoSupertrendAfter1rEnabled: boolean;
 }
 
@@ -418,12 +413,10 @@ const MGANN_SWEEP_ALERT_TYPES = new Set<Alert["type"]>([
 ]);
 
 /** Map configured alerts to the price lines the chart should draw. */
-export function toAlertLines(alerts: readonly Alert[], at = Date.now()): AlertLine[] {
+function toAlertLines(alerts: readonly Alert[]): AlertLine[] {
   const lines: AlertLine[] = [];
   for (const alert of alerts) {
     if (alert.symbol !== SYMBOL || !LEVEL_ALERT_TYPES.has(alert.type)) continue;
-    if (alert.params.source === "mp_plan" && (alert.params.mpFiredAt || alert.params.mpDeletedAt
-      || Number(alert.params.mpExpiresAt ?? 0) <= at)) continue;
     const level = Number(alert.params.level);
     if (!Number.isFinite(level)) continue;
     lines.push({
@@ -544,12 +537,17 @@ export function mergeMt5AccountUpdate(
   if (current === undefined || current.accountId !== update.accountId) {
     return current;
   }
+  const floatingPnl =
+    typeof update.equity === "number" && typeof update.balance === "number"
+      ? update.equity - update.balance
+      : current.floatingPnl;
   const next = {
     ...current,
     tradeMode: update.tradeMode,
     balance: update.balance,
     equity: update.equity,
     freeMargin: update.freeMargin,
+    floatingPnl,
   };
   return mt5AccountsEqual(current, next) ? current : next;
 }
@@ -593,7 +591,7 @@ export function mergeMt5OpenTradeProfitUpdates(
   return changed ? { ...current, positions } : current;
 }
 
-function mt5AccountsEqual(
+export function mt5AccountsEqual(
   left: Mt5Account | undefined,
   right: Mt5Account | undefined,
 ): boolean {
@@ -607,7 +605,13 @@ function mt5AccountsEqual(
     left?.balance === right?.balance &&
     left?.equity === right?.equity &&
     left?.margin === right?.margin &&
-    left?.freeMargin === right?.freeMargin
+    left?.freeMargin === right?.freeMargin &&
+    left?.floatingPnl === right?.floatingPnl &&
+    left?.accountStateAt === right?.accountStateAt &&
+    left?.accountStateStale === right?.accountStateStale &&
+    left?.connected === right?.connected &&
+    left?.error === right?.error &&
+    JSON.stringify(left?.uncertainActions) === JSON.stringify(right?.uncertainActions)
   );
 }
 
@@ -642,6 +646,7 @@ export function buildChartLimitOrderDraft(input: {
   referencePrice: number | undefined;
   settings: MarketOrderSettings;
   symbol?: Mt5Symbol;
+  accountCurrency?: string;
 }): ChartLimitOrderDraft | undefined {
   const referencePrice = input.referencePrice;
   if (
@@ -669,6 +674,7 @@ export function buildChartLimitOrderDraft(input: {
     entryGc,
     slGc,
     symbol: input.symbol,
+    accountCurrency: input.accountCurrency,
   });
   if (volumeLots === undefined) return undefined;
   return {
@@ -682,7 +688,6 @@ export function buildChartLimitOrderDraft(input: {
     tpGc,
     gcAnchored: true,
     takeProfit1rEnabled: settings.takeProfit1rEnabled,
-    takeProfitR: settings.takeProfitR ?? 1,
     autoSupertrendAfter1rEnabled:
       settings.takeProfit1rEnabled && settings.autoSupertrendAfter1rEnabled,
   };
@@ -695,7 +700,6 @@ function sanitizeMarketOrderSettings(
   const slDistanceGc = Number(value?.slDistanceGc);
   const tpDistanceGc = Number(value?.tpDistanceGc);
   const riskAmount = Number(value?.riskAmount);
-  const takeProfitR = Number(value?.takeProfitR);
   return {
     volumeLots: Number.isFinite(volumeLots)
       ? Math.max(0.01, Math.round(volumeLots * 100) / 100)
@@ -711,9 +715,6 @@ function sanitizeMarketOrderSettings(
         ? DEFAULT_MARKET_ORDER_SETTINGS.takeProfit1rEnabled
         : value.takeProfit1rEnabled === true,
     autoSupertrendAfter1rEnabled: value?.autoSupertrendAfter1rEnabled === true,
-    takeProfitR: Number.isFinite(takeProfitR) && takeProfitR >= 0.1
-      ? takeProfitR
-      : DEFAULT_MARKET_ORDER_SETTINGS.takeProfitR,
     sizingMode: value?.sizingMode === "risk" ? "risk" : "lots",
     riskAmount: Number.isFinite(riskAmount)
       ? Math.max(1, Math.round(riskAmount * 100) / 100)
@@ -726,6 +727,7 @@ export function calculateRiskBasedLots(input: {
   entryGc: number;
   stopGc: number;
   symbol?: Mt5Symbol;
+  accountCurrency?: string;
 }): number | undefined {
   if (
     !Number.isFinite(input.riskAmount) ||
@@ -753,9 +755,11 @@ export function calculateRiskBasedLots(input: {
     return undefined;
   }
   const stopDistance = Math.abs(input.entryGc - input.stopGc);
+  if (stopDistance <= 0) return undefined;
   const riskPerLot = (stopDistance / tickSize) * tickValue;
   if (!Number.isFinite(riskPerLot) || riskPerLot <= 0) return undefined;
 
+  // Risk and the broker's tick value both use account currency, including USC.
   const rawLots = input.riskAmount / riskPerLot;
   if (!Number.isFinite(rawLots) || rawLots <= 0) return undefined;
 
@@ -767,11 +771,12 @@ export function calculateRiskBasedLots(input: {
   return Number(boundedLots.toFixed(8));
 }
 
-function resolveOrderVolumeLots(input: {
+export function resolveOrderVolumeLots(input: {
   settings: MarketOrderSettings;
   entryGc: number;
   slGc: number;
   symbol?: Mt5Symbol;
+  accountCurrency?: string;
 }): number | undefined {
   const settings = sanitizeMarketOrderSettings(input.settings);
   if (settings.sizingMode !== "risk") return settings.volumeLots;
@@ -781,6 +786,7 @@ function resolveOrderVolumeLots(input: {
     entryGc: input.entryGc,
     stopGc: input.slGc,
     symbol: input.symbol,
+    accountCurrency: input.accountCurrency,
   });
 }
 
@@ -834,21 +840,6 @@ function orderLineId(orderId: string, field: OrderLineField): string {
   return `${orderId}:${field}`;
 }
 
-function pendingOrderPatch(patch: {
-  entryGc?: number | null;
-  slGc?: number | null;
-  tpGc?: number | null;
-}) {
-  // Until MT5 confirms the conversion, show the new level without the previous
-  // broker stop's money value.
-  return {
-    ...patch,
-    ...(patch.entryGc !== undefined ? { entryBroker: undefined } : {}),
-    ...(patch.slGc !== undefined ? { slBroker: undefined } : {}),
-    ...(patch.tpGc !== undefined ? { tpBroker: undefined } : {}),
-  };
-}
-
 function parseOrderLineId(id: string):
   | { orderId: string; field: OrderLineField }
   | undefined {
@@ -861,7 +852,10 @@ function parseOrderLineId(id: string):
   return { orderId: id.slice(0, index), field };
 }
 
-function toOrderLines(orders: readonly TradingOrder[]): OrderLine[] {
+function toOrderLines(
+  orders: readonly TradingOrder[],
+  modifyingIds?: ReadonlySet<string>,
+): OrderLine[] {
   const lines: OrderLine[] = [];
   for (const order of orders) {
     if (
@@ -873,6 +867,10 @@ function toOrderLines(orders: readonly TradingOrder[]): OrderLine[] {
     const entry = orderEntryGc(order);
     const sideTitle = order.side.toUpperCase();
     const hasBrokerPosition = order.brokerPositionTicket != null;
+    const isModifying =
+      order.basisStale || order.actionPending ||
+      modifyingIds?.has(order.id) ||
+      modifyingIds?.has(appOrderRowKey(order.id));
     if (isFinitePrice(entry)) {
       lines.push({
         id: orderLineId(order.id, "entryGc"),
@@ -881,7 +879,7 @@ function toOrderLines(orders: readonly TradingOrder[]): OrderLine[] {
         price: entry,
         side: order.side,
         status: order.status,
-        editable: !hasBrokerPosition && order.status !== "filled",
+        editable: !hasBrokerPosition && order.status !== "filled" && !isModifying,
         title: `${sideTitle} ${hasBrokerPosition || order.status === "filled" ? "fill" : order.kind}`,
       });
     }
@@ -894,6 +892,7 @@ function toOrderLines(orders: readonly TradingOrder[]): OrderLine[] {
         side: order.side,
         status: order.status,
         title: "SL",
+        editable: !isModifying,
       });
     }
     if (isFinitePrice(order.tpGc)) {
@@ -905,29 +904,11 @@ function toOrderLines(orders: readonly TradingOrder[]): OrderLine[] {
         side: order.side,
         status: order.status,
         title: "TP",
+        editable: !isModifying,
       });
     }
   }
   return lines;
-}
-
-type OrderLevelPatch = Pick<
-  Parameters<ApiClient["patchOrder"]>[1], "entryGc" | "slGc" | "tpGc"
->;
-
-export function projectBrokerAnchoredOrders(
-  orders: readonly TradingOrder[],
-  positions: readonly TradingPosition[],
-  pendingEdits: ReadonlyMap<string, OrderLevelPatch> = new Map(),
-): readonly TradingOrder[] {
-  const byTicket = new Map(positions.map((position) => [position.brokerPositionTicket, position]));
-  return orders.map((order) => {
-    const position = order.brokerPositionTicket == null
-      ? undefined : byTicket.get(order.brokerPositionTicket);
-    const projected = projectBrokerOrder(order, position);
-    const edit = pendingEdits.get(order.id);
-    return edit === undefined ? projected : { ...projected, ...pendingOrderPatch(edit) };
-  });
 }
 
 function orderEntryGc(order: TradingOrder): number | undefined {
@@ -959,16 +940,9 @@ function estimatePnlAtPrice(input: {
   volumeLots: number;
   entryGc: number | undefined;
   exitGc: number | undefined;
-  entryBroker?: number | null;
-  exitBroker?: number | null;
   symbol: Mt5Symbol | undefined;
 }): number | undefined {
-  // Broker fills and stops can use different GC/XAU bases. Their GC estimates
-  // cannot be subtracted to calculate the actual money at risk.
-  const brokerPrices = isFinitePrice(input.entryBroker);
-  const entry = brokerPrices ? input.entryBroker : input.entryGc;
-  const exit = brokerPrices ? input.exitBroker : input.exitGc;
-  if (!isFinitePrice(entry) || !isFinitePrice(exit)) return undefined;
+  if (input.entryGc === undefined || input.exitGc === undefined) return undefined;
   const tickSize =
     input.symbol?.tickSize && input.symbol.tickSize > 0
       ? input.symbol.tickSize
@@ -979,7 +953,7 @@ function estimatePnlAtPrice(input: {
       : 1;
   const direction = input.side === "buy" ? 1 : -1;
   return (
-    ((exit - entry) * direction) /
+    ((input.exitGc - input.entryGc) * direction) /
     tickSize *
     tickValue *
     input.volumeLots
@@ -992,11 +966,37 @@ function formatPnl(value: number | undefined): string | undefined {
   return `${sign}$${value.toFixed(2)}`;
 }
 
-function mt5PositionKey(ticket: number): string {
+export function formatProfit(
+  value: number | undefined | null,
+  currency?: string,
+  stale?: boolean,
+): string | undefined {
+  if (value == null || !Number.isFinite(value)) return undefined;
+  const sign = value > 0 ? "+" : "";
+  const absFormatted = Math.abs(value).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const prefix = value < 0 ? "-" : sign;
+  const cur = currency?.trim().toUpperCase();
+  let text = "";
+  if (cur === "USC") {
+    text = `${prefix}${absFormatted} USC`;
+  } else if (cur === "USD" || cur === "$") {
+    text = `${prefix}$${absFormatted}`;
+  } else if (cur) {
+    text = `${prefix}${absFormatted} ${cur}`;
+  } else {
+    text = `${prefix}$${absFormatted}`;
+  }
+  return stale ? `${text} (stale)` : text;
+}
+
+function mt5PositionKey(ticket: BrokerTicket): string {
   return `mt5pos:${ticket}`;
 }
 
-function mt5OrderKey(ticket: number): string {
+function mt5OrderKey(ticket: BrokerTicket): string {
   return `mt5order:${ticket}`;
 }
 
@@ -1007,7 +1007,7 @@ function appOrderRowKey(orderId: string): string {
 function supertrendTrailingRowKey(trailing: SupertrendTrailing): string {
   return trailing.targetType === "order"
     ? appOrderRowKey(trailing.targetId)
-    : mt5PositionKey(Number(trailing.targetId));
+    : mt5PositionKey(trailing.targetId);
 }
 
 function supertrendTrailingMap(
@@ -1057,49 +1057,52 @@ export function supertrendTrailingActivationError(
 
 function parseActionRowId(id: string):
   | { source: "app"; orderId: string }
-  | { source: "mt5pos"; ticket: number }
-  | { source: "mt5order"; ticket: number }
+  | { source: "mt5pos"; ticket: string }
+  | { source: "mt5order"; ticket: string }
   | undefined {
   if (id.startsWith("app:")) {
     const orderId = id.slice("app:".length);
     return orderId ? { source: "app", orderId } : undefined;
   }
   if (id.startsWith("mt5pos:")) {
-    const ticket = Number(id.slice("mt5pos:".length));
-    return Number.isInteger(ticket) ? { source: "mt5pos", ticket } : undefined;
+    const ticket = id.slice("mt5pos:".length);
+    return /^[0-9]{1,20}$/.test(ticket) ? { source: "mt5pos", ticket } : undefined;
   }
   if (id.startsWith("mt5order:")) {
-    const ticket = Number(id.slice("mt5order:".length));
-    return Number.isInteger(ticket) ? { source: "mt5order", ticket } : undefined;
+    const ticket = id.slice("mt5order:".length);
+    return /^[0-9]{1,20}$/.test(ticket) ? { source: "mt5order", ticket } : undefined;
   }
   return undefined;
 }
 
-function appBrokerPositionTickets(orders: readonly TradingOrder[]): Set<number> {
+function appBrokerPositionTickets(orders: readonly TradingOrder[]): Set<BrokerTicket> {
   return new Set(
     orders
       .map((order) => order.brokerPositionTicket)
-      .filter((ticket): ticket is number => ticket != null),
+      .filter((ticket): ticket is BrokerTicket => ticket != null),
   );
 }
 
-function appBrokerOrderTickets(orders: readonly TradingOrder[]): Set<number> {
+function appBrokerOrderTickets(orders: readonly TradingOrder[]): Set<BrokerTicket> {
   return new Set(
     orders
       .map((order) => order.brokerOrderTicket)
-      .filter((ticket): ticket is number => ticket != null),
+      .filter((ticket): ticket is BrokerTicket => ticket != null),
   );
 }
 
 function manualPositionLines(
   positions: readonly TradingPosition[],
   appOrders: readonly TradingOrder[],
+  modifyingIds?: ReadonlySet<string>,
 ): OrderLine[] {
   const appTickets = appBrokerPositionTickets(appOrders);
   const lines: OrderLine[] = [];
   for (const position of positions) {
     if (appTickets.has(position.brokerPositionTicket)) continue;
     const orderId = mt5PositionKey(position.brokerPositionTicket);
+    const ticketStr = String(position.brokerPositionTicket);
+    const isModifying = position.actionPending || modifyingIds?.has(orderId) || modifyingIds?.has(ticketStr);
     const entry = position.entryGcEstimate;
     if (isFinitePrice(entry)) {
       lines.push({
@@ -1122,7 +1125,7 @@ function manualPositionLines(
         side: position.side,
         status: "filled",
         title: "SL",
-        editable: position.basisStale !== true,
+        editable: position.basisStale !== true && !isModifying,
       });
     }
     if (isFinitePrice(position.tpGc)) {
@@ -1134,7 +1137,7 @@ function manualPositionLines(
         side: position.side,
         status: "filled",
         title: "TP",
-        editable: position.basisStale !== true,
+        editable: position.basisStale !== true && !isModifying,
       });
     }
   }
@@ -1144,12 +1147,15 @@ function manualPositionLines(
 function manualPendingOrderLines(
   pendingOrders: readonly Mt5PendingOrder[],
   appOrders: readonly TradingOrder[],
+  modifyingIds?: ReadonlySet<string>,
 ): OrderLine[] {
   const appTickets = appBrokerOrderTickets(appOrders);
   const lines: OrderLine[] = [];
   for (const pending of pendingOrders) {
     if (appTickets.has(pending.brokerOrderTicket)) continue;
     const orderId = mt5OrderKey(pending.brokerOrderTicket);
+    const ticketStr = String(pending.brokerOrderTicket);
+    const isModifying = pending.actionPending || modifyingIds?.has(orderId) || modifyingIds?.has(ticketStr);
     if (isFinitePrice(pending.entryGc)) {
       lines.push({
         id: orderLineId(orderId, "entryGc"),
@@ -1159,7 +1165,7 @@ function manualPendingOrderLines(
         side: pending.side,
         status: "working",
         title: `${pending.side.toUpperCase()} ${pending.kind}`,
-        editable: pending.basisStale !== true,
+        editable: pending.basisStale !== true && !isModifying,
       });
     }
     if (isFinitePrice(pending.slGc)) {
@@ -1171,7 +1177,7 @@ function manualPendingOrderLines(
         side: pending.side,
         status: "working",
         title: "SL",
-        editable: pending.basisStale !== true,
+        editable: pending.basisStale !== true && !isModifying,
       });
     }
     if (isFinitePrice(pending.tpGc)) {
@@ -1183,7 +1189,7 @@ function manualPendingOrderLines(
         side: pending.side,
         status: "working",
         title: "TP",
-        editable: pending.basisStale !== true,
+        editable: pending.basisStale !== true && !isModifying,
       });
     }
   }
@@ -1200,7 +1206,11 @@ function toMarketOrderRows(
   breakingEvenIds: ReadonlySet<string>,
   supertrendTrailings: ReadonlyMap<string, SupertrendTrailing>,
   supertrendTrailingPendingIds: ReadonlySet<string>,
+  account?: Mt5Account,
+  modifyingIds: ReadonlySet<string> = new Set(),
+  closing50Ids: ReadonlySet<string> = new Set(),
 ): MarketOrderRow[] {
+  const isExness = account?.provider === "exness" || account !== undefined;
   const rows: MarketOrderRow[] = [];
   const brokerPositionsByTicket = new Map(
     mt5OpenTrades.positions.map((position) => [
@@ -1210,23 +1220,60 @@ function toMarketOrderRows(
   );
   for (const order of orders) {
     if (order.symbolInternal !== SYMBOL || !isOpenTradingOrder(order)) continue;
-    const entry = orderEntryGc(order);
+    const entry = order.entryBroker ?? undefined;
     if (entry === undefined) continue;
     const brokerPosition =
       order.brokerPositionTicket == null
         ? undefined
         : brokerPositionsByTicket.get(order.brokerPositionTicket);
-    const pnl = brokerPosition?.profit ?? estimateOrderPnl(order, currentPrice, symbol);
+    let pnl: number | undefined;
+    let pnlText: string | undefined;
+    if (isExness) {
+      if (brokerPosition?.profit != null) {
+        pnl = brokerPosition.profit;
+        const cur = brokerPosition.profitCurrency || brokerPosition.currency || account?.currency;
+        pnlText = formatProfit(pnl, cur, brokerPosition.profitStale);
+      }
+    } else {
+      pnl = brokerPosition?.profit ?? estimateOrderPnl(order, currentPrice, symbol);
+      pnlText = formatPnl(pnl);
+    }
     const hasBrokerPosition = order.brokerPositionTicket != null;
-    const status = hasBrokerPosition || order.status === "filled" ? "fill" : order.status;
+    const status = hasBrokerPosition || order.status === "filled" ? "fill" : order.status === "working" ? order.kind : order.status;
     const rowId = appOrderRowKey(order.id);
+    const ticketStr = order.brokerPositionTicket != null ? String(order.brokerPositionTicket) : undefined;
     const trailing = supertrendTrailings.get(rowId);
+    const hasPendingAction =
+      order.actionPending ||
+      (order.status !== "working" && !hasBrokerPosition) ||
+      Boolean((order as { pendingAction?: unknown }).pendingAction) ||
+      Boolean((brokerPosition as { pendingAction?: unknown })?.pendingAction);
+    const isBePending =
+      breakingEvenIds.has(rowId) ||
+      breakingEvenIds.has(order.id) ||
+      (ticketStr != null && breakingEvenIds.has(ticketStr));
+    const isClose50Pending =
+      closing50Ids.has(rowId) ||
+      closing50Ids.has(order.id) ||
+      (ticketStr != null && closing50Ids.has(ticketStr));
+    const isClosePending =
+      closingIds.has(order.id) ||
+      closingIds.has(rowId) ||
+      (ticketStr != null && closingIds.has(ticketStr));
+    const isCancelPending =
+      cancellingIds.has(order.id) ||
+      cancellingIds.has(rowId);
+    const isModifyPending =
+      modifyingIds.has(order.id) ||
+      modifyingIds.has(rowId) ||
+      (ticketStr != null && modifyingIds.has(ticketStr));
+
     rows.push({
       id: rowId,
       side: order.side,
       title: `${order.side.toUpperCase()} ${status}`,
-      detail: `${order.volumeLots.toFixed(2)} @ ${entry.toFixed(1)}`,
-      pnlText: formatPnl(pnl),
+      detail: `${order.volumeLots.toFixed(2)} @ ${entry.toFixed(symbol?.digits ?? 3)}`,
+      pnlText,
       pnlValue: pnl,
       volumeLots: order.volumeLots,
       action:
@@ -1234,69 +1281,103 @@ function toMarketOrderRows(
         (order.status === "filled" || order.status === "sync_error")
           ? "close"
           : "cancel",
-      canBreakEven: hasBrokerPosition && brokerPosition?.basisStale !== true,
-      breakEvenPending: breakingEvenIds.has(rowId),
+      canBreakEven: brokerPosition !== undefined,
+      breakEvenPending: isBePending,
+      close50Pending: isClose50Pending,
       canSupertrendTrail: hasBrokerPosition && order.source !== "auto_mgann",
       supertrendTrailing: trailing !== undefined,
       supertrendTrailingPending: supertrendTrailingPendingIds.has(rowId),
       supertrendTrailingTimeframe: trailing?.timeframe,
-      pending: closingIds.has(order.id) || cancellingIds.has(order.id),
+      pending:
+        isClosePending ||
+        isCancelPending ||
+        isModifyPending ||
+        isBePending ||
+        isClose50Pending ||
+        hasPendingAction,
     });
   }
   const appPositionTickets = appBrokerPositionTickets(orders);
   for (const position of mt5OpenTrades.positions) {
     if (appPositionTickets.has(position.brokerPositionTicket)) continue;
-    const entry = position.entryGcEstimate;
     const rowId = mt5PositionKey(position.brokerPositionTicket);
+    const ticketStr = String(position.brokerPositionTicket);
     const trailing = supertrendTrailings.get(rowId);
+    const cur = position.profitCurrency || position.currency || account?.currency;
+    const pnl = position.profit != null ? position.profit : undefined;
+    const pnlText = formatProfit(pnl, cur, position.profitStale);
+    const hasPendingAction = position.actionPending || Boolean((position as { pendingAction?: unknown }).pendingAction);
+    const isBePending =
+      breakingEvenIds.has(rowId) ||
+      breakingEvenIds.has(ticketStr);
+    const isClose50Pending =
+      closing50Ids.has(rowId) ||
+      closing50Ids.has(ticketStr);
+    const isClosePending =
+      closingIds.has(rowId) ||
+      closingIds.has(ticketStr);
+    const isModifyPending =
+      modifyingIds.has(rowId) ||
+      modifyingIds.has(ticketStr);
+
     rows.push({
       id: rowId,
       side: position.side,
       title: `${position.side.toUpperCase()} manual`,
-      detail: `${position.volumeLots.toFixed(2)} @ ${
-        isFinitePrice(entry) ? entry.toFixed(1) : position.entryBroker.toFixed(3)
-      }`,
-      pnlText: formatPnl(position.profit),
-      pnlValue: position.profit,
+      detail: `${position.volumeLots.toFixed(2)} @ ${position.entryBroker.toFixed(symbol?.digits ?? 3)}`,
+      pnlText,
+      pnlValue: pnl,
       volumeLots: position.volumeLots,
       action: "close",
-      canBreakEven: isFinitePrice(entry) && position.basisStale !== true,
-      breakEvenPending: breakingEvenIds.has(rowId),
+      canBreakEven: true,
+      breakEvenPending: isBePending,
+      close50Pending: isClose50Pending,
       canSupertrendTrail: true,
       supertrendTrailing: trailing !== undefined,
       supertrendTrailingPending: supertrendTrailingPendingIds.has(rowId),
       supertrendTrailingTimeframe: trailing?.timeframe,
-      pending: closingIds.has(rowId),
+      pending:
+        isClosePending ||
+        isModifyPending ||
+        isBePending ||
+        isClose50Pending ||
+        hasPendingAction,
     });
   }
   const appOrderTickets = appBrokerOrderTickets(orders);
   for (const pending of mt5OpenTrades.orders) {
     if (appOrderTickets.has(pending.brokerOrderTicket)) continue;
+    const rowId = mt5OrderKey(pending.brokerOrderTicket);
+    const ticketStr = String(pending.brokerOrderTicket);
     rows.push({
-      id: mt5OrderKey(pending.brokerOrderTicket),
+      id: rowId,
       side: pending.side,
       title: `${pending.side.toUpperCase()} ${pending.kind}`,
-      detail: `${pending.volumeLots.toFixed(2)} @ ${
-        isFinitePrice(pending.entryGc)
-          ? pending.entryGc.toFixed(1)
-          : pending.entryBroker.toFixed(3)
-      }`,
+      detail: `${pending.volumeLots.toFixed(2)} @ ${pending.entryBroker.toFixed(symbol?.digits ?? 3)}`,
       action: "cancel",
       volumeLots: pending.volumeLots,
-      pending: cancellingIds.has(mt5OrderKey(pending.brokerOrderTicket)),
+      pending:
+        pending.actionPending ||
+        cancellingIds.has(rowId) ||
+        cancellingIds.has(ticketStr) ||
+        modifyingIds.has(rowId) ||
+        modifyingIds.has(ticketStr),
     });
   }
   return rows;
 }
 
-export function toOrderControls(
+function toOrderControls(
   orders: readonly TradingOrder[],
   currentPrice: number | undefined,
   symbol: Mt5Symbol | undefined,
   mt5OpenTrades: Mt5OpenTrades,
   closingIds: ReadonlySet<string>,
   cancellingIds: ReadonlySet<string>,
+  account?: Mt5Account,
+  modifyingIds: ReadonlySet<string> = new Set(),
 ): OrderControl[] {
+  const isExness = account?.provider === "exness" || account !== undefined;
   const controls: OrderControl[] = [];
   const brokerPositionsByTicket = new Map(
     mt5OpenTrades.positions.map((position) => [
@@ -1305,6 +1386,7 @@ export function toOrderControls(
     ]),
   );
 
+  const brokerOrdersByTicket = new Map(mt5OpenTrades.orders.map((order) => [order.brokerOrderTicket, order]));
   const pushBracketControls = (input: {
     actionId: string;
     orderId: string;
@@ -1313,10 +1395,9 @@ export function toOrderControls(
     entry: number | undefined;
     sl: number | null | undefined;
     tp: number | null | undefined;
-    entryBroker?: number | null;
-    slBroker?: number | null;
-    tpBroker?: number | null;
     pnlValue?: number;
+    pnlPerPriceUnit?: PnlPerPriceUnit;
+    pnlText?: string;
     canClose?: boolean;
     canCancel?: boolean;
     closing?: boolean;
@@ -1332,7 +1413,7 @@ export function toOrderControls(
         side: input.side,
         title: "ENTRY",
         detail: `${input.volumeLots.toFixed(2)} @ ${input.entry.toFixed(1)}`,
-        pnlText: formatPnl(input.pnlValue),
+        pnlText: input.pnlText ?? formatPnl(input.pnlValue),
         pnlValue: input.pnlValue,
         canClose: input.canClose,
         canCancel: input.canCancel,
@@ -1340,49 +1421,43 @@ export function toOrderControls(
         cancelling: input.cancelling,
       });
     }
-    if (isFinitePrice(input.sl)) {
-      const pnlValue = estimatePnlAtPrice({
-        side: input.side,
-        volumeLots: input.volumeLots,
-        entryGc: input.entry,
-        exitGc: input.sl,
-        entryBroker: input.entryBroker,
-        exitBroker: input.slBroker,
-        symbol,
-      });
+    for (const [level, price] of [["sl", input.sl], ["tp", input.tp]] as const) {
+      if (!isFinitePrice(price)) continue;
+      const rates = input.pnlPerPriceUnit;
+      let pnlValue: number | undefined;
+      let pnlText: string | undefined;
+      if (isExness) {
+        if (rates && isFinitePrice(input.entry)) {
+          const move = (price - input.entry) * (input.side === "buy" ? 1 : -1);
+          pnlValue = move * (move >= 0 ? rates.gain : rates.loss) * input.volumeLots;
+          const sign = pnlValue >= 0.005 ? "+" : pnlValue <= -0.005 ? "-" : "";
+          const unit = rates.currency === "USD" ? "$" : `${rates.currency} `;
+          const amount = Math.abs(pnlValue).toLocaleString("en-US", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          });
+          pnlText = `${sign}${unit}${amount}${rates.stale ? " (stale)" : ""}`;
+        }
+      } else {
+        pnlValue = estimatePnlAtPrice({
+          side: input.side,
+          volumeLots: input.volumeLots,
+          entryGc: input.entry,
+          exitGc: price,
+          symbol,
+        });
+        pnlText = formatPnl(pnlValue);
+      }
       controls.push({
-        id: `${input.actionId}:sl`,
+        id: `${input.actionId}:${level}`,
         orderId: input.orderId,
         actionId: input.actionId,
-        level: "sl",
-        price: input.sl,
+        level,
+        price,
         side: input.side,
-        title: "SL",
-        detail: input.sl.toFixed(1),
-        pnlText: formatPnl(pnlValue),
-        pnlValue,
-      });
-    }
-    if (isFinitePrice(input.tp)) {
-      const pnlValue = estimatePnlAtPrice({
-        side: input.side,
-        volumeLots: input.volumeLots,
-        entryGc: input.entry,
-        exitGc: input.tp,
-        entryBroker: input.entryBroker,
-        exitBroker: input.tpBroker,
-        symbol,
-      });
-      controls.push({
-        id: `${input.actionId}:tp`,
-        orderId: input.orderId,
-        actionId: input.actionId,
-        level: "tp",
-        price: input.tp,
-        side: input.side,
-        title: "TP",
-        detail: input.tp.toFixed(1),
-        pnlText: formatPnl(pnlValue),
+        title: level === "sl" ? "SL" : "TP",
+        detail: price.toFixed(1),
+        pnlText,
         pnlValue,
       });
     }
@@ -1397,19 +1472,30 @@ export function toOrderControls(
         : brokerPositionsByTicket.get(order.brokerPositionTicket);
     const hasBrokerPosition = order.brokerPositionTicket != null;
     const actionId = appOrderRowKey(order.id);
+    const brokerOrder = order.brokerOrderTicket == null ? undefined : brokerOrdersByTicket.get(order.brokerOrderTicket);
+    let pnlValue: number | undefined;
+    let pnlText: string | undefined;
+    if (isExness) {
+      if (brokerPosition?.profit != null) {
+        pnlValue = brokerPosition.profit;
+        const cur = brokerPosition.profitCurrency || brokerPosition.currency || account?.currency;
+        pnlText = formatProfit(pnlValue, cur, brokerPosition.profitStale);
+      }
+    } else {
+      pnlValue = brokerPosition?.profit ?? estimateOrderPnl(order, currentPrice, symbol);
+      pnlText = formatPnl(pnlValue);
+    }
     pushBracketControls({
       actionId,
       orderId: order.id,
       side: order.side,
-      volumeLots: brokerPosition?.volumeLots ?? order.volumeLots,
+      volumeLots: order.volumeLots,
       entry,
       sl: order.slGc,
       tp: order.tpGc,
-      entryBroker:
-        brokerPosition?.entryBroker ?? order.fillPriceBroker ?? order.entryBroker,
-      slBroker: order.slBroker,
-      tpBroker: order.tpBroker,
-      pnlValue: brokerPosition?.profit ?? estimateOrderPnl(order, currentPrice, symbol),
+      pnlPerPriceUnit: brokerPosition?.pnlPerPriceUnit ?? brokerOrder?.pnlPerPriceUnit,
+      pnlValue,
+      pnlText,
       canClose:
         hasBrokerPosition &&
         (order.status === "filled" || order.status === "sync_error"),
@@ -1417,8 +1503,18 @@ export function toOrderControls(
         !hasBrokerPosition &&
         order.status !== "filled" &&
         order.status !== "sync_error",
-      closing: closingIds.has(order.id),
-      cancelling: cancellingIds.has(order.id),
+      closing:
+        order.actionPending ||
+        closingIds.has(order.id) ||
+        closingIds.has(actionId) ||
+        modifyingIds.has(order.id) ||
+        modifyingIds.has(actionId),
+      cancelling:
+        order.actionPending ||
+        cancellingIds.has(order.id) ||
+        cancellingIds.has(actionId) ||
+        modifyingIds.has(order.id) ||
+        modifyingIds.has(actionId),
     });
   }
 
@@ -1426,6 +1522,10 @@ export function toOrderControls(
   for (const position of mt5OpenTrades.positions) {
     if (appPositionTickets.has(position.brokerPositionTicket)) continue;
     const actionId = mt5PositionKey(position.brokerPositionTicket);
+    const ticketStr = String(position.brokerPositionTicket);
+    const cur = position.profitCurrency || position.currency || account?.currency;
+    const pnlValue = position.profit != null ? position.profit : undefined;
+    const pnlText = formatProfit(pnlValue, cur, position.profitStale);
     pushBracketControls({
       actionId,
       orderId: actionId,
@@ -1434,12 +1534,16 @@ export function toOrderControls(
       entry: position.entryGcEstimate,
       sl: position.slGc,
       tp: position.tpGc,
-      entryBroker: position.entryBroker,
-      slBroker: position.slBroker,
-      tpBroker: position.tpBroker,
-      pnlValue: position.profit,
+      pnlPerPriceUnit: position.pnlPerPriceUnit,
+      pnlValue,
+      pnlText,
       canClose: true,
-      closing: closingIds.has(actionId),
+      closing:
+        position.actionPending ||
+        closingIds.has(actionId) ||
+        closingIds.has(ticketStr) ||
+        modifyingIds.has(actionId) ||
+        modifyingIds.has(ticketStr),
     });
   }
 
@@ -1447,6 +1551,7 @@ export function toOrderControls(
   for (const pending of mt5OpenTrades.orders) {
     if (appOrderTickets.has(pending.brokerOrderTicket)) continue;
     const actionId = mt5OrderKey(pending.brokerOrderTicket);
+    const ticketStr = String(pending.brokerOrderTicket);
     pushBracketControls({
       actionId,
       orderId: actionId,
@@ -1455,11 +1560,14 @@ export function toOrderControls(
       entry: isFinitePrice(pending.entryGc) ? pending.entryGc : undefined,
       sl: pending.slGc,
       tp: pending.tpGc,
-      entryBroker: pending.entryBroker,
-      slBroker: pending.slBroker,
-      tpBroker: pending.tpBroker,
+      pnlPerPriceUnit: pending.pnlPerPriceUnit,
       canCancel: true,
-      cancelling: cancellingIds.has(actionId),
+      cancelling:
+        pending.actionPending ||
+        cancellingIds.has(actionId) ||
+        cancellingIds.has(ticketStr) ||
+        modifyingIds.has(actionId) ||
+        modifyingIds.has(ticketStr),
     });
   }
 
@@ -1613,151 +1721,6 @@ function AlertToolbarButton({
         <span className="alert-toolbar-badge">{alertCount}</span>
       )}
     </button>
-  );
-}
-
-const ANALYST_LABELS: Record<string, string> = {
-  no_trade: "KhÃ´ng giao dá»‹ch",
-  wait_for_buy: "Chá» mua",
-  wait_for_sell: "Chá» bÃ¡n",
-  buy_candidate: "á»¨ng viÃªn mua",
-  sell_candidate: "á»¨ng viÃªn bÃ¡n",
-  bullish: "ThiÃªn mua",
-  bearish: "ThiÃªn bÃ¡n",
-  range: "Äi ngang",
-  unknown: "ChÆ°a rÃµ",
-  wait: "Chá»",
-  candidate: "CÃ³ setup",
-};
-
-function analystLabel(value: string): string {
-  return ANALYST_LABELS[value] ?? value.replace(/_/g, " ");
-}
-
-function formatAnalystTimestamp(timestamp: number): string {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      month: "short",
-      day: "2-digit",
-    }).format(new Date(timestamp));
-  } catch {
-    return "";
-  }
-}
-
-function formatAnalystConfidence(confidence: number): string {
-  return `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}%`;
-}
-
-function analystEventAiLabel(state: AnalystEventAiState | undefined): string {
-  if (!state) return "Not loaded";
-  if (!state.available || !state.llmEnabled) return "Not configured";
-  return state.enabled ? "On" : "Off";
-}
-
-function AnalystPanel({
-  open,
-  pending,
-  report,
-  error,
-  eventAi,
-  eventAiPending,
-  authenticated,
-  onRun,
-  onToggleEventAi,
-  onClose,
-}: {
-  open: boolean;
-  pending: boolean;
-  report?: AnalystReport;
-  error: string;
-  eventAi?: AnalystEventAiState;
-  eventAiPending: boolean;
-  authenticated: boolean;
-  onRun: () => void;
-  onToggleEventAi: () => void;
-  onClose: () => void;
-}) {
-  if (!open) return null;
-  return (
-    <div className="analyst-panel" role="dialog" aria-label="BÃ¡o cÃ¡o AI nháº­n Ä‘á»‹nh">
-      <div className="analyst-panel-header">
-        <div>
-          <div className="analyst-panel-title">AI nháº­n Ä‘á»‹nh</div>
-          {report && (
-            <div className="analyst-panel-time">
-              {formatAnalystTimestamp(report.createdAt)}
-            </div>
-          )}
-        </div>
-        <div className="analyst-panel-actions">
-          <button type="button" onClick={onRun} disabled={pending || !authenticated}>
-            {pending ? "Äang cháº¡y" : "Kiá»ƒm tra"}
-          </button>
-          <button type="button" aria-label="ÄÃ³ng AI nháº­n Ä‘á»‹nh" onClick={onClose}>
-            x
-          </button>
-        </div>
-      </div>
-      {error && <div className="analyst-panel-error">{error}</div>}
-      {authenticated && (
-      <div className="analyst-auto-send-control">
-        <div>
-          <span>Event scanner LLM</span>
-          <strong>{analystEventAiLabel(eventAi)}</strong>
-        </div>
-        <button
-          type="button"
-          disabled={eventAiPending || !eventAi?.available || !eventAi.llmEnabled}
-          onClick={onToggleEventAi}
-        >
-          {eventAiPending ? "Saving" : eventAi?.enabled ? "Off" : "On"}
-        </button>
-      </div>
-      )}
-      {pending && <div className="analyst-panel-muted">Äang Ä‘á»c tráº¡ng thÃ¡i thá»‹ trÆ°á»ng...</div>}
-      {!report && !pending ? (
-        <div className="analyst-panel-muted">ChÆ°a cÃ³ nháº­n Ä‘á»‹nh AI.</div>
-      ) : null}
-      {report && (
-        <div className="analyst-report">
-          <div className="analyst-report-grid">
-            <div>
-              <span>Quyáº¿t Ä‘á»‹nh</span>
-              <strong>{analystLabel(report.decision)}</strong>
-            </div>
-            <div>
-              <span>Xu hÆ°á»›ng</span>
-              <strong>{analystLabel(report.bias)}</strong>
-            </div>
-            <div>
-              <span>Äá»™ tin cáº­y</span>
-              <strong>{formatAnalystConfidence(report.confidence)}</strong>
-            </div>
-            <div>
-              <span>Rá»§i ro</span>
-              <strong>{analystLabel(report.riskState)}</strong>
-            </div>
-          </div>
-          <ul className="analyst-reasons">
-            {report.reason.map((reason, index) => (
-              <li key={`${report.reportId}:${index}`}>{reason}</li>
-            ))}
-          </ul>
-          <div className="analyst-condition">
-            <span>VÃ´ hiá»‡u náº¿u</span>
-            <p>{report.invalidIf}</p>
-          </div>
-          <div className="analyst-condition">
-            <span>XÃ¡c nháº­n tiáº¿p theo</span>
-            <p>{report.nextConfirmation}</p>
-          </div>
-          <div className="analyst-auto-trade">Auto-trade Ä‘ang táº¯t</div>
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -2072,8 +2035,7 @@ function footprintTouchesFixedRange(
 ): boolean {
   const range = fixedRangeMsFromAnchors(drawing.anchors, timeframe);
   if (range === null) return false;
-  const footprintDuration = timeframe === "30s" ? 30_000 : 60_000;
-  const footprintEnd = footprintTime + footprintDuration - 1;
+  const footprintEnd = footprintTime + 60_000 - 1;
   return footprintTime <= range.to && footprintEnd >= range.from;
 }
 
@@ -2082,7 +2044,7 @@ export function appShellClassName(chartFocusMode: boolean): string {
 }
 
 export function bigTradesEnabledForTimeframe(timeframe: Timeframe): boolean {
-  return timeframe === "15s" || timeframe === "30s" || timeframe === "1m";
+  return timeframe === "15s" || timeframe === "1m";
 }
 
 export function outsideBarSettingsForTimeframe(
@@ -2107,6 +2069,10 @@ function fixedRangeDeltaProfileSource(
   return mode === "volume" ? "minute_bars" : "footprint_cache";
 }
 
+function fixedRangeDeltaProfileRowTicks(mode: FixedRangeProfileMode): number {
+  return mode === "delta" ? DELTA_PROFILE_ROW_TICKS : VOLUME_PROFILE_ROW_TICKS;
+}
+
 /**
  * LiveApp â€” the composed, runnable application.
  *
@@ -2115,7 +2081,7 @@ function fixedRangeDeltaProfileSource(
  *   - ChartSocket connects to `/ws/chart` and subscribes to chart events;
  *   - HistoryLoader seeds the MemoryCache, then ChartContainer renders + applies
  *     realtime bar_update events incrementally;
- *   - status events drive the StatusIndicator; alert_event drives the AlertPanel.
+ *   - alert events update the AlertPanel and chart markers.
  *
  * The unit-tested `App` shell remains for the layout-chrome tests; this is the
  * integration entry point mounted by `main.tsx`.
@@ -2127,12 +2093,9 @@ export function LiveApp() {
   const socket = useMemo(() => new ChartSocket({ url: endpoints.ws }), [endpoints.ws]);
 
   const [timeframe, setTimeframe] = useState<Timeframe>("1m");
+  const [profileTimeframe, setProfileTimeframe] = useState<Timeframe>("1m");
   const contract = CHART_CONTRACT;
-  const [connection, setConnection] = useState<ConnectionState>("disconnected");
-  const disconnectStatusTimerRef = useRef<number | undefined>(undefined);
-  const degradedStatusTimerRef = useRef<number | undefined>(undefined);
   const [socketGeneration, setSocketGeneration] = useState(0);
-  const historySyncRefresh = useRef(new HistorySyncRefreshTracker());
   const [overlayRefreshNonce, setOverlayRefreshNonce] = useState(0);
   const [bars, setBars] = useState<readonly Bar[]>([]);
   const [loadedBarsTimeframe, setLoadedBarsTimeframe] =
@@ -2169,25 +2132,22 @@ export function LiveApp() {
   >([]);
   const [replaySelecting, setReplaySelecting] = useState(false);
   const [replaySelectionError, setReplaySelectionError] = useState("");
+  const [replayDataset, setReplayDataset] = useState<BarReplayDataset>();
+  const [replayCursorIndex, setReplayCursorIndex] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState<BarReplaySpeed>(1);
   const [replayFollowLatest, setReplayFollowLatest] = useState(true);
-  const [marketDataStatus, setMarketDataStatus] =
-    useState<MarketDataStatusMessage>();
   const [indicatorsVisible, setIndicatorsVisible] = useState(true);
-  const [denseOverlayMinSpacing, setDenseOverlayMinSpacing] = useState(
-    () => readDenseOverlayMinSpacing(browserStorage()),
-  );
-  useEffect(() => {
-    persistDenseOverlayMinSpacing(denseOverlayMinSpacing, browserStorage());
-  }, [denseOverlayMinSpacing]);
   const [orderLevelsVisible, setOrderLevelsVisible] = useState(true);
   const [showDailyVolumeProfile, setShowDailyVolumeProfile] = useState(false);
+  const [dailyVolumeProfileWidth, setDailyVolumeProfileWidth] = useState(
+    DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  );
   const [dailyVolumeProfileRowTicks, setDailyVolumeProfileRowTicks] = useState(
     DEFAULT_SESSION_VOLUME_PROFILE_ROW_TICKS,
   );
-  const [dailyVolumeProfileWidth, setDailyVolumeProfileWidth] = useState(
-    DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  const [dailyVolumeProfileDays, setDailyVolumeProfileDays] = useState(
+    DEFAULT_SESSION_VOLUME_PROFILE_DAYS,
   );
   const [
     showDailyVolumeProfileDevelopingPoc,
@@ -2201,13 +2161,20 @@ export function LiveApp() {
     useState<XKontrolDisplaySettings>(() => ({
       ...DEFAULT_XKONTROL_DISPLAY_SETTINGS,
     }));
-  const [showGcPushMomentum, setShowGcPushMomentum] = useState(true);
   const [showTduSignals, setShowTduSignals] = useState(true);
-  const [tduSettings, setTduSettings] = useState<TduSettings>(() => ({ ...DEFAULT_TDU_SETTINGS }));
-  const [gcPushMomentumSettings, setGcPushMomentumSettings] =
-    useState<GcPushMomentumSettings>(() => ({
-      ...DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
-    }));
+  const [denseOverlayMinBarSpacing, setDenseOverlayMinBarSpacing] = useState(() => {
+    try {
+      const stored = localStorage.getItem(DENSE_OVERLAY_SPACING_STORAGE_KEY);
+      return normalizeDenseOverlayBarSpacing(stored === null ? undefined : Number(stored));
+    } catch {
+      return normalizeDenseOverlayBarSpacing(undefined);
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(DENSE_OVERLAY_SPACING_STORAGE_KEY, String(denseOverlayMinBarSpacing)); } catch {
+      // Keep the setting active when browser storage is unavailable.
+    }
+  }, [denseOverlayMinBarSpacing]);
   const [showMgannSwing, setShowMgannSwing] = useState(false);
   const [mgannSwing, setMgannSwing] = useState<MgannSwingSettings>(() => ({
     ...DEFAULT_MGANN_SWING_SETTINGS,
@@ -2216,7 +2183,6 @@ export function LiveApp() {
   const showMgannSwingForTimeframe = showMgannSwing;
   const showMgannWaveDelta =
     showMgannSwingForTimeframe && mgannSwing.showWaveDelta;
-  const [showFootprint, setShowFootprint] = useState(false);
   const [showFvgGrader, setShowFvgGrader] = useState(true);
   const [showMgannBreak, setShowMgannBreak] = useState(true);
   const [mgannBreakSettings, setMgannBreakSettings] =
@@ -2258,24 +2224,12 @@ export function LiveApp() {
     DEFAULT_TIMEZONE_OFFSET_MINUTES,
   );
   const [alerts, setAlerts] = useState<readonly Alert[]>([]);
-  const [alertError, setAlertError] = useState("");
   const alertsRef = useRef(alerts);
   alertsRef.current = alerts;
-  const consumedMpAlerts = useRef(new Set<string>());
   const mgannBreakSettingsRef = useRef(mgannBreakSettings);
   mgannBreakSettingsRef.current = mgannBreakSettings;
   const [lastAlert, setLastAlert] = useState<AlertEventMessage | undefined>(undefined);
   const [alertPanelOpen, setAlertPanelOpen] = useState(false);
-  const [analystPanelOpen, setAnalystPanelOpen] = useState(false);
-  const [analystReport, setAnalystReport] = useState<AnalystReport | undefined>(
-    undefined,
-  );
-  const [analystEventAi, setAnalystEventAi] = useState<
-    AnalystEventAiState | undefined
-  >(undefined);
-  const [analystPending, setAnalystPending] = useState(false);
-  const [analystEventAiPending, setAnalystEventAiPending] = useState(false);
-  const [analystError, setAnalystError] = useState("");
   const [telegramConfig, setTelegramConfig] =
     useState<TelegramNotificationConfig>({
       enabled: false,
@@ -2292,24 +2246,35 @@ export function LiveApp() {
   const [webPushStatus, setWebPushStatus] = useState("");
   const [webPushSupported, setWebPushSupported] = useState(false);
   const [authUser, setAuthUser] = useState<AuthUser | undefined>(undefined);
-  const authUserRef = useRef(authUser);
-  authUserRef.current = authUser;
+  const authUserIdRef = useRef<string | undefined>(undefined);
+  authUserIdRef.current = authUser?.id;
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
   const [authMode, setAuthMode] = useState<AuthDialogMode>("login");
   const [authPending, setAuthPending] = useState(false);
   const [authError, setAuthError] = useState("");
   const [mt5Account, setMt5Account] = useState<Mt5Account | undefined>(undefined);
+  const [executionEnabled, setExecutionEnabled] = useState(false);
+  // A temporary capability failure must leave the manual panel visible and
+  // locked. Recover through read-only capability checks without a new login.
+  useEffect(() => {
+    if (!authUser || executionEnabled) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void api.execution().then((execution) => {
+        if (!cancelled) {
+          setExecutionEnabled(execution.enabled);
+        }
+      });
+    }, 5_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [api, authUser, executionEnabled]);
   const [mt5Symbol, setMt5Symbol] = useState<Mt5Symbol | undefined>(undefined);
+  const mt5SymbolRef = useRef<Mt5Symbol | undefined>(undefined);
+  mt5SymbolRef.current = mt5Symbol;
   const [mt5DialogOpen, setMt5DialogOpen] = useState(false);
-  const [mt5Terminals, setMt5Terminals] = useState<Mt5Terminal[]>([]);
   const [mt5Pending, setMt5Pending] = useState(false);
   const [mt5Error, setMt5Error] = useState("");
   const [orders, setOrders] = useState<readonly TradingOrder[]>([]);
-  const pendingOrderEditsRef = useRef(new Map<string, OrderLevelPatch>());
-  const orderEditRevisionRef = useRef(0);
-  const [pendingOrderEdits, setPendingOrderEdits] = useState<
-    ReadonlyMap<string, OrderLevelPatch>
-  >(() => new Map());
   const [mt5OpenTrades, setMt5OpenTrades] = useState<Mt5OpenTrades>(
     EMPTY_MT5_OPEN_TRADES,
   );
@@ -2322,6 +2287,15 @@ export function LiveApp() {
   const [breakingEvenOrderIds, setBreakingEvenOrderIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
+  const [closing50OrderIds, setClosing50OrderIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [modifyingOrderIds, setModifyingOrderIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const activeOrderEditsRef = useRef(new Set<string>());
+  const [orderDragPreviews, setOrderDragPreviews] = useState<ReadonlyMap<string, OrderDragPreview>>(() => new Map());
+  const tradingRefreshRef = useRef({ requested: 0, applied: 0 });
   const [supertrendTrailings, setSupertrendTrailings] = useState<
     ReadonlyMap<string, SupertrendTrailing>
   >(() => new Map());
@@ -2338,19 +2312,47 @@ export function LiveApp() {
     mt5OpenTrades.orders.length > 0;
   const [marketOrderSettings, setMarketOrderSettings] =
     useState<MarketOrderSettings>(() => readMarketOrderSettings());
-  const marketOrderSettingsRef = useRef(marketOrderSettings);
-  marketOrderSettingsRef.current = marketOrderSettings;
-  const updateMarketOrderSettings = (settings: MarketOrderSettings) => {
-    const next = sanitizeMarketOrderSettings(settings);
-    marketOrderSettingsRef.current = next;
-    setMarketOrderSettings(next);
-  };
-  const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(
-    DEFAULT_AUTO_TRADE_SETTINGS,
-  );
-  const orderSubmission = useOrderSubmissionLock();
-  const orderPending = orderSubmission.pending;
+  const [orderPending, setOrderPending] = useState(false);
   const [orderError, setOrderError] = useState("");
+  const [exnessActionError, setExnessActionError] = useState("");
+  const visibleOrderError = orderError || mt5Account?.error || exnessActionError;
+
+  const resetOrderPendingAndOptimisticState = useCallback(() => {
+    activeSubmissionTokenRef.current = 0;
+    orderSubmittingRef.current = false;
+    setOrderPending(false);
+    setClosingOrderIds(new Set());
+    setCancellingOrderIds(new Set());
+    setBreakingEvenOrderIds(new Set());
+    setClosing50OrderIds(new Set());
+    setModifyingOrderIds(new Set());
+    setSupertrendTrailingPendingIds(new Set());
+    activeOrderEditsRef.current = new Set();
+    setOrderDragPreviews(new Map());
+    setOrderError("");
+    setExnessActionError("");
+  }, []);
+
+  const accountGenerationRef = useRef(0);
+  const symbolRequestIdRef = useRef(0);
+  const orderSubmittingRef = useRef(false);
+  const activeSubmissionTokenRef = useRef(0);
+  const submissionTokenCounterRef = useRef(0);
+  const connectedAccountKey = mt5Account?.connected
+    ? `${authUser?.id ?? ""}:${mt5Account.accountId ?? mt5Account.login ?? ""}`
+    : "";
+  const connectedAccountKeyRef = useRef(connectedAccountKey);
+  connectedAccountKeyRef.current = connectedAccountKey;
+  const prevConnectedAccountKeyRef = useRef(connectedAccountKey);
+  useEffect(() => {
+    if (prevConnectedAccountKeyRef.current !== connectedAccountKey) {
+      prevConnectedAccountKeyRef.current = connectedAccountKey;
+      accountGenerationRef.current += 1;
+      setMt5Symbol(undefined);
+      mt5SymbolRef.current = undefined;
+      resetOrderPendingAndOptimisticState();
+    }
+  }, [connectedAccountKey, resetOrderPendingAndOptimisticState]);
   // TradingView-style chart context menu, anchored at the click point.
   const [chartMenu, setChartMenu] = useState<ChartMenuState | undefined>(
     undefined,
@@ -2358,7 +2360,6 @@ export function LiveApp() {
   const [activeTool, setActiveTool] = useState<DrawingToolType | null>(null);
   const fixedRangeProfileMode: FixedRangeProfileMode = "volume";
   const [chartFocusMode, setChartFocusMode] = useState(false);
-  const [marketOrderDrawerOpen, setMarketOrderDrawerOpen] = useState(false);
   const [drawingCount, setDrawingCount] = useState(0);
   const [deleteAllSignal, setDeleteAllSignal] = useState(0);
   const [removeDrawingIds, setRemoveDrawingIds] = useState<readonly string[]>([]);
@@ -2375,6 +2376,140 @@ export function LiveApp() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileHydrated, setProfileHydrated] = useState(false);
+  const workspace = useWorkspaces(api, authUser?.id, profileHydrated, chartBackgroundColor);
+  const workspaceId = workspace.active?.id;
+  const payload = workspace.active?.payload;
+  const panels = payload?.panels ?? [];
+  const charts = panels.filter((panel) => panel.type === "chart");
+  const mainPanel = charts.find((panel) => panel.id === MAIN_CHART);
+  const [instrument, setInstrument] = useState(DEFAULT_INSTRUMENT);
+  const [selection, setSelection] = useState<{ workspaceId?: string; panelId: string }>();
+  const [visualSelection, setVisualSelection] = useState<{ workspaceId?: string; panelId: string }>();
+  const activatePanel = (panelId: string) => {
+    const panel = panels.find(item => item.id === panelId);
+    if (!panel) return;
+    setVisualSelection({ workspaceId, panelId });
+    if (panel.type === "chart") setSelection({ workspaceId, panelId });
+  };
+  const [zoomed, setZoomed] = useState<{ workspaceId?: string; panelId: string }>();
+  const [workspaceFullscreen, setWorkspaceFullscreen] = useState(false);
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? true);
+  const [openScanChartId, setOpenScanChartId] = useState<string>();
+  const [scanStates, setScanStates] = useState<Record<string, {
+    active: boolean;
+    loading: boolean;
+    error: string | null;
+    settingsOpen: boolean;
+    suggestions: ScanAiSuggestion[];
+    addedIds: Set<string>;
+    groups: Set<ScanAiGroup>;
+    state: ScanAiState | "auto";
+    strength: ScanAiStrength;
+    density: ScanAiDensity;
+    depth: ScanAiDepth;
+    targetsAndStop: boolean;
+    patterns: string[];
+  }>>({});
+  const scanStatesRef = useRef(scanStates); scanStatesRef.current = scanStates;
+  const scanRequests = useRef(new Map<string, number>());
+  const acceptedScanGeometry = useRef(new Map<string, ScanAiSuggestion[]>());
+  const [drawingToolsOpen, setDrawingToolsOpen] = useState(false);
+  const [footprintZoomSelecting, setFootprintZoomSelecting] = useState(false);
+  const [autoFootprintPanels, setAutoFootprintPanels] = useState<ReadonlySet<string>>(() => new Set());
+  const updateAutoFootprintPanel = useCallback((id: string, visible: boolean) => {
+    setAutoFootprintPanels((current) => {
+      if (current.has(id) === visible) return current;
+      const next = new Set(current);
+      if (visible) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  useEffect(() => setFootprintZoomSelecting(false), [timeframe, workspaceId]);
+  const [scanPreview, setScanPreview] = useState<{ key: string; drawing: DrawingState }>();
+  const shellRef = useRef<HTMLDivElement>(null);
+  const chartDrawingActions = useRef(new Map<string, ChartDrawingActions>());
+  const fullscreenPanelId = zoomed?.workspaceId === workspaceId && panels.some((panel) => panel.id === zoomed?.panelId)
+    ? zoomed?.panelId : undefined;
+  const fullscreenChartId = charts.some((panel) => panel.id === fullscreenPanelId) ? fullscreenPanelId : undefined;
+  const selectedChart = charts.find((panel) => panel.id === fullscreenChartId)
+    ?? charts.find((panel) => selection?.workspaceId === workspaceId && panel.id === selection?.panelId)
+    ?? charts[0];
+  const selectedTimeframe = selectedChart?.id === MAIN_CHART ? timeframe : selectedChart?.timeframe ?? "1m";
+  const savedTheme = payload?.theme ?? DEFAULT_THEME;
+  const theme = useMemo(() => resolveWorkspaceTheme(savedTheme, systemDark), [savedTheme, systemDark]);
+  const mainTimeframe = payload?.useChartProfile && authUser ? profileTimeframe : mainPanel?.timeframe ?? "1m";
+  const workspaceTimeframes = [...new Set<Timeframe>([timeframe, ...charts.flatMap((panel) => panel.timeframe ?? [])])].sort().join(",");
+  const chartKey = (id: string) => `${workspaceId}/${id}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.instruments().then((catalog) => {
+      const active = catalog.find((item) => item.symbol === SYMBOL);
+      if (!cancelled && active) setInstrument(active);
+    }).catch(() => { /* Keep the built-in GC instrument during reconnect. */ });
+    return () => { cancelled = true; };
+  }, [api]);
+
+  useEffect(() => {
+    const scheme = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const change = (event: MediaQueryListEvent) => setSystemDark(event.matches);
+    scheme?.addEventListener("change", change);
+    return () => scheme?.removeEventListener("change", change);
+  }, []);
+
+  useEffect(() => {
+    if (workspaceId) applyWorkspaceTheme(theme, true);
+  }, [theme, workspaceId]);
+
+  useEffect(() => {
+    if (!authUser || !payload || payload.tradingAccountInitialized || !charts.length) return;
+    workspace.update((current) => {
+      if (current.tradingAccountInitialized) return current;
+      const hasAccount = current.panels.some((panel) => panel.type === "tradingAccount");
+      const canAdd = !hasAccount && current.panels.length < 12;
+      return {
+        ...current,
+        tradingAccountInitialized: true,
+        panels: canAdd ? [...current.panels, { id: crypto.randomUUID(), type: "tradingAccount" }] : current.panels,
+      };
+    });
+  }, [authUser, workspaceId, payload]);
+
+  useEffect(() => {
+    setTimeframe(mainTimeframe);
+    setReplaySelecting(false);
+    setReplaySelectionError("");
+    setReplayPlaying(false);
+    setReplayDataset(undefined);
+    setScanPreview(undefined);
+  }, [workspaceId, mainTimeframe]);
+
+  useEffect(() => setOpenScanChartId(undefined), [workspaceId]);
+
+  useEffect(() => {
+    const handleFullscreen = () => setWorkspaceFullscreen(document.fullscreenElement === shellRef.current);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setZoomed(undefined);
+      setWorkspaceFullscreen(false);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreen);
+    window.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreen);
+      window.removeEventListener("keydown", escape);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!profileHydrated) return;
+    const subscriptions = workspaceTimeframes.split(",") as Timeframe[];
+    for (const tf of subscriptions) socket.subscribe(SYMBOL, TIMEFRAME_SUBSCRIBED_EVENTS, tf);
+    return () => {
+      for (const tf of subscriptions) socket.unsubscribe(SYMBOL, TIMEFRAME_SUBSCRIBED_EVENTS, tf);
+    };
+  }, [socket, workspaceTimeframes, profileHydrated]);
   const profileIdRef = useRef(profileId);
   profileIdRef.current = profileId;
   const submittedOrderDrawingIdsRef = useRef(new Set<string>());
@@ -2421,24 +2556,22 @@ export function LiveApp() {
   const profilePayload = useMemo<ChartProfilePayload>(
     () => ({
       version: 1,
-      timeframe,
+      timeframe: profileTimeframe,
       chartBackgroundColor,
       showVolume: true,
       showVolumeDelta,
       showXKontrol,
       xKontrol: { ...xKontrolSettings },
-      showGcPushMomentum,
       showTduSignals,
-      tduSettings: { ...tduSettings },
-      gcPushMomentum: { ...gcPushMomentumSettings },
+      denseOverlayMinBarSpacing,
       showDailyVolumeProfile,
       dailyVolumeProfileWidth,
-      dailyVolumeProfileRowTicks,
       showDailyVolumeProfileDevelopingPoc,
+      dailyVolumeProfileRowTicks,
+      dailyVolumeProfileDays,
       showCvd: showMgannWaveDelta,
       showMgannSwing,
       mgannSwing: { ...mgannSwing },
-      showFootprint,
       showFvgGrader,
       showMgannBreak,
       mgannBreak: { ...mgannBreakSettings },
@@ -2464,10 +2597,11 @@ export function LiveApp() {
       chartBackgroundColor,
       dailyVolumeProfileWidth,
       dailyVolumeProfileRowTicks,
+      dailyVolumeProfileDays,
+      denseOverlayMinBarSpacing,
       drawings,
       ema,
       footprintSettings,
-      gcPushMomentumSettings,
       fvgSignalLimit,
       mgannBreakSignalHistoryBars,
       mgannBreakSignalLimit,
@@ -2477,7 +2611,6 @@ export function LiveApp() {
       mgannSwing,
       outsideBar,
       showBigTrades,
-      showFootprint,
       fvgSignalLimit,
       showMgannBreak,
       showMgannSwing,
@@ -2486,14 +2619,12 @@ export function LiveApp() {
       showDailyVolumeProfile,
       showDailyVolumeProfileDevelopingPoc,
       showMgannWaveDelta,
-      showGcPushMomentum,
       showTduSignals,
-      tduSettings,
       showFvgGrader,
       smc,
       supertrend,
       sweepReversal,
-      timeframe,
+      profileTimeframe,
       timezoneOffsetMinutes,
       xKontrolSettings,
     ],
@@ -2525,14 +2656,13 @@ export function LiveApp() {
 
   const toggleChartFocusMode = useCallback(() => {
     setChartFocusMode((focus) => !focus);
-    setMarketOrderDrawerOpen(false);
   }, []);
 
   const historyLoader = useRef<HistoryLoader | null>(null);
   const screenshotCaptureRef = useRef<(() => string | undefined) | undefined>(
     undefined,
   );
-  const deselectActiveTool = useCallback(() => setActiveTool(null), []);
+  const deselectActiveTool = useCallback(() => { setActiveTool(null); setFootprintZoomSelecting(false); }, []);
   const registerScreenshotCapture = useCallback(
     (capture: (() => string | undefined) | undefined) => {
       screenshotCaptureRef.current = capture;
@@ -2549,14 +2679,8 @@ export function LiveApp() {
     );
   }
   const currentSeriesKey = seriesDataKey(SYMBOL, contract, timeframe);
-  const footprintTimeframe: Extract<Timeframe, "30s" | "1m"> =
-    timeframe === "30s" ? "30s" : "1m";
-  const footprintOverlayKey = `${contract}:${footprintTimeframe}`;
   const realtimeFootprintEnabled =
-    ENABLE_REALTIME_FOOTPRINT_UPDATES &&
-    indicatorsVisible &&
-    showFootprint &&
-    footprintEnabledForTimeframe(timeframe);
+    ENABLE_REALTIME_FOOTPRINT_UPDATES && autoFootprintPanels.size > 0;
   const realtimeBigTradesEnabled =
     indicatorsVisible &&
     showBigTrades &&
@@ -2578,51 +2702,10 @@ export function LiveApp() {
     };
   }
   const hasLoadedCurrentSeries = loadedSeriesKey === currentSeriesKey;
-  const loadReplayTimeframe = useCallback(async (
-    source: BarReplayDataset,
-    nextTimeframe: Timeframe,
-    range: ReplayHistoryRange,
-  ): Promise<BarReplayDataset> => {
-    const response = await fetch(buildHistoryUrl({
-      symbol: SYMBOL, contract, timeframe: nextTimeframe,
-      ...range, limit: BAR_REPLAY_HISTORY_LIMIT,
-    }, endpoints.api));
-    if (!response.ok) throw new Error(`Unable to load replay history (${response.status})`);
-    const body = await response.json() as Partial<HistoryResponse> | null;
-    if (!Array.isArray(body?.bars)) throw new Error("Replay history is missing candles");
-    const [delta, fvg, trades] = await Promise.allSettled([
-      api.volumeDelta(SYMBOL, contract, nextTimeframe, BAR_REPLAY_HISTORY_LIMIT, range),
-      nextTimeframe === "1m"
-        ? api.fvgSignals(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range)
-        : Promise.resolve<FvgSignalUpdateMessage[]>([]),
-      api.bigTrades(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range, true),
-    ]);
-    return {
-      ...source,
-      bars: body.bars,
-      barsTimeframe: nextTimeframe,
-      volumeDelta: delta.status === "fulfilled" ? replayVolumeDelta(delta.value) : [],
-      fvgSignals: new Map(fvg.status === "fulfilled"
-        ? fvg.value.filter((signal) => signal.phase !== "clear" && signal.pulse !== 0)
-          .map((signal) => [signal.time, signal])
-        : []),
-      bigTrades: trades.status === "fulfilled" ? trades.value : [],
-      smcAiSignals: [],
-      alertSignals: [],
-    };
-  }, [api, contract, endpoints.api]);
-  const {
-    dataset: replayDataset,
-    cursorIndex: replayCursorIndex,
-    active: replayActive,
-    ready: replayReady,
-    loading: replayLoading,
-    error: replayLoadError,
-    start: startReplaySession,
-    stop: stopReplaySession,
-    updateDataset: updateReplayDataset,
-    step: advanceReplaySession,
-  } = useBarReplaySession(currentSeriesKey, timeframe, loadReplayTimeframe);
+  const replayActive = replayDataset?.seriesKey === currentSeriesKey;
+  const workspaceSync = useWorkspaceSync(authUser?.id ?? "guest", {
+    workspaceId: workspaceId ?? "", symbol: instrument.symbol, contract, mode: "live",
+  }, payload, workspace.update, replayActive ? [MAIN_CHART] : []);
   const replayPhase: BarReplayPhase = replayActive
     ? "active"
     : replaySelecting
@@ -2634,7 +2717,7 @@ export function LiveApp() {
     setReplaySelectionError("");
     setReplayPlaying(false);
     setReplayFollowLatest(true);
-    stopReplaySession();
+    setReplayDataset(undefined);
     const live = cache.get({ symbol: SYMBOL, contract, timeframe });
     if (live !== undefined) {
       setLoadedSeriesKey(currentSeriesKey);
@@ -2644,7 +2727,7 @@ export function LiveApp() {
     // Catch up Volume Delta/FVG and any REST overlays that changed during replay.
     setSocketGeneration((generation) => generation + 1);
     setOverlayRefreshNonce((nonce) => nonce + 1);
-  }, [cache, contract, currentSeriesKey, stopReplaySession, timeframe]);
+  }, [cache, contract, currentSeriesKey, timeframe]);
 
   const beginBarReplaySelection = useCallback(() => {
     const loaded = cache.get({ symbol: SYMBOL, contract, timeframe })?.bars ?? bars;
@@ -2652,13 +2735,13 @@ export function LiveApp() {
       setReplaySelectionError("Load at least three candles before starting replay");
       return;
     }
-    stopReplaySession();
+    setReplayDataset(undefined);
     setReplayPlaying(false);
     setReplayFollowLatest(true);
     setReplaySelectionError("");
     setActiveTool(null);
     setReplaySelecting(true);
-  }, [bars, cache, contract, stopReplaySession, timeframe]);
+  }, [bars, cache, contract, timeframe]);
 
   const cancelBarReplaySelection = useCallback(() => {
     setReplaySelecting(false);
@@ -2694,7 +2777,8 @@ export function LiveApp() {
         smcAiSignals: smcAiSignals.slice(),
         alertSignals: alertSignalMarkers.slice(),
       };
-      startReplaySession(snapshot, replayCursorBeforeSelection(selectedIndex));
+      setReplayDataset(snapshot);
+      setReplayCursorIndex(replayCursorBeforeSelection(selectedIndex));
       setReplayPlaying(false);
       setReplayFollowLatest(true);
       setReplaySelecting(false);
@@ -2702,7 +2786,7 @@ export function LiveApp() {
 
       const range = {
         from: sourceBars[0].time,
-        to: sourceBars[sourceBars.length - 1].time + barDurationForTimeframe(timeframe) - 1,
+        to: barEndForTimeframe(sourceBars[sourceBars.length - 1].time, timeframe) - 1,
       };
       void Promise.allSettled([
         api.volumeDelta(
@@ -2712,19 +2796,13 @@ export function LiveApp() {
           BAR_REPLAY_HISTORY_LIMIT,
           range,
         ),
-        fvgGraderEnabledForTimeframe(timeframe)
-          ? api.fvgSignals(
-              SYMBOL,
-              contract,
-              BAR_REPLAY_HISTORY_LIMIT,
-              range,
-              timeframe,
-            )
+        timeframe === "1m"
+          ? api.fvgSignals(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range)
           : Promise.resolve<FvgSignalUpdateMessage[]>([]),
         api.bigTrades(SYMBOL, contract, BAR_REPLAY_HISTORY_LIMIT, range, true),
       ]).then(([deltaResult, fvgResult, bigTradeResult]) => {
-        updateReplayDataset((current) => {
-          if (current.id !== id) return current;
+        setReplayDataset((current) => {
+          if (current?.id !== id) return current;
           const nextFvg = new Map<number, FvgSignalUpdateMessage>();
           const loadedFvg = fvgResult.status === "fulfilled" ? fvgResult.value : undefined;
           if (loadedFvg !== undefined) {
@@ -2764,27 +2842,28 @@ export function LiveApp() {
       smcAiSignals,
       timeframe,
       volumeDelta,
-      startReplaySession,
-      updateReplayDataset,
     ],
   );
 
   const stepBarReplay = useCallback((direction: -1 | 1) => {
     setReplayPlaying(false);
-    advanceReplaySession(direction);
-  }, [advanceReplaySession]);
+    setReplayCursorIndex((current) => {
+      const last = Math.max(0, (replayDataset?.bars.length ?? 1) - 1);
+      return Math.min(last, Math.max(0, current + direction));
+    });
+  }, [replayDataset]);
 
   useEffect(() => {
-    if (!replayReady || !replayPlaying || replayDataset === undefined) return;
+    if (!replayActive || !replayPlaying || replayDataset === undefined) return;
     if (replayCursorIndex >= replayDataset.bars.length - 1) {
       setReplayPlaying(false);
       return;
     }
     const timer = window.setTimeout(() => {
-      advanceReplaySession(1);
+      setReplayCursorIndex((current) => Math.min(current + 1, replayDataset.bars.length - 1));
     }, barReplayDelayMs(replaySpeed));
     return () => window.clearTimeout(timer);
-  }, [advanceReplaySession, replayReady, replayCursorIndex, replayDataset, replayPlaying, replaySpeed]);
+  }, [replayActive, replayCursorIndex, replayDataset, replayPlaying, replaySpeed]);
 
   useEffect(() => {
     if (!replayActive && !replaySelecting) return;
@@ -2795,7 +2874,7 @@ export function LiveApp() {
         if (replayActive) exitBarReplay();
         else cancelBarReplaySelection();
         event.preventDefault();
-      } else if (replayReady && event.code === "Space") {
+      } else if (replayActive && event.code === "Space") {
         setReplayPlaying((playing) => !playing);
         event.preventDefault();
       } else if (replayActive && event.key === "ArrowRight") {
@@ -2812,16 +2891,18 @@ export function LiveApp() {
     cancelBarReplaySelection,
     exitBarReplay,
     replayActive,
-    replayReady,
     replaySelecting,
     stepBarReplay,
   ]);
 
   useEffect(() => {
-    setReplayPlaying(false);
+    if (replayDataset !== undefined && replayDataset.seriesKey !== currentSeriesKey) {
+      setReplayDataset(undefined);
+      setReplayPlaying(false);
+    }
     setReplaySelecting(false);
     setReplaySelectionError("");
-  }, [currentSeriesKey]);
+  }, [currentSeriesKey, replayDataset]);
 
   const hasLiveTrailing = hasLiveSupertrendTrailing(
     supertrendTrailings,
@@ -2850,43 +2931,72 @@ export function LiveApp() {
       ? Math.max(latestLoadedBarTime ?? 0, extendRightLiveBar.time)
       : latestLoadedBarTime;
 
-  const applyMt5Status = useCallback(
-    (status: Awaited<ReturnType<ApiClient["mt5Status"]>>) => {
-      const account = status.account;
-      if (status.connected && account) {
-        setMt5Account((current) =>
-          mt5AccountsEqual(current, account) ? current : account,
-        );
-        return;
-      }
-      setMt5Account(undefined);
+  const refreshTradingState = useCallback(async () => {
+    if (!executionEnabled) return undefined;
+    const requestedUser = authUserIdRef.current;
+    if (!requestedUser) return undefined;
+    const sequence = ++tradingRefreshRef.current.requested;
+    const snapshot = await api.exnessState().catch(() => undefined);
+    if (!snapshot || authUserIdRef.current !== requestedUser || sequence < tradingRefreshRef.current.applied) return undefined;
+    tradingRefreshRef.current.applied = sequence;
+    const account = snapshot.account ?? undefined;
+    const snapshotAccountKey = account?.connected
+      ? `${requestedUser}:${account.accountId ?? account.login ?? ""}`
+      : "";
+    if (connectedAccountKeyRef.current !== snapshotAccountKey) {
+      accountGenerationRef.current += 1;
       setMt5Symbol(undefined);
-      setOrders([]);
-      setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
-      setSupertrendTrailings(new Map());
-      if (status.error) {
-        setOrderError(status.error);
-      }
-    },
-    [],
-  );
+      mt5SymbolRef.current = undefined;
+      resetOrderPendingAndOptimisticState();
+    }
+    setMt5Account((current) => mt5AccountsEqual(current, account) ? current : account);
+    if (account?.connected && (!mt5SymbolRef.current || (mt5SymbolRef.current.pipValue ?? 0) <= 0)) {
+      const targetGen = accountGenerationRef.current;
+      const reqId = ++symbolRequestIdRef.current;
+      void api.mt5Symbol().then((symbol) => {
+        if (
+          authUserIdRef.current === requestedUser &&
+          connectedAccountKeyRef.current === snapshotAccountKey &&
+          accountGenerationRef.current === targetGen &&
+          symbolRequestIdRef.current === reqId
+        ) {
+          setMt5Symbol(symbol);
+          mt5SymbolRef.current = symbol;
+        }
+      }).catch(() => {});
+    }
+    setOrders((current) => JSON.stringify(current) === JSON.stringify(snapshot.orders) ? current : snapshot.orders);
+    setMt5OpenTrades((current) => JSON.stringify(current) === JSON.stringify(snapshot.trades) ? current : snapshot.trades);
+    setSupertrendTrailings(supertrendTrailingMap(snapshot.trailings));
+    setExnessActionError(snapshot.actionError ?? "");
+    setOrderDragPreviews((current) => reconcileOrderDragPreviews(current, sequence, snapshot));
+    return { orders: snapshot.orders, openTrades: snapshot.trades };
+  }, [api, executionEnabled]);
 
-  const tradingRefresh = useMemo(
-    () => createTradingStateRefresh(api, {
-      guard: () => {
-        const editRevision = orderEditRevisionRef.current;
-        return () => editRevision === orderEditRevisionRef.current &&
-          pendingOrderEditsRef.current.size === 0;
-      },
-      orders: setOrders,
-      openTrades: setMt5OpenTrades,
-      status: applyMt5Status,
-      trailings: (rows) => setSupertrendTrailings(supertrendTrailingMap(rows)),
-    }),
-    [api, applyMt5Status],
-  );
-  const refreshTradingState = tradingRefresh.refresh;
-  useEffect(() => () => tradingRefresh.invalidate(), [tradingRefresh, authUser?.id]);
+  useEffect(() => {
+    if (!authUser || !executionEnabled) return;
+    void refreshTradingState();
+  }, [authUser, executionEnabled, refreshTradingState]);
+
+  useEffect(() => {
+    if (!authUser || !connectedAccountKey || !executionEnabled) return;
+    let cancelled = false;
+    const targetGen = accountGenerationRef.current;
+    const reqId = ++symbolRequestIdRef.current;
+    void api.mt5Symbol().then((symbol) => {
+      if (
+        !cancelled &&
+        authUserIdRef.current === authUser.id &&
+        connectedAccountKeyRef.current === connectedAccountKey &&
+        accountGenerationRef.current === targetGen &&
+        symbolRequestIdRef.current === reqId
+      ) {
+        setMt5Symbol(symbol);
+        mt5SymbolRef.current = symbol;
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [api, authUser, executionEnabled, connectedAccountKey]);
 
   const scheduleDeltaProfileRefresh = useCallback(() => {
     if (deltaProfileRefreshTimerRef.current !== undefined) {
@@ -3003,58 +3113,6 @@ export function LiveApp() {
   }, [marketOrderSettings]);
 
   useEffect(() => {
-    let cancelled = false;
-    if (!authUser) {
-      setAutoTradeSettings({
-        ...DEFAULT_AUTO_TRADE_SETTINGS,
-        volumeLots: marketOrderSettings.volumeLots,
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
-    void api.autoTradeSettings().then(
-      (settings) => {
-        if (!cancelled) setAutoTradeSettings(settings);
-      },
-      () => {
-        // The trade panel remains usable even if the settings request is late.
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [api, authUser]);
-
-  useEffect(() => {
-    if (
-      !authUser ||
-      (!autoTradeSettings.longEnabled && !autoTradeSettings.shortEnabled) ||
-      autoTradeSettings.volumeLots === marketOrderSettings.volumeLots
-    ) {
-      return;
-    }
-    let cancelled = false;
-    void api
-      .updateAutoTradeSettings({
-        longEnabled: autoTradeSettings.longEnabled,
-        shortEnabled: autoTradeSettings.shortEnabled,
-        volumeLots: marketOrderSettings.volumeLots,
-      })
-      .then((settings) => {
-        if (!cancelled) setAutoTradeSettings(settings);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setOrderError(error instanceof Error ? error.message : "Auto trade update failed");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api, authUser, autoTradeSettings, marketOrderSettings.volumeLots]);
-
-  useEffect(() => {
     if (!authUser || !profileHydrated) return;
     const timer = window.setTimeout(() => {
       persistProfileHotSnapshot(authUser.id, profileId, profilePayload);
@@ -3107,10 +3165,7 @@ export function LiveApp() {
         drawing.options?.fixedRangeProfileMode,
       );
       const source = fixedRangeDeltaProfileSource(mode);
-      const rowTicks = fixedRangeProfileRowTicks(
-        drawing.options?.fixedRangeProfileRowTicks,
-        mode,
-      );
+      const rowTicks = fixedRangeDeltaProfileRowTicks(mode);
       const requestKey = [
         contract,
         timeframe,
@@ -3204,32 +3259,25 @@ export function LiveApp() {
     timeframe,
   ]);
 
-  // Fetch delta profile for the current daily session (right-edge histogram).
+  // Fetch delta profile for the session volume profile (right-edge histogram).
   useEffect(() => {
     if (!showDailyVolumeProfile) {
       setSessionVolumeProfile(null);
       return;
     }
-    const now = Date.now();
-    const d = new Date(now);
-    const hour = d.getUTCHours();
-    const sessionStart = new Date(Date.UTC(
-      d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(),
-      SESSION_VP_START_UTC_HOUR, 0, 0, 0,
-    ));
-    if (hour < SESSION_VP_START_UTC_HOUR) {
-      sessionStart.setUTCDate(sessionStart.getUTCDate() - 1);
-    }
-    const fromMs = sessionStart.getTime();
+    const safeDays = normalizeSessionVolumeProfileDays(dailyVolumeProfileDays);
+    const safeRowTicks = normalizeSessionVolumeProfileRowTicks(dailyVolumeProfileRowTicks);
     let cancelled = false;
     const fetchProfile = () => {
+      const now = Date.now();
+      const fromMs = computeSessionVolumeProfileFromMs(now, safeDays);
       void api
         .deltaProfile({
           symbol: SYMBOL,
           contract,
           from: fromMs,
-          to: Date.now(),
-          rowTicks: dailyVolumeProfileRowTicks,
+          to: now,
+          rowTicks: safeRowTicks,
           valueAreaPct: DELTA_PROFILE_VALUE_AREA_PCT,
           source: "footprint_cache",
         })
@@ -3243,75 +3291,25 @@ export function LiveApp() {
     fetchProfile();
     const timer = window.setInterval(fetchProfile, 65_000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [api, contract, showDailyVolumeProfile, dailyVolumeProfileRowTicks]);
+  }, [api, contract, showDailyVolumeProfile, dailyVolumeProfileDays, dailyVolumeProfileRowTicks]);
 
-  // Connect the socket once and keep it for the component's lifetime. Status
-  // + alert handlers are attached here; subscription management lives in its
-  // own effect below so status churn never tears down the connection.
+  // Connect once and refresh chart data when the socket reconnects.
   useEffect(() => {
-    const clearDisconnectStatusTimer = () => {
-      if (disconnectStatusTimerRef.current === undefined) return;
-      window.clearTimeout(disconnectStatusTimerRef.current);
-      disconnectStatusTimerRef.current = undefined;
-    };
-    const clearDegradedStatusTimer = () => {
-      if (degradedStatusTimerRef.current === undefined) return;
-      window.clearTimeout(degradedStatusTimerRef.current);
-      degradedStatusTimerRef.current = undefined;
-    };
-    const markConnected = () => {
-      clearDisconnectStatusTimer();
-      clearDegradedStatusTimer();
-      setConnection("connected");
-    };
     const reconnect = () => {
       socket.ensureConnected(SOCKET_IDLE_TIMEOUT_MS, SOCKET_TRANSITION_TIMEOUT_MS);
     };
     const offOpen = socket.onOpen(() => {
-      markConnected();
       // Re-fetch REST history after reconnect so bars missed while the socket
       // was unavailable are patched without requiring a browser reload. Overlay
       // events can be missed the same way, so refresh them from REST too.
       setSocketGeneration((generation) => generation + 1);
       setOverlayRefreshNonce((generation) => generation + 1);
     });
-    const offClose = socket.onClose(() => {
-      clearDisconnectStatusTimer();
-      clearDegradedStatusTimer();
-      disconnectStatusTimerRef.current = window.setTimeout(() => {
-        disconnectStatusTimerRef.current = undefined;
-        setConnection("disconnected");
-      }, DISCONNECT_STATUS_DEBOUNCE_MS);
-    });
     socket.connect();
     const reconnectTimer = window.setInterval(reconnect, 5000);
-    const offStatus = socket.on("status", (msg) => {
-      if (msg.state === "connected") {
-        markConnected();
-        return;
-      }
-      if (msg.state === "degraded") {
-        clearDisconnectStatusTimer();
-        clearDegradedStatusTimer();
-        setConnection("degraded");
-        degradedStatusTimerRef.current = window.setTimeout(() => {
-          degradedStatusTimerRef.current = undefined;
-          if (socket.isOpen) {
-            setConnection("connected");
-          }
-        }, DEGRADED_STATUS_TTL_MS);
-        return;
-      }
-      clearDisconnectStatusTimer();
-      clearDegradedStatusTimer();
-      setConnection("disconnected");
-    });
     const offAlert = socket.on("alert_event", (msg) => {
       if ((msg.profileId ?? DEFAULT_PROFILE_ID) === profileIdRef.current) {
-        if (msg.alertId.startsWith("mp_")) {
-          consumedMpAlerts.current.add(msg.alertId);
-          setAlerts((prev) => prev.filter((alert) => alert.id !== msg.alertId));
-        } else if (msg.alertType !== "price_crosses_level") {
+        if (msg.alertType !== "price_crosses_level") {
           setAlerts((prev) =>
             prev.map((alert) =>
               alert.id === msg.alertId && alert.params.repeat !== true
@@ -3337,47 +3335,10 @@ export function LiveApp() {
         }
       }
     });
-    const offMarketDataStatus = socket.on("market_data_status", (msg) => {
-      if (historySyncRefresh.current.accept(msg)) {
-        setSocketGeneration((generation) => generation + 1);
-        setOverlayRefreshNonce((generation) => generation + 1);
-      }
-      setMarketDataStatus((current) => {
-        if (
-          current === undefined ||
-          current.activeSource !== msg.activeSource ||
-          current.reason !== msg.reason ||
-          msg.time - current.time >= MARKET_STATUS_RENDER_INTERVAL_MS
-        ) {
-          return msg;
-        }
-        return current;
-      });
-    });
-    const offOrder = socket.on("order_update", (msg) => {
-      setOrders((prev) => {
-        const without = prev.filter((order) => order.id !== msg.order.id);
-        return isOpenTradingOrder(msg.order) ? [msg.order, ...without] : without;
-      });
-    });
-    const offAccount = socket.on("account_update", (msg) => {
-      if (msg.symbol !== SYMBOL) return;
-      setMt5Account((current) => mergeMt5AccountUpdate(current, msg.account));
-      setMt5OpenTrades((current) =>
-        mergeMt5OpenTradeProfitUpdates(current, msg.positions),
-      );
-    });
     return () => {
       window.clearInterval(reconnectTimer);
-      clearDisconnectStatusTimer();
-      clearDegradedStatusTimer();
       offOpen();
-      offClose();
-      offStatus();
       offAlert();
-      offMarketDataStatus();
-      offOrder();
-      offAccount();
       socket.close();
     };
   }, [socket]);
@@ -3424,11 +3385,11 @@ export function LiveApp() {
     if (!realtimeFootprintEnabled) {
       return;
     }
-    socket.subscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, footprintTimeframe);
+    socket.subscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
     return () => {
-      socket.unsubscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, footprintTimeframe);
+      socket.unsubscribe(SYMBOL, FOOTPRINT_SUBSCRIBED_EVENTS, "1m");
     };
-  }, [socket, realtimeFootprintEnabled, footprintTimeframe]);
+  }, [socket, realtimeFootprintEnabled]);
 
   useEffect(() => {
     if (!realtimeBigTradesEnabled) {
@@ -3442,7 +3403,6 @@ export function LiveApp() {
 
   // Resolve profile-scoped alerts when the active profile changes.
   useEffect(() => {
-    setAlertError("");
     if (!authUser || !profileHydrated) {
       setAlerts([]);
       setLastAlert(undefined);
@@ -3452,26 +3412,16 @@ export function LiveApp() {
     let cancelled = false;
     setLastAlert(undefined);
     setAlertSignalMarkers([]);
-    let refreshing = false;
-    const refresh = async () => {
-      if (refreshing) return;
-      refreshing = true;
+    void (async () => {
       try {
         const a = await api.alerts(profileId);
-        if (!cancelled) setAlerts(a.filter((alert) => !consumedMpAlerts.current.has(alert.id)));
+        if (!cancelled) setAlerts(a);
       } catch {
         /* ignore */
-      } finally {
-        refreshing = false;
       }
-    };
-    void refresh();
-    // Reconcile server-managed MP alerts even when this chart stays open
-    // across a session change or misses an alert event during reconnect.
-    const timer = window.setInterval(() => { void refresh(); }, 5000);
+    })();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
     };
   }, [api, authUser, profileHydrated, profileId]);
 
@@ -3547,7 +3497,6 @@ export function LiveApp() {
   useEffect(() => {
     if (!profileHydrated) return;
     const requestedSeriesKey = seriesDataKey(SYMBOL, contract, timeframe);
-    socket.subscribe(SYMBOL, TIMEFRAME_SUBSCRIBED_EVENTS, timeframe);
     let cancelled = false;
     let deltaTimer: number | undefined;
     void (async () => {
@@ -3560,7 +3509,7 @@ export function LiveApp() {
           ...initialWindow,
         });
         let indicatorTimeframe = timeframe;
-        if ((timeframe === "15s" || timeframe === "30s") && history.bars.length === 0) {
+        if (timeframe === "15s" && history.bars.length === 0) {
           const fallbackWindow = initialHistoryWindow(
             SUB_MINUTE_HISTORY_FALLBACK_TF,
           );
@@ -3640,7 +3589,6 @@ export function LiveApp() {
       if (deltaTimer !== undefined) {
         window.clearTimeout(deltaTimer);
       }
-      socket.unsubscribe(SYMBOL, TIMEFRAME_SUBSCRIBED_EVENTS, timeframe);
     };
   }, [api, socket, contract, timeframe, socketGeneration, profileHydrated]);
 
@@ -3725,6 +3673,8 @@ export function LiveApp() {
   ]);
 
   useEffect(() => {
+    setLoadedOverlayContract(undefined);
+    setFootprintBars(new Map());
     setFvgSignals(new Map());
     setFvgSignalSeriesKey(undefined);
     setTduSignals(new Map());
@@ -3734,16 +3684,11 @@ export function LiveApp() {
   }, [contract]);
 
   useEffect(() => {
-    setLoadedOverlayContract(undefined);
-    setFootprintBars(new Map());
-  }, [contract, footprintTimeframe]);
-
-  useEffect(() => {
     if (!realtimeFootprintEnabled) {
       setLoadedOverlayContract(undefined);
       return;
     }
-    if (!hasLoadedCurrentSeries || loadedOverlayContract === footprintOverlayKey) {
+    if (!hasLoadedCurrentSeries || loadedOverlayContract === contract) {
       return;
     }
     let cancelled = false;
@@ -3755,7 +3700,6 @@ export function LiveApp() {
             SYMBOL,
             contract,
             MAX_RETAINED_LIVE_FOOTPRINT_BARS,
-            footprintTimeframe,
           );
         } catch {
           footprint = undefined;
@@ -3764,7 +3708,7 @@ export function LiveApp() {
         if (footprint !== undefined) {
           setFootprintBars(new Map(footprint.map((bar) => [bar.time, bar])));
         }
-        setLoadedOverlayContract(footprintOverlayKey);
+        setLoadedOverlayContract(contract);
       })();
     }, DEFERRED_OVERLAY_LOAD_MS);
     return () => {
@@ -3774,8 +3718,6 @@ export function LiveApp() {
   }, [
     api,
     contract,
-    footprintOverlayKey,
-    footprintTimeframe,
     hasLoadedCurrentSeries,
     loadedOverlayContract,
     realtimeFootprintEnabled,
@@ -3832,7 +3774,7 @@ export function LiveApp() {
   ]);
 
   useEffect(() => {
-    if (!fvgGraderEnabledForTimeframe(timeframe)) {
+    if (timeframe !== "1m") {
       return;
     }
     if (!hasLoadedCurrentSeries || !showFvgGrader) {
@@ -3844,7 +3786,7 @@ export function LiveApp() {
         return;
       }
       void api
-        .fvgSignals(SYMBOL, contract, fvgSignalLimit, undefined, timeframe)
+        .fvgSignals(SYMBOL, contract, fvgSignalLimit)
         .then((signals) => {
           if (cancelled) return;
           setFvgSignals((prev) => {
@@ -3953,7 +3895,7 @@ export function LiveApp() {
       }
     };
     const queueFootprintRender = (message: FootprintUpdateMessage) => {
-      // Footprint is latest-state data for the forming bar. Replace the
+      // Footprint is latest-state data for the forming 1m bar. Replace the
       // pending snapshot so a burst causes one React render, not one per frame.
       pendingFootprintRef.current = message;
       if (footprintRenderTimerRef.current !== undefined) return;
@@ -4018,7 +3960,7 @@ export function LiveApp() {
           if (
             msg.symbol !== SYMBOL ||
             !matchesChartContract(msg.contract) ||
-            msg.tf !== footprintTimeframe
+            msg.tf !== "1m"
           ) {
             return;
           }
@@ -4040,12 +3982,11 @@ export function LiveApp() {
       if (
         msg.symbol !== SYMBOL ||
         !matchesChartContract(msg.contract) ||
-        !fvgGraderEnabledForTimeframe(timeframe) ||
-        msg.tf !== timeframe
+        msg.tf !== "1m"
       ) {
         return;
       }
-      setFvgSignalSeriesKey(seriesDataKey(SYMBOL, contract, timeframe));
+      setFvgSignalSeriesKey(seriesDataKey(SYMBOL, contract, "1m"));
       setFvgSignals((prev) => {
         const next = new Map(prev);
         if (msg.phase === "clear" || msg.pulse === 0) {
@@ -4099,7 +4040,6 @@ export function LiveApp() {
     socket,
     contract,
     timeframe,
-    footprintTimeframe,
     scheduleDeltaProfileRefresh,
     publishLatestPrice,
     realtimeFootprintEnabled,
@@ -4119,21 +4059,11 @@ export function LiveApp() {
       onTradingLogin();
       return;
     }
-    setAlertError("");
-    void (async () => {
-      try {
-        await api.deleteAlert(id, profileId);
-        if (profileIdRef.current !== profileId) return;
-        setAlerts((prev) => prev.filter((a) => a.id !== id));
-        setAlertSignalMarkers((prev) =>
-          prev.filter((marker) => !marker.id.startsWith(`${id}:`)),
-        );
-      } catch (error) {
-        if (profileIdRef.current !== profileId) return;
-        setAlertError(error instanceof Error ? error.message : "Alert delete failed");
-        setAlertPanelOpen(true);
-      }
-    })();
+    setAlerts((prev) => prev.filter((a) => a.id !== id));
+    setAlertSignalMarkers((prev) =>
+      prev.filter((marker) => !marker.id.startsWith(`${id}:`)),
+    );
+    void api.deleteAlert(id, profileId);
   };
   const onCreateAlert = (input: {
     type: Alert["type"];
@@ -4321,81 +4251,6 @@ export function LiveApp() {
       }
     })();
   };
-  const onToggleAnalystPanel = () => {
-    if (!authUser) {
-      onTradingLogin();
-      return;
-    }
-    setAnalystPanelOpen((open) => {
-      const next = !open;
-      if (next) setAlertPanelOpen(false);
-      return next;
-    });
-  };
-  const onRunAnalyst = () => {
-    if (!authUser) {
-      onTradingLogin();
-      return;
-    }
-    if (analystPending) return;
-    setAnalystPanelOpen(true);
-    setAlertPanelOpen(false);
-    setAnalystPending(true);
-    setAnalystError("");
-    void (async () => {
-      try {
-        const result = await api.runAnalyst(SYMBOL, contract, profileId);
-        if (result.report) {
-          setAnalystReport(result.report);
-        }
-        if (result.error) {
-          setAnalystError(result.error);
-        } else if (!result.report) {
-          setAnalystError(
-            result.llmEnabled
-              ? "LLM khÃ´ng tráº£ vá» nháº­n Ä‘á»‹nh."
-              : "LLM Ä‘ang táº¯t.",
-          );
-        }
-      } catch (error) {
-        setAnalystError(
-          error instanceof Error ? error.message : "KhÃ´ng gá»i Ä‘Æ°á»£c AI nháº­n Ä‘á»‹nh.",
-        );
-      } finally {
-        setAnalystPending(false);
-      }
-    })();
-  };
-  const onToggleAnalystEventAi = () => {
-    if (!authUser) {
-      onTradingLogin();
-      return;
-    }
-    if (
-      analystEventAiPending ||
-      !analystEventAi?.available ||
-      !analystEventAi.llmEnabled
-    ) {
-      return;
-    }
-    const nextEnabled = !analystEventAi.enabled;
-    setAnalystEventAiPending(true);
-    setAnalystError("");
-    void (async () => {
-      try {
-        const next = await api.setAnalystEventAi(nextEnabled, profileId);
-        setAnalystEventAi(next);
-      } catch (error) {
-        setAnalystError(
-          error instanceof Error
-            ? error.message
-            : "KhÃ´ng Ä‘á»•i Ä‘Æ°á»£c cháº¿ Ä‘á»™ tá»± gá»­i AI.",
-        );
-      } finally {
-        setAnalystEventAiPending(false);
-      }
-    })();
-  };
   const onTradingLogin = () => {
     setAuthMode("login");
     setAuthError("");
@@ -4408,27 +4263,27 @@ export function LiveApp() {
     }
     setMt5Error("");
     setMt5DialogOpen(true);
-    void api.mt5Terminals().then(setMt5Terminals);
   };
   const onLogout = () => {
+    authUserIdRef.current = undefined;
+    setMt5DialogOpen(false);
     void (async () => {
       try {
         await api.logout();
       } catch {
         /* Local state still clears if the session was already gone. */
       } finally {
-        authUserRef.current = undefined;
         setAuthUser(undefined);
+        setExecutionEnabled(false);
         setShowVolumeDelta(false);
         setMt5Account(undefined);
         setMt5Symbol(undefined);
         setOrders([]);
         setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
         setSupertrendTrailings(new Map());
+        resetOrderPendingAndOptimisticState();
         setAlerts([]);
         setLastAlert(undefined);
-        setAnalystEventAi(undefined);
-        setAnalystPanelOpen(false);
         setTelegramConfig({
           enabled: false,
           chatId: "",
@@ -4439,42 +4294,68 @@ export function LiveApp() {
         setAuthDialogOpen(false);
         setMt5DialogOpen(false);
         setProfileId(DEFAULT_PROFILE_ID);
+        setProfileTimeframe("1m");
+        setDrawings([]);
+        setDrawingsLoadKey((key) => key + 1);
         setProfileHydrated(true);
       }
     })();
   };
   const onMarketOrder = (side: "buy" | "sell") => {
-    if (orderPending) return;
-    // A settings input may have just committed on blur, before this click's
-    // render. Read that value synchronously for both sizing and the bracket.
-    const settings = marketOrderSettingsRef.current;
-    const marketGcReference =
-      latestPriceRef.current ??
-      latestPrice ??
-      (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
-    const marketVolumeLots =
-      marketGcReference === undefined
-        ? settings.sizingMode === "risk"
-          ? undefined
-          : settings.volumeLots
-        : resolveOrderVolumeLots({
-            settings,
-            entryGc: marketGcReference,
-            slGc:
-              side === "buy"
-                ? marketGcReference - settings.slDistanceGc
-                : marketGcReference + settings.slDistanceGc,
-            symbol: mt5Symbol,
-          });
-    if (marketVolumeLots === undefined) {
-      setOrderError("Risk sizing needs a live MT5 symbol and current price.");
-      return;
-    }
-    if (!orderSubmission.acquire()) return;
+    if (orderSubmittingRef.current || orderPending || !authUser) return;
+    orderSubmittingRef.current = true;
+    const submissionToken = ++submissionTokenCounterRef.current;
+    activeSubmissionTokenRef.current = submissionToken;
+    const requestedUser = authUser.id;
+    const requestedAccountKey = connectedAccountKeyRef.current;
+    const submissionGen = accountGenerationRef.current;
+    setOrderPending(true);
     setOrderError("");
     void (async () => {
       try {
-        tradingRefresh.invalidate();
+        let currentSymbol = mt5SymbolRef.current ?? mt5Symbol;
+        if (
+          marketOrderSettings.sizingMode === "risk" &&
+          (!currentSymbol || (currentSymbol.pipValue ?? 0) <= 0) &&
+          mt5Account?.connected
+        ) {
+          try {
+            const reqId = ++symbolRequestIdRef.current;
+            const fetchedSymbol = await api.mt5Symbol();
+            if (
+              authUserIdRef.current === requestedUser &&
+              connectedAccountKeyRef.current === requestedAccountKey &&
+              accountGenerationRef.current === submissionGen &&
+              symbolRequestIdRef.current === reqId
+            ) {
+              currentSymbol = fetchedSymbol;
+              setMt5Symbol(fetchedSymbol);
+              mt5SymbolRef.current = fetchedSymbol;
+            }
+          } catch {}
+        }
+        if (
+          authUserIdRef.current !== requestedUser ||
+          connectedAccountKeyRef.current !== requestedAccountKey ||
+          accountGenerationRef.current !== submissionGen
+        ) {
+          return;
+        }
+        const marketGcReference =
+          latestPriceRef.current ??
+          latestPrice ??
+          (hasLoadedCurrentSeries ? bars[bars.length - 1]?.close : undefined);
+        const marketVolumeLots = resolveOrderVolumeLots({
+          settings: marketOrderSettings,
+          entryGc: 0,
+          slGc: marketOrderSettings.slDistanceGc,
+          symbol: currentSymbol,
+          accountCurrency: mt5Account?.currency,
+        });
+        if (marketVolumeLots === undefined) {
+          setOrderError("Risk sizing needs Exness instrument data and a valid stop distance.");
+          return;
+        }
         const order = await api.createOrder({
           source: "market_bar",
           side,
@@ -4483,30 +4364,47 @@ export function LiveApp() {
           ...(marketGcReference !== undefined
             ? { referenceGc: roundGcPrice(marketGcReference) }
             : {}),
-          slDistanceGc: settings.slDistanceGc,
-          tpDistanceGc: settings.tpDistanceGc,
-          takeProfit1rEnabled: settings.takeProfit1rEnabled,
-          takeProfitR: settings.takeProfitR ?? 1,
+          slDistanceGc: marketOrderSettings.slDistanceGc,
+          tpDistanceGc: marketOrderSettings.tpDistanceGc,
+          takeProfit1rEnabled: marketOrderSettings.takeProfit1rEnabled,
           ...supertrendAfter1rOrderFields(
-            settings.takeProfit1rEnabled &&
-              settings.autoSupertrendAfter1rEnabled,
+            marketOrderSettings.takeProfit1rEnabled &&
+              marketOrderSettings.autoSupertrendAfter1rEnabled,
             timeframe,
             supertrend,
           ),
           gcAnchored: false,
           idempotencyKey: newIdempotencyKey(),
         });
-        setOrders((prev) => {
-          const without = prev.filter((item) => item.id !== order.id);
-          return isOpenTradingOrder(order) ? [order, ...without] : without;
-        });
+        if (
+          authUserIdRef.current !== requestedUser ||
+          connectedAccountKeyRef.current !== requestedAccountKey ||
+          accountGenerationRef.current !== submissionGen
+        ) {
+          return;
+        }
         setOrderError(rejectedOrderMessage(order));
-        void refreshTradingState();
+        await refreshTradingState();
       } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Order failed");
-        await refreshTradingState().catch(() => undefined);
+        if (
+          authUserIdRef.current === requestedUser &&
+          connectedAccountKeyRef.current === requestedAccountKey &&
+          accountGenerationRef.current === submissionGen
+        ) {
+          setOrderError(error instanceof Error ? error.message : "Order failed");
+        }
       } finally {
-        orderSubmission.release();
+        if (activeSubmissionTokenRef.current === submissionToken) {
+          activeSubmissionTokenRef.current = 0;
+          orderSubmittingRef.current = false;
+        }
+        if (
+          authUserIdRef.current === requestedUser &&
+          connectedAccountKeyRef.current === requestedAccountKey &&
+          accountGenerationRef.current === submissionGen
+        ) {
+          setOrderPending(false);
+        }
       }
     })();
   };
@@ -4516,7 +4414,6 @@ export function LiveApp() {
   };
 
   const submitOrderBracketDrawing = (drawing: DrawingState) => {
-    if (submittedOrderDrawingIdsRef.current.has(drawing.id)) return;
     if (drawing.anchors.length < 3) return;
     const [entryAnchor, slAnchor, tpAnchor] = drawing.anchors;
     const entryGc = roundGcPrice(entryAnchor.price);
@@ -4531,7 +4428,7 @@ export function LiveApp() {
       return;
     }
     if (!mt5Account) {
-      setOrderError("Connect MT5 before placing chart orders.");
+      setOrderError("Connect your account before placing chart orders.");
       return;
     }
     const volumeLots = resolveOrderVolumeLots({
@@ -4539,15 +4436,10 @@ export function LiveApp() {
       entryGc,
       slGc,
       symbol: mt5Symbol,
+      accountCurrency: mt5Account?.currency,
     });
     if (volumeLots === undefined) {
-      setOrderError("Risk sizing requires a valid Entry-to-SL distance and MT5 symbol data.");
-      return;
-    }
-    if (!orderSubmission.acquire()) {
-      invalidOrderDrawingIdsRef.current.add(drawing.id);
-      removeTransientDrawing(drawing.id);
-      setOrderError("Wait for the current order submission to finish.");
+      setOrderError("Risk sizing requires a valid Entry-to-SL distance and broker symbol data.");
       return;
     }
     submittedOrderDrawingIdsRef.current.add(drawing.id);
@@ -4558,14 +4450,15 @@ export function LiveApp() {
       side === "buy"
         ? entryGc <= referencePrice ? "limit" : "stop"
         : entryGc >= referencePrice ? "limit" : "stop";
+    setOrderPending(true);
     setOrderError("");
     void (async () => {
       try {
-        tradingRefresh.invalidate();
         const order = await api.createOrder({
           source: "chart_bracket",
           side,
           kind,
+          autoPendingKind: true,
           volumeLots,
           entryGc,
           referenceGc: roundGcPrice(referencePrice),
@@ -4573,7 +4466,6 @@ export function LiveApp() {
           tpGc,
           takeProfit1rEnabled:
             kind === "limit" && marketOrderSettings.takeProfit1rEnabled,
-          takeProfitR: marketOrderSettings.takeProfitR ?? 1,
           ...supertrendAfter1rOrderFields(
             kind === "limit" &&
               marketOrderSettings.takeProfit1rEnabled &&
@@ -4581,27 +4473,23 @@ export function LiveApp() {
             timeframe,
             supertrend,
           ),
-          gcAnchored: true,
-          idempotencyKey: `chart-bracket:${drawing.id}`,
-        });
-        setOrders((prev) => {
-          const without = prev.filter((item) => item.id !== order.id);
-          return isOpenTradingOrder(order) ? [order, ...without] : without;
+          gcAnchored: false,
+          idempotencyKey: newIdempotencyKey(),
         });
         setOrderError(rejectedOrderMessage(order));
         removeTransientDrawing(drawing.id);
-        void refreshTradingState();
+        await refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Chart order failed");
-        await refreshTradingState().catch(() => undefined);
       } finally {
-        orderSubmission.release();
+        setOrderPending(false);
       }
     })();
   };
 
-  const onDrawingsStateChange = (state: DrawingState[]) => {
-    setDrawings((previous) => mergeVisibleDrawingState(previous, state, timeframe));
+  const onDrawingsStateChange = (state: DrawingState[], panelId?: string) => {
+    if (panelId) savePanelDrawings(panelId, state);
+    else setDrawings((previous) => mergeVisibleDrawingState(previous, state, timeframe));
     for (const drawing of state) {
       if (
         drawing.tool === "order_bracket" &&
@@ -4613,268 +4501,119 @@ export function LiveApp() {
     }
   };
 
-  const commitOrderLevelPatch = (
-    orderId: string,
-    patch: OrderLevelPatch,
-    requestPatch: Parameters<ApiClient["patchOrder"]>[1] = patch,
-  ) => {
-    tradingRefresh.invalidate();
-    const edit = { ...pendingOrderEditsRef.current.get(orderId), ...patch };
-    pendingOrderEditsRef.current.set(orderId, edit);
-    orderEditRevisionRef.current += 1;
-    setPendingOrderEdits(new Map(pendingOrderEditsRef.current));
-    setOrderError("");
-    setOrders((prev) => prev.map((order) =>
-      order.id === orderId ? { ...order, ...pendingOrderPatch(patch) } : order,
-    ));
-    return (async () => {
-      try {
-        const updated = await api.patchOrder(orderId, requestPatch);
-        setOrders((prev) => {
-          const without = prev.filter((order) => order.id !== updated.id);
-          return isOpenTradingOrder(updated) ? [updated, ...without] : without;
-        });
-      } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Modify order failed");
-        try {
-          setOrders(await api.orders(true));
-        } catch {
-          /* The next scheduled refresh will reconcile the order. */
-        }
-      } finally {
-        // Refresh the broker projection before removing the optimistic levels.
-        // Profit-only websocket updates do not contain the new SL/TP.
-        try {
-          const trades = await api.mt5OpenTrades();
-          if (pendingOrderEditsRef.current.get(orderId) === edit) {
-            setMt5OpenTrades(trades);
-          }
-        } catch {
-          /* The next scheduled refresh will reconcile the broker levels. */
-        }
-        if (pendingOrderEditsRef.current.get(orderId) === edit) {
-          pendingOrderEditsRef.current.delete(orderId);
-          orderEditRevisionRef.current += 1;
-          setPendingOrderEdits(new Map(pendingOrderEditsRef.current));
-        }
+  const onOrderDragBatchCommit = (updates: readonly OrderLineDragUpdate[]) => {
+    const groups = new Map<string, {
+      levels: Mt5TradePatchInput;
+      deltas: Partial<Record<OrderLineField, number>>;
+      prices: OrderDragPrices;
+    }>();
+    for (const update of updates) {
+      const line = parseOrderLineId(update.id);
+      if (!line) continue;
+      const group = groups.get(line.orderId) ?? { levels: {}, deltas: {}, prices: {} };
+      if (update.startPrice !== undefined) {
+        const move = roundGcPrice(roundGcPrice(update.price) - roundGcPrice(update.startPrice));
+        if (move === 0) continue;
+        group.deltas[line.field] = move;
+        group.prices[line.field] = update.startPrice + move;
+      } else {
+        group.levels[line.field] = roundGcPrice(update.price);
+        group.prices[line.field] = roundGcPrice(update.price);
       }
-    })();
+      groups.set(line.orderId, group);
+    }
+    for (const [orderId, { levels, deltas, prices }] of groups) {
+      const external = parseActionRowId(orderId);
+      const edits = activeOrderEditsRef.current;
+      if (edits.has(orderId) || modifyingOrderIds.has(orderId)) continue;
+      edits.add(orderId);
+      const requestedUser = authUserIdRef.current;
+      const key = newIdempotencyKey();
+      const changes = {
+        ...levels,
+        ...(Object.keys(deltas).length ? { priceDeltas: deltas } : {}),
+        idempotencyKey: key,
+      };
+      setOrderDragPreviews((current) => new Map(current).set(orderId, { key, prices }));
+      setOrderError("");
+      setModifyingOrderIds((prev) => new Set(prev).add(orderId));
+      void (async () => {
+        let accepted = false;
+        try {
+          if (external?.source === "mt5pos") {
+            await api.patchMt5Position(external.ticket, changes);
+          } else if (external?.source === "mt5order") {
+            await api.patchMt5Order(external.ticket, changes);
+          } else {
+            await api.patchOrder(orderId, changes);
+          }
+          accepted = true;
+        } catch (error) {
+          if (authUserIdRef.current === requestedUser) {
+            setOrderError(error instanceof Error ? error.message : "Modify order failed");
+          }
+        } finally {
+          if (authUserIdRef.current === requestedUser) {
+            const checkFrom = tradingRefreshRef.current.requested + 1;
+            setOrderDragPreviews((current) => {
+              const preview = current.get(orderId);
+              if (preview?.key !== key) return current;
+              const next = new Map(current);
+              if (accepted) next.set(orderId, { ...preview, checkFrom });
+              else next.delete(orderId);
+              return next;
+            });
+            await refreshTradingState();
+            if (authUserIdRef.current === requestedUser) setModifyingOrderIds((prev) => {
+              const next = new Set(prev);
+              next.delete(orderId);
+              return next;
+            });
+          }
+          edits.delete(orderId);
+        }
+      })();
+    }
   };
 
   const onOrderDragCommit = (id: string, price: number) => {
-    const parsed = parseOrderLineId(id);
-    if (!parsed) return;
-    if (parsed.orderId.startsWith("mt5pos:")) {
-      const ticket = Number(parsed.orderId.slice("mt5pos:".length));
-      if (!Number.isInteger(ticket)) return;
-      if (parsed.field === "entryGc") {
-        setOrderError("Filled MT5 positions cannot modify entry.");
-        return;
-      }
-      const level = roundGcPrice(price);
-      const patch: { slGc?: number; tpGc?: number } = {};
-      if (parsed.field === "slGc") patch.slGc = level;
-      if (parsed.field === "tpGc") patch.tpGc = level;
-      setOrderError("");
-      setMt5OpenTrades((prev) => ({
-        ...prev,
-        positions: prev.positions.map((position) =>
-          position.brokerPositionTicket === ticket
-            ? { ...position, ...pendingOrderPatch(patch) }
-            : position,
-        ),
-      }));
-      void (async () => {
-        try {
-          tradingRefresh.invalidate();
-          await api.patchMt5Position(ticket, patch);
-          setMt5OpenTrades(await api.mt5OpenTrades());
-        } catch (error) {
-          setOrderError(error instanceof Error ? error.message : "Modify MT5 position failed");
-          try {
-            setMt5OpenTrades(await api.mt5OpenTrades());
-          } catch {
-            /* Keep the current state if refresh also fails. */
-          }
-        }
-      })();
-      return;
-    }
-    if (parsed.orderId.startsWith("mt5order:")) {
-      const ticket = Number(parsed.orderId.slice("mt5order:".length));
-      if (!Number.isInteger(ticket)) return;
-      const level = roundGcPrice(price);
-      const patch: { entryGc?: number; slGc?: number; tpGc?: number } = {};
-      patch[parsed.field] = level;
-      setOrderError("");
-      setMt5OpenTrades((prev) => ({
-        ...prev,
-        orders: prev.orders.map((order) =>
-          order.brokerOrderTicket === ticket ? { ...order, ...pendingOrderPatch(patch) } : order,
-        ),
-      }));
-      void (async () => {
-        try {
-          tradingRefresh.invalidate();
-          await api.patchMt5Order(ticket, patch);
-          setMt5OpenTrades(await api.mt5OpenTrades());
-        } catch (error) {
-          setOrderError(error instanceof Error ? error.message : "Modify MT5 order failed");
-          try {
-            setMt5OpenTrades(await api.mt5OpenTrades());
-          } catch {
-            /* Keep the current state if refresh also fails. */
-          }
-        }
-      })();
-      return;
-    }
-    const order = orders.find((item) => item.id === parsed.orderId);
-    if (!order) return;
-    if (parsed.field === "entryGc" && order.status === "filled") {
-      setOrderError("Filled positions cannot modify entry.");
-      return;
-    }
-    const level = roundGcPrice(price);
-    const patch: Parameters<ApiClient["patchOrder"]>[1] = {};
-    patch[parsed.field] = level;
-    commitOrderLevelPatch(parsed.orderId, patch);
-  };
-
-  const onOrderDragBatchCommit = (
-    updates: readonly { id: string; price: number }[],
-  ) => {
-    const parsedUpdates = updates.flatMap((update) => {
-      const parsed = parseOrderLineId(update.id);
-      return parsed
-        ? [{ ...parsed, id: update.id, price: roundGcPrice(update.price) }]
-        : [];
-    });
-    if (parsedUpdates.length === 0) return;
-    if (parsedUpdates.length === 1) {
-      const update = parsedUpdates[0];
-      onOrderDragCommit(update.id, update.price);
-      return;
-    }
-    const byOrderId = new Map<string, typeof parsedUpdates>();
-    for (const update of parsedUpdates) {
-      byOrderId.set(update.orderId, [
-        ...(byOrderId.get(update.orderId) ?? []),
-        update,
-      ]);
-    }
-    for (const [orderId, group] of byOrderId) {
-      if (group.length === 1) {
-        const update = group[0];
-        onOrderDragCommit(update.id, update.price);
-        continue;
-      }
-      if (orderId.startsWith("mt5pos:")) {
-        const ticket = Number(orderId.slice("mt5pos:".length));
-        if (!Number.isInteger(ticket)) continue;
-        const patch: { slGc?: number; tpGc?: number } = {};
-        for (const update of group) {
-          if (update.field === "slGc") patch.slGc = update.price;
-          if (update.field === "tpGc") patch.tpGc = update.price;
-        }
-        if (patch.slGc === undefined && patch.tpGc === undefined) continue;
-        setOrderError("");
-        setMt5OpenTrades((prev) => ({
-          ...prev,
-          positions: prev.positions.map((position) =>
-            position.brokerPositionTicket === ticket
-              ? { ...position, ...pendingOrderPatch(patch) }
-              : position,
-          ),
-        }));
-        void (async () => {
-          try {
-            tradingRefresh.invalidate();
-            await api.patchMt5Position(ticket, patch);
-            setMt5OpenTrades(await api.mt5OpenTrades());
-          } catch (error) {
-            setOrderError(error instanceof Error ? error.message : "Modify MT5 position failed");
-            try {
-              setMt5OpenTrades(await api.mt5OpenTrades());
-            } catch {
-              /* Keep the optimistic state if refresh also fails. */
-            }
-          }
-        })();
-        continue;
-      }
-      if (orderId.startsWith("mt5order:")) {
-        const ticket = Number(orderId.slice("mt5order:".length));
-        if (!Number.isInteger(ticket)) continue;
-        const patch: { entryGc?: number; slGc?: number; tpGc?: number } = {};
-        for (const update of group) {
-          patch[update.field] = update.price;
-        }
-        setOrderError("");
-        setMt5OpenTrades((prev) => ({
-          ...prev,
-          orders: prev.orders.map((order) =>
-            order.brokerOrderTicket === ticket ? { ...order, ...pendingOrderPatch(patch) } : order,
-          ),
-        }));
-        void (async () => {
-          try {
-            tradingRefresh.invalidate();
-            await api.patchMt5Order(ticket, patch);
-            setMt5OpenTrades(await api.mt5OpenTrades());
-          } catch (error) {
-            setOrderError(error instanceof Error ? error.message : "Modify MT5 order failed");
-            try {
-              setMt5OpenTrades(await api.mt5OpenTrades());
-            } catch {
-              /* Keep the optimistic state if refresh also fails. */
-            }
-          }
-        })();
-        continue;
-      }
-      const order = orders.find((item) => item.id === orderId);
-      if (!order) continue;
-      const patch: Parameters<ApiClient["patchOrder"]>[1] = {};
-      for (const update of group) {
-        if (update.field === "entryGc" && order.status === "filled") continue;
-        patch[update.field] = update.price;
-      }
-      if (
-        patch.entryGc === undefined &&
-        patch.slGc === undefined &&
-        patch.tpGc === undefined
-      ) {
-        continue;
-      }
-      commitOrderLevelPatch(orderId, patch);
-    }
+    onOrderDragBatchCommit([{ id, price }]);
   };
 
   const onCloseOrder = (orderId: string) => {
-    if (closingOrderIds.has(orderId)) return;
+    const rowId = appOrderRowKey(orderId);
+    if (closingOrderIds.has(orderId) || closingOrderIds.has(rowId)) return;
     setOrderError("");
-    setClosingOrderIds((prev) => new Set(prev).add(orderId));
+    setClosingOrderIds((prev) => new Set(prev).add(orderId).add(rowId));
+    const idempotencyKey = `close-${orderId}-${Date.now()}`;
     void (async () => {
       try {
-        tradingRefresh.invalidate();
-        const closed = await api.closeOrder(orderId);
-        setOrders((prev) => {
-          const without = prev.filter((item) => item.id !== closed.id);
-          return isOpenTradingOrder(closed) ? [closed, ...without] : without;
-        });
-        await refreshTradingState();
+        await api.closeOrder(orderId, undefined, idempotencyKey);
+        for (let attempt = 0; attempt < 15; attempt++) {
+          await new Promise((resolve) => window.setTimeout(resolve, attempt === 0 ? 300 : 600));
+          const state = await refreshTradingState();
+          if (!state) break;
+          const order = state.orders?.find((o) => o.id === orderId);
+          const stillOpen = order ? isOpenTradingOrder(order) && order.status === "filled" : false;
+          if (!stillOpen) break;
+        }
       } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Close order failed");
-        try {
+        const msg = error instanceof Error ? error.message : "";
+        if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
           await refreshTradingState();
-        } catch {
-          /* Keep the current state if refresh also fails. */
+        } else {
+          setOrderError(msg || "Close order failed");
+          try {
+            await refreshTradingState();
+          } catch {
+            /* Keep the current state if refresh also fails. */
+          }
         }
       } finally {
         setClosingOrderIds((prev) => {
           const next = new Set(prev);
           next.delete(orderId);
+          next.delete(rowId);
           return next;
         });
       }
@@ -4882,29 +4621,38 @@ export function LiveApp() {
   };
 
   const onCancelOrder = (orderId: string) => {
-    if (cancellingOrderIds.has(orderId)) return;
+    const rowId = appOrderRowKey(orderId);
+    if (cancellingOrderIds.has(orderId) || cancellingOrderIds.has(rowId)) return;
     setOrderError("");
-    setCancellingOrderIds((prev) => new Set(prev).add(orderId));
+    setCancellingOrderIds((prev) => new Set(prev).add(orderId).add(rowId));
+    const idempotencyKey = `cancel-${orderId}-${Date.now()}`;
     void (async () => {
       try {
-        tradingRefresh.invalidate();
-        const cancelled = await api.cancelOrder(orderId);
-        setOrders((prev) => {
-          const without = prev.filter((item) => item.id !== cancelled.id);
-          return isOpenTradingOrder(cancelled) ? [cancelled, ...without] : without;
-        });
-        await refreshTradingState();
+        await api.cancelOrder(orderId, idempotencyKey);
+        for (let attempt = 0; attempt < 15; attempt++) {
+          await new Promise((resolve) => window.setTimeout(resolve, attempt === 0 ? 300 : 600));
+          const state = await refreshTradingState();
+          if (!state) break;
+          const order = state.orders?.find((o) => o.id === orderId);
+          if (!order || !isOpenTradingOrder(order)) break;
+        }
       } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Cancel order failed");
-        try {
+        const msg = error instanceof Error ? error.message : "";
+        if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
           await refreshTradingState();
-        } catch {
-          /* Keep the current state if refresh also fails. */
+        } else {
+          setOrderError(msg || "Cancel order failed");
+          try {
+            await refreshTradingState();
+          } catch {
+            /* Keep the current state if refresh also fails. */
+          }
         }
       } finally {
         setCancellingOrderIds((prev) => {
           const next = new Set(prev);
           next.delete(orderId);
+          next.delete(rowId);
           return next;
         });
       }
@@ -4913,67 +4661,42 @@ export function LiveApp() {
 
   const onOrderRowBreakEven = (rowId: string) => {
     const parsed = parseActionRowId(rowId);
-    if (!parsed || breakingEvenOrderIds.has(rowId)) return;
+    if (!parsed || parsed.source === "mt5order" || breakingEvenOrderIds.has(rowId)) return;
+    const idKey = parsed.source === "app" ? parsed.orderId : rowId;
+    if (modifyingOrderIds.has(rowId) || modifyingOrderIds.has(idKey)) return;
+    const requestedUser = authUserIdRef.current;
     setOrderError("");
     setBreakingEvenOrderIds((prev) => new Set(prev).add(rowId));
+    setModifyingOrderIds((prev) => new Set(prev).add(rowId).add(idKey));
     void (async () => {
       try {
+        const patch = { breakEven: true, idempotencyKey: newIdempotencyKey() };
         if (parsed.source === "app") {
-          const order = orders.find((item) => item.id === parsed.orderId);
-          if (!order) throw new Error("Order not found");
-          const entry = orderEntryGc(order);
-          if (entry === undefined || order.brokerPositionTicket == null) {
-            throw new Error("Break-even is only available for open positions");
-          }
-          const level = roundGcPrice(entry);
-          await commitOrderLevelPatch(parsed.orderId, { slGc: level }, { breakEven: true });
-          return;
+          await api.patchOrder(parsed.orderId, patch);
+        } else {
+          await api.patchMt5Position(parsed.ticket, patch);
         }
-        if (parsed.source === "mt5pos") {
-          const position = mt5OpenTrades.positions.find(
-            (item) => item.brokerPositionTicket === parsed.ticket,
-          );
-          const entry = position?.entryGcEstimate;
-          if (!position || !isFinitePrice(entry) || position.basisStale === true) {
-            throw new Error("Break-even is unavailable for this MT5 position");
-          }
-          const level = roundGcPrice(entry);
-          setMt5OpenTrades((prev) => ({
-            ...prev,
-            positions: prev.positions.map((item) =>
-              item.brokerPositionTicket === parsed.ticket
-                ? { ...item, ...pendingOrderPatch({ slGc: level }) }
-                : item,
-            ),
-          }));
-          tradingRefresh.invalidate();
-          await api.patchMt5Position(parsed.ticket, { breakEven: true });
-          setMt5OpenTrades(await api.mt5OpenTrades());
-          return;
-        }
-        throw new Error("Break-even is only available for open positions");
       } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Break-even failed");
-        try {
-          const [ordersResult, openTradesResult] = await Promise.allSettled([
-            api.orders(true),
-            api.mt5OpenTrades(),
-          ]);
-          if (ordersResult.status === "fulfilled") {
-            setOrders(ordersResult.value);
-          }
-          if (openTradesResult.status === "fulfilled") {
-            setMt5OpenTrades(openTradesResult.value);
-          }
-        } catch {
-          /* Keep the optimistic state if refresh also fails. */
+        if (authUserIdRef.current === requestedUser) {
+          setOrderError(error instanceof Error ? error.message : "Break-even failed");
         }
       } finally {
-        setBreakingEvenOrderIds((prev) => {
-          const next = new Set(prev);
-          next.delete(rowId);
-          return next;
-        });
+        if (authUserIdRef.current === requestedUser) {
+          await refreshTradingState();
+          if (authUserIdRef.current === requestedUser) {
+            setBreakingEvenOrderIds((prev) => {
+              const next = new Set(prev);
+              next.delete(rowId);
+              return next;
+            });
+            setModifyingOrderIds((prev) => {
+              const next = new Set(prev);
+              next.delete(rowId);
+              next.delete(idKey);
+              return next;
+            });
+          }
+        }
       }
     })();
   };
@@ -4995,10 +4718,10 @@ export function LiveApp() {
       targetSide = order.side;
     } else if (parsed.source === "mt5pos") {
       const position = mt5OpenTrades.positions.find(
-        (item) => item.brokerPositionTicket === parsed.ticket,
+        (item) => String(item.brokerPositionTicket) === parsed.ticket,
       );
       if (!position) {
-        setOrderError("MT5 position not found");
+        setOrderError("Position not found");
         return;
       }
       targetType = "position";
@@ -5081,25 +4804,41 @@ export function LiveApp() {
       onCloseOrder(parsed.orderId);
       return;
     }
-    if (parsed.source !== "mt5pos" || closingOrderIds.has(rowId)) return;
+    if (parsed.source !== "mt5pos") return;
+    const ticket = parsed.ticket;
+    if (closingOrderIds.has(rowId) || closingOrderIds.has(ticket)) return;
     setOrderError("");
-    setClosingOrderIds((prev) => new Set(prev).add(rowId));
+    setClosingOrderIds((prev) => new Set(prev).add(rowId).add(ticket));
+    const idempotencyKey = `close-${ticket}-${Date.now()}`;
     void (async () => {
       try {
-        tradingRefresh.invalidate();
-        await api.closeMt5Position(parsed.ticket);
-        await refreshTradingState();
+        await api.closeMt5Position(ticket, undefined, idempotencyKey);
+        for (let attempt = 0; attempt < 15; attempt++) {
+          await new Promise((resolve) => window.setTimeout(resolve, attempt === 0 ? 300 : 600));
+          const state = await refreshTradingState();
+          if (!state) break;
+          const stillOpen = state.openTrades?.positions.some(
+            (p) => String(p.brokerPositionTicket) === ticket,
+          );
+          if (!stillOpen) break;
+        }
       } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Close MT5 position failed");
-        try {
+        const msg = error instanceof Error ? error.message : "";
+        if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
           await refreshTradingState();
-        } catch {
-          /* Keep the current state if refresh also fails. */
+        } else {
+          setOrderError(msg || "Close position failed");
+          try {
+            await refreshTradingState();
+          } catch {
+            /* Keep the current state if refresh also fails. */
+          }
         }
       } finally {
         setClosingOrderIds((prev) => {
           const next = new Set(prev);
           next.delete(rowId);
+          next.delete(ticket);
           return next;
         });
       }
@@ -5109,22 +4848,37 @@ export function LiveApp() {
   const onOrderRowClose50Percent = (rowId: string, volumeLots: number) => {
     const parsed = parseActionRowId(rowId);
     if (!parsed) return;
+    const idKey = parsed.source === "app" ? parsed.orderId : parsed.ticket;
+    if (
+      closing50OrderIds.has(rowId) ||
+      closing50OrderIds.has(idKey) ||
+      closingOrderIds.has(rowId) ||
+      closingOrderIds.has(idKey)
+    ) {
+      return;
+    }
 
     const halfVolume = Math.max(0.01, Math.round(volumeLots * 50) / 100);
+    const targetVolume = Math.max(0.01, Math.round((volumeLots - halfVolume) * 100) / 100);
+
+    setOrderError("");
+    setClosing50OrderIds((prev) => new Set(prev).add(rowId).add(idKey));
+    setClosingOrderIds((prev) => new Set(prev).add(rowId).add(idKey));
 
     if (parsed.source === "app") {
-      if (closingOrderIds.has(parsed.orderId)) return;
-      setOrderError("");
-      setClosingOrderIds((prev) => new Set(prev).add(parsed.orderId));
+      const orderId = parsed.orderId;
+      const appRowId = appOrderRowKey(orderId);
+      const idempotencyKey = `close50-${orderId}-${Date.now()}`;
       void (async () => {
         try {
-          tradingRefresh.invalidate();
-          const updated = await api.closeOrder(parsed.orderId, halfVolume);
-          setOrders((prev) => {
-            const without = prev.filter((item) => item.id !== updated.id);
-            return isOpenTradingOrder(updated) ? [updated, ...without] : without;
-          });
-          await refreshTradingState();
+          await api.closeOrder(orderId, halfVolume, idempotencyKey);
+          for (let attempt = 0; attempt < 15; attempt++) {
+            await new Promise((resolve) => window.setTimeout(resolve, attempt === 0 ? 300 : 600));
+            const state = await refreshTradingState();
+            if (!state) break;
+            const ord = state.orders?.find((o) => o.id === orderId);
+            if (!ord || ord.volumeLots <= targetVolume + 0.005 || !isOpenTradingOrder(ord)) break;
+          }
         } catch (error) {
           setOrderError(error instanceof Error ? error.message : "Close position failed");
           try {
@@ -5133,35 +4887,55 @@ export function LiveApp() {
             /* Keep the current state if refresh also fails. */
           }
         } finally {
+          setClosing50OrderIds((prev) => {
+            const next = new Set(prev);
+            next.delete(rowId);
+            next.delete(orderId);
+            next.delete(appRowId);
+            return next;
+          });
           setClosingOrderIds((prev) => {
             const next = new Set(prev);
-            next.delete(parsed.orderId);
+            next.delete(rowId);
+            next.delete(orderId);
+            next.delete(appRowId);
             return next;
           });
         }
       })();
       return;
     }
-    if (parsed.source !== "mt5pos" || closingOrderIds.has(rowId)) return;
-
-    setOrderError("");
-    setClosingOrderIds((prev) => new Set(prev).add(rowId));
+    if (parsed.source !== "mt5pos") return;
+    const ticket = parsed.ticket;
+    const idempotencyKey = `close50-${ticket}-${Date.now()}`;
     void (async () => {
       try {
-        tradingRefresh.invalidate();
-        await api.closeMt5Position(parsed.ticket, halfVolume);
-        await refreshTradingState();
+        await api.closeMt5Position(ticket, halfVolume, idempotencyKey);
+        for (let attempt = 0; attempt < 15; attempt++) {
+          await new Promise((resolve) => window.setTimeout(resolve, attempt === 0 ? 300 : 600));
+          const state = await refreshTradingState();
+          if (!state) break;
+          const pos = state.openTrades?.positions.find((p) => String(p.brokerPositionTicket) === ticket);
+          if (!pos || pos.volumeLots <= targetVolume + 0.005) break;
+        }
       } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Close MT5 position failed");
+        setOrderError(error instanceof Error ? error.message : "Close position failed");
         try {
           await refreshTradingState();
         } catch {
           /* Keep the current state if refresh also fails. */
         }
       } finally {
+        setClosing50OrderIds((prev) => {
+          const next = new Set(prev);
+          next.delete(rowId);
+          next.delete(ticket);
+          return next;
+        });
         setClosingOrderIds((prev) => {
           const next = new Set(prev);
           next.delete(rowId);
+          next.delete(ticket);
           return next;
         });
       }
@@ -5175,25 +4949,41 @@ export function LiveApp() {
       onCancelOrder(parsed.orderId);
       return;
     }
-    if (parsed.source !== "mt5order" || cancellingOrderIds.has(rowId)) return;
+    if (parsed.source !== "mt5order") return;
+    const ticket = parsed.ticket;
+    if (cancellingOrderIds.has(rowId) || cancellingOrderIds.has(ticket)) return;
     setOrderError("");
-    setCancellingOrderIds((prev) => new Set(prev).add(rowId));
+    setCancellingOrderIds((prev) => new Set(prev).add(rowId).add(ticket));
+    const idempotencyKey = `cancel-${ticket}-${Date.now()}`;
     void (async () => {
       try {
-        tradingRefresh.invalidate();
-        await api.cancelMt5Order(parsed.ticket);
-        await refreshTradingState();
+        await api.cancelMt5Order(ticket, idempotencyKey);
+        for (let attempt = 0; attempt < 15; attempt++) {
+          await new Promise((resolve) => window.setTimeout(resolve, attempt === 0 ? 300 : 600));
+          const state = await refreshTradingState();
+          if (!state) break;
+          const stillThere = state.openTrades?.orders.some(
+            (o) => String(o.brokerOrderTicket) === ticket,
+          );
+          if (!stillThere) break;
+        }
       } catch (error) {
-        setOrderError(error instanceof Error ? error.message : "Cancel MT5 order failed");
-        try {
+        const msg = error instanceof Error ? error.message : "";
+        if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
           await refreshTradingState();
-        } catch {
-          /* Keep the current state if refresh also fails. */
+        } else {
+          setOrderError(msg || "Cancel order failed");
+          try {
+            await refreshTradingState();
+          } catch {
+            /* Keep the current state if refresh also fails. */
+          }
         }
       } finally {
         setCancellingOrderIds((prev) => {
           const next = new Set(prev);
           next.delete(rowId);
+          next.delete(ticket);
           return next;
         });
       }
@@ -5221,17 +5011,18 @@ export function LiveApp() {
 
   const onConfirmLimitOrderDraft = (draft: ChartLimitOrderDraft) => {
     setChartMenu(undefined);
+    if (orderPending) return;
     if (!mt5Account) {
-      setOrderError("Connect MT5 before placing chart orders.");
+      setOrderError("Connect your account before placing chart orders.");
       return;
     }
-    if (!orderSubmission.acquire()) return;
+    setOrderPending(true);
     setOrderError("");
     void (async () => {
       try {
-        tradingRefresh.invalidate();
         const order = await api.createOrder({
           ...draft,
+          gcAnchored: false,
           ...supertrendAfter1rOrderFields(
             draft.takeProfit1rEnabled && draft.autoSupertrendAfter1rEnabled,
             timeframe,
@@ -5239,17 +5030,12 @@ export function LiveApp() {
           ),
           idempotencyKey: newIdempotencyKey(),
         });
-        setOrders((prev) => {
-          const without = prev.filter((item) => item.id !== order.id);
-          return isOpenTradingOrder(order) ? [order, ...without] : without;
-        });
         setOrderError(rejectedOrderMessage(order));
-        void refreshTradingState();
+        await refreshTradingState();
       } catch (error) {
         setOrderError(error instanceof Error ? error.message : "Chart order failed");
-        await refreshTradingState().catch(() => undefined);
       } finally {
-        orderSubmission.release();
+        setOrderPending(false);
       }
     })();
   };
@@ -5265,28 +5051,27 @@ export function LiveApp() {
   };
   const applyProfilePayload = (payload: ChartProfilePayload) => {
     if (isTimeframe(payload.timeframe)) {
+      setProfileTimeframe(payload.timeframe);
       setTimeframe(payload.timeframe);
     }
     setChartBackgroundColor(normalizeChartBackgroundColor(payload.chartBackgroundColor));
-    setShowFootprint(Boolean(payload.showFootprint));
     setShowVolumeDelta(payload.showVolumeDelta !== false);
     setShowXKontrol(payload.showXKontrol === true);
     setXKontrolSettings(normalizeXKontrolDisplaySettings(payload.xKontrol));
-    setShowGcPushMomentum(payload.showGcPushMomentum !== false);
     setShowTduSignals(payload.showTduSignals !== false);
-    setTduSettings(normalizeTduSettings(payload.tduSettings));
-    setGcPushMomentumSettings(
-      normalizeGcPushMomentumSettings(payload.gcPushMomentum),
-    );
+    setDenseOverlayMinBarSpacing(normalizeDenseOverlayBarSpacing(payload.denseOverlayMinBarSpacing));
     setShowDailyVolumeProfile(Boolean(payload.showDailyVolumeProfile));
-    setDailyVolumeProfileRowTicks(
-      normalizeSessionVolumeProfileRowTicks(payload.dailyVolumeProfileRowTicks),
-    );
     setDailyVolumeProfileWidth(
       normalizeSessionVolumeProfileWidth(payload.dailyVolumeProfileWidth),
     );
     setShowDailyVolumeProfileDevelopingPoc(
       payload.showDailyVolumeProfileDevelopingPoc !== false,
+    );
+    setDailyVolumeProfileRowTicks(
+      normalizeSessionVolumeProfileRowTicks(payload.dailyVolumeProfileRowTicks),
+    );
+    setDailyVolumeProfileDays(
+      normalizeSessionVolumeProfileDays(payload.dailyVolumeProfileDays),
     );
     setShowMgannSwing(payload.showMgannSwing === true);
     setMgannSwing(
@@ -5333,7 +5118,7 @@ export function LiveApp() {
       ),
     });
     if (payload.marketOrderSettings) {
-      updateMarketOrderSettings(sanitizeMarketOrderSettings(payload.marketOrderSettings));
+      setMarketOrderSettings(sanitizeMarketOrderSettings(payload.marketOrderSettings));
     }
     setTimezoneOffsetMinutes(
       normalizeTimezoneOffsetMinutes(payload.timezoneOffsetMinutes),
@@ -5350,19 +5135,21 @@ export function LiveApp() {
     setActiveTool(null);
   };
 
-  async function loadAuthenticatedState(
-    user: AuthUser,
-    options: { openMt5Setup?: boolean } = {},
-  ): Promise<void> {
-    authUserRef.current = user;
+  async function loadAuthenticatedState(user: AuthUser): Promise<void> {
+    authUserIdRef.current = user.id;
     setAuthUser(user);
     setProfileLoading(true);
     setProfileHydrated(false);
     setOrderError("");
 
+    const execution = await api.execution();
+    const canTrade = execution.enabled;
+    setExecutionEnabled(canTrade);
     const [profileResult, statusResult] = await Promise.allSettled([
       api.meProfile(),
-      api.mt5Status(),
+      canTrade ? api.mt5Status() : Promise.resolve(
+        { connected: false } as Awaited<ReturnType<ApiClient["mt5Status"]>>,
+      ),
     ]);
 
     const hotSnapshot = readProfileHotSnapshot(user.id);
@@ -5383,7 +5170,7 @@ export function LiveApp() {
     }
 
     const connectedAccount =
-      statusResult.status === "fulfilled" && statusResult.value.connected
+      statusResult.status === "fulfilled" && (statusResult.value.connected || statusResult.value.account?.provider === "exness")
         ? statusResult.value.account ?? undefined
         : undefined;
     setMt5Account(connectedAccount);
@@ -5393,64 +5180,18 @@ export function LiveApp() {
       setOrderError("");
     }
 
-    if (connectedAccount) {
-      const [symbolResult, orderResult, openTradesResult, trailingResult] = await Promise.allSettled([
-        api.mt5Symbol(),
-        api.orders(true),
-        api.mt5OpenTrades(),
-        api.supertrendTrailings(),
-      ]);
-      setMt5Symbol(symbolResult.status === "fulfilled" ? symbolResult.value : undefined);
-      setOrders(orderResult.status === "fulfilled" ? orderResult.value : []);
-      setMt5OpenTrades(
-        openTradesResult.status === "fulfilled"
-          ? openTradesResult.value
-          : EMPTY_MT5_OPEN_TRADES,
-      );
-      setSupertrendTrailings(
-        trailingResult.status === "fulfilled"
-          ? supertrendTrailingMap(trailingResult.value)
-          : new Map(),
-      );
-    } else {
+    resetOrderPendingAndOptimisticState();
+    if (!connectedAccount) {
       setMt5Symbol(undefined);
       setOrders([]);
       setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
       setSupertrendTrailings(new Map());
-      if (options.openMt5Setup) {
-        setMt5Error("");
-        setMt5DialogOpen(true);
-        void api.mt5Terminals().then(setMt5Terminals);
-      }
     }
 
     setProfileSyncedSignature("");
     setProfileLoading(false);
     setProfileHydrated(true);
   }
-
-  useAuthSessionSync(api, (user) => {
-    if (user?.id === authUserRef.current?.id) return;
-    if (user) {
-      setAuthDialogOpen(false);
-      void loadAuthenticatedState(user).catch(() => {
-        setProfileLoading(false);
-      });
-      return;
-    }
-    authUserRef.current = undefined;
-    setAuthUser(undefined);
-    setMt5Account(undefined);
-    setMt5Symbol(undefined);
-    setOrders([]);
-    setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
-    setSupertrendTrailings(new Map());
-    setAlerts([]);
-    setMt5DialogOpen(false);
-    setAuthMode("login");
-    setAuthError("Your session is no longer valid. Please log in again before trading.");
-    setAuthDialogOpen(true);
-  });
 
   useEffect(() => {
     let cancelled = false;
@@ -5460,7 +5201,7 @@ export function LiveApp() {
         const user = await api.me();
         if (cancelled) return;
         if (user) {
-          await loadAuthenticatedState(user, { openMt5Setup: true });
+          await loadAuthenticatedState(user);
         } else {
           setAuthUser(undefined);
           setShowVolumeDelta(false);
@@ -5469,6 +5210,7 @@ export function LiveApp() {
           setOrders([]);
           setMt5OpenTrades(EMPTY_MT5_OPEN_TRADES);
           setSupertrendTrailings(new Map());
+          resetOrderPendingAndOptimisticState();
           setProfileId(DEFAULT_PROFILE_ID);
           setProfileLoading(false);
           setProfileHydrated(true);
@@ -5487,60 +5229,22 @@ export function LiveApp() {
     };
   }, [api]);
 
+  const tradingAccountId = mt5Account?.accountId;
   useEffect(() => {
-    if (!authUser || !mt5Account) return;
+    if (!authUser || !tradingAccountId || !executionEnabled) return;
     let cancelled = false;
-    const refreshOrders = () => {
-      const editRevision = orderEditRevisionRef.current;
-      const canApply = tradingRefresh.guard();
-      void Promise.allSettled([
-        api.orders(true),
-        api.mt5OpenTrades(),
-        api.mt5Status(),
-        api.supertrendTrailings(),
-      ]).then(([ordersResult, openTradesResult, statusResult, trailingResult]) => {
-        if (cancelled || !canApply()) return;
-        const levelsUnchanged = editRevision === orderEditRevisionRef.current &&
-          pendingOrderEditsRef.current.size === 0;
-        if (levelsUnchanged && ordersResult.status === "fulfilled") {
-          const next = ordersResult.value;
-          setOrders((prev) => {
-            if (prev.length !== next.length) return next;
-            for (let i = 0; i < prev.length; i++) {
-              if (
-                prev[i].id !== next[i].id ||
-                prev[i].status !== next[i].status ||
-                prev[i].version !== next[i].version
-              ) return next;
-            }
-            return prev;
-          });
-        }
-        if (levelsUnchanged && openTradesResult.status === "fulfilled") {
-          const next = openTradesResult.value;
-          setMt5OpenTrades((prev) => {
-            return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
-          });
-        }
-        if (statusResult.status === "fulfilled") {
-          applyMt5Status(statusResult.value);
-        }
-        if (trailingResult.status === "fulfilled") {
-          setSupertrendTrailings(supertrendTrailingMap(trailingResult.value));
-        }
+    let timer: number | undefined;
+    const refresh = () => {
+      void refreshTradingState().finally(() => {
+        if (!cancelled) timer = window.setTimeout(refresh, ORDER_REFRESH_INTERVAL_MS);
       });
     };
-    const timer = window.setInterval(refreshOrders, ORDER_REFRESH_INTERVAL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") refreshOrders();
-    };
-    document.addEventListener("visibilitychange", onVisible);
+    timer = window.setTimeout(refresh, ORDER_REFRESH_INTERVAL_MS);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
+      window.clearTimeout(timer);
     };
-  }, [api, applyMt5Status, authUser, mt5Account, tradingRefresh]);
+  }, [authUser, tradingAccountId, executionEnabled, refreshTradingState]);
 
   const onAuthSubmit = (input: {
     username: string;
@@ -5557,7 +5261,7 @@ export function LiveApp() {
             ? await api.register(input.username, input.password, input.inviteCode)
             : await api.login(input.username, input.password);
         setAuthDialogOpen(false);
-        await loadAuthenticatedState(user, { openMt5Setup: true });
+        await loadAuthenticatedState(user);
       } catch (error) {
         setAuthError(error instanceof Error ? error.message : "Login failed");
       } finally {
@@ -5566,111 +5270,91 @@ export function LiveApp() {
     })();
   };
 
-  const onSubmitMt5Account = (input: Mt5ConnectInput) => {
-    if (!authUser) {
-      onTradingLogin();
-      return;
-    }
+  const onSubmitExnessAccount = (input: ExnessConnectInput) => {
+    if (!authUser) { onTradingLogin(); return; }
+    const requestedUser = authUser.id;
     setMt5Pending(true);
     setMt5Error("");
     void (async () => {
       try {
-        const account = await api.connectMt5(input);
+        const account = await api.connectExness(input);
+        if (authUserIdRef.current !== requestedUser) return;
         setMt5Account(account);
-        const [symbolResult, orderResult, openTradesResult, trailingResult] = await Promise.allSettled([
-          api.mt5Symbol(),
-          api.orders(true),
-          api.mt5OpenTrades(),
-          api.supertrendTrailings(),
-        ]);
-        setMt5Symbol(symbolResult.status === "fulfilled" ? symbolResult.value : undefined);
-        setOrders(orderResult.status === "fulfilled" ? orderResult.value : []);
-        setMt5OpenTrades(
-          openTradesResult.status === "fulfilled"
-            ? openTradesResult.value
-            : EMPTY_MT5_OPEN_TRADES,
-        );
-        setSupertrendTrailings(
-          trailingResult.status === "fulfilled"
-            ? supertrendTrailingMap(trailingResult.value)
-            : new Map(),
-        );
-        setOrderError("");
         setMt5DialogOpen(false);
+        await refreshTradingState();
       } catch (error) {
-        setMt5Error(error instanceof Error ? error.message : "Account save failed");
-      } finally {
-        setMt5Pending(false);
-      }
+        if (authUserIdRef.current === requestedUser) setMt5Error(error instanceof Error ? error.message : "Exness connection failed");
+      } finally { if (authUserIdRef.current === requestedUser) setMt5Pending(false); }
     })();
   };
 
   // Alert level lines drawn on the candle scale (Req 16.5). Recomputed only
   // when the alert set changes.
   const alertLines = useMemo(() => toAlertLines(alerts), [alerts]);
-  const chartPositions = useBrokerChartPositions(
-    mt5OpenTrades.positions, orders,
-    `${authUser?.id ?? ""}:${mt5Account?.accountId ?? ""}`,
-  );
-  const chartOpenTrades = useMemo(
-    () => ({ ...mt5OpenTrades, positions: chartPositions }),
-    [mt5OpenTrades, chartPositions],
-  );
-  const displayedOrders = useMemo(
-    () => projectBrokerAnchoredOrders(orders, chartPositions, pendingOrderEdits),
-    [orders, chartPositions, pendingOrderEdits],
+  const chartOrderState = useMemo(
+    () => applyOrderDragPreviews(orders, mt5OpenTrades, orderDragPreviews),
+    [orders, mt5OpenTrades, orderDragPreviews],
   );
   const orderLines = useMemo(
     () =>
       [
-        ...toOrderLines(displayedOrders),
-        ...manualPositionLines(chartOpenTrades.positions, orders),
-        ...manualPendingOrderLines(chartOpenTrades.orders, orders),
+        ...toOrderLines(chartOrderState.orders, modifyingOrderIds),
+        ...manualPositionLines(chartOrderState.trades.positions, chartOrderState.orders, modifyingOrderIds),
+        ...manualPendingOrderLines(chartOrderState.trades.orders, chartOrderState.orders, modifyingOrderIds),
       ],
-    [orders, displayedOrders, chartOpenTrades],
+    [chartOrderState, modifyingOrderIds],
   );
   const orderRows = useMemo(
     () =>
       toMarketOrderRows(
-        displayedOrders,
+        orders,
         latestPrice,
         mt5Symbol,
-        chartOpenTrades,
+        mt5OpenTrades,
         closingOrderIds,
         cancellingOrderIds,
         breakingEvenOrderIds,
         supertrendTrailings,
         supertrendTrailingPendingIds,
+        mt5Account,
+        modifyingOrderIds,
+        closing50OrderIds,
       ),
     [
-      displayedOrders,
+      orders,
       latestPrice,
       mt5Symbol,
-      chartOpenTrades,
+      mt5OpenTrades,
       closingOrderIds,
       cancellingOrderIds,
       breakingEvenOrderIds,
       supertrendTrailings,
       supertrendTrailingPendingIds,
+      mt5Account,
+      modifyingOrderIds,
+      closing50OrderIds,
     ],
   );
   const orderControls = useMemo(
     () =>
       toOrderControls(
-        displayedOrders,
+        chartOrderState.orders,
         latestPrice,
         mt5Symbol,
-        chartOpenTrades,
+        chartOrderState.trades,
         closingOrderIds,
         cancellingOrderIds,
+        mt5Account,
+        modifyingOrderIds,
       ),
     [
-      displayedOrders,
+      chartOrderState,
       latestPrice,
       mt5Symbol,
-      chartOpenTrades,
       closingOrderIds,
       cancellingOrderIds,
+      mt5Account,
+      modifyingOrderIds,
     ],
   );
   const replayBars = replayDataset?.bars;
@@ -5680,20 +5364,20 @@ export function LiveApp() {
   const replayBigTrades = replayDataset?.bigTrades;
   const replaySmcAiSignals = replayDataset?.smcAiSignals;
   const replayAlertSignals = replayDataset?.alertSignals;
-  const replayCurrentBar = replayReady ? replayBars?.[replayCursorIndex] : undefined;
+  const replayCurrentBar = replayActive ? replayBars?.[replayCursorIndex] : undefined;
   const replayCutoffExclusive = replayCurrentBar === undefined
     ? undefined
-    : replayCurrentBar.time + barDurationForTimeframe(timeframe);
+    : barEndForTimeframe(replayCurrentBar.time, timeframe);
   // Keep replay projections independent from live state. The websocket keeps
   // updating `bars` and overlays behind the replay snapshot; including those
   // live collections in a replay memo would create a fresh prefix and repaint
   // the whole chart even while replay is paused.
   const replayChartBars = useMemo(
     () =>
-      replayReady && replayBars !== undefined
+      replayActive && replayBars !== undefined
         ? replayBarsThrough(replayBars, replayCursorIndex)
         : undefined,
-    [replayReady, replayBars, replayCursorIndex],
+    [replayActive, replayBars, replayCursorIndex],
   );
   const chartBars = replayActive
     ? replayChartBars ?? EMPTY_BARS
@@ -5724,10 +5408,6 @@ export function LiveApp() {
     : hasLoadedCurrentSeries
       ? footprintBars
       : EMPTY_FOOTPRINT_BARS;
-  const footprintVisible =
-    indicatorsVisible &&
-    showFootprint &&
-    footprintEnabledForTimeframe(timeframe);
   const replayChartFvgSignals = useMemo(
     () =>
       replayActive && replayFvgSignals !== undefined && replayCurrentBar !== undefined
@@ -5739,7 +5419,7 @@ export function LiveApp() {
     indicatorsVisible &&
     hasLoadedCurrentSeries &&
     showFvgGrader &&
-    fvgGraderEnabledForTimeframe(timeframe) &&
+    timeframe === "1m" &&
     (replayActive || fvgSignalSeriesKey === currentSeriesKey)
       ? replayActive
         ? replayChartFvgSignals ?? EMPTY_FVG_SIGNALS
@@ -5835,15 +5515,15 @@ export function LiveApp() {
     [drawings, timeframe],
   );
   const visibleDrawingsLoadKey = `${drawingsLoadKey}:${timeframe}`;
-  const chartMenuLimitDraft =
-    chartMenu === undefined
-      ? undefined
-      : buildChartLimitOrderDraft({
-          entryPrice: chartMenu.price,
-          referencePrice: chartMenu.referencePrice,
-          settings: marketOrderSettings,
-          symbol: mt5Symbol,
-        });
+  const chartMenuLimitDraft = !executionEnabled || chartMenu === undefined
+    ? undefined
+    : buildChartLimitOrderDraft({
+        entryPrice: chartMenu.price,
+        referencePrice: chartMenu.referencePrice,
+        settings: marketOrderSettings,
+        symbol: mt5Symbol,
+        accountCurrency: mt5Account?.currency,
+      });
 
   useEffect(() => {
     if (
@@ -5888,8 +5568,6 @@ export function LiveApp() {
 
   useEffect(() => {
     if (!lastAlert || !telegramConfig.enabled) return;
-    // MP alerts are delivered by the backend even while chart tabs are open.
-    if (lastAlert.alertId.startsWith("mp_")) return;
     const key = `${profileId}:${lastAlert.alertId}:${lastAlert.time}`;
     if (telegramSentRef.current === key) return;
     telegramSentRef.current = key;
@@ -5904,206 +5582,298 @@ export function LiveApp() {
     });
   }, [api, lastAlert, profileId, telegramConfig.enabled, telegramConfig.sendScreenshot]);
 
-  const activeMarketSource = marketDataStatus?.activeSource ?? undefined;
-  const activeSourceStatus =
-    activeMarketSource === undefined
-      ? undefined
-      : marketDataStatus?.sources[activeMarketSource];
-  const activeSourceLag = activeSourceStatus?.eventLagMs.last;
-  const sourceName =
-    activeMarketSource === "bookmap"
-      ? "BM"
-      : activeMarketSource === "nt"
-        ? marketDataStatus?.preferredSource === "bookmap"
-          ? "NT fallback"
-          : "NT"
-        : undefined;
-  const marketStatusLabel =
-    sourceName === undefined
-      ? undefined
-      : activeSourceLag === null || activeSourceLag === undefined
-        ? sourceName
-        : `${sourceName} · ${Math.round(activeSourceLag)} ms`;
-  const marketStatusReason = marketDataStatus
-    ? `${marketDataStatus.reason ?? "live"}; BM p95 ${marketDataStatus.sources.bookmap?.eventLagMs.p95 ?? "-"} ms; NT p95 ${marketDataStatus.sources.nt?.eventLagMs.p95 ?? "-"} ms`
-    : undefined;
+  const hasScanWidget = panels.some((panel) => panel.type === "aiScan");
+  function scanTimeframeFor(panel: WorkspacePanel) {
+    return panel.id === MAIN_CHART ? loadedBarsTimeframe : panel.timeframe ?? "1m";
+  }
+  const scanKey = (id: string, tf: Timeframe) => `${chartKey(id)}:${tf}:${replayDataset?.id ?? ""}`;
 
-  return (
-    <div className={appShellClassName(chartFocusMode)}>
-      <Toolbar>
-        <SymbolContractLabel symbol={SYMBOL} contract={contract} hideContract />
-        <nav className="toolbar-page-links" aria-label="Chart pages">
-          <a href="/fp">FP</a>
-          <a href="/mp">MP</a>
-          <a href="/lq">LQ</a>
-        </nav>
-        <TimeframeSelector
-          value={timeframe}
-          onChange={(nextTimeframe) => {
-            setReplaySelecting(false);
-            setReplaySelectionError("");
-            setReplayPlaying(false);
-            setTimeframe(nextTimeframe);
-          }}
-        />
-        <IndicatorToggles
-          denseOverlayMinSpacing={denseOverlayMinSpacing}
-          onDenseOverlayMinSpacingChange={setDenseOverlayMinSpacing}
-          indicatorsVisible={indicatorsVisible}
-          volumeDelta={showVolumeDelta}
-          xKontrol={showXKontrol}
-          xKontrolSettings={xKontrolSettings}
-          gcPushMomentum={showGcPushMomentum}
-          tduSignals={showTduSignals}
-          tduSettings={tduSettings}
-          gcPushMomentumSettings={gcPushMomentumSettings}
-          mgannSwing={showMgannSwing}
-          mgannSwingSettings={mgannSwing}
-          footprint={showFootprint}
-          fvgGrader={showFvgGrader}
-          mgannBreak={showMgannBreak}
-          mgannBreakSettings={mgannBreakSettings}
-          fvgSignalLimit={fvgSignalLimit}
-          mgannBreakSignalHistoryBars={mgannBreakSignalHistoryBars}
-          mgannBreakSignalLimit={mgannBreakSignalLimit}
-          bigTrades={showBigTrades && bigTradeOverlayEnabled}
-          ema={ema}
-          supertrend={supertrend}
-          smc={smc}
-          sweepReversal={sweepReversal}
-          outsideBar={effectiveOutsideBar}
-          footprintSettings={footprintSettings}
-          bigTradeSettings={bigTradeSettings}
-          mgannSwingDisabled={mgannSwingDisabled}
-          gcPushMomentumDisabled={
-            !gcPushMomentumEnabledForTimeframe(timeframe)
-          }
-          tduSignalsDisabled={!tduSignalsEnabledForTimeframe(timeframe)}
-          footprintDisabled={!footprintEnabledForTimeframe(timeframe)}
-          fvgGraderDisabled={!fvgGraderEnabledForTimeframe(timeframe)}
-          bigTradeDisabled={!bigTradeOverlayEnabled}
-          dailyVolumeProfile={showDailyVolumeProfile}
-          dailyVolumeProfileWidth={dailyVolumeProfileWidth}
-          dailyVolumeProfileRowTicks={dailyVolumeProfileRowTicks}
-          dailyVolumeProfileDevelopingPoc={showDailyVolumeProfileDevelopingPoc}
-          onDailyVolumeProfileChange={setShowDailyVolumeProfile}
-          onDailyVolumeProfileWidthChange={setDailyVolumeProfileWidth}
-          onDailyVolumeProfileRowTicksChange={setDailyVolumeProfileRowTicks}
-          onDailyVolumeProfileDevelopingPocChange={
-            setShowDailyVolumeProfileDevelopingPoc
-          }
-          onVolumeDeltaChange={setShowVolumeDelta}
-          onXKontrolChange={setShowXKontrol}
-          onXKontrolSettingsChange={setXKontrolSettings}
-          onGcPushMomentumChange={setShowGcPushMomentum}
-          onTduSignalsChange={setShowTduSignals}
-          onTduSettingsChange={setTduSettings}
-          onGcPushMomentumSettingsChange={setGcPushMomentumSettings}
-          onMgannSwingChange={setShowMgannSwing}
-          onMgannSwingSettingsChange={setMgannSwing}
-          onFootprintChange={setShowFootprint}
-          onFvgGraderChange={setShowFvgGrader}
-          onMgannBreakChange={setShowMgannBreak}
-          onMgannBreakSettingsChange={onMgannBreakSettingsChange}
-          onCreateMgannBreakAlert={onCreateMgannBreakAlert}
-          onFvgSignalLimitChange={setFvgSignalLimit}
-          onMgannBreakSignalHistoryBarsChange={setMgannBreakSignalHistoryBars}
-          onMgannBreakSignalLimitChange={setMgannBreakSignalLimit}
-          onBigTradesChange={setShowBigTrades}
-          onEmaChange={setEma}
-          onSupertrendChange={setSupertrend}
-          onCreateSupertrendAlert={onCreateSupertrendAlert}
-          supertrendAlertDisabled={timeframe === "15s"}
-          onSmcChange={setSmc}
-          onSweepReversalChange={setSweepReversal}
-          onCreateSweepReversalAlert={onCreateSweepReversalAlert}
-          onOutsideBarChange={setOutsideBar}
-          onFootprintSettingsChange={setFootprintSettings}
-          onBigTradeSettingsChange={setBigTradeSettings}
-        />
-        <div className="account-toolbar" aria-label="Account controls">
-          {authUser ? (
-            <>
-              <button type="button" onClick={onOpenMt5Account}>
-                Account
-              </button>
-              <button type="button" onClick={onLogout}>
-                Logout
-              </button>
-            </>
-          ) : (
-            <button type="button" onClick={onTradingLogin}>
-              Login
-            </button>
-          )}
-        </div>
-        <label className="chart-bg-control" title="Chart background">
-          <span
-            className="chart-bg-swatch"
-            style={{ background: chartBackgroundColor }}
-            aria-hidden="true"
-          />
-          <input
-            type="color"
-            aria-label="Chart background color"
-            value={chartBackgroundColor}
-            onChange={(e) => setChartBackgroundColor(e.currentTarget.value)}
-          />
-        </label>
-        {false && <div className="analyst-popover">
-          <button
-            type="button"
-            className={`analyst-toolbar-button${analystPanelOpen ? " is-open" : ""}`}
-            title="AI nháº­n Ä‘á»‹nh"
-            aria-label="AI nháº­n Ä‘á»‹nh"
-            aria-expanded={analystPanelOpen}
-            onClick={onToggleAnalystPanel}
-          >
-            AI
-          </button>
-          <AnalystPanel
-            open={analystPanelOpen}
-            pending={analystPending}
-            report={analystReport}
-            error={analystError}
-            eventAi={analystEventAi}
-            eventAiPending={analystEventAiPending}
-            authenticated={Boolean(authUser)}
-            onRun={onRunAnalyst}
-            onToggleEventAi={onToggleAnalystEventAi}
-            onClose={() => setAnalystPanelOpen(false)}
-          />
-        </div>}
-        <div className="toolbar-alert-group">
-          <ReplayToolbarButton
-            phase={replayPhase}
-            disabled={!hasLoadedCurrentSeries || bars.length < 3}
-            onClick={() => {
-              if (replayActive) {
-                exitBarReplay();
-              } else if (replaySelecting) {
-                cancelBarReplaySelection();
-              } else {
-                beginBarReplaySelection();
-              }
-            }}
-          />
-          <div className="alert-popover">
-            <AlertToolbarButton
-              open={alertPanelOpen}
-              alertCount={alerts.length}
-              onClick={() =>
-                setAlertPanelOpen((open) => {
-                  return !open;
-                })
-              }
-            />
+  const scanScope = (panelId: string) => scanSettingsScope(authUser?.id, workspaceId, panelId);
+  const scanContext = JSON.stringify([authUser?.id, workspaceId, instrument.symbol, contract,
+    loadedBarsTimeframe, replayDataset?.id, replayActive, panels.map(p => [p.id, p.timeframe])]);
+  const scanContextRef = useRef(scanContext); scanContextRef.current = scanContext;
+  useEffect(() => {
+    scanRequests.current.clear();
+    setScanStates({});
+    setScanPreview(undefined);
+  }, [scanContext]);
+
+  function defaultScanState(panelId = MAIN_CHART) {
+    const settings = loadScanSettings(scanScope(panelId));
+    return {
+      ...settings, groups: new Set(settings.groups),
+      active: false, loading: false, error: null as string | null,
+      settingsOpen: false, suggestions: [] as ScanAiSuggestion[], addedIds: new Set<string>(),
+    };
+  }
+  function existingScanDrawings(panelId: string): readonly DrawingState[] {
+    return panelId === MAIN_CHART && payload?.useChartProfile && authUser
+      ? visibleDrawings : panels.find(p => p.id === panelId)?.drawings ?? [];
+  }
+  const runScanForChart = useCallback(
+    async (panelId: string, customSettings?: Partial<ReturnType<typeof defaultScanState>>) => {
+      const panel = panels.find(p => p.id === panelId);
+      if (!panel) return;
+      const tf = scanTimeframeFor(panel);
+      const current = scanStatesRef.current[panelId] ?? defaultScanState(panelId);
+      const merged = { ...current, ...customSettings };
+      const context = scanContext;
+      const requestId = (scanRequests.current.get(panelId) ?? 0) + 1;
+      scanRequests.current.set(panelId, requestId);
+      const isCurrent = () => scanContextRef.current === context && scanRequests.current.get(panelId) === requestId;
+      setScanStates(prev => ({ ...prev, [panelId]: {
+        ...merged, loading: true, error: null, active: true, suggestions: [],
+      } }));
+      try {
+        const res: any = await api.aiScan({
+          symbol: instrument.symbol, contract, timeframe: tf,
+          depth: merged.depth, density: merged.density, strength: merged.strength,
+          groups: Array.from(merged.groups), patterns: merged.patterns,
+          targetsAndStop: merged.targetsAndStop,
+          states: merged.state === "auto" ? ["waiting", "in_play", "tested"] : [merged.state],
+          endTime: panelId === MAIN_CHART && replayActive ? chartBars[chartBars.length - 1]?.time : undefined,
+        });
+        if (!isCurrent()) return;
+        const rawList = Array.isArray(res?.suggestions) ? res.suggestions : (res?.candidates ?? []).map((c: any) => ({
+          ...c, group: c.type.startsWith("fibonacci") ? "fibonacci" : c.type === "elliott_wave" ? "elliott" : "lines",
+          label: c.label, state: "waiting", strength: "moderate", score: Math.round(c.score * 100),
+          drawingTool: c.drawingTool ?? (c.type.startsWith("fibonacci") ? "fib_retracement" : c.type === "elliott_wave" ? "path" : "trendline"),
+          anchors: (c.anchors ?? []).map((a: any) => ({ time: Math.round(a.time > 1e11 ? a.time / 1000 : a.time), price: a.price })),
+        }));
+        const accepted = acceptedScanGeometry.current.get(scanKey(panelId, tf)) ?? [];
+        const normalizedList = prepareSuggestions(rawList).filter(s =>
+          merged.groups.has(s.group) && !alreadyDrawn(s, existingScanDrawings(panelId), tf)
+          && !accepted.some(a => similarScanGeometry(s, a)));
+        setScanStates(prev => {
+          if (!isCurrent()) return prev;
+          const s = prev[panelId] ?? defaultScanState(panelId);
+          return { ...prev, [panelId]: { ...s, active: true, loading: false, suggestions: normalizedList } };
+        });
+      } catch (err: any) {
+        if (!isCurrent()) return;
+        setScanStates(prev => {
+          if (!isCurrent()) return prev;
+          const s = prev[panelId] ?? defaultScanState(panelId);
+          return { ...prev, [panelId]: { ...s, loading: false, error: err?.message ?? "Chart scan failed" } };
+        });
+      }
+    },
+    [panels, loadedBarsTimeframe, instrument.symbol, contract, replayActive, chartBars, api, scanContext],
+  );
+  const scanRunnerRef = useRef(runScanForChart); scanRunnerRef.current = runScanForChart;
+  useEffect(() => {
+    const sync = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      for (const panel of panels.filter(p => p.type === "chart")) {
+        if (event.type !== "storage" && detail?.scope !== scanScope(panel.id)) continue;
+        const settings = loadScanSettings(scanScope(panel.id));
+        const patch = { ...settings, groups: new Set(settings.groups) };
+        const active = scanStatesRef.current[panel.id]?.active;
+        scanRequests.current.set(panel.id, (scanRequests.current.get(panel.id) ?? 0) + 1);
+        setScanStates(prev => ({ ...prev, [panel.id]: {
+          ...(prev[panel.id] ?? defaultScanState(panel.id)), ...patch, suggestions: [], loading: false,
+        } }));
+        if (active) void scanRunnerRef.current(panel.id, patch);
+      }
+    };
+    window.addEventListener(SCAN_SETTINGS_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(SCAN_SETTINGS_EVENT, sync);
+      window.removeEventListener("storage", sync);
+      scanRequests.current.clear();
+    };
+  }, [workspaceId, authUser?.id, panels.map(p => p.id).join("|")]);
+  function updateScanSettings(panelId: string, patch: Partial<ScanSettings>) {
+    saveScanSettings(scanScope(panelId), { ...loadScanSettings(scanScope(panelId)), ...patch });
+  }
+
+  const handleToggleScan = useCallback(
+    (panelId: string) => {
+      const current = scanStates[panelId];
+      if (current?.active) {
+        scanRequests.current.set(panelId, (scanRequests.current.get(panelId) ?? 0) + 1);
+        setScanStates((prev) => ({
+          ...prev,
+          [panelId]: {
+            ...(prev[panelId] ?? defaultScanState()),
+            active: false,
+            loading: false,
+            suggestions: [],
+            settingsOpen: false,
+          },
+        }));
+      } else {
+        void runScanForChart(panelId);
+      }
+    },
+    [scanStates, runScanForChart],
+  );
+
+  const handleToggleScanSettings = useCallback((panelId: string) => {
+    setScanStates((prev) => {
+      const current = prev[panelId] ?? defaultScanState(panelId);
+      return {
+        ...prev,
+        [panelId]: {
+          ...current,
+          settingsOpen: !current.settingsOpen,
+        },
+      };
+    });
+  }, [authUser?.id, workspaceId]);
+
+  const handleAddScanSuggestion = useCallback(
+    (panelId: string, sug: ScanAiSuggestion) => {
+      const panel = panels.find((p) => p.id === panelId);
+      const scanTf = panel ? scanTimeframeFor(panel) : "1m";
+      const drawing = scanDrawing(sug, scanTf, theme.accent);
+      const actions = chartDrawingActions.current.get(chartKey(panelId));
+      if (!actions) return;
+      const key = scanKey(panelId, scanTf);
+      const accepted = acceptedScanGeometry.current.get(key) ?? [];
+      if (alreadyDrawn(sug, existingScanDrawings(panelId), scanTf) || accepted.some(a => similarScanGeometry(sug, a))) return;
+      acceptedScanGeometry.current.set(key, [...accepted, sug]);
+      actions?.add([drawing]);
+
+      setScanStates((prev) => {
+        const cur = prev[panelId];
+        if (!cur) return prev;
+        const nextAdded = new Set(cur.addedIds);
+        nextAdded.add(sug.id);
+        return {
+          ...prev,
+          [panelId]: {
+            ...cur,
+            addedIds: nextAdded,
+            suggestions: cur.suggestions.filter((s) => s.id !== sug.id),
+          },
+        };
+      });
+    },
+    [panels, loadedBarsTimeframe, theme.accent, workspaceId, visibleDrawings, payload?.useChartProfile, authUser],
+  );
+
+  function registerChartActions(id: string) {
+    const key = chartKey(id);
+    return (actions?: ChartDrawingActions) => {
+      if (actions) chartDrawingActions.current.set(key, actions);
+      else chartDrawingActions.current.delete(key);
+    };
+  }
+
+  function previewForChart(id: string, tf: Timeframe) {
+    return scanPreview?.key === scanKey(id, id === MAIN_CHART ? loadedBarsTimeframe : tf) ? scanPreview?.drawing : undefined;
+  }
+
+  function addPanel(type: WorkspacePanelType) {
+    const id = type === "chart" && !mainPanel ? MAIN_CHART : crypto.randomUUID();
+    workspace.update((current) => {
+      if (current.panels.length >= 12 || (type === "chart" && charts.length >= 4)) return current;
+      if (type === "aiScan" && hasScanWidget) return current;
+      if (type === "tradingAccount" && current.panels.some((panel) => panel.type === "tradingAccount")) return current;
+      const panel = type === "chart" ? chartPanel(id, selectedTimeframe) : { id, type };
+      return { ...current, panels: [...current.panels, panel], tradingAccountInitialized: current.tradingAccountInitialized || type === "tradingAccount" };
+    });
+    if (type === "chart") setSelection({ workspaceId, panelId: id });
+    setVisualSelection({ workspaceId, panelId: id });
+  }
+
+  function removePanel(id: string) {
+    scanRequests.current.set(id, (scanRequests.current.get(id) ?? 0) + 1);
+    if (openScanChartId === id) setOpenScanChartId(undefined);
+    setScanStates((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    workspace.update((current) => ({ ...current, panels: current.panels.filter((panel) => panel.id !== id) }));
+    if (zoomed?.panelId === id) setZoomed(undefined);
+    setScanPreview(undefined);
+  }
+
+  function movePanel(from: string, to: string) {
+    workspace.update((current) => {
+      if (from === to) return current;
+      const next = [...current.panels];
+      const fromIndex = next.findIndex((panel) => panel.id === from);
+      const toIndex = next.findIndex((panel) => panel.id === to);
+      if (fromIndex < 0 || toIndex < 0) return current;
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return { ...current, panels: next };
+    });
+  }
+
+  function changePanelTimeframe(panelId: string, next: Timeframe) {
+    setScanPreview(undefined);
+    setScanStates((prev) => {
+      const cur = prev[panelId];
+      if (!cur) return prev;
+      return { ...prev, [panelId]: { ...cur, suggestions: [] } };
+    });
+    if (panelId === MAIN_CHART && payload?.useChartProfile && authUser) setProfileTimeframe(next);
+    workspace.update((current) => ({
+      ...current,
+      panels: current.panels.map((panel) => panel.id === panelId ? { ...panel, timeframe: next } : panel),
+    }));
+  }
+
+  async function toggleWorkspaceFullscreen() {
+    if (document.fullscreenElement === shellRef.current) {
+      await document.exitFullscreen();
+    } else if (workspaceFullscreen) {
+      setWorkspaceFullscreen(false);
+    } else {
+      try {
+        if (!shellRef.current?.requestFullscreen) throw new Error("Fullscreen unavailable");
+        await shellRef.current.requestFullscreen();
+      } catch {
+        setWorkspaceFullscreen(true);
+      }
+    }
+  }
+
+  function savePanelDrawings(id: string, state: DrawingState[]) {
+    workspace.update((current) => {
+      const panel = current.panels.find((item) => item.id === id);
+      if (!panel || JSON.stringify(panel.drawings ?? []) === JSON.stringify(state)) return current;
+      return { ...current, panels: current.panels.map((item) => item.id === id ? { ...item, drawings: state } : item) };
+    });
+  }
+
+  function renderScan(chart: WorkspacePanel | undefined, close?: () => void) {
+    if (!chart) return <div className="workspace-empty">Add a chart to run a scan.</div>;
+    const id = chart.id;
+    const scanTimeframe = scanTimeframeFor(chart);
+    const key = scanKey(id, scanTimeframe);
+    const actions = () => chartDrawingActions.current.get(chartKey(id));
+    const add = (items: readonly AiScanCandidate[]) => items.forEach(item => handleAddScanSuggestion(id, item as unknown as ScanAiSuggestion));
+    return <AiScanPanel
+      key={key}
+      settingsScope={scanScope(id)}
+      existingDrawings={existingScanDrawings(id)}
+      api={api}
+      instrument={instrument}
+      timeframe={scanTimeframe}
+      contract={contract}
+      endTime={id === MAIN_CHART && replayActive ? chartBars[chartBars.length - 1]?.time : undefined}
+      onPreview={(candidate) => setScanPreview(candidate ? { key, drawing: scanDrawing(candidate, scanTimeframe, theme.accent, true) } : undefined)}
+      onAdd={(item) => add([item])}
+      onAddAll={add}
+      onUndo={() => actions()?.undo()}
+      onClose={() => { setScanPreview(undefined); setOpenScanChartId(undefined); close?.(); }}
+    />;
+  }
+
+  function alertPanel(open: boolean, embedded = false) {
+    return (
             <AlertPanel
-              open={alertPanelOpen}
-              smcSwingLength={smc.swingLength}
+              embedded={embedded}
+              open={open}
               alerts={alerts}
-              error={alertError}
-              lastEvent={lastAlert}
+              lastEvent={embedded ? undefined : lastAlert}
               onToggle={onToggleAlert}
               onDelete={onDeleteAlert}
               onCreate={onCreateAlert}
@@ -6118,222 +5888,484 @@ export function LiveApp() {
               webPushStatus={webPushStatus}
               webPushSupported={webPushSupported}
             />
-          </div>
-        </div>
-        <StatusIndicator
-          state={connection}
-          label={connection === "disconnected" ? undefined : marketStatusLabel}
-          reason={connection === "disconnected" ? undefined : marketStatusReason}
-        />
-      </Toolbar>
-      <main className="chart-area">
-        <DrawingToolbar
-          className="drawing-toolbar-desktop"
-          activeTool={activeTool}
-          drawingCount={drawingCount}
-          onToolSelect={setActiveTool}
-          onDeleteAll={deleteAllDrawings}
-          indicatorsVisible={indicatorsVisible}
-          onIndicatorsVisibleChange={setIndicatorsVisible}
-          orderLevelsVisible={orderLevelsVisible}
-          onOrderLevelsVisibleChange={setOrderLevelsVisible}
-        />
-        <div className="chart-stack">
-          <ChartContainer
-            denseOverlayMinSpacing={denseOverlayMinSpacing}
-            symbol={SYMBOL}
-            contract={contract}
-            timeframe={timeframe}
-            bars={chartBars}
-            barsTimeframe={
-              replayActive
-                ? replayDataset?.barsTimeframe ?? loadedBarsTimeframe
-                : loadedBarsTimeframe
-            }
-            volumeDelta={chartVolumeDelta}
-            footprintBars={chartFootprintBars}
-            fvgSignals={chartFvgSignals}
-            tduSignals={chartTduSignals}
-            bigTrades={chartBigTrades}
-            smcAiSignals={chartSmcAiSignals}
-            alertSignals={chartAlertSignals}
-            alertLines={replayActive ? EMPTY_ALERT_LINES : alertLines}
-            orderLines={
-              replayActive || !orderLevelsVisible ? EMPTY_ORDER_LINES : orderLines
-            }
-            orderControls={
-              replayActive || !orderLevelsVisible
-                ? EMPTY_ORDER_CONTROLS
-                : orderControls
-            }
-            ema={visibleEma}
-            supertrend={visibleSupertrend}
-            smc={visibleSmc}
-            sweepReversal={visibleSweepReversal}
-            outsideBar={visibleOutsideBar}
-            sessionVolumeProfile={
-              indicatorsVisible && showDailyVolumeProfile && !replayActive
-                ? sessionVolumeProfile
-                : null
-            }
-            sessionVolumeProfileWidth={dailyVolumeProfileWidth}
-            sessionVolumeProfileDevelopingPoc={
-              showDailyVolumeProfileDevelopingPoc
-            }
-            showVolume
-            showVolumeDelta={indicatorsVisible && showVolumeDelta}
-            showXKontrol={indicatorsVisible && showXKontrol}
-            xKontrolSettings={xKontrolSettings}
-            showGcPushMomentum={
-              indicatorsVisible &&
-              showGcPushMomentum &&
-              gcPushMomentumEnabledForTimeframe(timeframe)
-            }
-            gcPushMomentumSettings={gcPushMomentumSettings}
-            tduSettings={tduSettings}
-            showTduSignals={
-              indicatorsVisible &&
-              showTduSignals &&
-              tduSignalsEnabledForTimeframe(timeframe) &&
-              !replayActive
-            }
-            showCvd={indicatorsVisible && showMgannWaveDelta}
-            showMgannSwing={indicatorsVisible && showMgannSwingForTimeframe}
-            mgannSwing={mgannSwing}
-            showFootprint={footprintVisible}
-            showFvgGrader={
-              indicatorsVisible &&
-              showFvgGrader &&
-              fvgGraderEnabledForTimeframe(timeframe)
-            }
-            showBigTrades={indicatorsVisible && showBigTrades && bigTradeOverlayEnabled}
-            bigTradeSettings={bigTradeSettings}
-            chartBackgroundColor={chartBackgroundColor}
-            timezoneOffsetMinutes={timezoneOffsetMinutes}
-            onTimezoneOffsetChange={setTimezoneOffsetMinutes}
-            socket={socket}
-            suspendRealtime={replayActive}
-            followLatestBar={replayActive && replayFollowLatest}
-            onChartNavigate={
-              replayActive ? () => setReplayFollowLatest(false) : undefined
-            }
-            replaySelecting={replaySelecting}
-            onBarClick={replaySelecting ? selectBarReplayStart : undefined}
-            onRequestAlertAtPrice={replayActive ? undefined : onRequestChartMenu}
-            onRealtimeBar={onChartRealtimeBar}
-            onRequestMoreHistory={replayActive ? undefined : requestMoreHistory}
-            onAlertDragCommit={replayActive ? undefined : onAlertDragCommit}
-            onAlertDelete={replayActive ? undefined : onDeleteAlert}
-            onOrderDragCommit={replayActive ? undefined : onOrderDragCommit}
-            onOrderDragBatchCommit={replayActive ? undefined : onOrderDragBatchCommit}
-            onOrderClose={replayActive ? undefined : onOrderRowClose}
-            onOrderCancel={replayActive ? undefined : onOrderRowCancel}
-            priceSnap={roundGcPrice}
-            activeTool={activeTool}
-            fixedRangeProfileMode={fixedRangeProfileMode}
-            onToolDeselect={deselectActiveTool}
-            onDrawingCountChange={setDrawingCount}
-            drawings={visibleDrawings}
-            drawingsLoadKey={visibleDrawingsLoadKey}
-            onDrawingsChange={onDrawingsStateChange}
-            deleteAllSignal={deleteAllSignal}
-            removeDrawingIds={removeDrawingIds}
-            fixedRangeDeltaProfiles={fixedRangeDeltaProfiles}
-            footprintSettings={footprintSettings}
-            onScreenshotCaptureReady={registerScreenshotCapture}
+    );
+  }
+
+  function renderChartControls(panel: WorkspacePanel) {
+    const primary = panel.id === MAIN_CHART;
+    return (
+      <div className="workspace-chart-controls" role="toolbar" aria-label="Chart toolbar">
+        {primary && (
+          <button
+            type="button"
+            className="workspace-drawing-toggle"
+            aria-label={drawingToolsOpen ? "Close drawing tools" : "Open drawing tools"}
+            title={drawingToolsOpen ? "Close drawing tools" : "Open drawing tools"}
+            aria-controls="workspace-drawing-tools"
+            aria-expanded={drawingToolsOpen}
+            onClick={() => {
+              if (drawingToolsOpen) deselectActiveTool();
+              setDrawingToolsOpen(!drawingToolsOpen);
+            }}
           >
-            <BarReplayControls
-              phase={replayPhase}
-              playing={replayPlaying}
-              speed={replaySpeed}
-              currentBar={replayActive ? replayCursorIndex + 1 : 0}
-              totalBars={replayDataset?.bars.length ?? 0}
-              selectionError={replaySelectionError}
-              loading={replayLoading}
-              loadError={replayLoadError}
-              disabled={!replayReady}
-              onCancelSelection={cancelBarReplaySelection}
-              onTogglePlaying={() => {
-                if (
-                  replayReady && replayDataset !== undefined &&
-                  replayCursorIndex < replayDataset.bars.length - 1
-                ) {
-                  setReplayPlaying((playing) => !playing);
-                }
+            <span aria-hidden="true">{drawingToolsOpen ? "‹" : "›"}</span>
+          </button>
+        )}
+        <SymbolContractLabel symbol={instrument.displaySymbol} contract={instrument.venue} />
+        <TimeframeSelector value={primary ? timeframe : panel.timeframe ?? "1m"} onChange={(next) => changePanelTimeframe(panel.id, next)} />
+        <div className="workspace-scan-toolbar-group">
+          <button
+            type="button"
+            className={`workspace-scan-toggle ${scanStates[panel.id]?.active ? "is-active" : ""}`}
+            aria-label={scanStates[panel.id]?.active ? "Disable AI Scan" : "Enable AI Scan"}
+            title="AI Scan - chart suggestions"
+            aria-pressed={scanStates[panel.id]?.active ?? false}
+            disabled={scanStates[panel.id]?.loading}
+            onClick={() => handleToggleScan(panel.id)}
+          >
+            {scanStates[panel.id]?.loading ? (
+              <span className="workspace-scan-spinner" aria-hidden="true" />
+            ) : (
+              <ScanAiSparkleIcon />
+            )}
+            <span>Scan AI</span>
+          </button>
+          <button
+            type="button"
+            className="workspace-scan-settings-btn"
+            aria-label="AI Scan filter settings"
+            title="AI Scan suggestion settings"
+            aria-expanded={scanStates[panel.id]?.settingsOpen ?? false}
+            onClick={() => handleToggleScanSettings(panel.id)}
+          >
+            <span aria-hidden="true">⚙</span>
+          </button>
+          {scanStates[panel.id]?.settingsOpen && (
+            <ScanAiSettingsPopover
+              groups={scanStates[panel.id]?.groups ?? defaultScanState(panel.id).groups}
+              strength={scanStates[panel.id]?.strength ?? defaultScanState(panel.id).strength}
+              density={scanStates[panel.id]?.density ?? defaultScanState(panel.id).density}
+              depth={scanStates[panel.id]?.depth ?? defaultScanState(panel.id).depth}
+              targetsAndStop={scanStates[panel.id]?.targetsAndStop ?? defaultScanState(panel.id).targetsAndStop}
+              patterns={scanStates[panel.id]?.patterns ?? defaultScanState(panel.id).patterns}
+              state={scanStates[panel.id]?.state ?? defaultScanState(panel.id).state}
+              onStateChange={state => updateScanSettings(panel.id, { state })}
+              onPatternsChange={patterns => updateScanSettings(panel.id, { patterns })}
+              onToggleGroup={group => {
+                const groups = loadScanSettings(scanScope(panel.id)).groups;
+                updateScanSettings(panel.id, { groups: groups.includes(group) ? groups.filter(g => g !== group) : [...groups, group] });
               }}
-              onStepBack={() => stepBarReplay(-1)}
-              onStepForward={() => stepBarReplay(1)}
-              onSpeedChange={setReplaySpeed}
-              onExit={exitBarReplay}
-            />
-            <div className="chart-quick-controls" aria-label="Quick chart controls">
-              <button
-                type="button"
-                className={`footprint-quick-toggle${
-                  footprintVisible ? " is-on" : ""
-                }`}
-                role="switch"
-                aria-checked={footprintVisible}
-                aria-label="Footprint"
-                disabled={!footprintEnabledForTimeframe(timeframe)}
-                title={
-                  footprintEnabledForTimeframe(timeframe)
-                    ? `Footprint ${footprintVisible ? "on" : "off"}`
-                    : "Footprint is available on 15s/30s/1m charts"
-                }
-                onClick={() => {
-                  if (!indicatorsVisible) {
-                    setIndicatorsVisible(true);
-                    setShowFootprint(true);
-                    return;
-                  }
-                  setShowFootprint((visible) => !visible);
-                }}
-              >
-                <span className="footprint-quick-switch" aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                className="chart-focus-toggle"
-                aria-pressed={chartFocusMode}
-                onClick={toggleChartFocusMode}
-              >
-                {chartFocusMode ? "Exit" : "Focus"}
-              </button>
-            </div>
-            <DrawingToolbar
-              className="drawing-toolbar-mobile"
-              activeTool={activeTool}
-              drawingCount={drawingCount}
-              onToolSelect={setActiveTool}
-              onDeleteAll={deleteAllDrawings}
-              indicatorsVisible={indicatorsVisible}
-              onIndicatorsVisibleChange={setIndicatorsVisible}
-              orderLevelsVisible={orderLevelsVisible}
-              onOrderLevelsVisibleChange={setOrderLevelsVisible}
-            />
-          </ChartContainer>
-          {authUser && !replayActive && (
-            <MarketOrderBar
-              account={mt5Account}
-              pending={orderPending}
-              error={orderError}
-              variant={chartFocusMode ? "drawer" : "default"}
-              drawerOpen={marketOrderDrawerOpen}
-              onDrawerOpenChange={setMarketOrderDrawerOpen}
-              openOrderCount={orderRows.length}
-              orderRows={orderRows}
-              settings={marketOrderSettings}
-              onSettingsChange={updateMarketOrderSettings}
-              onMarketOrder={onMarketOrder}
-              onOrderRowBreakEven={onOrderRowBreakEven}
-              onOrderRowSupertrendTrailing={onOrderRowSupertrendTrailing}
-              onOrderRowClose={onOrderRowClose}
-              onOrderRowClose50Percent={onOrderRowClose50Percent}
-              onOrderRowCancel={onOrderRowCancel}
+              onChangeStrength={strength => updateScanSettings(panel.id, { strength })}
+              onChangeDensity={density => updateScanSettings(panel.id, { density })}
+              onChangeDepth={depth => updateScanSettings(panel.id, { depth })}
+              onToggleTargetsAndStop={targetsAndStop => updateScanSettings(panel.id, { targetsAndStop })}
+              onRescan={() => void runScanForChart(panel.id)}
+              onClose={() => handleToggleScanSettings(panel.id)}
             />
           )}
         </div>
+        {primary && <>
+          <IndicatorToggles
+            indicatorsVisible={indicatorsVisible}
+            denseOverlayMinBarSpacing={denseOverlayMinBarSpacing}
+            onDenseOverlayMinBarSpacingChange={setDenseOverlayMinBarSpacing}
+            volumeDelta={showVolumeDelta}
+            xKontrol={showXKontrol}
+            xKontrolSettings={xKontrolSettings}
+            tduSignals={showTduSignals}
+            mgannSwing={showMgannSwing}
+            mgannSwingSettings={mgannSwing}
+            fvgGrader={showFvgGrader}
+            mgannBreak={showMgannBreak}
+            mgannBreakSettings={mgannBreakSettings}
+            fvgSignalLimit={fvgSignalLimit}
+            mgannBreakSignalHistoryBars={mgannBreakSignalHistoryBars}
+            mgannBreakSignalLimit={mgannBreakSignalLimit}
+            bigTrades={showBigTrades && bigTradeOverlayEnabled}
+            ema={ema}
+            supertrend={supertrend}
+            smc={smc}
+            sweepReversal={sweepReversal}
+            outsideBar={effectiveOutsideBar}
+            footprintSettings={footprintSettings}
+            bigTradeSettings={bigTradeSettings}
+            mgannSwingDisabled={mgannSwingDisabled}
+            tduSignalsDisabled={!tduSignalsEnabledForTimeframe(timeframe)}
+            fvgGraderDisabled={timeframe !== "1m"}
+            bigTradeDisabled={!bigTradeOverlayEnabled}
+            dailyVolumeProfile={showDailyVolumeProfile}
+            dailyVolumeProfileWidth={dailyVolumeProfileWidth}
+            dailyVolumeProfileDevelopingPoc={showDailyVolumeProfileDevelopingPoc}
+            dailyVolumeProfileRowTicks={dailyVolumeProfileRowTicks}
+            dailyVolumeProfileDays={dailyVolumeProfileDays}
+            onDailyVolumeProfileChange={setShowDailyVolumeProfile}
+            onDailyVolumeProfileWidthChange={setDailyVolumeProfileWidth}
+            onDailyVolumeProfileDevelopingPocChange={
+              setShowDailyVolumeProfileDevelopingPoc
+            }
+            onDailyVolumeProfileRowTicksChange={setDailyVolumeProfileRowTicks}
+            onDailyVolumeProfileDaysChange={setDailyVolumeProfileDays}
+            onVolumeDeltaChange={setShowVolumeDelta}
+            onXKontrolChange={setShowXKontrol}
+            onXKontrolSettingsChange={setXKontrolSettings}
+            onTduSignalsChange={setShowTduSignals}
+            onMgannSwingChange={setShowMgannSwing}
+            onMgannSwingSettingsChange={setMgannSwing}
+            onFvgGraderChange={setShowFvgGrader}
+            onMgannBreakChange={setShowMgannBreak}
+            onMgannBreakSettingsChange={onMgannBreakSettingsChange}
+            onCreateMgannBreakAlert={onCreateMgannBreakAlert}
+            onFvgSignalLimitChange={setFvgSignalLimit}
+            onMgannBreakSignalHistoryBarsChange={setMgannBreakSignalHistoryBars}
+            onMgannBreakSignalLimitChange={setMgannBreakSignalLimit}
+            onBigTradesChange={setShowBigTrades}
+            onEmaChange={setEma}
+            onSupertrendChange={setSupertrend}
+            onCreateSupertrendAlert={onCreateSupertrendAlert}
+            supertrendAlertDisabled={timeframe === "15s"}
+            onSmcChange={setSmc}
+            onSweepReversalChange={setSweepReversal}
+            onCreateSweepReversalAlert={onCreateSweepReversalAlert}
+            onOutsideBarChange={setOutsideBar}
+            onFootprintSettingsChange={setFootprintSettings}
+            onBigTradeSettingsChange={setBigTradeSettings}
+          />
+          <div className="toolbar-alert-group">
+            <ReplayToolbarButton
+              phase={replayPhase}
+              disabled={!hasLoadedCurrentSeries || bars.length < 3}
+              onClick={() => {
+                if (replayActive) {
+                  exitBarReplay();
+                } else if (replaySelecting) {
+                  cancelBarReplaySelection();
+                } else {
+                  beginBarReplaySelection();
+                }
+              }}
+            />
+            <div className="alert-popover">
+              <AlertToolbarButton
+                open={alertPanelOpen}
+                alertCount={alerts.length}
+                onClick={() =>
+                  setAlertPanelOpen((open) => {
+                    return !open;
+                  })
+                }
+              />
+              {alertPanel(alertPanelOpen)}
+            </div>
+          </div>
+        </>}
+      </div>
+    );
+  }
+
+  function renderTradingAccount() {
+    const connected = authUser && executionEnabled && mt5Account && mt5Account.connected !== false;
+    const accountLabel = mt5Account
+      ? `${mt5Account.server || mt5Account.provider || "Broker"} · ${mt5Account.login || mt5Account.accountId}`
+      : "";
+    return (
+      <section className="trading-account-widget" aria-label="Broker account">
+        {connected ? (
+          <>
+            <div className="trading-account-summary">
+              <strong title={accountLabel}>{accountLabel}</strong>
+            </div>
+            {replayActive ? (
+              <p className="trading-account-note">Exit replay to manage orders.</p>
+            ) : (
+              <MarketOrderBar
+                account={mt5Account}
+                pending={orderPending}
+                error={visibleOrderError || undefined}
+                openOrderCount={orderRows.length}
+                orderRows={orderRows}
+                settings={marketOrderSettings}
+                onSettingsChange={(settings) => {
+                  setMarketOrderSettings(sanitizeMarketOrderSettings(settings));
+                  setOrderError((prev) =>
+                    prev.startsWith("Risk sizing") ? "" : prev
+                  );
+                }}
+                onMarketOrder={onMarketOrder}
+                onOrderRowBreakEven={onOrderRowBreakEven}
+                onOrderRowSupertrendTrailing={onOrderRowSupertrendTrailing}
+                onOrderRowClose={onOrderRowClose}
+                onOrderRowClose50Percent={onOrderRowClose50Percent}
+                onOrderRowCancel={onOrderRowCancel}
+              />
+            )}
+          </>
+        ) : (
+          <div className="trading-account-connect">
+            <h2>Connect your trading account</h2>
+            <button
+              type="button"
+              className="trading-account-connect-button"
+              disabled={Boolean(authUser && !executionEnabled)}
+              onClick={onOpenMt5Account}
+            >{authUser ? "Connect Account" : "Login to connect"}</button>
+            {authUser && !executionEnabled && <p>Broker connection is currently unavailable.</p>}
+            {authUser && visibleOrderError && <p role="alert">{visibleOrderError}</p>}
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  function renderWidget(panel: WorkspacePanel) {
+    const tf = panel.timeframe ?? "1m";
+    switch (panel.type) {
+      case "chart": return <MiniChartPanel
+        sync={workspaceSync.connection(panel.id)}
+        onAutoFootprintVisibilityChange={(visible) => updateAutoFootprintPanel(panel.id, visible)}
+        denseOverlayMinBarSpacing={denseOverlayMinBarSpacing}
+        autoFootprint={indicatorsVisible}
+        api={api}
+        socket={socket}
+        instrument={instrument}
+        contract={contract}
+        timeframe={tf}
+        theme={theme}
+        timezoneOffsetMinutes={timezoneOffsetMinutes}
+        drawings={panel.drawings}
+        onDrawingsChange={(state) => savePanelDrawings(panel.id, state)}
+        onDrawingActionsReady={registerChartActions(panel.id)}
+        previewDrawing={previewForChart(panel.id, tf)}
+        scanDrafts={scanStates[panel.id]?.active ? {
+          suggestions: scanStates[panel.id]?.suggestions ?? [],
+          onAddSuggestion: (sug) => handleAddScanSuggestion(panel.id, sug),
+        } : undefined}
+        drawingKeyboardActive={selectedChart?.id === panel.id}
+      />;
+      case "aiScan": return renderScan(selectedChart, () => removePanel(panel.id));
+      case "alerts": return alertPanel(true, true);
+      case "tradingAccount": return renderTradingAccount();
+      case "footprint": return <WidgetFrame path="/fp" name={PANEL_NAMES.footprint} theme={theme} widgetId={panel.id} relay={workspaceSync} onActivate={() => activatePanel(panel.id)} />;
+      case "marketProfile": return <WidgetFrame path="/mp" name={PANEL_NAMES.marketProfile} theme={theme} widgetId={panel.id} relay={workspaceSync} onActivate={() => activatePanel(panel.id)} />;
+      case "liquidity": return <WidgetFrame path="/lq" name={PANEL_NAMES.liquidity} theme={theme} widgetId={panel.id} relay={workspaceSync} onActivate={() => activatePanel(panel.id)} />;
+    }
+  }
+
+  return (
+    <div ref={shellRef} className={appShellClassName(chartFocusMode) + (workspaceFullscreen ? " workspace-is-fullscreen" : "")}>
+      <WorkspaceToolbar
+        workspaces={workspace.workspaces}
+        activeWorkspaceId={workspaceId ?? ""}
+        theme={savedTheme}
+        fullscreen={workspaceFullscreen}
+        requestPending={workspace.requestPending || !workspace.ready}
+        hasActiveWorkspace={Boolean(payload)}
+        panelCount={panels.length}
+        chartCount={charts.length}
+        hasTradingAccount={panels.some((panel) => panel.type === "tradingAccount")}
+        onSelect={workspace.select}
+        onCreate={(template) => { void workspace.create(template); }}
+        onRename={workspace.rename}
+        onRemove={(id) => { void workspace.remove(id); }}
+        onAddPanel={addPanel}
+        onThemeChange={(nextTheme) => workspace.update((current) => ({ ...current, theme: nextTheme }))}
+        onFullscreen={() => void toggleWorkspaceFullscreen()}
+        accountControls={
+          <div className="workspace-account" role="group" aria-label="Account controls">
+            {authUser ? (
+              <>
+                <button type="button" onClick={onLogout}>
+                  Logout
+                </button>
+              </>
+            ) : (
+              <button type="button" onClick={onTradingLogin}>
+                Login
+              </button>
+            )}
+          </div>
+        }
+      />
+      {workspace.error && <div className="workspace-error" role="alert">{workspace.error} <button type="button" onClick={workspace.retrySave}>Retry</button></div>}
+      <main className="chart-area">
+        {payload && <WorkspaceBoard
+          key={workspaceId}
+          panels={panels}
+          layout={payload.layout}
+          selectedId={visualSelection && visualSelection.workspaceId === workspaceId && panels.some(panel => panel.id === visualSelection.panelId)
+            ? visualSelection.panelId : selectedChart?.id ?? panels[0]?.id}
+          fullscreenId={fullscreenPanelId}
+          compactTradingAccount={Boolean(authUser)}
+          onAccountSettings={authUser && executionEnabled && mt5Account && mt5Account.connected !== false ? onOpenMt5Account : undefined}
+          onSelect={activatePanel}
+          onFullscreen={(panelId) => setZoomed(fullscreenPanelId === panelId ? undefined : { workspaceId, panelId })}
+          onRemove={removePanel}
+          onMove={movePanel}
+          onResize={(layout) => workspace.update((current) => ({ ...current, layout }))}
+          renderChartControls={renderChartControls}
+          renderLinkControls={panel => canLinkPanel(panel) ? <WidgetLinkMenu name={PANEL_NAMES[panel.type]}
+            paused={panel.id === MAIN_CHART && replayActive}
+            value={panel.sync} onChange={sync => workspace.update(current => ({ ...current,
+              panels: current.panels.map(item => item.id === panel.id ? { ...item, sync } : item),
+            }))} /> : null}
+          renderPanel={(panel) => <>
+            {panel.id !== MAIN_CHART ? renderWidget(panel) : <div className="workspace-primary-chart">
+              <div id="workspace-drawing-tools" className="workspace-drawing-rail" hidden={!drawingToolsOpen}>
+                <DrawingToolbar
+                  activeTool={activeTool}
+                  drawingCount={drawingCount}
+                  onToolSelect={(tool) => { setFootprintZoomSelecting(false); setActiveTool(tool); }}
+                  footprintZoomSelecting={footprintZoomSelecting}
+                  footprintZoomDisabled={!footprintEnabledForTimeframe(timeframe)}
+                  onFootprintZoomSelect={() => { setActiveTool(null); setFootprintZoomSelecting((selecting) => !selecting); }}
+                  onDeleteAll={deleteAllDrawings}
+                  indicatorsVisible={indicatorsVisible}
+                  onIndicatorsVisibleChange={setIndicatorsVisible}
+                  orderLevelsVisible={orderLevelsVisible}
+                  onOrderLevelsVisibleChange={setOrderLevelsVisible}
+                  showOrderLevelsToggle={executionEnabled}
+                />
+              </div>
+              <div className="chart-stack">
+                <ChartContainer
+                  symbol={SYMBOL}
+                  contract={contract}
+                  timeframe={timeframe}
+                  bars={chartBars}
+                  barsTimeframe={
+                    replayActive
+                      ? replayDataset?.barsTimeframe ?? loadedBarsTimeframe
+                      : loadedBarsTimeframe
+                  }
+                  volumeDelta={chartVolumeDelta}
+                  footprintBars={chartFootprintBars}
+                  fvgSignals={chartFvgSignals}
+                  tduSignals={chartTduSignals}
+                  bigTrades={chartBigTrades}
+                  smcAiSignals={chartSmcAiSignals}
+                  alertSignals={chartAlertSignals}
+                  alertLines={replayActive ? EMPTY_ALERT_LINES : alertLines}
+                  orderLines={executionEnabled && !replayActive && orderLevelsVisible ? orderLines : EMPTY_ORDER_LINES}
+                  orderControls={executionEnabled && !replayActive && orderLevelsVisible ? orderControls : EMPTY_ORDER_CONTROLS}
+                  ema={visibleEma}
+                  supertrend={visibleSupertrend}
+                  smc={visibleSmc}
+                  sweepReversal={visibleSweepReversal}
+                  outsideBar={visibleOutsideBar}
+                  sessionVolumeProfile={
+                    indicatorsVisible && showDailyVolumeProfile && !replayActive
+                      ? sessionVolumeProfile
+                      : null
+                  }
+                  sessionVolumeProfileWidth={dailyVolumeProfileWidth}
+                  sessionVolumeProfileDevelopingPoc={
+                    showDailyVolumeProfileDevelopingPoc
+                  }
+                  showVolume
+                  showVolumeDelta={indicatorsVisible && showVolumeDelta}
+                  showXKontrol={indicatorsVisible && showXKontrol}
+                  xKontrolSettings={xKontrolSettings}
+                  showTduSignals={
+                    indicatorsVisible &&
+                    showTduSignals &&
+                    tduSignalsEnabledForTimeframe(timeframe) &&
+                    !replayActive
+                  }
+                  showCvd={indicatorsVisible && showMgannWaveDelta}
+                  showMgannSwing={indicatorsVisible && showMgannSwingForTimeframe}
+                  mgannSwing={mgannSwing}
+                  autoFootprint={indicatorsVisible}
+                  footprintApi={api}
+                  onAutoFootprintVisibilityChange={(visible) => updateAutoFootprintPanel(MAIN_CHART, visible)}
+                  footprintZoomSelecting={footprintZoomSelecting}
+                  onFootprintZoomSelectionComplete={() => setFootprintZoomSelecting(false)}
+                  denseOverlayMinBarSpacing={denseOverlayMinBarSpacing}
+                  showFvgGrader={indicatorsVisible && showFvgGrader && timeframe === "1m"}
+                  showBigTrades={indicatorsVisible && showBigTrades && bigTradeOverlayEnabled}
+                  bigTradeSettings={bigTradeSettings}
+                  chartBackgroundColor={theme.background}
+                  chartTheme={theme}
+                  timezoneOffsetMinutes={timezoneOffsetMinutes}
+                  onTimezoneOffsetChange={setTimezoneOffsetMinutes}
+                  socket={socket}
+                  suspendRealtime={replayActive}
+                  followLatestBar={replayActive && replayFollowLatest}
+                  onChartNavigate={
+                    replayActive ? () => setReplayFollowLatest(false) : undefined
+                  }
+                  replaySelecting={replaySelecting}
+                  onBarClick={replaySelecting ? selectBarReplayStart : undefined}
+                  onRequestAlertAtPrice={replayActive ? undefined : onRequestChartMenu}
+                  onRealtimeBar={onChartRealtimeBar}
+                  onRequestMoreHistory={replayActive ? undefined : requestMoreHistory}
+                  onAlertDragCommit={replayActive ? undefined : onAlertDragCommit}
+                  onAlertDelete={replayActive ? undefined : onDeleteAlert}
+                  onOrderDragCommit={executionEnabled && !replayActive ? onOrderDragCommit : undefined}
+                  onOrderDragBatchCommit={executionEnabled && !replayActive ? onOrderDragBatchCommit : undefined}
+                  onOrderClose={executionEnabled && !replayActive ? onOrderRowClose : undefined}
+                  onOrderCancel={executionEnabled && !replayActive ? onOrderRowCancel : undefined}
+                  priceSnap={roundGcPrice}
+                  activeTool={activeTool}
+                  fixedRangeProfileMode={fixedRangeProfileMode}
+                  onToolDeselect={deselectActiveTool}
+                  onDrawingCountChange={setDrawingCount}
+                  sync={replayActive ? undefined : workspaceSync.connection(panel.id)}
+                  drawings={payload.useChartProfile && authUser ? visibleDrawings : mainPanel?.drawings}
+                  drawingsLoadKey={payload.useChartProfile && authUser ? visibleDrawingsLoadKey : timeframe}
+                  onDrawingsChange={(state) => onDrawingsStateChange(state, payload.useChartProfile && authUser ? undefined : panel.id)}
+                  onDrawingActionsReady={registerChartActions(panel.id)}
+                  previewDrawing={previewForChart(panel.id, timeframe)}
+                  scanDrafts={scanStates[panel.id]?.active ? {
+                    suggestions: scanStates[panel.id]?.suggestions ?? [],
+                    onAddSuggestion: (sug) => handleAddScanSuggestion(panel.id, sug),
+                  } : undefined}
+                  drawingKeyboardActive={selectedChart?.id === panel.id}
+                  deleteAllSignal={deleteAllSignal}
+                  removeDrawingIds={removeDrawingIds}
+                  fixedRangeDeltaProfiles={fixedRangeDeltaProfiles}
+                  footprintSettings={footprintSettings}
+                  onScreenshotCaptureReady={registerScreenshotCapture}
+                >
+                  <BarReplayControls
+                    phase={replayPhase}
+                    playing={replayPlaying}
+                    speed={replaySpeed}
+                    currentBar={replayActive ? replayCursorIndex + 1 : 0}
+                    totalBars={replayDataset?.bars.length ?? 0}
+                    selectionError={replaySelectionError}
+                    onCancelSelection={cancelBarReplaySelection}
+                    onTogglePlaying={() => {
+                      if (
+                        replayDataset !== undefined &&
+                        replayCursorIndex < replayDataset.bars.length - 1
+                      ) {
+                        setReplayPlaying((playing) => !playing);
+                      }
+                    }}
+                    onStepBack={() => stepBarReplay(-1)}
+                    onStepForward={() => stepBarReplay(1)}
+                    onSpeedChange={setReplaySpeed}
+                    onExit={exitBarReplay}
+                  />
+                  <div className="chart-quick-controls" aria-label="Quick chart controls">
+                    <button
+                      type="button"
+                      className="chart-focus-toggle"
+                      aria-pressed={chartFocusMode}
+                      onClick={toggleChartFocusMode}
+                    >
+                      {chartFocusMode ? "Exit" : "Focus"}
+                    </button>
+                  </div>
+                </ChartContainer>
+              </div>
+            </div>}
+          </>}
+        />}
+        {!payload && !workspace.error && (
+          <div className="workspace-empty" role="status">
+            {workspace.ready ? "Choose + to create a workspace." : "Loading workspace…"}
+          </div>
+        )}
         <AuthDialog
           open={authDialogOpen}
           mode={authMode}
@@ -6347,15 +6379,28 @@ export function LiveApp() {
           onSubmit={onAuthSubmit}
           onClose={() => setAuthDialogOpen(false)}
         />
-        <Mt5AccountDialog
+        {executionEnabled && <ExnessAccountDialog
           open={mt5DialogOpen}
           account={mt5Account}
+          profileName={authUser?.username}
           pending={mt5Pending}
           error={mt5Error}
-          terminals={mt5Terminals}
-          onSubmit={onSubmitMt5Account}
+          onSubmit={onSubmitExnessAccount}
+          onAcknowledgeUncertain={(key) => {
+            const requestedUser = authUserIdRef.current;
+            setMt5Pending(true);
+            setMt5Error("");
+            void api.acknowledgeUncertainExecution(key).then((account) => {
+              if (authUserIdRef.current === requestedUser) {
+                setMt5Account(account);
+                return refreshTradingState();
+              }
+            }).catch((error: unknown) => {
+              if (authUserIdRef.current === requestedUser) setMt5Error(error instanceof Error ? error.message : "Review failed");
+            }).finally(() => { if (authUserIdRef.current === requestedUser) setMt5Pending(false); });
+          }}
           onClose={() => setMt5DialogOpen(false)}
-        />
+        />}
         {chartMenu !== undefined && (
           <ChartContextMenu
             menu={chartMenu}

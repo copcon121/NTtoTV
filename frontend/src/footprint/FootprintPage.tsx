@@ -11,6 +11,12 @@ import {
 } from "react";
 
 import { ApiClient } from "../api/client";
+import { OrderflowIcon, OrderflowMenu } from "../orderflow/OrderflowMenu";
+import { TicksPerLevelSetting, ticksPreferenceKey, useTicksPerLevel } from "../orderflow/ticksPerLevel";
+import { useWorkspaceTheme } from "../workspace/useWorkspaceTheme";
+import { useWidgetSync } from "../chart/shared/useWidgetSync";
+import { CanvasChartHost, type HostNavigation } from "../chart/shared/CanvasChartHost";
+import { workspaceColors, type WorkspaceColors } from "../workspace/themes";
 import {
   DEFAULT_FOOTPRINT_SETTINGS,
   type FootprintSettings,
@@ -31,11 +37,12 @@ import {
 } from "../chart/barReplay";
 import { resolveEndpoints } from "../endpoints";
 import { ChartSocket } from "../socket/ChartSocket";
-import type { ChartEventType, Timeframe } from "../socket/messages";
+import type { ChartEventType } from "../socket/messages";
 import { FootprintCanvas } from "./FootprintCanvas";
 import {
   type FootprintBar,
   mergeFootprint,
+  groupFootprintRows,
   selectDisplayBars,
 } from "./footprintModel";
 import { footprintSessionStartMs, parseFootprintSearchTime } from "./timeSearch";
@@ -44,8 +51,7 @@ const SYMBOL = "GC";
 const CHART_CONTRACT = SYMBOL;
 const DEFAULT_LATEST_COUNT = 500;
 const MIN_LATEST_COUNT = 10;
-const MAX_M1_LATEST_COUNT = 24 * 60;
-const MAX_30S_LATEST_COUNT = 2 * 24 * 60;
+const MAX_LATEST_COUNT = 24 * 60;
 const DEFAULT_HISTORY_CONTEXT = 3;
 const MIN_HISTORY_CONTEXT = 3;
 const MAX_HISTORY_CONTEXT = 500;
@@ -71,7 +77,6 @@ const DEFAULT_PAGE_FOOTPRINT_SETTINGS: FootprintSettings = {
 const identityPriceToY = (price: number) => price;
 
 type PageMode = "latest" | "history";
-type FootprintTimeframe = Extract<Timeframe, "30s" | "1m">;
 type FootprintNumberSettingKey =
   | "vaPercent"
   | "absorptionPercent"
@@ -114,6 +119,9 @@ type ChartDragState =
   };
 
 export function FootprintPage() {
+  const theme = useWorkspaceTheme();
+  const [ticksPerLevel, setTicksPerLevel] = useTicksPerLevel("fp", SYMBOL, 1);
+  const embedded = new URLSearchParams(window.location.search).get("widget") === "1";
   const endpoints = useMemo(() => resolveEndpoints(), []);
   const api = useMemo(() => new ApiClient({ basePath: endpoints.api }), [endpoints.api]);
   const socket = useMemo(() => new ChartSocket({ url: endpoints.ws }), [endpoints.ws]);
@@ -135,9 +143,6 @@ export function FootprintPage() {
   );
 
   const [mode, setMode] = useState<PageMode>("latest");
-  const [timeframe, setTimeframe] = useState<FootprintTimeframe>("1m");
-  const maxLatestCount =
-    timeframe === "30s" ? MAX_30S_LATEST_COUNT : MAX_M1_LATEST_COUNT;
   const [bars, setBars] = useState<ReadonlyMap<number, FootprintBar>>(new Map());
   const [barCount, setBarCount] = useState(DEFAULT_LATEST_COUNT);
   const [barCountInput, setBarCountInput] = useState(String(DEFAULT_LATEST_COUNT));
@@ -145,9 +150,6 @@ export function FootprintPage() {
   const [contextInput, setContextInput] = useState(String(DEFAULT_HISTORY_CONTEXT));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [connection, setConnection] = useState<"connected" | "disconnected">(
-    "disconnected",
-  );
   const [isDraggingChart, setIsDraggingChart] = useState(false);
   const [isScalingPrice, setIsScalingPrice] = useState(false);
   const [isPinchingChart, setIsPinchingChart] = useState(false);
@@ -165,6 +167,7 @@ export function FootprintPage() {
   const [replaySpeed, setReplaySpeed] = useState<BarReplaySpeed>(1);
   const [centerRequestNonce, setCenterRequestNonce] = useState(0);
   const [barWidthPx, setBarWidthPx] = useState(DEFAULT_BAR_WIDTH_PX);
+  const [linkedNavigation, setLinkedNavigation] = useState<HostNavigation>({ revision: 0 });
   const [rowHeightPx, setRowHeightPx] = useState(DEFAULT_ROW_HEIGHT_PX);
   const [footprintSettings, setFootprintSettings] = useState<FootprintSettings>(
     () => ({ ...DEFAULT_PAGE_FOOTPRINT_SETTINGS }),
@@ -224,7 +227,6 @@ export function FootprintPage() {
       setHistoryMeta(null);
       try {
         const result = await api.footprintDetails(SYMBOL, CHART_CONTRACT, {
-          timeframe,
           from: sessionStart,
         });
         if (seq !== requestSeq.current) return;
@@ -242,7 +244,7 @@ export function FootprintPage() {
         }
       }
     },
-    [api, timeframe],
+    [api],
   );
 
   const loadHistory = useCallback(
@@ -252,7 +254,6 @@ export function FootprintPage() {
       setError(null);
       try {
         const result = await api.footprintDetails(SYMBOL, CHART_CONTRACT, {
-          timeframe,
           at,
           context,
         });
@@ -276,7 +277,7 @@ export function FootprintPage() {
         }
       }
     },
-    [api, timeframe],
+    [api],
   );
 
   useEffect(() => {
@@ -294,27 +295,23 @@ export function FootprintPage() {
   }, [loadLatest, mode]);
 
   useEffect(() => {
-    const offOpen = socket.onOpen(() => setConnection("connected"));
-    const offClose = socket.onClose(() => setConnection("disconnected"));
     socket.connect();
     const reconnectTimer = window.setInterval(() => {
       socket.ensureConnected();
     }, 5_000);
     return () => {
       window.clearInterval(reconnectTimer);
-      offOpen();
-      offClose();
       socket.close(1000, "footprint page unmount");
     };
   }, [socket]);
 
   useEffect(() => {
     if (mode !== "latest") return;
-    socket.subscribe(SYMBOL, FOOTPRINT_EVENTS, timeframe);
+    socket.subscribe(SYMBOL, FOOTPRINT_EVENTS, "1m");
     const offFootprint = socket.on("footprint_update", (msg) => {
       if (
         msg.symbol !== SYMBOL ||
-        msg.tf !== timeframe ||
+        msg.tf !== "1m" ||
         (CHART_CONTRACT !== SYMBOL && msg.contract !== CHART_CONTRACT)
       ) {
         return;
@@ -328,15 +325,18 @@ export function FootprintPage() {
     });
     return () => {
       offFootprint();
-      socket.unsubscribe(SYMBOL, FOOTPRINT_EVENTS, timeframe);
+      socket.unsubscribe(SYMBOL, FOOTPRINT_EVENTS, "1m");
     };
-  }, [barCount, mode, socket, timeframe]);
+  }, [barCount, mode, socket]);
 
   const liveVisibleBars = useMemo(
     () => selectDisplayBars(bars, barCount),
     [bars, barCount],
   );
   const replayActive = replayDataset !== undefined;
+  const sync = useWidgetSync({ symbol: SYMBOL, contract: CHART_CONTRACT, timeframe: "1m",
+    mode: replayActive ? "replay" : "live", replayId: replayActive ? `fp-${replayDataset[0]?.time}` : undefined });
+  const linked = !!sync.config?.groupId && (sync.config.syncViewport || sync.config.syncDrawings) && !replaySelecting;
   const replayPhase: BarReplayPhase = replayActive
     ? "active"
     : replaySelecting
@@ -355,18 +355,28 @@ export function FootprintPage() {
     [replayCursorIndex, replayDataset, replaySourceBars],
   );
   const renderBars = useMemo(
-    () =>
-      replayActive || replaySelecting ? mapFromBars(visibleBars) : bars,
-    [bars, replayActive, replaySelecting, visibleBars],
+    () => {
+      const source = replayActive || replaySelecting ? mapFromBars(visibleBars) : bars;
+      if (ticksPerLevel <= 1) return source;
+      const grouped = new Map<number, FootprintBar>();
+      for (const [time, bar] of source) {
+        grouped.set(time, groupFootprintRows(bar, 0.1, ticksPerLevel));
+      }
+      return grouped;
+    },
+    [bars, replayActive, replaySelecting, visibleBars, ticksPerLevel],
   );
   const displayBarCount = Math.max(1, replaySourceBars.length);
+  const layoutBars = useMemo(() => visibleBars.map(bar => groupFootprintRows(bar, 0.1, ticksPerLevel)), [visibleBars, ticksPerLevel]);
+  const priceStep = ticksPerLevel * 0.1;
   const canvasWidth = canvasWidthForBarWidth(
     displayBarCount,
     canvasHostSize.width,
     barWidthPx,
   );
   const canvasHeight = canvasHeightForFootprint({
-    bars: visibleBars,
+    bars: layoutBars,
+    priceStep,
     displayBarCount,
     canvasWidth,
     hostHeight: canvasHostSize.height,
@@ -377,9 +387,10 @@ export function FootprintPage() {
       priceToY: identityPriceToY,
       width: canvasWidth,
       height: canvasHeight,
-      textColor: "#000000",
+      textColor: theme.text,
+      theme,
     }),
-    [canvasHeight, canvasWidth],
+    [canvasHeight, canvasWidth, theme],
   );
   const updateScrollView = useCallback((element: HTMLElement) => {
     setScrollView({ left: element.scrollLeft, top: element.scrollTop });
@@ -392,7 +403,8 @@ export function FootprintPage() {
     if (!element) return;
     const frame = window.requestAnimationFrame(() => {
       scrollLatestBarIntoView(element, {
-        bars: visibleBars,
+        bars: layoutBars,
+        priceStep,
         barCount: displayBarCount,
         rowHeightPx,
         canvasWidth,
@@ -409,7 +421,8 @@ export function FootprintPage() {
     mode,
     rowHeightPx,
     updateScrollView,
-    visibleBars,
+    layoutBars,
+    priceStep,
   ]);
   useLayoutEffect(() => {
     const targetTime = pendingCenterTimeRef.current;
@@ -418,7 +431,8 @@ export function FootprintPage() {
     if (!element) return;
     const frame = window.requestAnimationFrame(() => {
       centerFootprintBarInView(element, {
-        bars: visibleBars,
+        bars: layoutBars,
+        priceStep,
         barCount: displayBarCount,
         targetTime,
         rowHeightPx,
@@ -436,13 +450,13 @@ export function FootprintPage() {
     displayBarCount,
     rowHeightPx,
     updateScrollView,
-    visibleBars,
+    layoutBars,
+    priceStep,
   ]);
   const liveStatusText = statusFor({
     mode,
     loading,
     error,
-    connection,
     visibleCount: visibleBars.length,
     historyMeta,
     rowHeightPx,
@@ -580,7 +594,8 @@ export function FootprintPage() {
     if (!element) return;
     const frame = window.requestAnimationFrame(() => {
       scrollReplayBarIntoView(element, {
-        bars: visibleBars,
+        bars: layoutBars,
+        priceStep,
         barCount: displayBarCount,
         barIndex: replayCursorIndex,
         rowHeightPx,
@@ -598,7 +613,8 @@ export function FootprintPage() {
     replayCursorIndex,
     rowHeightPx,
     updateScrollView,
-    visibleBars,
+    layoutBars,
+    priceStep,
   ]);
 
   const submitLatest = (event: FormEvent<HTMLFormElement>) => {
@@ -607,11 +623,12 @@ export function FootprintPage() {
     const nextCount = clampInteger(
       barCountInput,
       MIN_LATEST_COUNT,
-      maxLatestCount,
+      MAX_LATEST_COUNT,
       DEFAULT_LATEST_COUNT,
     );
     setBarCount(nextCount);
     setBarCountInput(String(nextCount));
+    if (linked) setLinkedNavigation(current => ({ revision: current.revision + 1, latest: true, visibleBars: nextCount }));
     void loadLatest();
   };
 
@@ -704,7 +721,8 @@ export function FootprintPage() {
         nextBarWidth,
       );
       const nextCanvasHeight = canvasHeightForFootprint({
-        bars: visibleBars,
+        bars: layoutBars,
+        priceStep,
         displayBarCount,
         canvasWidth: nextCanvasWidth,
         hostHeight: canvasHostSize.height,
@@ -815,85 +833,59 @@ export function FootprintPage() {
   };
 
   return (
-    <div className="footprint-page">
+    <div className="footprint-page orderflow-page">
       <header className="footprint-page-toolbar">
-        <a className="footprint-page-back" href="/">
-          Chart
-        </a>
-        <a className="footprint-page-back" href="/mp">
-          MP
-        </a>
-        <a className="footprint-page-back" href="/lq">
-          LQ
-        </a>
-        <div className="footprint-page-title">
-          <span>GC Footprint</span>
-          <span>{timeframe.toUpperCase()} · {mode === "latest" ? "From 05:00 UTC+7" : "History"}</span>
-        </div>
-        <nav
-          className="timeframe-selector"
-          role="radiogroup"
-          aria-label="Footprint timeframe"
-        >
-          {(["30s", "1m"] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              role="radio"
-              aria-checked={timeframe === value}
-              onClick={() => {
-                if (value === timeframe) return;
-                exitBarReplay();
-                setMode("latest");
-                const nextMax = value === "30s"
-                  ? MAX_30S_LATEST_COUNT
-                  : MAX_M1_LATEST_COUNT;
-                setBarCount((current) => Math.min(current, nextMax));
-                setBarCountInput((current) =>
-                  String(Math.min(Number(current) || DEFAULT_LATEST_COUNT, nextMax))
-                );
-                setTimeframe(value);
-              }}
-            >
-              {value}
-            </button>
-          ))}
+        <nav className="orderflow-navigation" aria-label="Chart pages">
+          <a className="footprint-page-back" href="/">Chart</a>
+          <a className="footprint-page-back" href="/mp">MP</a>
+          <a className="footprint-page-back" href="/lq">LQ</a>
         </nav>
-        <form className="footprint-page-form" onSubmit={submitLatest}>
-          <label>
-            Bars
-            <input
-              type="number"
-              min={MIN_LATEST_COUNT}
-              max={maxLatestCount}
-              value={barCountInput}
-              onChange={(event) => setBarCountInput(event.currentTarget.value)}
-            />
-          </label>
-          <button type="submit">Latest</button>
-        </form>
-        <form className="footprint-page-form footprint-page-search" onSubmit={submitHistory}>
-          <label>
-            Time
-            <input
-              type="text"
-              value={searchInput}
-              placeholder="20:00 1/7"
-              onChange={(event) => setSearchInput(event.currentTarget.value)}
-            />
-          </label>
-          <label>
-            Context
-            <input
-              type="number"
-              min={MIN_HISTORY_CONTEXT}
-              max={MAX_HISTORY_CONTEXT}
-              value={contextInput}
-              onChange={(event) => setContextInput(event.currentTarget.value)}
-            />
-          </label>
-          <button type="submit">History</button>
-        </form>
+        <div className="footprint-page-title orderflow-title">
+          {!embedded && <><strong>GC/USD</strong><span>COMEX</span></>}<span className="orderflow-page-name">Footprint</span>
+        </div>
+        <OrderflowMenu label="Data" icon="data">
+          <div className="orderflow-popover-section">
+            <strong>Latest data</strong>
+            <form className="footprint-page-form" onSubmit={submitLatest}>
+              <label>
+                Bars
+                <input
+                  type="number"
+                  min={MIN_LATEST_COUNT}
+                  max={MAX_LATEST_COUNT}
+                  value={barCountInput}
+                  onChange={(event) => setBarCountInput(event.currentTarget.value)}
+                />
+              </label>
+              <button type="submit">Latest</button>
+            </form>
+          </div>
+          <div className="orderflow-popover-section">
+            <strong>History · UTC+7</strong>
+            <form className="footprint-page-form footprint-page-search" onSubmit={submitHistory}>
+              <label>
+                Time
+                <input
+                  type="text"
+                  value={searchInput}
+                  placeholder="20:00 1/7"
+                  onChange={(event) => setSearchInput(event.currentTarget.value)}
+                />
+              </label>
+              <label>
+                Context
+                <input
+                  type="number"
+                  min={MIN_HISTORY_CONTEXT}
+                  max={MAX_HISTORY_CONTEXT}
+                  value={contextInput}
+                  onChange={(event) => setContextInput(event.currentTarget.value)}
+                />
+              </label>
+              <button type="submit">History</button>
+            </form>
+          </div>
+        </OrderflowMenu>
         <button
           type="button"
           className={`footprint-page-replay-button${
@@ -930,8 +922,36 @@ export function FootprintPage() {
             <path d="M20 4v7h-7" />
             <path d="m10 8 5 4-5 4z" fill="currentColor" stroke="none" />
           </svg>
-          Replay
         </button>
+        <div className="footprint-page-zoom-actions" aria-label="Footprint zoom controls">
+          <button
+            type="button"
+            title="Zoom out"
+            aria-label="Zoom out"
+            onClick={() => {
+              if (linked) setLinkedNavigation(current => ({ revision: current.revision + 1, factor: 1.25 }));
+              else setBarWidthPx(w => clampBarWidth(w / 1.25));
+            }}
+          >−</button>
+          <button
+            type="button"
+            title="Zoom in"
+            aria-label="Zoom in"
+            onClick={() => {
+              if (linked) setLinkedNavigation(current => ({ revision: current.revision + 1, factor: 0.8 }));
+              else setBarWidthPx(w => clampBarWidth(w * 1.25));
+            }}
+          >+</button>
+          <button
+            type="button"
+            title="Jump to latest"
+            aria-label="Latest"
+            onClick={() => {
+              if (linked) setLinkedNavigation(current => ({ revision: current.revision + 1, latest: true }));
+              else if (canvasShellRef.current) canvasShellRef.current.scrollLeft = canvasShellRef.current.scrollWidth;
+            }}
+          >Latest</button>
+        </div>
         <div className="footprint-page-settings" ref={settingsMenuRef}>
           <button
             type="button"
@@ -939,9 +959,10 @@ export function FootprintPage() {
             aria-expanded={isSettingsOpen}
             aria-controls="footprint-display-settings"
             onClick={() => setIsSettingsOpen((open) => !open)}
+            aria-label="Settings"
+            title="Footprint settings"
           >
-            Settings
-            <span className="footprint-page-settings-chevron" aria-hidden="true" />
+            <OrderflowIcon name="settings" />
           </button>
           {isSettingsOpen ? (
             <form
@@ -950,6 +971,10 @@ export function FootprintPage() {
               aria-label="Footprint display settings"
               onSubmit={(event) => event.preventDefault()}
             >
+              <fieldset className="footprint-page-settings-group">
+                <legend>Price levels</legend>
+                <TicksPerLevelSetting value={ticksPerLevel} onChange={setTicksPerLevel} contextKey={ticksPreferenceKey("fp", SYMBOL)} />
+              </fieldset>
               <fieldset className="footprint-page-settings-group">
                 <legend>Value Area</legend>
                 <div className="footprint-page-settings-controls">
@@ -1216,11 +1241,16 @@ export function FootprintPage() {
             </form>
           ) : null}
         </div>
-        <div className="footprint-page-status" aria-live="polite">
+        <div className="footprint-page-status orderflow-status" aria-live="polite" title={statusText}>
           {statusText}
         </div>
       </header>
       <div className="footprint-page-chart-wrap">
+        {linked ? <CanvasChartHost title="Footprint" bars={[...renderBars.values()]} sync={sync} navigation={linkedNavigation}>
+          {projection => <FootprintCanvas bars={renderBars} viewport={{ ...projection, theme, textColor: theme.text }}
+            ticksPerLevel={ticksPerLevel} tickSize={0.1} rowHeightPx={rowHeightPx}
+            settings={footprintSettings} layout="chart" showXKontrol={showXKontrol} xKontrolSettings={xKontrolSettings} />}
+        </CanvasChartHost> : <>
         <main
           ref={canvasHostRef}
           className={`footprint-page-canvas-shell${isDraggingChart ? " is-dragging" : ""
@@ -1239,6 +1269,8 @@ export function FootprintPage() {
           >
             <FootprintCanvas
               bars={renderBars}
+              ticksPerLevel={ticksPerLevel}
+              tickSize={0.1}
               viewport={viewport}
               settings={footprintSettings}
               displayCount={displayBarCount}
@@ -1252,7 +1284,8 @@ export function FootprintPage() {
           </div>
         </main>
         <FootprintStickyAxes
-          bars={visibleBars}
+          bars={layoutBars}
+          priceStep={priceStep}
           barCount={displayBarCount}
           rowHeightPx={rowHeightPx}
           canvasWidth={canvasWidth}
@@ -1262,6 +1295,7 @@ export function FootprintPage() {
           scrollLeft={scrollView.left}
           scrollTop={scrollView.top}
         />
+        </>}
         <BarReplayControls
           phase={replayPhase}
           playing={replayPlaying}
@@ -1325,6 +1359,7 @@ export function footprintBarIndexAtCanvasX(input: {
 
 export function canvasHeightForFootprint(input: {
   bars: readonly FootprintBar[];
+  priceStep?: number;
   displayBarCount: number;
   canvasWidth: number;
   hostHeight: number;
@@ -1341,13 +1376,14 @@ export function canvasHeightForFootprint(input: {
     MAX_VIRTUAL_CANVAS_HEIGHT_PX,
     Math.max(
       minimumVisibleHeight,
-      estimateStandaloneCanvasHeight(input.bars, input.rowHeightPx),
+      estimateStandaloneCanvasHeight(input.bars, input.rowHeightPx, input.priceStep),
     ),
   );
 }
 
 function FootprintStickyAxes({
   bars,
+  priceStep,
   barCount,
   rowHeightPx,
   canvasWidth,
@@ -1358,6 +1394,7 @@ function FootprintStickyAxes({
   scrollTop,
 }: {
   bars: readonly FootprintBar[];
+  priceStep?: number;
   barCount: number;
   rowHeightPx: number;
   canvasWidth: number;
@@ -1368,6 +1405,8 @@ function FootprintStickyAxes({
   scrollTop: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const theme = useWorkspaceTheme();
+  const colors = useMemo(() => workspaceColors(theme), [theme]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1378,6 +1417,7 @@ function FootprintStickyAxes({
 
     const layout = computeStandaloneLayout({
       bars,
+      priceStep,
       barCount,
       rowHeightPx,
       canvasWidth,
@@ -1389,13 +1429,14 @@ function FootprintStickyAxes({
       width: viewportWidth,
       height: viewportHeight,
       scrollTop,
-    });
+    }, colors);
     drawStickyTimeAxis(ctx, bars, layout, {
       width: viewportWidth,
       height: viewportHeight,
       scrollLeft,
-    });
+    }, colors);
   }, [
+    colors,
     barCount,
     bars,
     canvasHeight,
@@ -1405,6 +1446,7 @@ function FootprintStickyAxes({
     scrollTop,
     viewportHeight,
     viewportWidth,
+    priceStep,
   ]);
 
   return (
@@ -1421,6 +1463,7 @@ function FootprintStickyAxes({
 function estimateStandaloneCanvasHeight(
   bars: readonly FootprintBar[],
   rowHeightPx: number,
+  explicitPriceStep?: number,
 ): number {
   if (bars.length === 0) return MIN_CANVAS_HEIGHT_PX;
   const prices = bars
@@ -1435,7 +1478,7 @@ function estimateStandaloneCanvasHeight(
     .filter(isFiniteNumber);
   if (prices.length === 0) return MIN_CANVAS_HEIGHT_PX;
 
-  const priceStep = inferPriceStep(bars);
+  const priceStep = explicitPriceStep ?? inferPriceStep(bars);
   let minPrice = Math.min(...prices);
   let maxPrice = Math.max(...prices);
   if (minPrice >= maxPrice) {
@@ -1466,6 +1509,7 @@ function isFiniteNumber(value: unknown): value is number {
 
 function computeStandaloneLayout(input: {
   bars: readonly FootprintBar[];
+  priceStep?: number;
   barCount: number;
   rowHeightPx: number;
   canvasWidth: number;
@@ -1494,7 +1538,7 @@ function computeStandaloneLayout(input: {
     .filter(isFiniteNumber);
   if (prices.length === 0) return null;
 
-  const priceStep = inferPriceStep(input.bars);
+  const priceStep = input.priceStep ?? inferPriceStep(input.bars);
   let dataMinPrice = Math.min(...prices);
   let dataMaxPrice = Math.max(...prices);
   if (dataMinPrice >= dataMaxPrice) {
@@ -1540,6 +1584,7 @@ function scrollLatestBarIntoView(
   element: HTMLElement,
   input: {
     bars: readonly FootprintBar[];
+    priceStep?: number;
     barCount: number;
     rowHeightPx: number;
     canvasWidth: number;
@@ -1571,6 +1616,7 @@ export function centerFootprintBarInView(
   element: HTMLElement,
   input: {
     bars: readonly FootprintBar[];
+    priceStep?: number;
     barCount: number;
     targetTime: number;
     rowHeightPx: number;
@@ -1629,6 +1675,7 @@ function scrollReplayBarIntoView(
   element: HTMLElement,
   input: {
     bars: readonly FootprintBar[];
+    priceStep?: number;
     barCount: number;
     barIndex: number;
     rowHeightPx: number;
@@ -1690,13 +1737,14 @@ function drawStickyPriceAxis(
   ctx: CanvasRenderingContext2D,
   layout: NonNullable<ReturnType<typeof computeStandaloneLayout>>,
   viewport: { width: number; height: number; scrollTop: number },
+  colors: WorkspaceColors,
 ): void {
   const axisW = 64;
   const axisX = Math.max(0, viewport.width - axisW);
-  ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+  ctx.fillStyle = colors.background;
   ctx.fillRect(axisX, 0, axisW, viewport.height);
 
-  ctx.strokeStyle = "#737373";
+  ctx.strokeStyle = colors.border;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(axisX, 0);
@@ -1709,7 +1757,7 @@ function drawStickyPriceAxis(
   ctx.font = "11px Arial";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = "#666666";
+  ctx.fillStyle = colors.text;
   for (let tick = minTick; tick <= maxTick; tick++) {
     if ((tick - minTick) % labelEvery !== 0 && tick !== maxTick) continue;
     const price = roundPrice(tick * layout.priceStep);
@@ -1724,13 +1772,14 @@ function drawStickyTimeAxis(
   bars: readonly FootprintBar[],
   layout: NonNullable<ReturnType<typeof computeStandaloneLayout>>,
   viewport: { width: number; height: number; scrollLeft: number },
+  colors: WorkspaceColors,
 ): void {
   const axisH = 34;
   const axisY = Math.max(0, viewport.height - axisH);
-  ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+  ctx.fillStyle = colors.background;
   ctx.fillRect(0, axisY, viewport.width, axisH);
 
-  ctx.strokeStyle = "#737373";
+  ctx.strokeStyle = colors.border;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, axisY + 6);
@@ -1738,7 +1787,7 @@ function drawStickyTimeAxis(
   ctx.stroke();
 
   const every = Math.max(1, Math.ceil(58 / Math.max(1, layout.barW)));
-  ctx.fillStyle = "#666666";
+  ctx.fillStyle = colors.text;
   ctx.font = "11px Arial";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
@@ -1848,7 +1897,6 @@ function statusFor(input: {
   mode: PageMode;
   loading: boolean;
   error: string | null;
-  connection: "connected" | "disconnected";
   visibleCount: number;
   historyMeta: { at: number; context: number; targetFound: boolean } | null;
   rowHeightPx: number;
@@ -1860,7 +1908,7 @@ function statusFor(input: {
     const state = input.historyMeta.targetFound ? "found" : "nearest";
     return `${formatTime(input.historyMeta.at)} ${state} - ${input.visibleCount} bars - ${scale}`;
   }
-  return `${input.visibleCount} bars - ${input.connection} - ${scale}`;
+  return `${input.visibleCount} bars · ${scale}`;
 }
 
 function formatTime(time: number): string {

@@ -64,7 +64,7 @@ export function anchorFromPoint(
   series: DrawingSeries,
   point: ChartPoint,
 ): AnchorPoint | null {
-  const logical = chart.timeScale().coordinateToLogical(point.x);
+  const logical = logicalForCoordinate(chart, point.x);
   const price = series.coordinateToPrice(point.y);
   if (logical === null || price === null) return null;
   return {
@@ -80,6 +80,23 @@ function timeForLogical(
   logical: Logical,
 ): UTCTimestamp {
   const logicalNumber = logical as number;
+  const values = series.data();
+  // Use the actual loaded calendar for fractional anchors across session/data gaps.
+  // A median bar step is only meaningful outside covered history.
+  let low = 0, high = values.length - 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const time = numericTime(values[mid]);
+    if (time === undefined) break;
+    const index = logicalForDataPoint(chart, mid, time);
+    if (index === logicalNumber) return time as UTCTimestamp;
+    if (index < logicalNumber) low = mid + 1; else high = mid - 1;
+  }
+  const leftTime = numericTime(values[high]), rightTime = numericTime(values[low]);
+  if (leftTime !== undefined && rightTime !== undefined && leftTime < rightTime) {
+    const leftIndex = logicalForDataPoint(chart, high, leftTime), rightIndex = logicalForDataPoint(chart, low, rightTime);
+    return (leftTime + (logicalNumber - leftIndex) / (rightIndex - leftIndex) * (rightTime - leftTime)) as UTCTimestamp;
+  }
   const leftLogical = Math.floor(logicalNumber);
   const leftData = series.dataByIndex(leftLogical, MismatchDirection.NearestLeft);
   const rightData = series.dataByIndex(leftLogical, MismatchDirection.NearestRight);
@@ -146,16 +163,38 @@ function coordinateForTime(
   const exact = chart.timeScale().timeToCoordinate(time as Time);
   if (exact !== null) return exact;
   const logical = logicalForTime(chart, series, time);
-  return logical === null ? null : chart.timeScale().logicalToCoordinate(logical);
+  return coordinateForLogical(chart, logical ?? undefined);
 }
 
-function coordinateForLogical(
+export function coordinateForLogical(
   chart: ChartApi,
   logical: number | undefined,
 ): Coordinate | null {
-  return Number.isFinite(logical)
-    ? chart.timeScale().logicalToCoordinate(logical as Logical)
-    : null;
+  if (logical === undefined || !Number.isFinite(logical)) return null;
+  const scale = chart.timeScale();
+  const left = Math.floor(logical);
+  const leftX = scale.logicalToCoordinate(left as Logical);
+  if (leftX === null || !Number.isFinite(leftX)) return null;
+  if (logical === left) return leftX;
+  // lightweight-charts accepts integer indices here and returns zero for fractions.
+  // UTC anchors and half-bar candle centers need the continuous native spacing.
+  const rightX = scale.logicalToCoordinate((left + 1) as Logical);
+  return rightX === null || !Number.isFinite(rightX) ? null
+    : (leftX + (logical - left) * (rightX - leftX)) as Coordinate;
+}
+
+export function logicalForCoordinate(chart: ChartApi, x: number): Logical | null {
+  if (!Number.isFinite(x)) return null;
+  const scale = chart.timeScale();
+  const nearest = scale.coordinateToLogical(x);
+  if (nearest === null || !Number.isFinite(nearest)) return null;
+  // The inverse native API snaps to an integer too. Recover the continuous
+  // position from its neighbouring native coordinates instead of losing UTC.
+  const left = Math.floor(nearest);
+  const leftX = scale.logicalToCoordinate(left as Logical);
+  const rightX = scale.logicalToCoordinate((left + 1) as Logical);
+  if (leftX === null || rightX === null || !Number.isFinite(leftX) || !Number.isFinite(rightX) || rightX === leftX) return null;
+  return (left + (x - leftX) / (rightX - leftX)) as Logical;
 }
 
 function logicalForTime(

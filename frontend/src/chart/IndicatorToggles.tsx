@@ -1,10 +1,4 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import {
-  MAX_DENSE_OVERLAY_BAR_SPACING,
-  MIN_DENSE_OVERLAY_BAR_SPACING,
-  normalizeDenseOverlayMinSpacing,
-} from "./zoomVisibility";
-import { DEFAULT_TDU_SETTINGS, normalizeTduSettings, type TduSettings } from "./tduSettings";
 
 import {
   DEFAULT_OUTSIDE_BAR_SETTINGS,
@@ -37,16 +31,17 @@ import {
 import {
   DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
   DEFAULT_SESSION_VOLUME_PROFILE_ROW_TICKS,
-  normalizeSessionVolumeProfileRowTicks,
+  DEFAULT_SESSION_VOLUME_PROFILE_DAYS,
   MAX_SESSION_VOLUME_PROFILE_WIDTH_PX,
   MIN_SESSION_VOLUME_PROFILE_WIDTH_PX,
+  MIN_SESSION_VOLUME_PROFILE_ROW_TICKS,
+  MAX_SESSION_VOLUME_PROFILE_ROW_TICKS,
+  MIN_SESSION_VOLUME_PROFILE_DAYS,
+  MAX_SESSION_VOLUME_PROFILE_DAYS,
   normalizeSessionVolumeProfileWidth,
+  normalizeSessionVolumeProfileRowTicks,
+  normalizeSessionVolumeProfileDays,
 } from "./sessionVolumeProfileSettings";
-import {
-  DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
-  normalizeGcPushMomentumSettings,
-  type GcPushMomentumSettings,
-} from "./gcPushMomentum";
 import {
   DEFAULT_SUPERTREND_SETTINGS,
   normalizeSupertrendSettings,
@@ -57,6 +52,7 @@ import {
   normalizeXKontrolDisplaySettings,
   type XKontrolDisplaySettings,
 } from "./xKontrol";
+import { MIN_DENSE_OVERLAY_BAR_SPACING, normalizeDenseOverlayBarSpacing } from "./zoomVisibility";
 
 /**
  * IndicatorToggles â€” TradingView-style "Indicators" dropdown.
@@ -64,8 +60,7 @@ import {
  * A single button opens a popover listing the available indicators, each with
  * an enable/disable checkbox. Volume is intentionally always enabled. The EMA
  * row has a gear button that opens a small settings panel to edit the EMA
- * length and line color. Footprint is M1-only and can be disabled
- * independently. EMA is an explicitly-added overlay (Req 19.3).
+ * length and line color. The Footprint row configures the zoomed chart.
  */
 export interface EmaSettings {
   enabled: boolean;
@@ -191,18 +186,14 @@ export function normalizeMgannBreakSignalLimit(value: unknown): number {
 export interface IndicatorTogglesProps {
   /** Temporary master visibility; individual indicator settings stay unchanged. */
   indicatorsVisible?: boolean;
-  denseOverlayMinSpacing?: number;
-  onDenseOverlayMinSpacingChange?: (value: number) => void;
+  denseOverlayMinBarSpacing?: number;
+  onDenseOverlayMinBarSpacingChange?: (spacing: number) => void;
   volumeDelta?: boolean;
   xKontrol?: boolean;
   xKontrolSettings?: Partial<XKontrolDisplaySettings>;
-  gcPushMomentum?: boolean;
   tduSignals?: boolean;
-  tduSettings?: Partial<TduSettings>;
-  gcPushMomentumSettings?: Partial<GcPushMomentumSettings>;
   mgannSwing?: boolean;
   mgannSwingSettings?: Partial<MgannSwingSettings>;
-  footprint: boolean;
   fvgGrader?: boolean;
   fvgSignalLimit?: number;
   /** Whether mGann Break L/S markers are visible on the chart. */
@@ -219,21 +210,15 @@ export interface IndicatorTogglesProps {
   footprintSettings: FootprintSettings;
   bigTradeSettings?: BigTradeSettings;
   mgannSwingDisabled?: boolean;
-  gcPushMomentumDisabled?: boolean;
   tduSignalsDisabled?: boolean;
-  footprintDisabled?: boolean;
   fvgGraderDisabled?: boolean;
   bigTradeDisabled?: boolean;
   onVolumeDeltaChange?: (enabled: boolean) => void;
   onXKontrolChange?: (enabled: boolean) => void;
   onXKontrolSettingsChange?: (next: XKontrolDisplaySettings) => void;
-  onGcPushMomentumChange?: (enabled: boolean) => void;
   onTduSignalsChange?: (enabled: boolean) => void;
-  onTduSettingsChange?: (next: TduSettings) => void;
-  onGcPushMomentumSettingsChange?: (next: GcPushMomentumSettings) => void;
   onMgannSwingChange?: (enabled: boolean) => void;
   onMgannSwingSettingsChange?: (next: MgannSwingSettings) => void;
-  onFootprintChange: (enabled: boolean) => void;
   onFvgGraderChange?: (enabled: boolean) => void;
   onFvgSignalLimitChange?: (limit: number) => void;
   onMgannBreakChange?: (enabled: boolean) => void;
@@ -243,12 +228,14 @@ export interface IndicatorTogglesProps {
   onCreateMgannBreakAlert?: () => void;
   dailyVolumeProfile?: boolean;
   dailyVolumeProfileWidth?: number;
-  dailyVolumeProfileRowTicks?: number;
   dailyVolumeProfileDevelopingPoc?: boolean;
+  dailyVolumeProfileRowTicks?: number;
+  dailyVolumeProfileDays?: number;
   onDailyVolumeProfileChange?: (enabled: boolean) => void;
   onDailyVolumeProfileWidthChange?: (widthPx: number) => void;
-  onDailyVolumeProfileRowTicksChange?: (ticks: number) => void;
   onDailyVolumeProfileDevelopingPocChange?: (enabled: boolean) => void;
+  onDailyVolumeProfileRowTicksChange?: (rowTicks: number) => void;
+  onDailyVolumeProfileDaysChange?: (days: number) => void;
   onBigTradesChange: (enabled: boolean) => void;
   onEmaChange: (next: EmaSettings) => void;
   onSupertrendChange?: (next: SupertrendSettings) => void;
@@ -310,18 +297,14 @@ function IndicatorRow({
 
 export function IndicatorToggles({
   indicatorsVisible = true,
-  denseOverlayMinSpacing = MIN_DENSE_OVERLAY_BAR_SPACING,
-  onDenseOverlayMinSpacingChange = () => {},
+  denseOverlayMinBarSpacing = MIN_DENSE_OVERLAY_BAR_SPACING,
+  onDenseOverlayMinBarSpacingChange = () => {},
   volumeDelta = false,
   xKontrol = false,
   xKontrolSettings = DEFAULT_XKONTROL_DISPLAY_SETTINGS,
-  gcPushMomentum = false,
   tduSignals = true,
-  tduSettings = DEFAULT_TDU_SETTINGS,
-  gcPushMomentumSettings = DEFAULT_GC_PUSH_MOMENTUM_SETTINGS,
   mgannSwing = false,
   mgannSwingSettings = DEFAULT_MGANN_SWING_SETTINGS,
-  footprint,
   fvgGrader = false,
   fvgSignalLimit = DEFAULT_FVG_SIGNAL_LIMIT,
   mgannBreak = true,
@@ -331,8 +314,9 @@ export function IndicatorToggles({
   bigTrades,
   dailyVolumeProfile = false,
   dailyVolumeProfileWidth = DEFAULT_SESSION_VOLUME_PROFILE_WIDTH_PX,
-  dailyVolumeProfileRowTicks = DEFAULT_SESSION_VOLUME_PROFILE_ROW_TICKS,
   dailyVolumeProfileDevelopingPoc = true,
+  dailyVolumeProfileRowTicks = DEFAULT_SESSION_VOLUME_PROFILE_ROW_TICKS,
+  dailyVolumeProfileDays = DEFAULT_SESSION_VOLUME_PROFILE_DAYS,
   ema,
   supertrend = DEFAULT_SUPERTREND_SETTINGS,
   smc,
@@ -341,21 +325,15 @@ export function IndicatorToggles({
   footprintSettings,
   bigTradeSettings = DEFAULT_BIG_TRADE_SETTINGS,
   mgannSwingDisabled = false,
-  gcPushMomentumDisabled = false,
   tduSignalsDisabled = false,
-  footprintDisabled = false,
   fvgGraderDisabled = false,
   bigTradeDisabled = false,
   onVolumeDeltaChange = () => {},
   onXKontrolChange = () => {},
   onXKontrolSettingsChange = () => {},
-  onGcPushMomentumChange = () => {},
   onTduSignalsChange = () => {},
-  onTduSettingsChange = () => {},
-  onGcPushMomentumSettingsChange = () => {},
   onMgannSwingChange = () => {},
   onMgannSwingSettingsChange = () => {},
-  onFootprintChange,
   onFvgGraderChange = () => {},
   onFvgSignalLimitChange = () => {},
   onMgannBreakChange = () => {},
@@ -365,8 +343,9 @@ export function IndicatorToggles({
   onCreateMgannBreakAlert = () => {},
   onDailyVolumeProfileChange = () => {},
   onDailyVolumeProfileWidthChange = () => {},
-  onDailyVolumeProfileRowTicksChange = () => {},
   onDailyVolumeProfileDevelopingPocChange = () => {},
+  onDailyVolumeProfileRowTicksChange = () => {},
+  onDailyVolumeProfileDaysChange = () => {},
   onBigTradesChange,
   onEmaChange,
   onSupertrendChange = () => {},
@@ -380,51 +359,31 @@ export function IndicatorToggles({
   onBigTradeSettingsChange = () => {},
 }: IndicatorTogglesProps) {
   const outsideBarConfig = normalizeOutsideBarSettings(outsideBar);
-  const tduConfig = normalizeTduSettings(tduSettings);
   const supertrendConfig = normalizeSupertrendSettings(supertrend);
   const sweepConfig = normalizeSweepReversalSettings(sweepReversal);
   const mgannSwingConfig = normalizeMgannSwingSettings(mgannSwingSettings);
   const mgannBreakConfig = normalizeMgannBreakSettings(mgannBreakSettings);
-  const gcPushMomentumConfig = normalizeGcPushMomentumSettings(
-    gcPushMomentumSettings,
-  );
   const xKontrolConfig = normalizeXKontrolDisplaySettings(xKontrolSettings);
   const outsideBarDeltaFilter = outsideBarConfig.deltaFilter;
+  const normalizedDailyVolumeProfileWidth =
+    normalizeSessionVolumeProfileWidth(dailyVolumeProfileWidth);
+  const normalizedDailyVolumeProfileRowTicks =
+    normalizeSessionVolumeProfileRowTicks(dailyVolumeProfileRowTicks);
+  const normalizedDailyVolumeProfileDays =
+    normalizeSessionVolumeProfileDays(dailyVolumeProfileDays);
   const [open, setOpen] = useState(false);
-  const [denseOverlayMinSpacingDraft, setDenseOverlayMinSpacingDraft] = useState(
-    String(denseOverlayMinSpacing),
-  );
-  useEffect(() => {
-    setDenseOverlayMinSpacingDraft(String(denseOverlayMinSpacing));
-  }, [denseOverlayMinSpacing]);
+  const [denseOverlaySpacingDraft, setDenseOverlaySpacingDraft] = useState(String(denseOverlayMinBarSpacing));
+  useEffect(() => setDenseOverlaySpacingDraft(String(denseOverlayMinBarSpacing)), [denseOverlayMinBarSpacing]);
   const [combinedSettingsOpen, setCombinedSettingsOpen] = useState(false);
   const [supertrendSettingsOpen, setSupertrendSettingsOpen] = useState(false);
   const [dailyVolumeProfileSettingsOpen, setDailyVolumeProfileSettingsOpen] =
     useState(false);
+  const [dailyVolumeProfileRowTicksDraft, setDailyVolumeProfileRowTicksDraft] =
+    useState(String(normalizedDailyVolumeProfileRowTicks));
+  const [dailyVolumeProfileDaysDraft, setDailyVolumeProfileDaysDraft] =
+    useState(String(normalizedDailyVolumeProfileDays));
   const [mgannSwingSettingsOpen, setMgannSwingSettingsOpen] = useState(false);
-  const [gcPushMomentumSettingsOpen, setGcPushMomentumSettingsOpen] =
-    useState(false);
   const [xKontrolSettingsOpen, setXKontrolSettingsOpen] = useState(false);
-  const [tduSettingsOpen, setTduSettingsOpen] = useState(false);
-  const [tduSigmaDrafts, setTduSigmaDrafts] = useState([
-    String(tduConfig.level1Sigma), String(tduConfig.level2Sigma), String(tduConfig.level3Sigma),
-  ]);
-  const [tduSigmaError, setTduSigmaError] = useState("");
-  useEffect(() => {
-    setTduSigmaDrafts([String(tduConfig.level1Sigma), String(tduConfig.level2Sigma), String(tduConfig.level3Sigma)]);
-    setTduSigmaError("");
-  }, [tduConfig.level1Sigma, tduConfig.level2Sigma, tduConfig.level3Sigma]);
-  const commitTduSigma = () => {
-    const values = tduSigmaDrafts.map(Number);
-    if (tduSigmaDrafts.some((value) => value.trim() === "") ||
-        values.some((value) => !Number.isFinite(value) || value < 0.1 || value > 100) ||
-        values[0] >= values[1] || values[1] >= values[2]) {
-      setTduSigmaError("Use 0.1-100 and Level 1 < Level 2 < Level 3.");
-      return;
-    }
-    setTduSigmaError("");
-    onTduSettingsChange({ ...tduConfig, level1Sigma: values[0], level2Sigma: values[1], level3Sigma: values[2] });
-  };
   const [smcSettingsOpen, setSmcSettingsOpen] = useState(false);
   const [sweepSettingsOpen, setSweepSettingsOpen] = useState(false);
   const [fpSettingsOpen, setFpSettingsOpen] = useState(false);
@@ -455,12 +414,6 @@ export function IndicatorToggles({
     String(smc.fvgThresholdMultiplier),
   );
   const [vaPercentDraft, setVaPercentDraft] = useState(String(footprintSettings.vaPercent));
-  const [profileRowTicksDraft, setProfileRowTicksDraft] = useState(
-    String(normalizeSessionVolumeProfileRowTicks(dailyVolumeProfileRowTicks)),
-  );
-  useEffect(() => {
-    setProfileRowTicksDraft(String(normalizeSessionVolumeProfileRowTicks(dailyVolumeProfileRowTicks)));
-  }, [dailyVolumeProfileRowTicks]);
   const [imbMinVolDraft, setImbMinVolDraft] = useState(String(footprintSettings.imbalanceMinVolume));
   const [absPercentDraft, setAbsPercentDraft] = useState(String(footprintSettings.absorptionPercent));
   const [absDepthDraft, setAbsDepthDraft] = useState(String(footprintSettings.absorptionDepth));
@@ -490,20 +443,6 @@ export function IndicatorToggles({
   );
   const [mgannImpulseBreakDraft, setMgannImpulseBreakDraft] = useState(
     String(mgannSwingConfig.impulseBreakTicks),
-  );
-  const [gcPushHorizonDraft, setGcPushHorizonDraft] = useState(
-    String(gcPushMomentumConfig.horizonBars),
-  );
-  const [gcPushSmoothingDraft, setGcPushSmoothingDraft] = useState(
-    String(gcPushMomentumConfig.pushSmoothingBars),
-  );
-  const [gcPushSignalSmoothingDraft, setGcPushSignalSmoothingDraft] = useState(
-    String(gcPushMomentumConfig.signalSmoothingBars),
-  );
-  const [gcPushVolatilityHalfLifeDraft, setGcPushVolatilityHalfLifeDraft] =
-    useState(String(gcPushMomentumConfig.volatilityHalfLifeBars));
-  const [gcPushStrongPercentileDraft, setGcPushStrongPercentileDraft] = useState(
-    String(Math.round(gcPushMomentumConfig.strongPercentile * 100)),
   );
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -617,42 +556,18 @@ export function IndicatorToggles({
   }, [mgannSwingConfig.impulseBreakTicks]);
 
   useEffect(() => {
-    setGcPushHorizonDraft(String(gcPushMomentumConfig.horizonBars));
-  }, [gcPushMomentumConfig.horizonBars]);
+    setDailyVolumeProfileRowTicksDraft(String(normalizedDailyVolumeProfileRowTicks));
+  }, [normalizedDailyVolumeProfileRowTicks]);
 
   useEffect(() => {
-    setGcPushSmoothingDraft(String(gcPushMomentumConfig.pushSmoothingBars));
-  }, [gcPushMomentumConfig.pushSmoothingBars]);
-
-  useEffect(() => {
-    setGcPushSignalSmoothingDraft(
-      String(gcPushMomentumConfig.signalSmoothingBars),
-    );
-  }, [gcPushMomentumConfig.signalSmoothingBars]);
-
-  useEffect(() => {
-    setGcPushVolatilityHalfLifeDraft(
-      String(gcPushMomentumConfig.volatilityHalfLifeBars),
-    );
-  }, [gcPushMomentumConfig.volatilityHalfLifeBars]);
-
-  useEffect(() => {
-    setGcPushStrongPercentileDraft(
-      String(Math.round(gcPushMomentumConfig.strongPercentile * 100)),
-    );
-  }, [gcPushMomentumConfig.strongPercentile]);
+    setDailyVolumeProfileDaysDraft(String(normalizedDailyVolumeProfileDays));
+  }, [normalizedDailyVolumeProfileDays]);
 
   useEffect(() => {
     if (mgannSwingDisabled) {
       setMgannSwingSettingsOpen(false);
     }
   }, [mgannSwingDisabled]);
-
-  useEffect(() => {
-    if (gcPushMomentumDisabled) {
-      setGcPushMomentumSettingsOpen(false);
-    }
-  }, [gcPushMomentumDisabled]);
 
   useEffect(() => {
     setVaPercentDraft(String(footprintSettings.vaPercent));
@@ -684,7 +599,6 @@ export function IndicatorToggles({
         setSupertrendSettingsOpen(false);
         setDailyVolumeProfileSettingsOpen(false);
         setMgannSwingSettingsOpen(false);
-        setGcPushMomentumSettingsOpen(false);
         setSmcSettingsOpen(false);
         setSweepSettingsOpen(false);
         setFpSettingsOpen(false);
@@ -698,7 +612,6 @@ export function IndicatorToggles({
         setCombinedSettingsOpen(false);
         setDailyVolumeProfileSettingsOpen(false);
         setMgannSwingSettingsOpen(false);
-        setGcPushMomentumSettingsOpen(false);
         setSmcSettingsOpen(false);
         setSweepSettingsOpen(false);
         setFpSettingsOpen(false);
@@ -721,20 +634,16 @@ export function IndicatorToggles({
     1 +
     (volumeDelta ? 1 : 0) +
     (xKontrol ? 1 : 0) +
-    (gcPushMomentum && !gcPushMomentumDisabled ? 1 : 0) +
     (tduSignals && !tduSignalsDisabled ? 1 : 0) +
     (dailyVolumeProfile ? 1 : 0) +
     (mgannSwing && !mgannSwingDisabled ? 1 : 0) +
     (combinedIndicatorActive ? 1 : 0) +
     (supertrendConfig.enabled ? 1 : 0) +
-    (footprint ? 1 : 0) +
     (fvgGrader ? 1 : 0) +
     (mgannBreak ? 1 : 0) +
     (bigTrades ? 1 : 0) +
     (smc.enabled ? 1 : 0) +
     (sweepConfig.enabled ? 1 : 0);
-  const normalizedDailyVolumeProfileWidth =
-    normalizeSessionVolumeProfileWidth(dailyVolumeProfileWidth);
   const normalizedFvgSignalLimit = normalizeFvgSignalLimit(fvgSignalLimit);
   const normalizedMgannBreakSignalHistoryBars = normalizeMgannBreakSignalHistoryBars(
     mgannBreakSignalHistoryBars,
@@ -912,68 +821,6 @@ export function IndicatorToggles({
     }
   };
 
-  const updateGcPushMomentum = (
-    next: Partial<GcPushMomentumSettings>,
-  ) => {
-    onGcPushMomentumSettingsChange(
-      normalizeGcPushMomentumSettings({
-        ...gcPushMomentumConfig,
-        ...next,
-      }),
-    );
-  };
-
-  const commitGcPushHorizon = () => {
-    const parsed = Math.round(Number(gcPushHorizonDraft));
-    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 12) {
-      updateGcPushMomentum({ horizonBars: parsed });
-    } else {
-      setGcPushHorizonDraft(String(gcPushMomentumConfig.horizonBars));
-    }
-  };
-
-  const commitGcPushSignalSmoothing = () => {
-    const parsed = Math.round(Number(gcPushSignalSmoothingDraft));
-    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 50) {
-      updateGcPushMomentum({ signalSmoothingBars: parsed });
-    } else {
-      setGcPushSignalSmoothingDraft(
-        String(gcPushMomentumConfig.signalSmoothingBars),
-      );
-    }
-  };
-
-  const commitGcPushSmoothing = () => {
-    const parsed = Math.round(Number(gcPushSmoothingDraft));
-    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 50) {
-      updateGcPushMomentum({ pushSmoothingBars: parsed });
-    } else {
-      setGcPushSmoothingDraft(String(gcPushMomentumConfig.pushSmoothingBars));
-    }
-  };
-
-  const commitGcPushVolatilityHalfLife = () => {
-    const parsed = Math.round(Number(gcPushVolatilityHalfLifeDraft));
-    if (Number.isFinite(parsed) && parsed >= 10 && parsed <= 240) {
-      updateGcPushMomentum({ volatilityHalfLifeBars: parsed });
-    } else {
-      setGcPushVolatilityHalfLifeDraft(
-        String(gcPushMomentumConfig.volatilityHalfLifeBars),
-      );
-    }
-  };
-
-  const commitGcPushStrongPercentile = () => {
-    const parsed = Math.round(Number(gcPushStrongPercentileDraft));
-    if (Number.isFinite(parsed) && parsed >= 80 && parsed <= 99) {
-      updateGcPushMomentum({ strongPercentile: parsed / 100 });
-    } else {
-      setGcPushStrongPercentileDraft(
-        String(Math.round(gcPushMomentumConfig.strongPercentile * 100)),
-      );
-    }
-  };
-
   const commitImbMinVol = () => {
     const parsed = Math.round(Number(imbMinVolDraft));
     if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1000) {
@@ -1059,6 +906,33 @@ export function IndicatorToggles({
     }
   };
 
+  const commitDenseOverlaySpacing = () => {
+    const parsed = denseOverlaySpacingDraft.trim() === "" ? NaN : Number(denseOverlaySpacingDraft);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+      setDenseOverlaySpacingDraft(String(denseOverlayMinBarSpacing));
+      return;
+    }
+    const next = normalizeDenseOverlayBarSpacing(parsed);
+    onDenseOverlayMinBarSpacingChange(next);
+    setDenseOverlaySpacingDraft(String(next));
+  };
+
+  const commitDailyVolumeProfileRowTicks = () => {
+    const next = normalizeSessionVolumeProfileRowTicks(dailyVolumeProfileRowTicksDraft);
+    setDailyVolumeProfileRowTicksDraft(String(next));
+    if (next !== normalizedDailyVolumeProfileRowTicks) {
+      onDailyVolumeProfileRowTicksChange(next);
+    }
+  };
+
+  const commitDailyVolumeProfileDays = () => {
+    const next = normalizeSessionVolumeProfileDays(dailyVolumeProfileDaysDraft);
+    setDailyVolumeProfileDaysDraft(String(next));
+    if (next !== normalizedDailyVolumeProfileDays) {
+      onDailyVolumeProfileDaysChange(next);
+    }
+  };
+
   return (
     <div className="indicator-toggles" ref={rootRef}>
       <button
@@ -1081,37 +955,25 @@ export function IndicatorToggles({
       </button>
       {open && (
         <div className="indicator-menu" role="menu" aria-label="Indicator list">
-          <div className="ema-settings" aria-label="Indicator zoom visibility">
-            <label className="ema-setting-line">
-              <span className="ema-setting-label">Auto-hide below (px)</span>
-              <input
-                className="ema-length-input"
-                type="number"
-                min={0}
-                max={MAX_DENSE_OVERLAY_BAR_SPACING}
-                step={0.5}
-                value={denseOverlayMinSpacingDraft}
-                aria-label="Indicator minimum candle spacing"
-                onChange={(event) => {
-                  setDenseOverlayMinSpacingDraft(event.currentTarget.value);
-                }}
-                onBlur={() => {
-                  const next = denseOverlayMinSpacingDraft.trim() === ""
-                    ? denseOverlayMinSpacing
-                    : normalizeDenseOverlayMinSpacing(Number(denseOverlayMinSpacingDraft));
-                  setDenseOverlayMinSpacingDraft(String(next));
-                  onDenseOverlayMinSpacingChange(next);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                }}
-              />
-            </label>
-            <div className="ema-setting-label">
-              TDU, mGann, Sweep Reversal, BigTrade. Default: 6 px.
-              Lower to show at smaller zoom; 0 = always show.
-            </div>
-          </div>
+          <label className="indicator-threshold-control" title="Hide dense indicator overlays when candle spacing is below this number of pixels. Set 0 to keep them visible at every zoom level.">
+            Auto-hide below (px)
+            <input
+              aria-label="Auto-hide below (px)"
+              type="number"
+              min={0}
+              max={100}
+              step={0.5}
+              value={denseOverlaySpacingDraft}
+              onChange={(event) => setDenseOverlaySpacingDraft(event.currentTarget.value)}
+              onBlur={commitDenseOverlaySpacing}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commitDenseOverlaySpacing();
+                }
+              }}
+            />
+          </label>
           <IndicatorRow
             label="Volume"
             checked
@@ -1187,176 +1049,6 @@ export function IndicatorToggles({
             </div>
           )}
           <IndicatorRow
-            label="GC Push Momentum"
-            checked={gcPushMomentum}
-            disabled={gcPushMomentumDisabled}
-            title={
-              gcPushMomentumDisabled
-                ? "GC Push Momentum is available on the 1-minute and 5-minute charts"
-                : "Volatility-normalized price push with order-flow confirmation"
-            }
-            onChange={onGcPushMomentumChange}
-            trailing={
-              <button
-                type="button"
-                className="indicator-gear"
-                aria-label="GC Push Momentum settings"
-                aria-expanded={gcPushMomentumSettingsOpen}
-                disabled={gcPushMomentumDisabled}
-                onClick={() => setGcPushMomentumSettingsOpen((value) => !value)}
-              >
-                {"\u2699"}
-              </button>
-            }
-          />
-          {gcPushMomentumSettingsOpen && !gcPushMomentumDisabled && (
-            <div
-              className="ema-settings"
-              aria-label="GC Push Momentum settings panel"
-            >
-              <label className="ema-setting-line">
-                <span className="ema-setting-label">Momentum display</span>
-                <select
-                  className="ema-length-input"
-                  aria-label="GC Push Momentum display mode"
-                  value={gcPushMomentumConfig.displayMode}
-                  onChange={(event) =>
-                    updateGcPushMomentum({
-                      displayMode:
-                        event.currentTarget.value === "native"
-                          ? "native"
-                          : "mgann_wave",
-                    })
-                  }
-                >
-                  <option value="mgann_wave">MGann Wave Direction</option>
-                  <option value="native">Native Push - Signal</option>
-                </select>
-              </label>
-              <label className="fp-toggle-label">
-                <input
-                  type="checkbox"
-                  checked={gcPushMomentumConfig.showLines}
-                  aria-label="GC Push Momentum Push and Signal lines"
-                  onChange={(event) =>
-                    updateGcPushMomentum({ showLines: event.currentTarget.checked })
-                  }
-                />
-                Push / Signal lines
-              </label>
-              <label className="fp-toggle-label">
-                <input
-                  type="checkbox"
-                  checked={gcPushMomentumConfig.showDivergence}
-                  aria-label="GC Push Momentum confirmed divergence"
-                  onChange={(event) =>
-                    updateGcPushMomentum({
-                      showDivergence: event.currentTarget.checked,
-                    })
-                  }
-                />
-                Confirmed Div 2 / Div 3
-              </label>
-              <label className="ema-setting-line">
-                <span className="ema-setting-label">Push horizon</span>
-                <input
-                  className="ema-length-input"
-                  type="number"
-                  min={1}
-                  max={12}
-                  step={1}
-                  aria-label="GC Push Momentum horizon bars"
-                  value={gcPushHorizonDraft}
-                  onChange={(event) =>
-                    setGcPushHorizonDraft(event.currentTarget.value)
-                  }
-                  onBlur={commitGcPushHorizon}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") commitGcPushHorizon();
-                  }}
-                />
-              </label>
-              <label className="ema-setting-line">
-                <span className="ema-setting-label">Push smoothing</span>
-                <input
-                  className="ema-length-input"
-                  type="number"
-                  min={1}
-                  max={50}
-                  step={1}
-                  aria-label="GC Push Momentum push smoothing bars"
-                  value={gcPushSmoothingDraft}
-                  onChange={(event) =>
-                    setGcPushSmoothingDraft(event.currentTarget.value)
-                  }
-                  onBlur={commitGcPushSmoothing}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") commitGcPushSmoothing();
-                  }}
-                />
-              </label>
-              <label className="ema-setting-line">
-                <span className="ema-setting-label">Signal smoothing</span>
-                <input
-                  className="ema-length-input"
-                  type="number"
-                  min={1}
-                  max={50}
-                  step={1}
-                  aria-label="GC Push Momentum signal smoothing bars"
-                  value={gcPushSignalSmoothingDraft}
-                  onChange={(event) =>
-                    setGcPushSignalSmoothingDraft(event.currentTarget.value)
-                  }
-                  onBlur={commitGcPushSignalSmoothing}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") commitGcPushSignalSmoothing();
-                  }}
-                />
-              </label>
-              <label className="ema-setting-line">
-                <span className="ema-setting-label">Vol half-life</span>
-                <input
-                  className="ema-length-input"
-                  type="number"
-                  min={10}
-                  max={240}
-                  step={1}
-                  aria-label="GC Push Momentum volatility half-life"
-                  value={gcPushVolatilityHalfLifeDraft}
-                  onChange={(event) =>
-                    setGcPushVolatilityHalfLifeDraft(event.currentTarget.value)
-                  }
-                  onBlur={commitGcPushVolatilityHalfLife}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      commitGcPushVolatilityHalfLife();
-                    }
-                  }}
-                />
-              </label>
-              <label className="ema-setting-line">
-                <span className="ema-setting-label">Strong %ile</span>
-                <input
-                  className="ema-length-input"
-                  type="number"
-                  min={80}
-                  max={99}
-                  step={1}
-                  aria-label="GC Push Momentum strong percentile"
-                  value={gcPushStrongPercentileDraft}
-                  onChange={(event) =>
-                    setGcPushStrongPercentileDraft(event.currentTarget.value)
-                  }
-                  onBlur={commitGcPushStrongPercentile}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") commitGcPushStrongPercentile();
-                  }}
-                />
-              </label>
-            </div>
-          )}
-          <IndicatorRow
             label="TDU Buy/Sell Momentum"
             checked={tduSignals}
             disabled={tduSignalsDisabled}
@@ -1366,94 +1058,7 @@ export function IndicatorToggles({
                 : "TDU 10-second volume momentum triangles and candle/delta divergence"
             }
             onChange={onTduSignalsChange}
-            trailing={
-              <button
-                type="button"
-                className="indicator-gear"
-                aria-label="TDU settings"
-                aria-expanded={tduSettingsOpen}
-                disabled={tduSignalsDisabled}
-                onClick={() => setTduSettingsOpen((value) => !value)}
-              >
-                {"\u2699"}
-              </button>
-            }
           />
-          {tduSettingsOpen && (
-            <div className="ema-settings" aria-label="TDU settings panel">
-              {([1, 2, 3] as const).map((level) => (
-                <label className="ema-setting-line" key={`sigma-${level}`}>
-                  <span className="ema-setting-label">Level {level} threshold</span>
-                  <input
-                    className="ema-length-input"
-                    type="number"
-                    min={0.1}
-                    max={100}
-                    step={0.1}
-                    aria-label={`TDU Level ${level} sigma threshold`}
-                    value={tduSigmaDrafts[level - 1]}
-                    onChange={(event) => {
-                      const value = event.currentTarget.value;
-                      setTduSigmaDrafts((previous) => previous.map((draft, index) => index === level - 1 ? value : draft));
-                    }}
-                    onBlur={commitTduSigma}
-                    onKeyDown={(event) => { if (event.key === "Enter") commitTduSigma(); }}
-                  />
-                  <span>sigma</span>
-                </label>
-              ))}
-              {tduSigmaError && <p role="alert">{tduSigmaError}</p>}
-              <p>Lower thresholds give more signals. Uses 10-second volume / 15 buckets.</p>
-              <p>Older signals without bucket data appear only at default 4 / 5 / 6 thresholds.</p>
-              {([1, 2, 3] as const).map((level) => {
-                const key = `showLevel${level}` as const;
-                return (
-                  <label className="fp-toggle-label" key={level}>
-                    <input
-                      type="checkbox"
-                      aria-label={`TDU Level ${level}`}
-                      checked={tduConfig[key]}
-                      onChange={(event) => onTduSettingsChange({
-                        ...tduConfig, [key]: event.currentTarget.checked,
-                      })}
-                    />
-                    Level {level} - {level} {level === 1 ? "triangle" : "triangles"}
-                  </label>
-                );
-              })}
-              <label className="fp-toggle-label">
-                <input
-                  type="checkbox"
-                  aria-label="TDU filter small-body candles"
-                  checked={tduConfig.filterSmallBody}
-                  onChange={(event) => onTduSettingsChange({
-                    ...tduConfig, filterSmallBody: event.currentTarget.checked,
-                  })}
-                />
-                Filter doji / long-wick candles
-              </label>
-              <label className="ema-setting-line">
-                <span className="ema-setting-label">Hide when body &lt;=</span>
-                <input
-                  className="ema-length-input"
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={1}
-                  aria-label="TDU minimum body percent"
-                  disabled={!tduConfig.filterSmallBody}
-                  value={tduConfig.minBodyPercent}
-                  onChange={(event) => {
-                    if (event.currentTarget.value === "") return;
-                    onTduSettingsChange(normalizeTduSettings({
-                      ...tduConfig, minBodyPercent: event.currentTarget.valueAsNumber,
-                    }));
-                  }}
-                />
-                <span>% of high-low</span>
-              </label>
-            </div>
-          )}
           <IndicatorRow
             label="Volume Profile"
             checked={dailyVolumeProfile}
@@ -1472,33 +1077,6 @@ export function IndicatorToggles({
           />
           {dailyVolumeProfileSettingsOpen && (
             <div className="ema-settings" aria-label="Volume Profile settings panel">
-              <div className="ema-setting-line">
-                <span className="ema-setting-label">Ticks per row</span>
-                <input
-                  type="number"
-                  className="ema-period-input"
-                  min={1}
-                  step={1}
-                  aria-label="Volume Profile ticks per row"
-                  value={profileRowTicksDraft}
-                  onChange={(event) => {
-                    setProfileRowTicksDraft(event.currentTarget.value);
-                    const ticks = event.currentTarget.valueAsNumber;
-                    if (Number.isSafeInteger(ticks) && ticks >= 1) {
-                      onDailyVolumeProfileRowTicksChange(ticks);
-                    }
-                  }}
-                  onBlur={() => setProfileRowTicksDraft(
-                    String(normalizeSessionVolumeProfileRowTicks(dailyVolumeProfileRowTicks)),
-                  )}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") event.currentTarget.blur();
-                  }}
-                />
-                <span className="profile-width-value">
-                  {(normalizeSessionVolumeProfileRowTicks(dailyVolumeProfileRowTicks) * 0.1).toFixed(1)} price / row
-                </span>
-              </div>
               <div className="ema-setting-line">
                 <span className="ema-setting-label">Width</span>
                 <div className="profile-width-control">
@@ -1521,6 +1099,50 @@ export function IndicatorToggles({
                     {normalizedDailyVolumeProfileWidth}px
                   </span>
                 </div>
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Tick Size</span>
+                <input
+                  type="number"
+                  className="ema-length-input"
+                  aria-label="Volume Profile tick size"
+                  min={MIN_SESSION_VOLUME_PROFILE_ROW_TICKS}
+                  max={MAX_SESSION_VOLUME_PROFILE_ROW_TICKS}
+                  step={1}
+                  value={dailyVolumeProfileRowTicksDraft}
+                  onChange={(event) =>
+                    setDailyVolumeProfileRowTicksDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitDailyVolumeProfileRowTicks}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitDailyVolumeProfileRowTicks();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              </div>
+              <div className="ema-setting-line">
+                <span className="ema-setting-label">Days</span>
+                <input
+                  type="number"
+                  className="ema-length-input"
+                  aria-label="Volume Profile days"
+                  min={MIN_SESSION_VOLUME_PROFILE_DAYS}
+                  max={MAX_SESSION_VOLUME_PROFILE_DAYS}
+                  step={1}
+                  value={dailyVolumeProfileDaysDraft}
+                  onChange={(event) =>
+                    setDailyVolumeProfileDaysDraft(event.currentTarget.value)
+                  }
+                  onBlur={commitDailyVolumeProfileDays}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      commitDailyVolumeProfileDays();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
               </div>
               <label className="fp-toggle-label">
                 <input
@@ -1551,7 +1173,7 @@ export function IndicatorToggles({
                 disabled={mgannSwingDisabled}
                 onClick={() => setMgannSwingSettingsOpen((v) => !v)}
               >
-                ...
+                {"\u2699"}
               </button>
             }
           />
@@ -1889,7 +1511,7 @@ export function IndicatorToggles({
                 aria-expanded={combinedSettingsOpen}
                 onClick={() => setCombinedSettingsOpen((v) => !v)}
               >
-                ...
+                {"\u2699"}
               </button>
             }
           />
@@ -2423,7 +2045,7 @@ export function IndicatorToggles({
                 aria-expanded={smcSettingsOpen}
                 onClick={() => setSmcSettingsOpen((v) => !v)}
               >
-                ...
+                {"\u2699"}
               </button>
             }
           />
@@ -2611,35 +2233,6 @@ export function IndicatorToggles({
                 <label className="fp-toggle-label">
                   <input
                     type="checkbox"
-                    aria-label="SMC show swing labels"
-                    checked={smc.showSwingLabels}
-                    onChange={(e) =>
-                      onSmcChange({ ...smc, showSwingLabels: e.currentTarget.checked })
-                    }
-                  />
-                  <span>HH / HL / LL / LH</span>
-                </label>
-              </div>
-              <div className="ema-setting-line">
-                <label className="fp-toggle-label">
-                  <input
-                    type="checkbox"
-                    aria-label="SMC show confirmed swing Fib levels"
-                    checked={smc.showSwingFibLevels}
-                    onChange={(e) =>
-                      onSmcChange({
-                        ...smc,
-                        showSwingFibLevels: e.currentTarget.checked,
-                      })
-                    }
-                  />
-                  <span>Fib 0.5 / 0.382</span>
-                </label>
-              </div>
-              <div className="ema-setting-line">
-                <label className="fp-toggle-label">
-                  <input
-                    type="checkbox"
                     checked={smc.fvgAutoThreshold}
                     onChange={(e) =>
                       onSmcChange({
@@ -2764,23 +2357,18 @@ export function IndicatorToggles({
               </div>
             </div>
           )}
-          <IndicatorRow
-            label="Footprint"
-            checked={footprint}
-            disabled={footprintDisabled}
-            onChange={onFootprintChange}
-            trailing={
-              <button
-                type="button"
-                className="indicator-gear"
-                aria-label="Footprint settings"
-                aria-expanded={fpSettingsOpen}
-                onClick={() => setFpSettingsOpen((v) => !v)}
-              >
-                {"\u2699"}
-              </button>
-            }
-          />
+          <div className="indicator-row">
+            <span className="indicator-row-main">Footprint</span>
+            <button
+              type="button"
+              className="indicator-gear"
+              aria-label="Footprint settings"
+              aria-expanded={fpSettingsOpen}
+              onClick={() => setFpSettingsOpen((v) => !v)}
+            >
+              {"\u2699"}
+            </button>
+          </div>
           <IndicatorRow
             label="FVG Grader"
             checked={fvgGrader}
@@ -3008,7 +2596,7 @@ export function IndicatorToggles({
                 aria-expanded={btSettingsOpen}
                 onClick={() => setBtSettingsOpen((v) => !v)}
               >
-                ...
+                {"\u2699"}
               </button>
             }
           />

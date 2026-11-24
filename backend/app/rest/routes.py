@@ -20,11 +20,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from .. import __version__
 from ..config import settings as default_settings
-from ..engines.bar_aggregator import SUPPORTED_TFS, BarAggregator
+from ..engines.bar_aggregator import BarAggregator
+from ..engines.session_calendar import CALENDAR_TFS, CHART_TFS, is_gc_session_open
 from ..models.timestamp import now_ms
 from ..storage.records import BarRecord
 from ..storage.tick_store import TickStore
@@ -37,10 +38,6 @@ router = APIRouter(prefix="/api", tags=["meta"])
 # precomputed bars, and ``limit`` defaults to and is capped at this value.
 # (Req 11.4; design "History semantics")
 HISTORY_CACHE_CAP = 5000
-
-# Supported timeframes, surfaced as a set for O(1) validation of the ``tf``
-# query parameter (unknown values -> 404 with field "tf"). (design REST API)
-_SUPPORTED_TFS = frozenset(SUPPORTED_TFS)
 
 
 def get_contract_state(request: Request) -> ContractStateStore:
@@ -77,14 +74,8 @@ def get_tick_store(request: Request) -> TickStore:
 
 
 def _raw_rebuild_source(request: Request) -> str:
-    """Choose one raw feed for cache-miss rebuilds without merging sources."""
-    runtime = getattr(request.app.state, "runtime", None)
-    if runtime is not None:
-        status = runtime.pipeline.market_data_status_message()
-        source = status.active_source or status.preferred_source
-    else:
-        source = default_settings.market_data_preferred_source
-    return source if source in ("nt", "bookmap", "rithmic") else "nt"
+    """Use the sole authoritative raw feed for cache-miss rebuilds."""
+    return "rithmic"
 
 
 def _raw_rebuild_contract(
@@ -100,6 +91,18 @@ def _raw_rebuild_contract(
 async def health() -> dict[str, str]:
     """Liveness probe used by smoke tests and the dev harness."""
     return {"status": "ok", "version": __version__}
+
+
+@router.get("/ready")
+async def ready(request: Request, response: Response) -> dict[str, Any]:
+    """Readiness requires both Rithmic plants and synchronized order flow."""
+
+    runtime = getattr(request.app.state, "runtime", None)
+    is_ready = runtime is not None and runtime.pipeline.is_ready()
+    if not is_ready:
+        response.status_code = 503
+    status = None if runtime is None else runtime.pipeline.market_data_status_dict()
+    return {"ready": is_ready, "marketData": status}
 
 
 @router.get("/symbols")
@@ -237,7 +240,7 @@ def _rebuild_bars(
     to: int,
     *,
     raw_contract: str | None = None,
-    source: str = "nt",
+    source: str = "rithmic",
 ) -> list[BarRecord]:
     """Rebuild OHLCV bars for one timeframe from raw Tick_Store ticks.
 
@@ -252,6 +255,8 @@ def _rebuild_bars(
     for trade in tick_store.read_range(
         raw_contract or contract, frm, to, source=source
     ):
+        if tf in CALENDAR_TFS and not is_gc_session_open(trade.time):
+            continue
         bucket = agg.bucket_start(trade.time, tf)
         rec = bars.get(bucket)
         if rec is None:
@@ -284,7 +289,7 @@ def _rebuild_bars(
 async def get_history(
     request: Request,
     symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
-    tf: str = Query(..., description="Timeframe (15s,30s,1m,3m,5m,15m,30m,1h,4h,1D)"),
+    tf: str = Query(..., description="Chart timeframe, e.g. 1m, 1D, 1W or 1M"),
     contract: str | None = Query(
         None, description="GC contract; defaults to the Active_Contract"
     ),
@@ -315,7 +320,7 @@ async def get_history(
     """
     if not state.is_known_symbol(symbol):
         raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
-    if tf not in _SUPPORTED_TFS:
+    if tf not in CHART_TFS:
         raise not_found(
             f"Unknown timeframe {tf!r} for symbol {symbol!r}", field="tf"
         )
@@ -334,6 +339,29 @@ async def get_history(
         raise bad_request("'limit' must be a positive integer", field="limit")
     effective_limit = HISTORY_CACHE_CAP if limit is None else min(limit, HISTORY_CACHE_CAP)
 
+    bars, source = _history_bars(
+        request, state, tick_store, symbol, resolved_contract, tf, frm, to, effective_limit,
+    )
+    return {
+        "symbol": symbol,
+        "contract": resolved_contract,
+        "tf": tf,
+        "bars": [_bar_to_dict(b) for b in bars],
+        "source": source,
+    }
+
+
+def _history_bars(
+    request: Request,
+    state: ContractStateStore,
+    tick_store: TickStore,
+    symbol: str,
+    resolved_contract: str,
+    tf: str,
+    frm: int | None,
+    to: int | None,
+    effective_limit: int,
+) -> tuple[list[BarRecord], str]:
     # Cache path: precomputed bars, most-recent-up-to-limit within the window.
     # (Req 11.4, 8.3)
     cached = state.cache.read_bars(
@@ -364,17 +392,13 @@ async def get_history(
             raw_contract=_raw_rebuild_contract(state, symbol, resolved_contract),
             source=_raw_rebuild_source(request),
         )
+        if tf in CALENDAR_TFS and frm is not None:
+            rebuilt = [bar for bar in rebuilt if bar.time >= frm]
         # Keep the response bounded to the same most-recent cap as the cache path.
         bars = rebuilt[-effective_limit:]
         source = "rebuild"
 
-    return {
-        "symbol": symbol,
-        "contract": resolved_contract,
-        "tf": tf,
-        "bars": [_bar_to_dict(b) for b in bars],
-        "source": source,
-    }
+    return bars, source
 
 
 def state_retention_ms() -> int:

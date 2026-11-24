@@ -1,0 +1,227 @@
+/* Chart chrome uses the same palette as /lq; layout stays in styles.css. */
+.app-shell {
+  --bg: var(--workspace-bg);
+  --panel: var(--workspace-panel);
+  --border: var(--workspace-border);
+  --text: var(--workspace-text);
+  --muted: var(--workspace-muted);
+  --up: var(--workspace-rise, #35d6b0);
+  --down: var(--workspace-fall, #ff5267);
+  color-scheme: inherit;
+  color: var(--text);
+  background: var(--bg);
+  accent-color: var(--workspace-accent);
+  scrollbar-color: var(--workspace-control-border) var(--bg);
+}
+
+.app-shell .toolbar-page-links a,
+.app-shell .indicator-button,
+.app-shell .chart-bg-control,
+.app-shell .alert-toolbar-button,
+.app-shell .bar-replay-toolbar-button,
+.app-shell .bar-replay-controls button,
+.app-shell .bar-replay-controls select,
+.app-shell .chart-focus-toggle,
+.app-shell .drawing-toolbar-toggle,
+.app-shell .market-order-drawer-toggle {
+  color: var(--workspace-control-text);
+  background: var(--workspace-control);
+  border-color: var(--workspace-control-border);
+}
+
+.app-shell .toolbar-page-links a {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-shell .toolbar-page-links a:hover,
+.app-shell .indicator-button:hover,
+.app-shell .alert-toolbar-button:hover,
+.app-shell .bar-replay-toolbar-button:hover {
+  color: var(--workspace-control-text);
+  background: var(--workspace-hover);
+  border-color: var(--workspace-hover-border);
+}
+
+.app-shell .drawing-tool-btn:hover:not(:disabled),
+.app-shell .drawing-toolbar-toggle:hover {
+  color: var(--text);
+  background: var(--workspace-hover);
+  border-color: var(--workspace-hover-border);
+}
+
+.app-shell .chart-bg-control:focus-within {
+  border-color: var(--workspace-accent);
+}
+
+.app-shell .drawing-tool-btn.active,
+.app-shell .drawing-tool-btn.active:hover:not(:disabled),
+.app-shell .drawing-tool-indicators.is-hidden,
+.app-shell .drawing-tool-indicators.is-hidden:hover,
+.app-shell .drawing-tool-order-levels.is-hidden,
+.app-shell .drawing-tool-order-levels.is-hidden:hover {
+  color: var(--workspace-accent-ink);
+  font-weight: 700;
+  background: var(--workspace-accent);
+  border-color: var(--workspace-accent);
+  box-shadow: none;
+}
+
+.app-shell .indicator-badge {
+  color: var(--workspace-accent-ink);
+  background: var(--workspace-accent);
+}
+
+.app-shell .indicator-badge.is-muted {
+  color: var(--text);
+  background: var(--workspace-hover);
+}
+
+.app-shell .indicator-button.is-muted {
+  color: var(--muted);
+}
+
+.app-shell .drawing-toolbar,
+.app-shell .market-order-bar:not(.is-closed),
+.app-shell .indicator-menu,
+.app-shell .alert-popover .alert-panel,
+.app-shell .timeframe-menu,
+.app-shell .workspace-scan-settings-popover,
+.app-shell .chart-menu,
+.app-shell .alert-menu,
+.app-shell .drawing-profile-context-menu,
+.app-shell .drawing-fib-context-menu,
+.app-shell .bar-replay-controls,
+.app-shell .crosshair-box {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--border);
+}
+
+.app-shell .bar-replay-controls .bar-replay-main {
+  color: var(--workspace-accent-ink);
+  background: var(--workspace-accent);
+  border-color: var(--workspace-accent);
+}
+
+.app-shell .market-order-size-control,
+.app-shell .market-order-settings label {
+  color: var(--muted);
+}
+
+.app-shell .drawing-toolbar-separator {
+  background: var(--border);
+}
+
+.app-shell .chart-timezone-control option {
+  color: var(--text);
+  background: var(--panel);
+}
+
+.app-shell .indicator-row:hover,
+.app-shell .indicator-gear:hover,
+.app-shell .chart-menu-item:hover:not(:disabled),
+.app-shell .alert-menu-item:hover,
+.app-shell .timeframe-menu-row:hover,
+.app-shell .timeframe-group-trigger:hover {
+  background: var(--workspace-hover);
+}
+
+.app-shell .timeframe-menu-row:has(.timeframe-option[aria-pressed="true"]) {
+  background: color-mix(in srgb, var(--workspace-accent) 14%, transparent);
+  color: var(--workspace-accent);
+}
+
+.app-shell .timeframe-menu button {
+  color: var(--text);
+}
+
+.app-shell .timeframe-group-trigger,
+.app-shell .timeframe-pin,
+.app-shell .scan-settings-close,
+.app-shell .scan-settings-subtitle,
+.app-shell .scan-settings-label {
+  color: var(--muted);
+}
+
+.app-shell .scan-settings-close:hover {
+  color: var(--text);
+}
+
+.app-shell .scan-settings-header,
+.app-shell .scan-settings-actions,
+.app-shell .timeframe-group + .timeframe-group {
+  border-color: var(--border);
+}
+
+.app-shell .scan-settings-title,
+.app-shell .scan-settings-checkbox-label,
+.app-shell .scan-settings-switch-label {
+  color: var(--text);
+}
+
+.app-shell .scan-settings-rescan-btn {
+  color: var(--workspace-accent-ink);
+  background: var(--workspace-accent);
+}
+
+.app-shell .ema-settings,
+.app-shell .indicator-threshold-control input,
+.app-shell .ema-length-input,
+.app-shell .telegram-row input,
+.app-shell .market-order-settings input,
+.app-shell .market-order-settings select,
+.app-shell .market-order-size-control input,
+.app-shell .market-order-size-control select,
+.app-shell .scan-settings-field select {
+  color: var(--text);
+  background: var(--bg);
+  border-color: var(--workspace-control-border);
+}
+
+.app-shell .indicator-settings-section,
+.app-shell .telegram-settings,
+.app-shell .alert-line {
+  border-color: var(--border);
+}
+
+.app-shell .profile-width-control input[type="range"],
+.app-shell .drawing-profile-context-slider input {
+  accent-color: var(--workspace-accent);
+}
+
+.app-shell .status-indicator {
+  color: var(--muted);
+}
+
+.app-shell .status-connected .status-dot {
+  box-shadow: 0 0 8px rgb(0 214 143 / 55%);
+}
+
+.app-shell .status-disconnected .status-dot {
+  box-shadow: 0 0 8px rgb(255 82 103 / 55%);
+}
+
+.app-shell :is(button, a, input, select):focus-visible {
+  outline: 2px solid var(--workspace-accent);
+  outline-offset: 2px;
+}
+
+.app-shell button:disabled {
+  opacity: 0.5;
+}
+
+@media (min-width: 701px) {
+  .app-shell > .toolbar {
+    min-height: 52px;
+    gap: 10px;
+  }
+}
+
+@media (min-width: 701px) and (max-width: 1000px) {
+  .app-shell > .toolbar {
+    flex-wrap: wrap;
+  }
+}

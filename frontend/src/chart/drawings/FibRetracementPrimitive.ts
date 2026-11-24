@@ -34,6 +34,7 @@ interface FibRetracementRenderOptions {
   lineWidth: number;
   trendLineVisible: boolean;
   trendLineColor: string;
+  extendRight: boolean;
 }
 
 export const DEFAULT_FIB_RETRACEMENT_LEVELS: readonly FibRetracementLevel[] = [
@@ -79,7 +80,9 @@ export function fibLevelPrice(
   startPrice: number,
   endPrice: number,
   level: number,
+  directional = false,
 ): number {
+  if (directional) return startPrice + (endPrice - startPrice) * level;
   const low = Math.min(startPrice, endPrice);
   const high = Math.max(startPrice, endPrice);
   return low + (high - low) * level;
@@ -90,6 +93,7 @@ function toRenderOptions(options?: DrawingOptions): FibRetracementRenderOptions 
     levels: normalizeFibRetracementLevels(options?.fibLevels),
     lineWidth: Math.max(1, Math.min(4, Math.round(options?.lineWidth ?? DEFAULT_LINE_WIDTH))),
     trendLineVisible: options?.fibTrendLineVisible !== false,
+    extendRight: options?.fibExtendRight === true,
     trendLineColor: normalizeCssColor(
       options?.fibTrendLineColor,
       options?.lineColor ?? DEFAULT_TREND_LINE_COLOR,
@@ -123,7 +127,7 @@ class FibRetracementRenderer implements IPrimitivePaneRenderer {
       }
 
       const left = Math.min(this.p1.x, this.p2.x);
-      const right = Math.max(this.p1.x, this.p2.x);
+      const right = this.options.extendRight ? mediaSize.width : Math.max(this.p1.x, this.p2.x);
       if (right - left < 1) return;
 
       ctx.save();
@@ -230,7 +234,7 @@ class FibRetracementPaneView implements IPrimitivePaneView {
     this.p2 = { x: x2 as number, y: y2 as number };
     this.levels = this.source.renderOptions.levels.flatMap((level) => {
       if (level.enabled === false) return [];
-      const price = fibLevelPrice(anchors[0].price, anchors[1].price, level.value);
+      const price = fibLevelPrice(anchors[0].price, anchors[1].price, level.value, this.source.toState().options?.fibDirectional);
       const y = series.priceToCoordinate(price);
       return y === null ? [] : [{ ...level, price, y: y as number }];
     });

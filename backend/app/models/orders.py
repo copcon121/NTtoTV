@@ -70,7 +70,6 @@ class OrderRecord:
     updated_at: CanonicalTimestamp
     version: int = 1
     take_profit_1r_enabled: bool = False
-    take_profit_r: float = 1.0
     auto_supertrend_after_1r_enabled: bool = False
     trailing_timeframe: str | None = None
     trailing_period: int | None = None

@@ -45,31 +45,6 @@ beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(NOW); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("LQ per-bar Volume Delta", () => {
-  it("loads two days of 15s history while preserving the live delta over a late snapshot", async () => {
-    const env = setup();
-    const { result, unmount } = renderHook(() => useVolumeDelta(env.client, "/api", "15s", 15_000, 0));
-    expect(env.socket.subscribe).toHaveBeenCalledWith("GC", ["volume_delta_update"], "15s");
-    expect(env.requests).toHaveLength(3);
-    const pages = env.requests.map((request) => new URL(request.url, "https://example.test").searchParams);
-    expect(pages.every((page) => page.get("tf") === "15s" && page.get("limit") === "5000")).toBe(true);
-    expect(Number(pages[0].get("from"))).toBe(NOW - 48 * 60 * 60_000);
-    expect(Number(pages[0].get("to")) + 1).toBe(Number(pages[1].get("from")));
-    expect(Number(pages[1].get("to")) + 1).toBe(Number(pages[2].get("from")));
-    expect(Number(pages[2].get("to"))).toBe(NOW);
-    env.emit({ tf: "15s", delta: 75 });
-    env.emit({ tf: "30s", delta: -900 });
-    await env.respond(2, [{ time: NOW - 15_000, delta: -20 }, { time: NOW, delta: 10 }]);
-    await env.respond(1, []);
-    const oldest = NOW - 48 * 60 * 60_000;
-    await env.respond(0, [{ time: oldest, delta: 30 }]);
-    expect(result.current.bars).toEqual([
-      { time: oldest, delta: 30 }, { time: NOW - 15_000, delta: -20 }, { time: NOW, delta: 75 },
-    ]);
-    unmount();
-    expect(env.requests.every((request) => request.signal.aborted)).toBe(true);
-    expect(env.socket.unsubscribe).toHaveBeenCalledWith("GC", ["volume_delta_update"], "15s");
-  });
-
   it("keeps the realtime candle over a REST snapshot, without accepting other series", async () => {
     const env = setup();
     const { result } = renderHook(() => useVolumeDelta(env.client, "/api", "1m", 60_000, 0));
@@ -114,28 +89,5 @@ describe("LQ per-bar Volume Delta", () => {
     expect(result.current.bars).toEqual([
       { time: NOW - 60_000, delta: -30 }, { time: NOW, delta: 60 },
     ]);
-  });
-
-  it("keeps the viewport during a history repair and accepts repaired closed deltas", async () => {
-    const env = setup();
-    const { result, rerender, unmount } = renderHook(
-      ({ reloadKey }) => useVolumeDelta(env.client, "/api", "1m", 60_000, reloadKey),
-      { initialProps: { reloadKey: 0 } },
-    );
-    await env.respond(0, [{ time: NOW - 120_000, delta: 15 }]);
-    env.emit({ delta: 60 });
-    rerender({ reloadKey: 1 });
-    expect(result.current.bars).toEqual([
-      { time: NOW - 120_000, delta: 15 }, { time: NOW, delta: 60 },
-    ]);
-    await env.respond(1, [
-      { time: NOW - 120_000, delta: -30 }, { time: NOW - 60_000, delta: 20 },
-      { time: NOW, delta: 45 },
-    ]);
-    expect(result.current.bars).toEqual([
-      { time: NOW - 120_000, delta: -30 }, { time: NOW - 60_000, delta: 20 },
-      { time: NOW, delta: 60 },
-    ]);
-    unmount();
   });
 });

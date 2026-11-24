@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   barDurationForTimeframe,
+  barEndForTimeframe,
   countdownBarStartMs,
   formatBarCountdown,
   remainingObservedBarTimeMs,
@@ -12,7 +13,6 @@ import {
 describe("bar countdown", () => {
   it("maps chart timeframes to their bar durations", () => {
     expect(barDurationForTimeframe("15s")).toBe(15_000);
-    expect(barDurationForTimeframe("30s")).toBe(30_000);
     expect(barDurationForTimeframe("1m")).toBe(60_000);
     expect(barDurationForTimeframe("15m")).toBe(15 * 60_000);
     expect(barDurationForTimeframe("4h")).toBe(4 * 60 * 60_000);
@@ -22,6 +22,15 @@ describe("bar countdown", () => {
   it("counts down from the current bar close and never goes negative", () => {
     expect(remainingBarTimeMs(120_000, 60_000, 150_250)).toBe(29_750);
     expect(remainingBarTimeMs(120_000, 60_000, 200_000)).toBe(0);
+  });
+
+  it("uses GC session opens across leap months and daylight-saving changes", () => {
+    expect(barEndForTimeframe(Date.parse("2024-01-31T23:00:00Z"), "1M"))
+      .toBe(Date.parse("2024-02-29T23:00:00Z"));
+    expect(barEndForTimeframe(Date.parse("2024-02-29T23:00:00Z"), "1M"))
+      .toBe(Date.parse("2024-03-31T22:00:00Z"));
+    expect(barEndForTimeframe(Date.parse("2024-03-03T23:00:00Z"), "1W"))
+      .toBe(Date.parse("2024-03-10T22:00:00Z"));
   });
 
   it("keeps counting against the wall-clock bucket when the last trade bar is stale", () => {

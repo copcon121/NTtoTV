@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hmac
-import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -16,29 +15,23 @@ from .alerts import get_cache
 from .errors import ApiError, ErrorCode, bad_request, conflict
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-logger = logging.getLogger(__name__)
 
 
-def _user_to_dict(user: AuthenticatedUser) -> dict[str, str]:
-    return {"id": user.id, "username": user.username}
+def _user_to_dict(user: AuthenticatedUser | Any) -> dict[str, Any]:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "mustChangePassword": bool(getattr(user, "must_change_password", False)),
+    }
 
 
-def current_user_optional(
+async def current_user_optional(
     request: Request, cache: CacheStore = Depends(get_cache)
 ) -> AuthenticatedUser | None:
-    token = request.cookies.get(SESSION_COOKIE)
-    user = cache.users.read_session_user(token)
-    if user is None and request.method not in {"GET", "HEAD", "OPTIONS"}:
-        # Record presence only, never the Cookie header, token, or its hash.
-        cookie_count = sum(
-            part.strip().partition("=")[0] == SESSION_COOKIE
-            for part in request.headers.get("cookie", "").split(";")
-        )
-        logger.warning(
-            "Authentication rejected method=%s path=%s session_cookie=%s cookie_count=%s",
-            request.method, request.url.path, "invalid" if token else "missing", cookie_count,
-        )
-    return user
+    remote_user = getattr(request.state, "execution_user", None)
+    if remote_user is not None:
+        return remote_user
+    return cache.users.read_session_user(request.cookies.get(SESSION_COOKIE))
 
 
 def get_current_user(
@@ -46,10 +39,16 @@ def get_current_user(
 ) -> AuthenticatedUser:
     if user is None:
         raise ApiError(401, ErrorCode.UNAUTHORIZED, "Authentication required")
+    if user.must_change_password:
+        raise ApiError(
+            403,
+            ErrorCode.PASSWORD_CHANGE_REQUIRED,
+            "Password change required",
+        )
     return user
 
 
-def _create_session_cookie(response: Response, cache: CacheStore, user_id: str) -> None:
+def _create_session_cookie(response: Response, cache: CacheStore, user_id: str, *, secure: bool = False) -> None:
     token = cache.users.create_session(
         user_id,
         ttl_ms=default_settings.auth_session_ttl_ms,
@@ -58,6 +57,7 @@ def _create_session_cookie(response: Response, cache: CacheStore, user_id: str) 
         SESSION_COOKIE,
         token,
         httponly=True,
+        secure=secure,
         samesite="lax",
         max_age=default_settings.auth_session_ttl_seconds,
     )
@@ -76,11 +76,17 @@ async def login(
         rec = cache.users.create_user(username, password)
     else:
         rec = cache.users.authenticate(username, password)
+        if rec is None and cache.users.read_user_by_username(username) is None:
+            from ..execution.profile_migration import import_windows_profile
+            rec = await import_windows_profile(cache, username, password)
         if rec is None:
             raise ApiError(401, ErrorCode.UNAUTHORIZED, "Invalid username or password")
 
-    _create_session_cookie(response, cache, rec.id)
-    return {"user": {"id": rec.id, "username": rec.username}}
+    _create_session_cookie(response, cache, rec.id, secure=request.url.scheme == "https")
+    from ..execution import execution_mode
+    if execution_mode() == "exness":
+        response.delete_cookie("nttotv_windows_session")
+    return {"user": _user_to_dict(rec)}
 
 
 @router.post("/register")
@@ -94,8 +100,8 @@ async def register(
     if cache.users.read_user_by_username(username) is not None:
         raise conflict("Username already exists", field="username")
     rec = cache.users.create_user(username, password)
-    _create_session_cookie(response, cache, rec.id)
-    return {"user": {"id": rec.id, "username": rec.username}}
+    _create_session_cookie(response, cache, rec.id, secure=request.url.scheme == "https")
+    return {"user": _user_to_dict(rec)}
 
 
 @router.post("/logout")
@@ -119,13 +125,56 @@ async def refresh(
     if user is None:
         raise ApiError(401, ErrorCode.UNAUTHORIZED, "Authentication required")
     cache.users.delete_session(request.cookies.get(SESSION_COOKIE))
-    _create_session_cookie(response, cache, user.id)
+    _create_session_cookie(response, cache, user.id, secure=request.url.scheme == "https")
     return {"user": _user_to_dict(user)}
 
 
 @router.get("/me")
-async def me(user: AuthenticatedUser = Depends(get_current_user)) -> dict[str, Any]:
+async def me(
+    user: AuthenticatedUser | None = Depends(current_user_optional),
+) -> dict[str, Any]:
+    if user is None:
+        raise ApiError(401, ErrorCode.UNAUTHORIZED, "Authentication required")
     return {"user": _user_to_dict(user)}
+
+
+@router.post("/password")
+async def change_password(
+    request: Request,
+    response: Response,
+    cache: CacheStore = Depends(get_cache),
+    user: AuthenticatedUser | None = Depends(current_user_optional),
+) -> dict[str, Any]:
+    if user is None:
+        raise ApiError(401, ErrorCode.UNAUTHORIZED, "Authentication required")
+    try:
+        body = await request.json()
+    except Exception:
+        raise bad_request("Request body must be valid JSON")
+    if not isinstance(body, dict):
+        raise bad_request("Request body must be a JSON object")
+    current_password = body.get("currentPassword")
+    new_password = body.get("newPassword")
+    if not isinstance(current_password, str) or not current_password:
+        raise bad_request("Current password is required", field="currentPassword")
+    if not isinstance(new_password, str) or len(new_password) < 8:
+        raise bad_request(
+            "New password must contain at least 8 characters", field="newPassword"
+        )
+    if current_password == new_password:
+        raise bad_request(
+            "New password must be different from the temporary password",
+            field="newPassword",
+        )
+    if not cache.users.change_password(user.id, current_password, new_password):
+        raise ApiError(
+            401, ErrorCode.UNAUTHORIZED, "Current password is incorrect", "currentPassword"
+        )
+    changed = cache.users.read_user(user.id)
+    if changed is None:
+        raise ApiError(500, ErrorCode.INTERNAL, "User no longer exists")
+    _create_session_cookie(response, cache, changed.id, secure=request.url.scheme == "https")
+    return {"user": _user_to_dict(changed)}
 
 
 async def _credentials(request: Request) -> tuple[str, str]:

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { drawLiquidityCrosshair, liquidityCrosshairAt, type LiquidityCrosshairViewport } from "./crosshair";
+import { THEME_PRESETS, workspaceColors } from "../workspace/themes";
 
 const view: LiquidityCrosshairViewport = {
   left: 10, width: 400, top: 20, priceHeight: 200, deltaTop: 230, deltaHeight: 100,
@@ -40,6 +41,27 @@ describe("shared LQ crosshair", () => {
     expect(liquidityCrosshairAt({ x: 250, y: 70 }, view, delta)?.delta).toBe(0);
     expect(liquidityCrosshairAt({ x: 350, y: 70 }, view, delta)?.delta).toBeNull();
     expect(liquidityCrosshairAt({ x: 410, y: 70 }, view, delta)?.time).toBe(180_000);
+  });
+
+  it("uses the light workspace palette for guides and label backgrounds", () => {
+    const colors = workspaceColors(THEME_PRESETS.find((theme) => theme.preset === "System Light")!);
+    const rectangles: string[] = [];
+    const labels: Array<{ text: string; color: string }> = [];
+    const context = {
+      fillStyle: "",
+      strokeStyle: "",
+      save() {}, restore() {}, setLineDash() {}, beginPath() {}, stroke() {},
+      arc() {}, fill() {}, moveTo() {}, lineTo() {},
+      fillRect() { rectangles.push(this.fillStyle); },
+      measureText(text: string) { return { width: text.length * 6 }; },
+      fillText(text: string) { labels.push({ text, color: this.fillStyle }); },
+    };
+    drawLiquidityCrosshair(context as unknown as CanvasRenderingContext2D,
+      { x: 164, y: 70 }, view, delta, String, String, colors);
+    expect(context.strokeStyle).toBe(colors.crosshair);
+    expect(rectangles).toEqual([colors.panel, colors.panel, colors.panel]);
+    expect(labels).toContainEqual({ text: "60000", color: colors.text });
+    expect(labels).toContainEqual({ text: "Delta: -25", color: colors.fall });
   });
 
   it("hides outside the plot and keeps only the time guide in the pane gap", () => {

@@ -30,6 +30,11 @@ export interface DrawingToolbarProps {
   orderLevelsVisible?: boolean;
   /** Toggles the temporary visibility of live ENTRY / SL / TP levels. */
   onOrderLevelsVisibleChange?: (visible: boolean) => void;
+  /** Hide order-on-chart controls in a market-data-only deployment. */
+  showOrderLevelsToggle?: boolean;
+  footprintZoomSelecting?: boolean;
+  footprintZoomDisabled?: boolean;
+  onFootprintZoomSelect?: () => void;
 }
 
 export function DrawingToolbar({
@@ -42,6 +47,10 @@ export function DrawingToolbar({
   onIndicatorsVisibleChange = () => {},
   orderLevelsVisible = true,
   onOrderLevelsVisibleChange = () => {},
+  showOrderLevelsToggle = true,
+  footprintZoomSelecting = false,
+  footprintZoomDisabled = false,
+  onFootprintZoomSelect,
 }: DrawingToolbarProps) {
   const isMobile = className?.includes("drawing-toolbar-mobile") === true;
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -78,6 +87,14 @@ export function DrawingToolbar({
         </button>
       )}
       <div className="drawing-toolbar-tools">
+        {onFootprintZoomSelect && <button type="button"
+          className={`drawing-tool-btn${footprintZoomSelecting ? " active" : ""}`}
+          aria-label="Footprint magnifier" title={footprintZoomDisabled ? "Footprint requires a timeframe of 1 minute or longer" : "Footprint magnifier"}
+          aria-pressed={footprintZoomSelecting} disabled={footprintZoomDisabled} onClick={onFootprintZoomSelect}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <circle cx="10" cy="10" r="6" /><path d="m15 15 6 6M7 10h6m-3-3v6" />
+          </svg>
+        </button>}
         {DRAWING_TOOLS.map((tool) => {
           const isActive = activeTool === tool.type;
           return (
@@ -110,7 +127,7 @@ export function DrawingToolbar({
       <div className="drawing-toolbar-separator" />
 
       <div className="drawing-toolbar-bottom">
-        <button
+        {showOrderLevelsToggle && <button
           type="button"
           className={`drawing-tool-btn drawing-tool-order-levels${
             orderLevelsVisible ? "" : " is-hidden"
@@ -136,7 +153,7 @@ export function DrawingToolbar({
             <path d="M7 5v4M12 10v4M17 15v4" />
             {!orderLevelsVisible && <path d="M4 4 20 20" />}
           </svg>
-        </button>
+        </button>}
 
         <button
           type="button"

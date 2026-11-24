@@ -1,0 +1,863 @@
+
+.workspace-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--gc-background);
+  border-bottom: 1px solid var(--gc-border);
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 30;
+}
+.workspace-switcher, .workspace-actions, .workspace-account, .workspace-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.workspace-switcher { min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.workspace-actions { flex-shrink: 0; }
+.workspace-mobile-switcher,
+.workspace-mobile-picker { display: none; }
+.workspace-toolbar button,
+.workspace-panel-header button,
+.workspace-scan-toggle,
+.workspace-drawing-toggle,
+.ai-scan-panel button,
+.ai-scan-panel select,
+.workspace-error button,
+.chart-auto-fit {
+  background: var(--gc-control);
+  color: var(--gc-text);
+  border: 1px solid var(--gc-border);
+  border-radius: 5px;
+  padding: 5px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+.workspace-toolbar button { white-space: nowrap; }
+.workspace-toolbar .workspace-icon-button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.workspace-toolbar .workspace-mobile-actions-toggle { display: none; }
+.workspace-account button { height: 30px; }
+.workspace-tab-popup {
+  --tab-popup-width: 140px;
+  position: absolute;
+  z-index: 3;
+  width: var(--tab-popup-width);
+  display: grid;
+  gap: 3px;
+  padding: 5px;
+  border: 1px solid var(--gc-border);
+  border-radius: 6px;
+  background: var(--gc-panel);
+  box-shadow: 0 8px 20px #0005;
+}
+.workspace-tab-popup > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+}
+.workspace-tab-popup > button:hover:enabled,
+.workspace-tab-popup > button:focus-visible { background: var(--workspace-hover); }
+.workspace-tab-popup.is-renaming {
+  --tab-popup-width: min(248px, calc(100% - 8px));
+  padding: 10px;
+}
+.workspace-tab-popup label { display: grid; gap: 6px; }
+.workspace-tab-popup input {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--gc-border);
+  border-radius: 4px;
+  background: var(--gc-control);
+  color: var(--gc-text);
+  font: inherit;
+}
+.workspace-rename-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 9px; }
+.workspace-rename-actions button[type="submit"] {
+  background: var(--gc-accent);
+  border-color: var(--gc-accent);
+  color: var(--gc-accent-ink);
+}
+.workspace-toolbar button:hover:not(:disabled),
+.workspace-panel-header button:hover,
+.workspace-scan-toggle:hover,
+.workspace-drawing-toggle:hover,
+.ai-scan-panel button:hover:not(:disabled),
+.chart-auto-fit:hover {
+  border-color: var(--gc-accent);
+}
+.workspace-toolbar button:disabled, .ai-scan-panel button:disabled, .workspace-scan-toggle:disabled {
+  opacity: .5;
+  cursor: default;
+}
+.workspace-switcher button.is-active,
+.theme-presets button.is-selected,
+.workspace-scan-toggle[aria-expanded="true"] {
+  color: var(--gc-accent-text, var(--gc-accent));
+  border-color: var(--gc-accent);
+  background: var(--gc-panel);
+}
+.workspace-menu-anchor { position: relative; }
+.workspace-menu, .theme-popover, .workspace-create-popover, .workspace-scan-overlay {
+  position: absolute;
+  z-index: 2;
+  background: var(--gc-panel);
+  color: var(--gc-text);
+  border: 1px solid var(--gc-border);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px #0005;
+  padding: 10px;
+}
+.workspace-menu-dismiss { position: fixed; inset: 0; z-index: 1; }
+.workspace-menu { top: calc(100% + 7px); right: 0; display: grid; gap: 5px; min-width: 150px; }
+.workspace-menu button { text-align: left; }
+.theme-popover { top: calc(100% + 7px); right: 0; width: min(380px, 92vw); max-height: calc(100dvh - 75px); overflow-y: auto; overscroll-behavior: contain; }
+.theme-popover-title { font-weight: 700; margin: 3px 0; }
+.theme-popover-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.theme-popover .theme-add-button, .theme-popover .theme-apply-button { color: var(--gc-accent-ink); background: var(--gc-accent); border-color: var(--gc-accent); }
+.theme-popover .theme-apply-button:disabled { opacity: 0.5; }
+.theme-library { display: grid; gap: 6px; margin-top: 12px; }
+.theme-library-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.theme-library-row > button:first-child { display: flex; align-items: center; gap: 7px; text-align: left; min-width: 0; }
+.theme-library-row > button:first-child > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.theme-library-row .is-selected { border-color: var(--gc-accent); }
+.theme-swatch { width: 16px; height: 16px; border: 2px solid; border-radius: 4px; flex: 0 0 auto; }
+.theme-help, .theme-validation, .theme-error { font-size: 11px; line-height: 1.5; margin: 7px 0; }
+.theme-help { color: var(--gc-muted); }
+.theme-error { color: var(--gc-text); border-left: 3px solid var(--workspace-fall); padding-left: 8px; }
+.theme-editor { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--gc-border); }
+.theme-name-field { display: grid; gap: 5px; }
+.theme-editor input { color: var(--gc-text); background: var(--gc-control); border: 1px solid var(--gc-border); border-radius: 4px; min-height: 30px; min-width: 0; padding: 4px 6px; }
+.theme-editor input:focus-visible { outline: 2px solid var(--gc-accent); outline-offset: 1px; }
+.theme-editor-colors { display: grid; gap: 6px; }
+.theme-editor-color { display: grid; grid-template-columns: minmax(0, 1fr) 34px 90px; align-items: center; gap: 8px; }
+.theme-editor-color input[type="color"] { width: 34px; padding: 2px; cursor: pointer; }
+.theme-editor-color input[aria-invalid="true"] { border-color: var(--workspace-fall); }
+.theme-editor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+.theme-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.theme-presets button { white-space: normal; min-height: 31px; padding: 3px; }
+.theme-color-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 12px; margin: 12px 0 2px; }
+.theme-color-grid label { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.theme-color-grid input { width: 33px; height: 25px; cursor: pointer; padding: 1px; }
+.workspace-create-popover { top: calc(100% + 3px); left: 10px; width: min(272px, 92vw); display: grid; gap: 6px; }
+.workspace-create-popover button { text-align: left; padding: 8px; }
+.workspace-create-popover small { display: block; margin-top: 2px; color: var(--gc-muted); }
+.workspace-error { padding: 5px 10px; background: var(--gc-panel); }
+/* viewport-fit=cover also applies to iOS Home Screen windows. Inset the entire
+   workspace so its header, content and fullscreen variant stay in the usable area. */
+.app-shell:has(> .workspace-toolbar) {
+  height: 100dvh;
+  width: 100%;
+  padding: var(--standalone-safe-top) var(--standalone-safe-right)
+    var(--standalone-safe-bottom) var(--standalone-safe-left);
+}
+.workspace-link-button[data-linked="true"] { border-color: var(--gc-accent); color: var(--gc-accent); }
+.workspace-link-popover {
+  position: fixed;
+  z-index: 1200;
+  box-sizing: border-box;
+  width: min(300px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  overflow: auto;
+  padding: 12px;
+  color: var(--gc-text);
+  background: var(--gc-panel);
+  border: 1px solid var(--gc-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px #0008;
+  font-size: 13px;
+}
+.workspace-link-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.workspace-link-popover label { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.workspace-link-popover select { flex: 1; min-width: 0; }
+.workspace-link-popover button, .workspace-link-popover select {
+  min-height: 30px; padding: 4px 8px; border: 1px solid var(--gc-border); border-radius: 4px;
+  background: var(--gc-control); color: var(--gc-text); font: inherit;
+}
+.workspace-link-popover input { accent-color: var(--gc-accent); }
+.workspace-link-popover :focus-visible { outline: 2px solid var(--gc-accent); outline-offset: 2px; }
+.workspace-link-popover p { margin: 10px 0 0; color: var(--gc-muted); line-height: 1.4; }
+
+.workspace-board {
+  display: grid;
+  position: relative;
+  grid-template-columns: minmax(0, var(--column-split)) minmax(0, 1fr);
+  gap: 5px;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 3px 3px 0;
+}
+.workspace-board.is-single { grid-template-columns: minmax(0, 1fr); }
+.workspace-board[data-compact="true"] {
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: var(--mobile-row-tracks) !important;
+  overflow-y: auto;
+  width: 100%;
+  height: 100%;
+}
+.workspace-board[data-compact="true"] .workspace-divider { display: none; }
+.workspace-board.is-scrollable { overflow-y: auto; }
+.workspace-panel {
+  background: var(--gc-background);
+  border: 1px solid var(--gc-border);
+  border-radius: 6px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.workspace-panel[hidden] { display: none; }
+.workspace-panel.is-selected {
+  border-color: var(--gc-accent);
+  box-shadow: inset 0 0 0 1px var(--gc-accent);
+}
+.workspace-panel.is-wide { grid-column: 1 / -1; }
+.workspace-panel.is-trading-account {
+  border-radius: 6px 6px 0 0;
+  max-height: min(46dvh, 360px);
+}
+.workspace-panel.is-trading-account.is-right-dock,
+.workspace-board.has-right-dock .workspace-panel.is-trading-account {
+  border-radius: 6px;
+  max-height: none;
+  height: 100%;
+}
+.workspace-panel.is-trading-account > .workspace-panel-body { flex: 0 1 auto; }
+.workspace-panel.is-trading-account.is-right-dock > .workspace-panel-body,
+.workspace-board.has-right-dock .workspace-panel.is-trading-account > .workspace-panel-body {
+  flex: 1 1 auto;
+}
+.trading-account-compact-controls {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.trading-account-compact-controls .trading-account-close,
+.workspace-panel.is-compact-account .trading-account-close,
+.trading-account-settings,
+.trading-account-lock {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--gc-text);
+  background: var(--gc-control);
+  border: 1px solid var(--gc-border);
+  border-radius: 5px;
+  font: inherit;
+  cursor: pointer;
+}
+.trading-account-dock-toggle,
+.workspace-dock-toggle {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 23px;
+  padding: 0;
+  color: var(--gc-text);
+  background: var(--gc-control);
+  border: 1px solid var(--gc-border);
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+.trading-account-compact-controls .trading-account-dock-toggle {
+  width: 32px;
+  height: 32px;
+  border-radius: 5px;
+}
+.workspace-panel.is-compact-account .trading-account-summary {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 28px;
+  padding: 2px 8px;
+  padding-right: 125px;
+  background: var(--gc-panel);
+}
+.workspace-panel.is-compact-account .trading-account-summary strong {
+  font-size: 11px;
+}
+.workspace-panel.is-compact-account .trading-account-compact-controls {
+  position: absolute;
+  top: 2px;
+  right: 5px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.workspace-panel.is-compact-account .trading-account-close,
+.trading-account-compact-controls .trading-account-dock-toggle,
+.trading-account-compact-controls .trading-account-settings,
+.trading-account-compact-controls .trading-account-lock {
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border-radius: 4px;
+}
+.workspace-panel.is-compact-account .trading-account-compact-controls svg {
+  width: 14px;
+  height: 14px;
+}
+.workspace-panel.is-compact-account .trading-account-connect { padding-right: 125px; }
+.trading-account-lock[aria-pressed="true"] { color: var(--gc-accent); border-color: var(--gc-accent); }
+.workspace-panel.is-trading-account .workspace-panel-header { min-height: 40px; }
+.workspace-panel.is-trading-account .workspace-panel-header button { width: 32px; height: 32px; padding: 0; }
+.trading-account-settings:focus-visible,
+.trading-account-lock:focus-visible,
+.trading-account-dock-toggle:focus-visible,
+.trading-account-close:focus-visible { outline: 2px solid var(--gc-accent); outline-offset: -2px; }
+.workspace-dock-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  grid-template-rows: 1fr 120px;
+  gap: 8px;
+  padding: 8px;
+}
+.workspace-dock-target {
+  pointer-events: auto;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--gc-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--gc-panel) 88%, transparent);
+  color: var(--gc-muted);
+  font-weight: 600;
+  font-size: 13px;
+  transition: all 0.15s ease;
+}
+.workspace-dock-target.is-right-target {
+  grid-column: 2;
+  grid-row: 1;
+}
+.workspace-dock-target.is-bottom-target {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+.workspace-dock-target.is-active,
+.workspace-dock-target:hover {
+  border-color: var(--gc-accent);
+  background: color-mix(in srgb, var(--gc-accent) 22%, var(--gc-panel));
+  color: var(--gc-accent-text, var(--gc-accent));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--gc-accent) 30%, transparent);
+}
+@media (max-width: 700px) {
+  .workspace-board.has-right-dock,
+  .workspace-board.has-right-dock.is-single-content {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .workspace-board.has-right-dock .workspace-panel.is-trading-account,
+  .workspace-board.has-right-dock.is-single-content .workspace-panel.is-trading-account {
+    grid-column: 1 / -1 !important;
+    grid-row: auto !important;
+    max-height: min(46dvh, 360px) !important;
+    border-radius: 6px 6px 0 0 !important;
+  }
+  .workspace-board.has-right-dock .workspace-panel.is-wide:not(.is-trading-account) {
+    grid-column: 1 / -1 !important;
+  }
+}
+.workspace-panel-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 3px 6px 3px 9px;
+  background: var(--gc-panel);
+  border-bottom: 1px solid var(--gc-border);
+}
+.workspace-panel.is-chart {
+  position: relative;
+  overflow: visible;
+}
+.workspace-panel.is-chart:has(.workspace-chart-controls :is(.timeframe-trigger, .indicator-button, .alert-toolbar-button)[aria-expanded="true"]) {
+  z-index: 20;
+}
+.workspace-chart-header {
+  position: relative;
+  z-index: 16;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 5px 5px 0 0;
+  background: var(--gc-background);
+}
+.workspace-panel-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.workspace-panel-grip {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 24px;
+  border: 1px solid var(--gc-border);
+  border-radius: 4px;
+  background: var(--gc-control);
+  color: var(--gc-text);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  padding: 0;
+  font: inherit;
+  line-height: 1;
+}
+.workspace-panel-grip:hover {
+  border-color: var(--gc-accent);
+  color: var(--gc-accent-text, var(--gc-accent));
+}
+.workspace-panel-grip:active,
+.workspace-panel-grip.is-active {
+  cursor: grabbing;
+  background: var(--gc-panel);
+  border-color: var(--gc-accent);
+}
+.workspace-panel-grip:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+.workspace-board.is-dragging-panel .workspace-panel-body,
+.workspace-board.is-dragging-panel iframe,
+.workspace-board.is-dragging-panel canvas {
+  pointer-events: none !important;
+}
+.workspace-panel.is-being-dragged {
+  opacity: 0.45;
+  border-style: dashed;
+  border-color: var(--gc-accent);
+}
+.workspace-panel.is-drop-target {
+  outline: 2px solid var(--gc-accent) !important;
+  box-shadow: 0 0 0 2px var(--gc-accent), inset 0 0 16px color-mix(in srgb, var(--gc-accent) 22%, transparent) !important;
+  position: relative;
+}
+.workspace-panel.is-drop-target::after {
+  content: "Drop to swap position";
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 50;
+  padding: 3px 8px;
+  background: var(--gc-accent);
+  color: var(--gc-accent-ink);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.workspace-chart-controls {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+.workspace-chart-controls .symbol-contract-label {
+  padding: 0 4px;
+  white-space: nowrap;
+}
+.app-shell .workspace-chart-controls .toolbar-page-links a,
+.workspace-chart-controls .timeframe-selector .timeframe-trigger,
+.workspace-chart-controls .timeframe-favorites button,
+.workspace-chart-controls .indicator-button,
+.workspace-chart-controls .alert-toolbar-button,
+.workspace-chart-controls .bar-replay-toolbar-button,
+.workspace-chart-controls .workspace-scan-toggle,
+.workspace-chart-controls .workspace-drawing-toggle {
+  height: 24px;
+  min-height: 24px;
+  padding: 0 6px;
+  flex-shrink: 0;
+  font-size: 12px;
+  border-radius: 4px;
+}
+.workspace-chart-controls .timeframe-trigger { min-width: 42px; gap: 6px; }
+.workspace-chart-controls .toolbar-page-links,
+.workspace-chart-controls .toolbar-alert-group,
+.workspace-chart-controls .timeframe-favorites { gap: 3px; }
+.workspace-chart-controls .alert-toolbar-button,
+.workspace-chart-controls .bar-replay-toolbar-button { width: 24px; padding: 0; }
+.workspace-chart-controls .workspace-drawing-toggle {
+  width: 24px;
+  padding: 0;
+  color: var(--gc-text);
+  font-size: 19px;
+  line-height: 1;
+}
+.workspace-drawing-toggle[aria-expanded="true"] {
+  color: var(--gc-accent-text, var(--gc-accent));
+  border-color: var(--gc-accent);
+}
+.workspace-primary-chart {
+  flex: 1 1 auto;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.workspace-drawing-rail {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.workspace-drawing-rail[hidden] { display: none; }
+.workspace-drawing-rail .drawing-toolbar {
+  width: 33px;
+  min-height: 100%;
+  padding: 3px 0;
+  box-shadow: none;
+}
+.workspace-drawing-rail .drawing-tool-btn {
+  width: 27px;
+  height: 27px;
+}
+.workspace-drawing-rail .drawing-tool-btn svg { width: 17px; height: 17px; }
+.workspace-scan-overlay { max-width: calc(100% - 16px); }
+@media (min-width: 701px) {
+  .workspace-board:not(.is-scrollable):not([data-compact="true"]) { overflow: visible; }
+  .workspace-chart-controls .indicator-menu { max-height: min(65dvh, 560px); overflow-y: auto; }
+  .workspace-panel[data-content-row]:not([data-content-row="1"]) .workspace-chart-controls :is(.timeframe-menu, .indicator-menu, .alert-popover .alert-panel) {
+    top: auto;
+    bottom: calc(100% + 4px);
+    max-height: min(65dvh, 520px);
+  }
+}
+.workspace-panel-header strong[draggable="true"] { cursor: grab; }
+.workspace-panel-header span { color: var(--gc-muted); font-weight: 400; }
+.workspace-panel-header button { min-width: 26px; min-height: 23px; padding: 0 4px; }
+.workspace-panel-body { min-width: 0; min-height: 0; flex: 1 1 auto; display: flex; position: relative; }
+.workspace-panel-body .alert-panel--embedded { position: static; width: 100%; max-height: none; overflow: auto; }
+.workspace-mini-chart { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
+.footprint-zoom-selection { position: absolute; inset: 0; z-index: 21; cursor: zoom-in; touch-action: none; }
+.footprint-zoom-box { position: absolute; pointer-events: none; border: 1px solid var(--gc-accent); background: color-mix(in srgb, var(--gc-accent) 15%, transparent); }
+.footprint-zoom-status { position: absolute; top: 7px; left: 8px; z-index: 22; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 16px); padding: 5px 7px; border: 1px solid var(--gc-border); border-radius: 4px; background: var(--gc-panel); color: var(--gc-text); font-size: 12px; }
+.footprint-zoom-status button { padding: 3px 7px; border: 1px solid var(--gc-border); border-radius: 3px; background: var(--gc-control); color: var(--gc-text); font: inherit; cursor: pointer; }
+.workspace-frame { width: 100%; height: 100%; border: 0; }
+.workspace-empty { display: grid; place-items: center; flex: 1; padding: 20px; color: var(--gc-muted); text-align: center; }
+.workspace-panel-message { position: absolute; left: 12px; top: 8px; z-index: 3; padding: 6px 9px; border-radius: 5px; background: var(--gc-panel); }
+.trading-account-widget {
+  container: trading-account / inline-size;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--gc-panel);
+}
+.trading-account-connect {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  text-align: center;
+}
+.trading-account-connect h2 {
+  margin: 0;
+  color: var(--gc-text);
+  font-size: clamp(19px, 2vw, 28px);
+  font-weight: 500;
+  letter-spacing: -.02em;
+}
+.trading-account-summary button,
+.trading-account-connect button {
+  padding: 5px 12px;
+  background: var(--gc-control);
+  color: var(--gc-text);
+  border: 1px solid var(--gc-border);
+  border-radius: 5px;
+  font: inherit;
+  cursor: pointer;
+}
+.trading-account-connect .trading-account-connect-button {
+  padding: 8px 16px;
+  background: var(--gc-accent);
+  color: var(--gc-accent-ink);
+  border-color: var(--gc-accent);
+}
+.trading-account-connect p,
+.trading-account-note { margin: 0; color: var(--gc-muted); }
+.trading-account-widget button:disabled { opacity: .5; cursor: default; }
+.trading-account-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px;
+}
+.trading-account-summary strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trading-account-summary button { flex: 0 0 auto; min-height: 26px; padding: 3px 8px; }
+.trading-account-note { padding: 0 12px 6px; }
+.trading-account-widget .market-order-bar {
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+  padding: 4px 8px;
+  background: var(--gc-panel);
+  color: var(--gc-text);
+}
+.trading-account-widget .market-order-main { flex: 0 0 auto; overflow: visible; row-gap: 4px; }
+.trading-account-widget .market-order-rows { max-height: min(20dvh, 112px); overflow-x: hidden; overflow-y: auto; }
+.trading-account-widget .market-order-rows { overscroll-behavior-y: contain; scrollbar-width: thin; }
+.trading-account-widget .market-order-row { flex: 0 0 auto; }
+.trading-account-widget .market-order-actions button { min-height: 32px; }
+.trading-account-widget .market-order-meta { white-space: normal; flex-wrap: wrap; }
+.workspace-divider { position: absolute; z-index: 5; touch-action: none; }
+.workspace-divider.is-vertical { cursor: col-resize; top: 0; bottom: 0; right: -6px; width: 8px; }
+.workspace-divider.is-horizontal { cursor: row-resize; bottom: -4px; left: 0; right: 0; height: 8px; }
+.workspace-divider:hover, .workspace-divider:focus-visible { background: var(--gc-accent); opacity: .55; }
+.workspace-board.is-scrollable .workspace-divider.is-horizontal { display: none; }
+.workspace-is-fullscreen { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 50; }
+.chart-auto-fit {
+  position: absolute;
+  z-index: 4;
+  right: 8px;
+  bottom: 35px;
+  font-size: 17px;
+  min-width: 32px;
+  padding: 2px 5px;
+  opacity: 0;
+  pointer-events: none;
+}
+.chart-container:hover > .chart-auto-fit,
+.chart-container:focus-within > .chart-auto-fit {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (hover: none), (pointer: coarse) {
+  .chart-container > .chart-auto-fit { opacity: 1; pointer-events: auto; }
+}
+.workspace-scan-overlay { top: 6px; right: 8px; bottom: 8px; width: 352px; padding: 0; z-index: 19; }
+.ai-scan-panel { display: flex; flex-direction: column; gap: 9px; height: 100%; width: 100%; padding: 11px; overflow: auto; }
+.ai-scan-header, .ai-scan-controls, .ai-scan-status, .ai-scan-candidate-top, .ai-scan-candidate-actions {
+  display: flex; justify-content: space-between; align-items: center; gap: 7px;
+}
+.ai-scan-header b { font-size: 15px; }
+.ai-scan-header small { display: block; margin-top: 3px; color: var(--gc-muted); }
+.ai-scan-controls label { display: flex; align-items: center; gap: 7px; }
+.ai-scan-filters { display: flex; flex-wrap: wrap; gap: 7px; border: 1px solid var(--gc-border); padding: 5px; }
+.ai-scan-filters label { display: flex; align-items: center; gap: 3px; }
+.ai-scan-empty, .ai-scan-status { color: var(--gc-muted); }
+.ai-scan-error { color: var(--down); }
+.ai-scan-results { display: grid; gap: 7px; }
+.ai-scan-results article {
+  background: var(--gc-control);
+  border: 1px solid var(--gc-border);
+  border-radius: 6px;
+  padding: 8px;
+}
+.ai-scan-results article.is-preview { border-color: var(--gc-accent); }
+.ai-scan-candidate-top span { color: var(--gc-accent-text, var(--gc-accent)); }
+.ai-scan-results article p { margin: 6px 0; overflow-wrap: anywhere; }
+.ai-scan-results article small { color: var(--gc-muted); }
+.ai-scan-candidate-actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 8px; }
+.ai-scan-panel .ai-scan-accept-all { color: var(--gc-accent-ink); background: var(--gc-accent); border-color: var(--gc-accent); }
+@media (max-width: 700px), (max-height: 500px) and (max-width: 1000px) {
+  .workspace-chart-controls .timeframe-menu,
+  .workspace-chart-controls .indicator-menu,
+  .workspace-chart-controls .alert-popover .alert-panel {
+    position: fixed;
+    inset: calc(16dvh + var(--standalone-safe-top)) calc(8px + var(--standalone-safe-right)) auto calc(8px + var(--standalone-safe-left));
+    width: auto;
+    max-height: calc(72dvh - var(--standalone-safe-top) - var(--standalone-safe-bottom));
+    overflow-y: auto;
+  }
+  .chart-focus .workspace-chart-header { display: none; }
+  .chart-focus .workspace-drawing-rail { display: none; }
+  .workspace-toolbar { flex-wrap: nowrap; gap: 6px; min-height: 44px; padding: 5px; }
+  .workspace-switcher { display: none; }
+  .workspace-mobile-switcher { display: flex; flex: 1 1 auto; min-width: 0; }
+  .workspace-mobile-switcher > button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    min-width: 0;
+    min-height: 34px;
+    text-align: left;
+  }
+  .workspace-mobile-switcher > button > span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .workspace-toolbar .workspace-mobile-actions-toggle { display: grid; flex: 0 0 34px; width: 34px; height: 34px; }
+  .workspace-actions {
+    position: absolute;
+    display: none;
+    top: calc(100% + 5px);
+    right: 5px;
+    z-index: 2;
+    width: min(260px, calc(100vw - 10px));
+    padding: 9px;
+    border: 1px solid var(--gc-border);
+    border-radius: 8px;
+    background: var(--gc-panel);
+    box-shadow: 0 12px 32px #0005;
+  }
+  .workspace-actions.is-mobile-open { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+  .workspace-actions.is-mobile-open { max-height: calc(100dvh - 55px - var(--standalone-safe-top) - var(--standalone-safe-bottom)); overflow-y: auto; }
+  .workspace-actions .workspace-theme-anchor { width: 34px; }
+  .workspace-actions .workspace-menu-anchor > button { min-height: 34px; width: 100%; }
+  .workspace-actions .workspace-fullscreen { width: 34px; height: 34px; }
+  .workspace-actions .workspace-account {
+    grid-column: 1 / -1;
+    justify-content: stretch;
+    padding-top: 8px;
+    border-top: 1px solid var(--gc-border);
+  }
+  .workspace-actions .workspace-account button { flex: 1 1 auto; min-height: 34px; }
+  .workspace-mobile-picker {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    top: calc(100% + 5px);
+    left: 5px;
+    z-index: 2;
+    width: min(360px, calc(100% - 10px));
+    max-height: calc(100dvh - 60px - var(--standalone-safe-top) - var(--standalone-safe-bottom));
+    padding: 6px;
+    border: 1px solid var(--gc-border);
+    border-radius: 8px;
+    background: var(--gc-panel);
+    box-shadow: 0 12px 32px #0005;
+  }
+  .workspace-mobile-picker ul {
+    min-height: 0;
+    max-height: min(55dvh, 420px);
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    list-style: none;
+  }
+  .workspace-mobile-picker li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 5px; padding: 3px 0; }
+  .workspace-mobile-picker .workspace-icon-button { width: 34px; height: 34px; }
+  .workspace-mobile-option { min-height: 36px; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+  .workspace-mobile-option[aria-pressed="true"] { color: var(--gc-accent-text, var(--gc-accent)); border-color: var(--gc-accent); font-weight: 700; }
+  .workspace-mobile-picker .workspace-mobile-create { flex: 0 0 auto; min-height: 38px; margin-top: 6px; text-align: left; }
+  .workspace-menu-anchor { position: static; }
+  .theme-popover, .workspace-menu {
+    position: fixed;
+    inset: calc(55px + var(--standalone-safe-top)) calc(5px + var(--standalone-safe-right)) auto calc(5px + var(--standalone-safe-left));
+    width: auto;
+    max-height: calc(100dvh - 65px - var(--standalone-safe-top) - var(--standalone-safe-bottom));
+    overflow-y: auto;
+  }
+  .workspace-create-popover { max-height: calc(100dvh - 60px - var(--standalone-safe-top) - var(--standalone-safe-bottom)); overflow-y: auto; }
+  .workspace-board:not(.is-single) { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: var(--mobile-row-tracks) !important; grid-auto-rows: minmax(260px, 1fr); overflow-y: auto; }
+  .workspace-board:not(.is-single) .is-trading-account { grid-row: auto !important; }
+  .workspace-board .workspace-divider { display: none; }
+  .workspace-board.has-trading-account.is-single:not(.is-scrollable) {
+    height: 100%;
+    grid-template-rows: minmax(0, 1fr) max-content !important;
+    overflow: hidden;
+  }
+  .trading-account-widget .market-order-actions button { min-height: 38px; }
+  .trading-account-widget .market-order-rows { max-height: min(20dvh, 120px); }
+  .trading-account-widget .market-order-settings { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
+  .trading-account-widget .market-order-settings > label { grid-column: span 2; width: auto; min-width: 0; grid-template-columns: auto minmax(0, 1fr); gap: 3px; font-size: 11px; }
+  .trading-account-widget .market-order-settings input:not([type="checkbox"]) { width: 100%; min-width: 0; height: 26px; min-height: 26px; font-size: 11px; padding: 0 4px; }
+  .trading-account-widget .market-order-settings > .auto-trade-toggle { grid-column: span 3; display: flex !important; justify-content: center; align-items: center; height: 26px; min-height: 26px; font-size: 11px; padding: 1px 4px; }
+  .trading-account-widget .market-order-settings > .auto-trade-toggle input { flex: 0 0 auto; width: 13px; height: 13px; margin: 0 3px 0 0; }
+  .trading-account-connect { gap: 8px; padding: 10px; }
+  .chart-focus .workspace-toolbar { display: none; }
+}
+
+/* Reflow by widget width, rather than viewport width: a right dock is narrow
+   even on a two-monitor workspace. Keep all data and actions in normal flow. */
+@container trading-account (max-width: 1100px) {
+  .trading-account-summary strong { font-size: 11px; }
+  .trading-account-connect h2, .trading-account-connect p { overflow-wrap: anywhere; }
+  .trading-account-widget .market-order-main,
+  .trading-account-widget .market-order-main.has-order-rows {
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "meta" "settings" "actions" "rows";
+    grid-template-rows: auto auto auto auto;
+    align-items: stretch;
+    gap: 3px;
+    overflow: visible;
+  }
+  .trading-account-widget .market-order-meta { overflow: visible; gap: 3px 6px; font-size: 11px; }
+  .trading-account-widget .market-order-meta > span { white-space: normal; overflow-wrap: anywhere; }
+  .trading-account-widget .market-order-size-control { margin-left: 0; font-size: 11px; }
+  .trading-account-widget .market-order-size-control select { height: 26px; min-height: 26px; font-size: 11px; padding: 0 4px; }
+  .trading-account-widget .market-order-settings { display: grid; width: 100%; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 3px; }
+  .trading-account-widget .market-order-settings > label { grid-column: span 2; width: auto; min-width: 0; grid-template-columns: auto minmax(0, 1fr); gap: 3px; font-size: 11px; }
+  .trading-account-widget .market-order-settings input:not([type="checkbox"]) { width: 100%; min-width: 0; height: 26px; min-height: 26px; font-size: 11px; padding: 0 4px; }
+  .trading-account-widget .market-order-settings > .auto-trade-toggle { grid-column: span 3; display: flex !important; justify-content: center; align-items: center; white-space: normal; height: 26px; min-height: 26px; font-size: 11px; padding: 1px 4px; }
+  .trading-account-widget .market-order-settings > .auto-trade-toggle input { flex: 0 0 auto; width: 13px; height: 13px; margin: 0 3px 0 0; }
+  .trading-account-widget .market-order-actions { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .trading-account-widget .market-order-actions button { width: 100%; min-height: 38px; font-size: 14px; font-weight: 700; }
+  .trading-account-widget .market-order-rows { max-height: min(24dvh, 150px); overflow-x: hidden; overflow-y: auto; }
+  .trading-account-widget .market-order-row {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title pnl" "detail detail" "row-actions row-actions";
+    gap: 3px 6px;
+    padding: 5px 6px;
+  }
+  .trading-account-widget .market-order-row-title { grid-area: title; white-space: normal; overflow-wrap: anywhere; }
+  .trading-account-widget .market-order-row-detail { grid-area: detail; overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+  .trading-account-widget .market-order-row-pnl { grid-area: pnl; font-size: inherit; white-space: normal; overflow-wrap: anywhere; }
+  .trading-account-widget .market-order-row-actions { grid-area: row-actions; width: 100%; justify-self: stretch; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+  .trading-account-widget .market-order-row-actions button { min-width: 0; min-height: 32px; padding: 3px; }
+}
+
+/* Keep touch controls usable without enlarging unrelated chart toolbars. */
+.exness-dialog { width: min(440px, 100%); max-height: 100%; }
+.exness-dialog > .modal-header,
+.exness-dialog > .exness-account-note,
+.exness-dialog > .modal-actions { flex: 0 0 auto; }
+@media (pointer: coarse) {
+  .workspace-panel.is-trading-account .workspace-panel-header { min-height: 36px; }
+  .workspace-panel.is-compact-account .trading-account-compact-controls button { width: 28px; height: 26px; }
+  .workspace-panel.is-compact-account .trading-account-summary { min-height: 30px; padding-right: 125px; }
+  .workspace-panel.is-compact-account .trading-account-connect { padding-right: 125px; }
+  .trading-account-widget .market-order-settings input:not([type="checkbox"]) { min-height: 28px; height: 28px; }
+  .trading-account-widget .market-order-size-control select { min-height: 26px; height: 26px; }
+  .trading-account-widget .market-order-actions button { min-height: 44px; }
+  .trading-account-widget .market-order-row-actions button { min-height: 32px; }
+  .trading-account-widget .auto-trade-toggle { min-height: 28px; height: 28px; padding: 2px 4px; }
+  .exness-dialog button, .exness-dialog input { min-height: 40px; }
+  .exness-dialog .icon-button { width: 40px; }
+}

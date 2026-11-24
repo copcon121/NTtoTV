@@ -1,6 +1,6 @@
 """Reduce an in-memory depth feed to compact liquidity chart events.
 
-The Bookmap adapter performs this reduction inside Bookmap.  Direct Rithmic
+Rithmic depth is reduced in-process. The
 depth arrives in the backend, so this engine mirrors the same threshold and
 long-lived-line semantics without persisting the raw order book.
 """
@@ -68,7 +68,7 @@ class DepthLiquidityTracker:
         self._absolute_armed: set[tuple[str, int]] = set()
         self._candidates: dict[tuple[str, int], _Candidate] = {}
         self._ready = False
-        # Bookmap bridge sequences are positive and touch-bubble sequences begin
+        # Feed sequences are positive and touch-bubble sequences begin
         # at -1. Reserve a distant negative range for backend-derived depth.
         self._next_sequence = -1_000_000_000
 

@@ -1,9 +1,0 @@
-{
-  "pivotPrices": [100, 120, 95, 115, 90, 100],
-  "tailPrice": 90,
-  "signalIndex": 35,
-  "confirmationIndex": 40,
-  "boostVolumeFromIndex": 30,
-  "baseVolume": 10,
-  "boostVolume": 20
-}

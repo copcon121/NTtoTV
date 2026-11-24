@@ -1,7 +1,6 @@
 """TTW TrendAnalyzerPro-compatible price-only trend state machine.
 
-The implementation mirrors the behavior recovered from the installed
-``TTW-TrendAnalyzerPro 1.0.3 b4`` Bookmap add-on:
+The implementation preserves the reference TTW TrendAnalyzerPro behavior:
 
 * trade prices are accumulated into one-second OHLC values;
 * ten one-second pulses form one history bucket;

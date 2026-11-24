@@ -19,7 +19,9 @@ export type Timeframe =
   | "30m"
   | "1h"
   | "4h"
-  | "1D";
+  | "1D"
+  | "1W"
+  | "1M";
 
 /**
  * Event types a Frontend client can subscribe to (Req 5.2, 5.4, 5.5).
@@ -252,9 +254,6 @@ export interface FvgSignalUpdateMessage {
   phase: FvgSignalPhase;
 }
 
-/** Completed 10-second volume, population standard deviation, prior delta direction. */
-export type TduMomentumSample = readonly [volume: number, sigma: number, direction: number];
-
 export interface TduSignalUpdateMessage {
   type: "tdu_signal_update";
   symbol: string;
@@ -264,7 +263,6 @@ export interface TduSignalUpdateMessage {
   momentumDirection: number;
   momentumLevel: number;
   deltaDivergence: number;
-  momentumSamples?: readonly TduMomentumSample[];
 }
 
 export type LiquidityEventKind =
@@ -282,7 +280,7 @@ export type LiquidityAction =
   | "snapshot"
   | "touch";
 
-/** Compact signal derived inside Bookmap from full-depth updates. */
+/** Compact signal derived from Rithmic full-depth updates. */
 export interface LiquidityUpdateMessage {
   type: "liquidity_update";
   symbol: string;
@@ -392,19 +390,26 @@ export interface MarketDataStatusMessage {
   type: "market_data_status";
   symbol: string;
   time: number;
-  activeSource?: "bookmap" | "rithmic" | "nt" | null;
-  preferredSource: "bookmap" | "nt" | string;
+  activeSource?: "rithmic" | null;
+  preferredSource: "rithmic";
   switchedAt?: number | null;
   reason?: string | null;
   sources: Record<string, MarketDataSourceStatus>;
   historySync?: {
-    state: string;
+    state: "stopped" | "connecting" | "syncing" | "synced" | "error";
     connected: boolean;
     highWatermark?: number | null;
+    pendingRanges?: readonly (readonly [number, number])[];
     lastSuccessAt?: number | null;
-    pendingRanges?: number[][];
     lastError?: string | null;
   };
+  rollPending?: {
+    current: string;
+    candidate: string;
+    observations: number;
+    confirmed: boolean;
+    checkedAt?: number | null;
+  } | null;
 }
 
 /** Alert firing event (Req 5.2, 17.2). */
@@ -506,7 +511,9 @@ export interface TradingOrder {
     | "cancelled"
     | "closed"
     | "sync_paused"
-    | "sync_error";
+    | "sync_error"
+    | "unlinked";
+  // Unlinked execution intents remain in the audit trail after explicit review.
   idempotencyKey: string;
   version: number;
   entryGc?: number | null;
@@ -519,16 +526,26 @@ export interface TradingOrder {
   fillPriceGcEstimate?: number | null;
   basisAtSubmit?: number | null;
   basisAtLastSync?: number | null;
-  brokerOrderTicket?: number | null;
-  brokerPositionTicket?: number | null;
-  brokerDealTicket?: number | null;
+  basisStale?: boolean;
+  actionPending?: boolean;
+  brokerOrderTicket?: number | string | null;
+  brokerPositionTicket?: number | string | null;
+  brokerDealTicket?: number | string | null;
   rejectReason?: string | null;
   createdAt: number;
   updatedAt: number;
 }
 
+/** Account-currency PnL for one lot moving by one broker price unit. */
+export interface PnlPerPriceUnit {
+  gain: number;
+  loss: number;
+  currency: string;
+  stale: boolean;
+}
+
 export interface TradingPosition {
-  brokerPositionTicket: number;
+  brokerPositionTicket: number | string;
   orderId?: string | null;
   symbolBroker?: string;
   side: Side;
@@ -539,8 +556,14 @@ export interface TradingPosition {
   tpBroker?: number | null;
   slGc?: number | null;
   tpGc?: number | null;
-  profit?: number;
+  profit?: number | null;
+  currency?: string;
+  profitCurrency?: string;
+  profitAttribution?: "broker_account_total" | "unavailable" | null;
+  profitStale?: boolean;
+  pnlPerPriceUnit?: PnlPerPriceUnit;
   basisStale?: boolean;
+  actionPending?: boolean;
   updatedAt: number;
 }
 
@@ -554,7 +577,7 @@ export interface TradingAccount {
 }
 
 export interface AccountPositionUpdate {
-  brokerPositionTicket: number;
+  brokerPositionTicket: number | string;
   profit?: number;
   updatedAt: number;
 }

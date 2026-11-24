@@ -1,2 +1,0 @@
-Summary for C:\Bookmap\API\Layer1ApiModules\7.4.0.1---7.7.1.9999---2---stops-icebergs-on-chart---2.08.jar
-Decompiled with CFR 0.152

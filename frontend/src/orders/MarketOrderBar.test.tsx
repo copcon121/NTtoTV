@@ -12,25 +12,6 @@ const settings = {
 };
 
 describe("MarketOrderBar", () => {
-  it("ignores the second click of a double-click on a market entry button", () => {
-    const onMarketOrder = vi.fn();
-    render(
-      <MarketOrderBar
-        account={{ accountId: "a", login: 1, server: "Fake", tradeMode: "demo" }}
-        openOrderCount={0}
-        settings={settings}
-        onSettingsChange={vi.fn()}
-        onMarketOrder={onMarketOrder}
-      />,
-    );
-    const buy = screen.getByRole("button", { name: "BUY" });
-    fireEvent.click(buy, { detail: 1 });
-    fireEvent.click(buy, { detail: 2 });
-    expect(onMarketOrder).toHaveBeenCalledTimes(1);
-    fireEvent.click(buy, { detail: 1 });
-    expect(onMarketOrder).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps the bottom login action hidden when the user is not authenticated", () => {
     render(
       <MarketOrderBar
@@ -81,7 +62,7 @@ describe("MarketOrderBar", () => {
 
     expect(screen.getByText("DEMO")).toBeInTheDocument();
     expect(screen.queryByText(/Exness-Demo/)).not.toBeInTheDocument();
-    expect(screen.getByText("Bal 10,000.00")).toBeInTheDocument();
+    expect(screen.getByText("Bal 10,000.00 USD")).toBeInTheDocument();
     expect(screen.queryByText("Eq 9,999.50")).not.toBeInTheDocument();
     expect(screen.queryByText("Open 2")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "BUY" })).toBeInTheDocument();
@@ -117,7 +98,7 @@ describe("MarketOrderBar", () => {
     expect(onMarketOrder).toHaveBeenNthCalledWith(2, "buy");
   });
 
-  it("keeps manual trading controls without Auto L or Auto S toggles", () => {
+  it("keeps manual order and exit controls without Auto L or Auto S", () => {
     render(
       <MarketOrderBar
         account={{
@@ -140,6 +121,7 @@ describe("MarketOrderBar", () => {
     expect(screen.queryByLabelText("Auto trade S")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "SELL" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "BUY" })).toBeEnabled();
+    expect(screen.getByLabelText("Sizing mode")).toBeInTheDocument();
     expect(screen.getByLabelText("Take profit 50% at 1R")).toBeInTheDocument();
     expect(screen.getByLabelText("Auto SuperTrend trailing after 1R")).toBeInTheDocument();
   });
@@ -162,26 +144,6 @@ describe("MarketOrderBar", () => {
       ...settings,
       takeProfit1rEnabled: false,
     });
-  });
-
-  it("accepts a custom R target and shows the same target for SuperTrend", () => {
-    const onSettingsChange = vi.fn();
-    render(
-      <MarketOrderBar
-        openOrderCount={0}
-        settings={{ ...settings, takeProfitR: 2.5 }}
-        onSettingsChange={onSettingsChange}
-        onMarketOrder={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByLabelText("Take profit 50% at 2.5R")).toBeChecked();
-    expect(screen.getByText("ST @ 2.5R")).toBeInTheDocument();
-    const input = screen.getByLabelText("R");
-    fireEvent.focus(input);
-    fireEvent.change(input, { target: { value: "1,5" } });
-    fireEvent.blur(input);
-    expect(onSettingsChange).toHaveBeenCalledWith({ ...settings, takeProfitR: 1.5 });
   });
 
   it("toggles SuperTrend trailing for the remainder after 1R", () => {
@@ -466,7 +428,7 @@ describe("MarketOrderBar", () => {
         onMarketOrder={vi.fn()}
       />,
     );
-    const risk = screen.getByLabelText("Risk $") as HTMLInputElement;
+    const risk = screen.getByLabelText("Risk amount") as HTMLInputElement;
     fireEvent.focus(risk);
     fireEvent.change(risk, { target: { value: "125" } });
     fireEvent.blur(risk);
@@ -475,5 +437,241 @@ describe("MarketOrderBar", () => {
       riskAmount: 125,
       sizingMode: "risk",
     });
+  });
+
+  it("shows concise Trading Account floating PnL with raw USC formatting and stale indicator", () => {
+    const { rerender } = render(
+      <MarketOrderBar
+        account={{
+          accountId: "acct-usc",
+          login: 789,
+          server: "Exness-Real",
+          tradeMode: "live",
+          currency: "USC",
+          balance: 100000,
+          equity: 100012.34,
+          floatingPnl: 12.34,
+          accountStateStale: false,
+        }}
+        openOrderCount={1}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+
+    const pnlEl = screen.getByText("PnL +12.34 USC");
+    expect(pnlEl).toBeInTheDocument();
+    expect(pnlEl).toHaveClass("winning");
+    expect(pnlEl).not.toHaveClass("is-stale");
+
+    // Stale losing PnL
+    rerender(
+      <MarketOrderBar
+        account={{
+          accountId: "acct-usc",
+          login: 789,
+          server: "Exness-Real",
+          tradeMode: "live",
+          currency: "USC",
+          balance: 100000,
+          equity: 99950,
+          floatingPnl: -50.0,
+          accountStateStale: true,
+        }}
+        openOrderCount={1}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+
+    const stalePnlEl = screen.getByText("PnL -50.00 USC (stale)");
+    expect(stalePnlEl).toBeInTheDocument();
+    expect(stalePnlEl).toHaveClass("losing");
+    expect(stalePnlEl).toHaveClass("is-stale");
+  });
+
+  it("shows concise Trading Account floating PnL in USD formatting", () => {
+    render(
+      <MarketOrderBar
+        account={{
+          accountId: "acct-usd",
+          login: 456,
+          server: "Exness-Demo",
+          tradeMode: "demo",
+          currency: "USD",
+          balance: 5000,
+          equity: 5025.5,
+          floatingPnl: 25.5,
+        }}
+        openOrderCount={1}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("PnL +$25.50")).toBeInTheDocument();
+  });
+
+  it("renders BE and 50% buttons and handles click callbacks", () => {
+    const onBreakEven = vi.fn();
+    const onClose50 = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <MarketOrderBar
+        openOrderCount={1}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+        orderRows={[
+          {
+            id: "row-1",
+            title: "BUY 0.10",
+            detail: "@ 2650.0",
+            side: "buy",
+            action: "close",
+            volumeLots: 0.1,
+            canBreakEven: true,
+          },
+        ]}
+        onOrderRowBreakEven={onBreakEven}
+        onOrderRowClose50Percent={onClose50}
+        onOrderRowClose={onClose}
+      />,
+    );
+
+    const beBtn = screen.getByRole("button", { name: "BE" });
+    const close50Btn = screen.getByRole("button", { name: "50%" });
+    const closeBtn = screen.getByRole("button", { name: "Close" });
+
+    expect(beBtn).not.toBeDisabled();
+    expect(close50Btn).not.toBeDisabled();
+    expect(closeBtn).not.toBeDisabled();
+
+    fireEvent.click(beBtn);
+    expect(onBreakEven).toHaveBeenCalledWith("row-1");
+
+    fireEvent.click(close50Btn);
+    expect(onClose50).toHaveBeenCalledWith("row-1", 0.1);
+
+    fireEvent.click(closeBtn);
+    expect(onClose).toHaveBeenCalledWith("row-1");
+  });
+
+  it("disables all action buttons and shows '...' on BE button when breakEvenPending is true", () => {
+    render(
+      <MarketOrderBar
+        openOrderCount={1}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+        orderRows={[
+          {
+            id: "row-1",
+            title: "BUY 0.10",
+            detail: "@ 2650.0",
+            side: "buy",
+            action: "close",
+            volumeLots: 0.1,
+            canBreakEven: true,
+            breakEvenPending: true,
+          },
+        ]}
+      />,
+    );
+
+    const beBtn = screen.getByRole("button", { name: "..." });
+    const close50Btn = screen.getByRole("button", { name: "50%" });
+    const closeBtn = screen.getByRole("button", { name: "Close" });
+
+    expect(beBtn).toBeDisabled();
+    expect(close50Btn).toBeDisabled();
+    expect(closeBtn).toBeDisabled();
+  });
+
+  it("disables all action buttons and shows '...' on 50% button when close50Pending is true", () => {
+    render(
+      <MarketOrderBar
+        openOrderCount={1}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+        orderRows={[
+          {
+            id: "row-1",
+            title: "BUY 0.10",
+            detail: "@ 2650.0",
+            side: "buy",
+            action: "close",
+            volumeLots: 0.1,
+            canBreakEven: true,
+            close50Pending: true,
+          },
+        ]}
+      />,
+    );
+
+    const beBtn = screen.getByRole("button", { name: "BE" });
+    const close50Btn = screen.getByRole("button", { name: "..." });
+    const closeBtn = screen.getByRole("button", { name: "Close" });
+
+    expect(beBtn).toBeDisabled();
+    expect(close50Btn).toBeDisabled();
+    expect(closeBtn).toBeDisabled();
+  });
+
+  it("disables all action buttons and shows '...' on Close button when pending is true", () => {
+    render(
+      <MarketOrderBar
+        openOrderCount={1}
+        settings={settings}
+        onSettingsChange={vi.fn()}
+        onMarketOrder={vi.fn()}
+        orderRows={[
+          {
+            id: "row-1",
+            title: "BUY 0.10",
+            detail: "@ 2650.0",
+            side: "buy",
+            action: "close",
+            volumeLots: 0.1,
+            canBreakEven: true,
+            pending: true,
+          },
+        ]}
+      />,
+    );
+
+    const beBtn = screen.getByRole("button", { name: "BE" });
+    const close50Btn = screen.getByRole("button", { name: "50%" });
+    const closeBtn = screen.getByRole("button", { name: "..." });
+
+    expect(beBtn).toBeDisabled();
+    expect(close50Btn).toBeDisabled();
+    expect(closeBtn).toBeDisabled();
+  });
+
+  it("labels cent risk and balance with USC and updates labels when the account changes", () => {
+    const props = {
+      openOrderCount: 0,
+      settings: { ...settings, sizingMode: "risk" as const, riskAmount: 10 },
+      onSettingsChange: vi.fn(),
+      onMarketOrder: vi.fn(),
+    };
+    const account = {
+      accountId: "cent", login: 1, server: "Exness", tradeMode: "live" as const,
+      currency: "USC", balance: 209.80, connected: true,
+    };
+    const { rerender } = render(<MarketOrderBar {...props} account={account} />);
+    expect(screen.getByLabelText("Risk USC")).toHaveValue("10");
+    expect(screen.getByRole("option", { name: "Risk USC" })).toBeInTheDocument();
+    expect(screen.getByText(/Bal .*USC/)).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Risk $" })).not.toBeInTheDocument();
+
+    rerender(<MarketOrderBar {...props} account={{ ...account, currency: "USD" }} />);
+    expect(screen.getByLabelText("Risk $")).toHaveValue("10");
+    expect(screen.getByText(/Bal .*USD/)).toBeInTheDocument();
   });
 });

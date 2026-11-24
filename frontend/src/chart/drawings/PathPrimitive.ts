@@ -27,6 +27,7 @@ interface PathRenderOptions {
   width: number;
   lineStyle: "solid" | "dashed";
   noteText: string;
+  anchorLabels?: readonly string[];
 }
 
 const DEFAULT_OPTIONS: PathRenderOptions = {
@@ -43,6 +44,7 @@ function toRenderOptions(options?: DrawingOptions): PathRenderOptions {
     width: options?.lineWidth ?? DEFAULT_OPTIONS.width,
     lineStyle: options?.lineStyle ?? DEFAULT_OPTIONS.lineStyle,
     noteText: options?.noteText?.trim() ?? DEFAULT_OPTIONS.noteText,
+    anchorLabels: options?.anchorLabels,
   };
 }
 
@@ -82,7 +84,7 @@ class PathRenderer implements IPrimitivePaneRenderer {
         segment = [];
       };
 
-      for (const point of this.points) {
+      for (const [index, point] of this.points.entries()) {
         if (point.x === null || point.y === null) {
           flushSegment();
           continue;
@@ -93,6 +95,8 @@ class PathRenderer implements IPrimitivePaneRenderer {
         };
         segment.push(next);
         visiblePoints.push(next);
+        const label = this.options.anchorLabels?.[index];
+        if (label) this.drawNoteLabel(scope, label, next.x, next.y);
       }
       flushSegment();
 

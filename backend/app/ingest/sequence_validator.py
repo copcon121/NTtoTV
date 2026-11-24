@@ -1,7 +1,6 @@
 """Per-Stream sequence validator (task 6.2).
 
-Validates the monotonic per-Stream sequence numbers assigned by the NT_AddOn
-(Req 1.3) as events arrive on `/ws/nt`, classifying each event as one of
+Validates monotonic per-stream sequence numbers from Rithmic, classifying each event as one of
 ``ACCEPT`` / ``DUPLICATE`` / ``OUT_OF_ORDER`` / ``GAP`` and maintaining the
 highest processed sequence per Stream:
 

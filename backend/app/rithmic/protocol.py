@@ -44,6 +44,8 @@ GET_INSTRUMENT_BY_UNDERLYING_RESPONSE = 103
 GET_INSTRUMENT_BY_UNDERLYING_KEYS_RESPONSE = 104
 SEARCH_SYMBOLS_REQUEST = 109
 SEARCH_SYMBOLS_RESPONSE = 110
+FRONT_MONTH_CONTRACT_REQUEST = 113
+FRONT_MONTH_CONTRACT_RESPONSE = 114
 DBO_SNAPSHOT_REQUEST = 115
 DBO_SNAPSHOT_RESPONSE = 116
 DBO_UPDATES_REQUEST = 117
@@ -53,9 +55,7 @@ BEST_BID_OFFER = 151
 ORDER_BOOK = 156
 DEPTH_BY_ORDER = 160
 
-# History Plant: one-tick bars retain per-trade bid/ask volume.
-TICK_BAR_REPLAY_REQUEST = 206
-TICK_BAR_REPLAY_RESPONSE = 207
+# History Plant request/response templates.
 TIME_BAR_REPLAY_REQUEST = 202
 TIME_BAR_REPLAY_RESPONSE = 203
 VOLUME_PROFILE_MINUTE_BARS_REQUEST = 208
@@ -251,10 +251,15 @@ def build_login_request(
     os_platform: str | None = None,
     aggregated_quotes: bool = False,
     template_version: str = "5.55",
-    infra_type: int = 1,
     user_message: str = "nttotv-probe",
+    infra_type: int = 1,
 ) -> bytes:
-    """Build a read-only Ticker or History Plant login."""
+    """Build a read-only plant login.
+
+    ``infra_type`` follows ``RequestLogin.SysInfraType``: 1 is Ticker Plant
+    and 3 is History Plant.  The connector never exposes Order Plant login.
+    """
+
     if infra_type not in (1, 3):
         raise ValueError("only Ticker Plant (1) and History Plant (3) are supported")
 
@@ -273,7 +278,7 @@ def build_login_request(
         fields.append(field_string(144021, os_version))
     if os_platform:
         fields.append(field_string(144020, os_platform))
-    # Encode false as well: this mirrors Bookmap's Full (non-aggregated) mode.
+    # Encode false explicitly so the gateway supplies non-aggregated quotes.
     fields.append(field_varint(153644, int(aggregated_quotes)))
     return _request(LOGIN_REQUEST, fields)
 
@@ -285,26 +290,22 @@ def build_time_bar_replay_request(
     start_seconds: int,
     finish_seconds: int,
     period_minutes: int = 1,
-    period_seconds: int | None = None,
     max_count: int = 0,
     resume_bars: bool = False,
     user_message: str = "nttotv-history-time-bars",
 ) -> bytes:
-    """Request native minute or second bars from the History Plant."""
+    """Request closed minute bars from the History Plant."""
 
     if start_seconds < 0 or finish_seconds < start_seconds:
         raise ValueError("invalid history range")
     if period_minutes <= 0:
         raise ValueError("period_minutes must be positive")
-    if period_seconds is not None and period_seconds <= 0:
-        raise ValueError("period_seconds must be positive")
     fields = [
         field_string(132760, user_message),
         field_string(110100, symbol),
         field_string(110101, exchange),
-        # RequestTimeBarReplay.BarType: SECOND_BAR=1, MINUTE_BAR=2.
-        field_varint(119200, 1 if period_seconds is not None else 2),
-        field_varint(119112, period_seconds if period_seconds is not None else period_minutes),
+        field_varint(119200, 2),  # RequestTimeBarReplay.BarType.MINUTE_BAR
+        field_varint(119112, period_minutes),
         field_varint(153002, start_seconds),
         field_varint(153003, finish_seconds),
         field_varint(149253, 1),  # Direction.FIRST
@@ -365,6 +366,24 @@ def build_resume_bars_request(
     )
 
 
+def build_front_month_contract_request(
+    *,
+    symbol: str,
+    exchange: str,
+    subscribe: bool = False,
+    user_message: str = "nttotv-front-month",
+) -> bytes:
+    return _request(
+        FRONT_MONTH_CONTRACT_REQUEST,
+        (
+            field_string(132760, user_message),
+            field_string(110100, symbol),
+            field_string(110101, exchange),
+            field_varint(154352, int(subscribe)),
+        ),
+    )
+
+
 def build_market_data_request(
     *, symbol: str, exchange: str, update_bits: int, subscribe: bool = True
 ) -> bytes:
@@ -378,25 +397,6 @@ def build_market_data_request(
             field_varint(154211, update_bits),
         ),
     )
-
-
-def build_tick_replay_request(
-    *, symbol: str, exchange: str, start: int, end: int,
-    user_message: str = "nttotv-history", max_count: int = 10_000,
-) -> bytes:
-    """Inclusive logical seconds; Rithmic's wire finish_index is EXCLUSIVE."""
-    if not 0 <= start <= end < 2_147_483_647 or max_count < 1:
-        raise ValueError("invalid tick replay range or count")
-    return _request(TICK_BAR_REPLAY_REQUEST, (
-        field_string(132760, user_message),
-        field_string(110100, symbol), field_string(110101, exchange),
-        field_varint(119200, 1), field_varint(119208, 1),
-        field_string(148162, "1"),
-        field_varint(153002, start), field_varint(153003, end + 1),
-        field_varint(154020, max_count),
-        field_varint(149253, 1), field_varint(149307, 1),
-        field_varint(153642, 0),
-    ))
 
 
 def build_dbo_updates_request(
@@ -589,13 +589,6 @@ def _dbo_snapshot_orders(
     return orders
 
 
-def template_id(data: bytes) -> int:
-    value = _first_varint(parse_fields(data), TEMPLATE_ID_FIELD)
-    if value is None:
-        raise ProtocolDecodeError("R|Protocol frame has no template_id")
-    return value
-
-
 def decode_message(data: bytes) -> dict[str, Any]:
     """Decode the read-only templates understood by the probe."""
 
@@ -610,9 +603,6 @@ def decode_message(data: bytes) -> dict[str, Any]:
     rp_codes = _strings(fields, 132766)
     if rp_codes:
         base["rpCode"] = rp_codes
-    handler_codes = _strings(fields, 132764)
-    if handler_codes:
-        base["handlerRpCode"] = handler_codes
 
     if template == SYSTEM_INFO_RESPONSE:
         base.update(
@@ -634,6 +624,74 @@ def decode_message(data: bytes) -> dict[str, Any]:
             heartbeatInterval=_first_double(fields, 153633),
             fcmId=_first_string(fields, 154013),
             ibId=_first_string(fields, 154014),
+        )
+    elif template == TIME_BAR_REPLAY_RESPONSE:
+        base.update(
+            type="time_bar_replay",
+            requestKey=_first_string(fields, 132758),
+            requestHandlerCode=_strings(fields, 132764),
+            symbol=_first_string(fields, 110100),
+            exchange=_first_string(fields, 110101),
+            barType=_first_varint(fields, 119200),
+            period=_first_string(fields, 119112),
+            marker=_first_varint(fields, 119100),
+            numTrades=_first_varint(fields, 119109),
+            volume=_first_varint(fields, 119110),
+            bidVolume=_first_varint(fields, 119117),
+            askVolume=_first_varint(fields, 119118),
+            open=_first_double(fields, 100019),
+            close=_first_double(fields, 100021),
+            high=_first_double(fields, 100012),
+            low=_first_double(fields, 100013),
+            settlementPrice=_first_double(fields, 100070),
+        )
+    elif template == VOLUME_PROFILE_MINUTE_BARS_RESPONSE:
+        base.update(
+            type="volume_profile_minute_bar",
+            requestKey=_first_string(fields, 132758),
+            requestHandlerCode=_strings(fields, 132764),
+            symbol=_first_string(fields, 110100),
+            exchange=_first_string(fields, 110101),
+            period=_first_string(fields, 119215),
+            marker=_first_varint(fields, 119100),
+            numTrades=_first_varint(fields, 119204),
+            volume=_first_varint(fields, 119205),
+            bidVolume=_first_varint(fields, 119213),
+            askVolume=_first_varint(fields, 119214),
+            open=_first_double(fields, 100019),
+            close=_first_double(fields, 100021),
+            high=_first_double(fields, 100012),
+            low=_first_double(fields, 100013),
+            prices=_doubles(fields, 119216),
+            noAggressorVolume=(
+                _varints(fields, 159011) or _varints(fields, 119217)
+            ),
+            bidVolumes=_varints(fields, 159012) or _varints(fields, 119218),
+            askVolumes=_varints(fields, 159013) or _varints(fields, 119219),
+            noAggressorTrades=(
+                _varints(fields, 159014) or _varints(fields, 119220)
+            ),
+            bidAggressorTrades=(
+                _varints(fields, 159015) or _varints(fields, 119221)
+            ),
+            askAggressorTrades=(
+                _varints(fields, 159016) or _varints(fields, 119222)
+            ),
+        )
+    elif template == RESUME_BARS_RESPONSE:
+        base.update(
+            type="resume_bars",
+            ok=rp_codes == ["0"],
+        )
+    elif template == FRONT_MONTH_CONTRACT_RESPONSE:
+        base.update(
+            type="front_month_contract",
+            symbol=_first_string(fields, 110100),
+            exchange=_first_string(fields, 110101),
+            isFrontMonth=bool(_first_varint(fields, 149166) or False),
+            symbolName=_first_string(fields, 100003),
+            tradingSymbol=_first_string(fields, 157095),
+            tradingExchange=_first_string(fields, 157096),
         )
     elif template in (MARKET_DATA_RESPONSE, DBO_UPDATES_RESPONSE):
         base["type"] = (
@@ -695,86 +753,6 @@ def decode_message(data: bytes) -> dict[str, Any]:
             price=_first_double(fields, 154405),
             orders=_dbo_snapshot_orders(fields),
             requestHandlerCode=_strings(fields, 132764),
-        )
-    elif template == TIME_BAR_REPLAY_RESPONSE:
-        base.update(
-            type="time_bar_replay",
-            requestKey=_first_string(fields, 132758),
-            requestHandlerCode=_strings(fields, 132764),
-            symbol=_first_string(fields, 110100),
-            exchange=_first_string(fields, 110101),
-            barType=_first_varint(fields, 119200),
-            period=_first_string(fields, 119112),
-            marker=_first_varint(fields, 119100),
-            numTrades=_first_varint(fields, 119109),
-            volume=_first_varint(fields, 119110),
-            bidVolume=_first_varint(fields, 119117),
-            askVolume=_first_varint(fields, 119118),
-            open=_first_double(fields, 100019),
-            close=_first_double(fields, 100021),
-            high=_first_double(fields, 100012),
-            low=_first_double(fields, 100013),
-            settlementPrice=_first_double(fields, 100070),
-        )
-    elif template == VOLUME_PROFILE_MINUTE_BARS_RESPONSE:
-        base.update(
-            type="volume_profile_minute_bar",
-            requestKey=_first_string(fields, 132758),
-            requestHandlerCode=_strings(fields, 132764),
-            symbol=_first_string(fields, 110100),
-            exchange=_first_string(fields, 110101),
-            period=_first_string(fields, 119215),
-            marker=_first_varint(fields, 119100),
-            numTrades=_first_varint(fields, 119204),
-            volume=_first_varint(fields, 119205),
-            bidVolume=_first_varint(fields, 119213),
-            askVolume=_first_varint(fields, 119214),
-            open=_first_double(fields, 100019),
-            close=_first_double(fields, 100021),
-            high=_first_double(fields, 100012),
-            low=_first_double(fields, 100013),
-            prices=_doubles(fields, 119216),
-            noAggressorVolume=(
-                _varints(fields, 159011) or _varints(fields, 119217)
-            ),
-            bidVolumes=_varints(fields, 159012) or _varints(fields, 119218),
-            askVolumes=_varints(fields, 159013) or _varints(fields, 119219),
-            noAggressorTrades=(
-                _varints(fields, 159014) or _varints(fields, 119220)
-            ),
-            bidAggressorTrades=(
-                _varints(fields, 159015) or _varints(fields, 119221)
-            ),
-            askAggressorTrades=(
-                _varints(fields, 159016) or _varints(fields, 119222)
-            ),
-        )
-    elif template == RESUME_BARS_RESPONSE:
-        base.update(
-            type="resume_bars",
-            ok=rp_codes == ["0"],
-        )
-    elif template == TICK_BAR_REPLAY_RESPONSE:
-        seconds = _varints(fields, 119202)
-        micros = _varints(fields, 119203)
-        base.update(
-            type="tick_replay",
-            symbol=_first_string(fields, 110100),
-            exchange=_first_string(fields, 110101),
-            barType=_first_varint(fields, 119200),
-            barSubType=_first_varint(fields, 119208),
-            typeSpecifier=_first_string(fields, 148162),
-            sequences=_strings(fields, 119225),
-            numTrades=_first_varint(fields, 119204),
-            volume=_first_varint(fields, 119205),
-            bidVolume=_first_varint(fields, 119213),
-            askVolume=_first_varint(fields, 119214),
-            open=_first_double(fields, 100019),
-            close=_first_double(fields, 100021),
-            high=_first_double(fields, 100012),
-            low=_first_double(fields, 100013),
-            seconds=seconds, micros=micros,
-            timeMs=(seconds[0] * 1000 + (micros[0] if micros else 0) // 1000) if seconds else None,
         )
     elif template == LAST_TRADE:
         base.update(

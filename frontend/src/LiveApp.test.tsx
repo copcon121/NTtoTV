@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -7,6 +8,7 @@ import {
   ChartContextMenu,
   FOOTPRINT_SUBSCRIBED_EVENTS,
   GLOBAL_SUBSCRIBED_EVENTS,
+  LiveApp,
   TIMEFRAME_SUBSCRIBED_EVENTS,
   appShellClassName,
   bigTradesEnabledForTimeframe,
@@ -19,21 +21,19 @@ import {
   mergeVisibleDrawingState,
   mergeMt5AccountUpdate,
   mergeMt5OpenTradeProfitUpdates,
+  mt5AccountsEqual,
+  formatProfit,
   persistActiveProfileId,
   persistProfileHotSnapshot,
-  projectBrokerAnchoredOrders,
   readActiveProfileId,
   readProfileHotSnapshot,
   resolveEndpoints,
   seriesDataKey,
   supertrendTrailingActivationError,
-  toAlertLines,
-  toOrderControls,
   visibleDrawingsForTimeframe,
 } from "./LiveApp";
 import type { SupertrendTrailing } from "./api/client";
-import type { TradingOrder, TradingPosition } from "./socket/messages";
-import { useBrokerChartPositions } from "./orders/brokerChartLevels";
+import type { ChartContainerProps } from "./chart/ChartContainer";
 import {
   DEFAULT_EMA_SETTINGS,
   DEFAULT_FOOTPRINT_SETTINGS,
@@ -42,102 +42,35 @@ import type { DrawingState } from "./chart/drawings/types";
 import { DEFAULT_SMC_SETTINGS } from "./chart/smc";
 import { DEFAULT_SUPERTREND_SETTINGS } from "./chart/supertrend";
 import type { ChartProfilePayload } from "./profiles/types";
-import type { Alert } from "./alerts/types";
+
+const scanChartMock = vi.hoisted(() => ({ add: vi.fn(), drawings: [] as DrawingState[] }));
+vi.mock("./chart/ChartContainer", () => ({
+  ChartContainer: ({ children, scanDrafts, drawings, onDrawingActionsReady, onDrawingsChange, orderLines, orderControls, onOrderDragBatchCommit }: ChartContainerProps) => {
+    useEffect(() => {
+      scanChartMock.drawings = [...(drawings ?? [])];
+      onDrawingActionsReady?.({ add: items => {
+        scanChartMock.add(items);
+        const map = new Map(scanChartMock.drawings.map(d => [d.id, d]));
+        items.forEach(d => map.set(d.id, d));
+        scanChartMock.drawings = [...map.values()];
+        onDrawingsChange?.(scanChartMock.drawings);
+      }, undo: vi.fn() });
+      return () => onDrawingActionsReady?.(undefined);
+    }, [drawings, onDrawingActionsReady, onDrawingsChange]);
+    return <div>{children}<output aria-label="Scan drafts">{scanDrafts?.suggestions.length ?? 0}</output>
+      {scanDrafts?.suggestions.map(s => <button key={s.id} onClick={() => scanDrafts.onAddSuggestion(s)}>Accept {s.id}</button>)}
+      {orderControls?.filter((control) => control.level !== "entry").map((control) => (
+      <output key={control.id} aria-label={`${control.title} value`}>{control.pnlText ?? control.detail}</output>
+    ))}{orderLines?.filter((line) => line.field === "slGc").map((line) => (
+      <button key={line.id} onClick={() => onOrderDragBatchCommit?.([
+        { id: line.id, startPrice: line.price, price: line.price + 5 },
+      ])}>SL {line.price}</button>
+    ))}</div>;
+  },
+}));
 
 afterEach(() => {
   cleanup();
-});
-
-describe("order stop and target money", () => {
-  const symbol = {
-    symbol: "XAUUSDm", digits: 2, tickSize: 0.01, pipValue: 1,
-    minLot: 0.01, maxLot: 100, lotStep: 0.01, stopsLevel: 0.1,
-  };
-  const order: TradingOrder = {
-    id: "ord_1", userId: "u1", accountId: "a1", source: "market_bar",
-    symbolInternal: "GC", contractInternal: "GC", symbolBroker: "XAUUSDm",
-    side: "sell", kind: "market", volumeLots: 0.1, gcAnchored: true,
-    takeProfit1rEnabled: false, autoSupertrendAfter1rEnabled: false,
-    status: "filled", idempotencyKey: "test", version: 1,
-    fillPriceGcEstimate: 3925, fillPriceBroker: 3900,
-    slGc: 3918.7, slBroker: 3896, tpGc: 3910, tpBroker: 3887.3,
-    brokerPositionTicket: 7, createdAt: 1, updatedAt: 1,
-  };
-  const position: TradingPosition = {
-    brokerPositionTicket: 7, side: "sell", volumeLots: 0.05,
-    entryBroker: 3900, entryGcEstimate: 3922.7,
-    slGc: 3918.7, slBroker: 3896, tpGc: 3910, tpBroker: 3887.3,
-    profit: 106.1, updatedAt: 1,
-  };
-
-  it("uses broker fill and exit prices with the remaining position volume", () => {
-    const controls = toOrderControls(
-      [order], 3904.8, symbol, { positions: [position], orders: [] },
-      new Set(), new Set(),
-    );
-    expect(controls.find((c) => c.level === "entry")?.pnlValue).toBe(106.1);
-    expect(controls.find((c) => c.level === "sl")?.pnlValue).toBeCloseTo(20);
-    expect(controls.find((c) => c.level === "tp")?.pnlValue).toBeCloseTo(63.5);
-  });
-
-  it("keeps a profitable stop positive and a losing stop negative for both sides", () => {
-    for (const side of ["buy", "sell"] as const) {
-      const direction = side === "buy" ? 1 : -1;
-      const controls = toOrderControls(
-        [{ ...order, side, slBroker: 3900 + direction * 2 }],
-        undefined, symbol, { positions: [], orders: [] }, new Set(), new Set(),
-      );
-      expect(controls.find((c) => c.level === "sl")?.pnlValue).toBeCloseTo(20);
-      const losing = toOrderControls(
-        [{ ...order, side, slBroker: 3900 - direction * 2 }],
-        undefined, symbol, { positions: [], orders: [] }, new Set(), new Set(),
-      );
-      expect(losing.find((c) => c.level === "sl")?.pnlValue).toBeCloseTo(-20);
-    }
-  });
-
-  it("does not show old stop money while a new broker stop is unconfirmed", () => {
-    const controls = toOrderControls(
-      [{ ...order, slGc: 3917, slBroker: undefined }], undefined, symbol,
-      { positions: [position], orders: [] }, new Set(), new Set(),
-    );
-    const stop = controls.find((c) => c.level === "sl");
-    expect(stop?.price).toBe(3917);
-    expect(stop?.pnlValue).toBeUndefined();
-    expect(stop?.pnlText).toBeUndefined();
-  });
-
-  it("keeps broker projections and pending edits consistent with stop money", () => {
-    const brokerPosition = { ...position, slBroker: 3897, tpBroker: 3888 };
-    const projected = projectBrokerAnchoredOrders([order], [brokerPosition]);
-    const controls = toOrderControls(projected, undefined, symbol,
-      { positions: [brokerPosition], orders: [] }, new Set(), new Set());
-    expect(controls.find((c) => c.level === "sl")?.pnlValue).toBeCloseTo(15);
-    expect(controls.find((c) => c.level === "tp")?.pnlValue).toBeCloseTo(60);
-
-    const pending = projectBrokerAnchoredOrders([order], [brokerPosition],
-      new Map([[order.id, { slGc: 3917 }]]));
-    const pendingControls = toOrderControls(pending, undefined, symbol,
-      { positions: [brokerPosition], orders: [] }, new Set(), new Set());
-    expect(pendingControls.find((c) => c.level === "sl")?.price).toBe(3917);
-    expect(pendingControls.find((c) => c.level === "sl")?.pnlValue).toBeUndefined();
-    expect(pendingControls.find((c) => c.level === "tp")?.pnlValue).toBeCloseTo(60);
-  });
-
-  it("uses unrounded broker prices for manual MT5 positions and pending orders", () => {
-    const controls = toOrderControls([], undefined, symbol, {
-      positions: [{ ...position, slBroker: 3896.047 }],
-      orders: [{
-        brokerOrderTicket: 8, symbolBroker: "XAUUSDm", side: "buy", kind: "limit",
-        volumeLots: 0.1, entryBroker: 3900.03, entryGc: 3922.7,
-        slBroker: 3897.01, slGc: 3919.7, updatedAt: 1,
-      }],
-    }, new Set(), new Set());
-    expect(controls.find((c) => c.orderId === "mt5pos:7" && c.level === "sl")?.pnlValue)
-      .toBeCloseTo(19.765);
-    expect(controls.find((c) => c.orderId === "mt5order:8" && c.level === "sl")?.pnlValue)
-      .toBeCloseTo(-30.2);
-  });
 });
 
 const profilePayload: ChartProfilePayload = {
@@ -152,19 +85,180 @@ const profilePayload: ChartProfilePayload = {
   drawings: [],
 };
 
-describe("MP alert chart lifecycle", () => {
-  it("removes consumed and expired MP lines while retaining current and manual levels", () => {
-    const managed: Alert = { id: "mp_active", symbol: "GC", type: "price_crosses_level",
-      enabled: true, params: { source: "mp_plan", level: 4055.5, mpExpiresAt: 2000 } };
-    const rows: Alert[] = [managed,
-      { ...managed, id: "mp_fired", enabled: false, params: { ...managed.params, mpFiredAt: 900 } },
-      { ...managed, id: "mp_deleted", enabled: false, params: { ...managed.params, mpDeletedAt: 900 } },
-      { ...managed, id: "mp_expired", params: { ...managed.params, mpExpiresAt: 1000 } },
-      { ...managed, id: "manual_disabled", enabled: false, params: { level: 4068 } },
-    ];
-    expect(toAlertLines(rows, 1000).map((line) => line.id)).toEqual(["mp_active", "manual_disabled"]);
-    expect(toAlertLines(rows, 2000).map((line) => line.id)).toEqual(["manual_disabled"]);
+
+describe("LiveApp scan persistence and request isolation", () => {
+  const suggestion = {
+    id: "confirmed", group: "lines", type: "support_trendline", label: "Confirmed line",
+    state: "waiting", strength: "strong", score: 90, drawingTool: "trendline",
+    anchors: [{time:1700000000,price:100},{time:1700003600,price:160}],
+  };
+  const manual: DrawingState = {
+    id: "manual-keep", tool: "trendline", sourceTimeframe: "1m",
+    anchors: [{time:1700000000 as any,price:200},{time:1700003600 as any,price:210}], options: {},
+  };
+  function setup() {
+    localStorage.clear(); scanChartMock.add.mockClear();
+    localStorage.setItem("gc.workspace.guest.v1", JSON.stringify([{
+      id:"scan-test",name:"Scan Test",createdAt:1,updatedAt:1,
+      payload:{version:1,template:"scratch",useChartProfile:false,tradingAccountInitialized:true,
+        panels:[{id:"main-chart",type:"chart",timeframe:"1m",drawings:[manual]}]},
+    }]));
+    const pending: { body: any; resolve: (response: Response) => void }[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/ai-scan") return new Promise<Response>(resolve => pending.push({ body:JSON.parse(String(init?.body)), resolve }));
+      if (url === "/api/auth/me") return Promise.resolve(Response.json({user:null}));
+      if (url === "/api/execution") return Promise.resolve(Response.json({enabled:false}));
+      return Promise.resolve(new Response(null, {status:404}));
+    }));
+    return pending;
+  }
+  it("keeps rapid filter edits saved and rejects late responses, including empty groups", async () => {
+    const pending = setup();
+    const view = render(<LiveApp />);
+    try {
+      fireEvent.click(await screen.findByRole("button",{name:"Enable AI Scan"}));
+      await waitFor(() => expect(pending).toHaveLength(1));
+      fireEvent.click(screen.getByRole("button",{name:"AI Scan filter settings"}));
+      const settings = screen.getByRole("dialog",{name:"AI Scan settings"});
+      const strength = within(settings).getByLabelText("Strength");
+      fireEvent.change(strength,{target:{value:"strong"}});
+      await waitFor(() => expect(pending).toHaveLength(2));
+      fireEvent.click(within(settings).getByLabelText("Support / resistance"));
+      await waitFor(() => expect(pending).toHaveLength(3));
+      await act(async () => pending[2].resolve(Response.json({suggestions:[suggestion]})));
+      expect(await screen.findByRole("button",{name:"Accept confirmed"})).toBeInTheDocument();
+      await act(async () => {
+        pending[0].resolve(Response.json({suggestions:[{...suggestion,id:"old",group:"levels"}]}));
+        pending[1].resolve(Response.json({suggestions:[{...suggestion,id:"old-strong",group:"levels"}]}));
+      });
+      expect(strength).toHaveValue("strong");
+      expect(screen.queryByRole("button",{name:"Accept old"})).not.toBeInTheDocument();
+      expect(within(settings).getByLabelText("Support / resistance")).not.toBeChecked();
+      for (const label of ["Trendlines","Fibonacci retracements","Chart patterns","Elliott waves"]) fireEvent.click(within(settings).getByLabelText(label));
+      await waitFor(() => expect(pending[pending.length - 1]?.body.groups).toEqual([]));
+      await act(async () => pending.slice(3).forEach(p => p.resolve(Response.json({suggestions:[]}))));
+      expect(screen.getByLabelText("Scan drafts")).toHaveTextContent("0");
+      view.unmount();
+      const remount = render(<LiveApp />);
+      fireEvent.click(await screen.findByRole("button",{name:"AI Scan filter settings"}));
+      const saved = screen.getByRole("dialog",{name:"AI Scan settings"});
+      expect(within(saved).getByLabelText("Strength")).toHaveValue("strong");
+      expect(within(saved).getAllByRole("checkbox").slice(0,5).every(e => !(e as HTMLInputElement).checked)).toBe(true);
+      remount.unmount();
+    } finally { view.unmount(); vi.unstubAllGlobals(); localStorage.clear(); }
   });
+  it("does not add repeated permanent geometry across rescan/remount and keeps manual drawings", async () => {
+    const pending = setup();
+    const view = render(<LiveApp />);
+    try {
+      fireEvent.click(await screen.findByRole("button",{name:"Enable AI Scan"}));
+      await waitFor(() => expect(pending).toHaveLength(1));
+      await act(async () => pending[0].resolve(Response.json({suggestions:[suggestion]})));
+      fireEvent.click(await screen.findByRole("button",{name:"Accept confirmed"}));
+      expect(scanChartMock.add).toHaveBeenCalledTimes(1);
+      expect(scanChartMock.drawings.some(d => d.id === "manual-keep")).toBe(true);
+      fireEvent.click(screen.getByRole("button",{name:"Disable AI Scan"}));
+      fireEvent.click(screen.getByRole("button",{name:"Enable AI Scan"}));
+      await waitFor(() => expect(pending).toHaveLength(2));
+      await act(async () => pending[1].resolve(Response.json({suggestions:[{...suggestion,id:"changed-id"}]})));
+      expect(screen.getByLabelText("Scan drafts")).toHaveTextContent("0");
+      view.unmount();
+      const remount = render(<LiveApp />);
+      fireEvent.click(await screen.findByRole("button",{name:"Enable AI Scan"}));
+      await waitFor(() => expect(pending).toHaveLength(3));
+      const shifted = {...suggestion,id:"shifted",anchors:suggestion.anchors.map(a => ({time:a.time+60,price:a.price+1}))};
+      await act(async () => pending[2].resolve(Response.json({suggestions:[shifted]})));
+      expect(screen.getByLabelText("Scan drafts")).toHaveTextContent("0");
+      expect(scanChartMock.add).toHaveBeenCalledTimes(1);
+      expect(scanChartMock.drawings.some(d => d.id === "manual-keep")).toBe(true);
+      remount.unmount();
+    } finally { view.unmount(); vi.unstubAllGlobals(); localStorage.clear(); }
+  });
+});
+
+describe("Exness execution state", () => {
+  it("uses Exness snapshots for Terminal positions, order lines, and PnL", async () => {
+    const account = { accountId: "100", provider: "exness", connected: true, tradeMode: "live" };
+    const position = {
+      brokerPositionTicket: "18446744073709551001",
+      side: "buy",
+      volumeLots: 0.1,
+      entryBroker: 2500.21,
+      entryGcEstimate: 2510.4,
+      tpGc: 2530.4,
+      profitCurrency: "USC",
+      pnlPerPriceUnit: { gain: 100, loss: 100, currency: "USC", stale: false },
+    };
+    let profit = 10;
+    let slGc = 2504.4;
+    let profitStale = false;
+    let actionPending = false;
+    const edits: unknown[] = [];
+    const submitted: unknown[] = [];
+    const responses: Record<string, unknown> = {
+      "/api/auth/me": { user: { id: "exness-test", username: "test" } },
+      "/api/workspaces": { workspaces: [{
+        id: "exness-workspace", name: "GC Workspace", createdAt: 1, updatedAt: 1,
+        payload: { version: 1, template: "essentials", tradingAccountInitialized: true, panels: [
+          { id: "main-chart", type: "chart", timeframe: "1m" },
+          { id: "broker-account", type: "tradingAccount" },
+        ] },
+      }] },
+      "/api/execution": { enabled: true, mode: "exness", profiles: [] },
+      "/api/execution/status": { connected: true, account },
+      "/api/execution/symbol": { symbol: { symbol: "XAUUSD", digits: 2, tickSize: .01, pipValue: 1, minLot: .01, maxLot: 100, lotStep: .01 } },
+    };
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/orders" && init?.method === "POST") {
+        submitted.push(JSON.parse(String(init.body)));
+        return Response.json({ order: { id: "test-market", status: "submitted" } }, { status: 202 });
+      }
+      if (url === `/api/execution/positions/${position.brokerPositionTicket}` && init?.method === "PATCH") {
+        edits.push(JSON.parse(String(init.body)));
+        actionPending = true;
+        return Response.json({ pending: true }, { status: 202 });
+      }
+      if (url === "/api/execution/state") {
+        return Response.json({ account, trades: { positions: [{ ...position, profit, profitStale, slGc, actionPending }], orders: [] }, orders: [], trailings: [] });
+      }
+      return url in responses ? Response.json(responses[url]) : new Response(null, { status: 404 });
+    }));
+    const view = render(<LiveApp />);
+    try {
+      expect(await screen.findByText("0.10 @ 2500.21")).toBeInTheDocument();
+      expect(screen.getByText("+10.00 USC")).toBeInTheDocument();
+      expect(screen.getByLabelText("TP value")).toHaveTextContent("+USC 200.00");
+      expect(screen.getByLabelText("SL value")).toHaveTextContent("-USC 60.00");
+      fireEvent.change(screen.getByRole("combobox", { name: "Sizing mode" }), { target: { value: "risk" } });
+      fireEvent.click(screen.getByRole("button", { name: "BUY" }));
+      await waitFor(() => expect(submitted).toEqual([expect.objectContaining({
+        side: "buy", kind: "market", volumeLots: .33, slDistanceGc: 3, tpDistanceGc: 6,
+      })]));
+      fireEvent.click(screen.getByRole("button", { name: "SL 2504.4" }));
+      await waitFor(() => expect(edits).toEqual([{ priceDeltas: { slGc: 5 }, idempotencyKey: expect.any(String) }]));
+      expect(screen.getByRole("button", { name: "SL 2509.4" })).toBeInTheDocument();
+      expect(screen.getByLabelText("SL value")).toHaveTextContent("-USC 10.00");
+      profitStale = true;
+      expect(await screen.findByText("+10.00 USC (stale)", {}, { timeout: 4_000 })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "SL 2509.4" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "SL 2504.4" })).not.toBeInTheDocument();
+      profit = -5;
+      profitStale = false;
+      slGc = 2510.4;
+      actionPending = false;
+      expect(await screen.findByText("-5.00 USC", {}, { timeout: 4_000 })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "SL 2510.4" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "SL 2510.4" }));
+      expect(screen.getByRole("button", { name: "SL 2515.4" })).toBeInTheDocument();
+      await waitFor(() => expect(edits).toHaveLength(2));
+      actionPending = false;
+      expect(await screen.findByRole("button", { name: "SL 2510.4" }, { timeout: 4_000 })).toBeInTheDocument();
+    } finally {
+      view.unmount();
+      window.localStorage.removeItem("gc-chart-platform.market-order-settings");
+      vi.unstubAllGlobals();
+    }
+  }, 10_000);
 });
 
 describe("resolveEndpoints", () => {
@@ -187,86 +281,6 @@ describe("resolveEndpoints", () => {
         host: "charts.example.test",
       }).ws,
     ).toBe("wss://charts.example.test/ws/chart");
-  });
-});
-
-describe("broker-fixed market bracket display", () => {
-  it("keeps chart levels after 50% close and receives TP edits from MT5", () => {
-    const position: TradingPosition = {
-      brokerPositionTicket: 7, side: "buy", symbolBroker: "XAUUSDm",
-      volumeLots: 0.1, profit: 65.4, entryBroker: 3915, entryGcEstimate: 3940,
-      slBroker: 3910.4, slGc: 3935.4, tpBroker: 3952.5, tpGc: 3977.5, updatedAt: 1,
-    };
-    const order = { id: "partial", source: "market_bar", kind: "market",
-      gcAnchored: false, side: "buy", status: "filled", symbolInternal: "GC",
-      volumeLots: 0.1, brokerPositionTicket: 7, fillPriceBroker: 3915,
-      fillPriceGcEstimate: 3940, slBroker: 3910.4, slGc: 3935.4,
-      tpBroker: 3952.5, tpGc: 3977.5 } as TradingOrder;
-    const symbol = { symbol: "XAUUSDm", digits: 2, tickSize: 0.01, pipValue: 1,
-      minLot: 0.01, maxLot: 100, lotStep: 0.01, stopsLevel: 0.1 };
-    const { result, rerender } = renderHook(({ incoming, saved }) => {
-      const positions = useBrokerChartPositions([incoming], [saved], "mock-account");
-      return toOrderControls(projectBrokerAnchoredOrders([saved], positions),
-        undefined, symbol, { positions, orders: [] }, new Set(), new Set());
-    }, { initialProps: { incoming: position, saved: order } });
-    const half = { ...position, volumeLots: 0.05, profit: 32.7,
-      entryGcEstimate: 3929.4, slGc: 3924.8, tpGc: 3966.9, updatedAt: 2 };
-    rerender({ incoming: half, saved: { ...order, volumeLots: 0.05 } });
-    expect(result.current.find((c) => c.level === "entry")?.price).toBe(3940);
-    expect(result.current.find((c) => c.level === "sl")?.price).toBe(3935.4);
-    expect(result.current.find((c) => c.level === "tp")?.price).toBe(3977.5);
-    expect(result.current.find((c) => c.level === "sl")?.pnlValue).toBeCloseTo(-23);
-    expect(result.current.find((c) => c.level === "tp")?.pnlValue).toBeCloseTo(187.5);
-
-    const moved = { ...half, tpBroker: 3942.5, tpGc: 3956.9, updatedAt: 3 };
-    rerender({ incoming: moved, saved: { ...order, source: "chart_bracket", gcAnchored: true } });
-    expect(result.current.find((c) => c.level === "entry")?.price).toBe(3940);
-    expect(result.current.find((c) => c.level === "sl")?.price).toBe(3935.4);
-    expect(result.current.find((c) => c.level === "tp")?.price).toBe(3956.9);
-    expect(result.current.find((c) => c.level === "tp")?.pnlValue).toBeCloseTo(137.5);
-  });
-
-  it("keeps pending SL/TP edits above stale broker and profit snapshots", () => {
-    const order = {
-      id: "ord_drag", source: "market_bar", kind: "market", gcAnchored: false,
-      brokerPositionTicket: 7, entryGc: 2360, slGc: 2357, tpGc: 2366,
-    } as TradingOrder;
-    const position = {
-      brokerPositionTicket: 7, side: "buy" as const, volumeLots: 0.1,
-      entryBroker: 2350, entryGcEstimate: 2365, slGc: 2362, tpGc: 2371,
-      updatedAt: 1,
-    };
-    const edits = new Map([[order.id, { slGc: 2363, tpGc: 2375 }]]);
-    const projected = projectBrokerAnchoredOrders([order], [position], edits)[0];
-    expect(projected).toMatchObject({ entryGc: 2365, slGc: 2363, tpGc: 2375 });
-    expect(projectBrokerAnchoredOrders([order], [
-      { ...position, profit: 20, updatedAt: 2 },
-    ], edits)[0]).toMatchObject({ slGc: 2363, tpGc: 2375 });
-    expect(position.slGc).toBe(2362);
-    expect(order.slGc).toBe(2357);
-    // Removing a rejected edit restores the actual broker levels.
-    expect(projectBrokerAnchoredOrders([order], [position])[0]).toMatchObject({
-      slGc: 2362, tpGc: 2371,
-    });
-  });
-
-  it("projects the actual MT5 position without changing stored order anchors", () => {
-    const order = {
-      id: "ord_fixed", source: "market_bar", kind: "market", gcAnchored: true,
-      brokerPositionTicket: 7, entryGc: 2360, slGc: 2357, tpGc: 2366,
-    } as TradingOrder;
-    const position = {
-      brokerPositionTicket: 7, side: "buy" as const, volumeLots: 0.1,
-      entryBroker: 2350, entryGcEstimate: 2365, slGc: 2362, tpGc: 2371,
-      updatedAt: 1,
-    };
-    expect(projectBrokerAnchoredOrders([order], [position])[0]).toMatchObject({
-      entryGc: 2365, slGc: 2362, tpGc: 2371,
-    });
-    expect(order.slGc).toBe(2357);
-    expect(projectBrokerAnchoredOrders([order], [])[0]).toBe(order);
-    const chartOrder = { ...order, source: "chart_bracket" as const, kind: "limit" as const };
-    expect(projectBrokerAnchoredOrders([chartOrder], [position])[0]).toBe(chartOrder);
   });
 });
 
@@ -403,7 +417,6 @@ describe("mobile chart limit order draft", () => {
       tpGc: 2366,
       gcAnchored: true,
       takeProfit1rEnabled: true,
-      takeProfitR: 1,
       autoSupertrendAfter1rEnabled: true,
     });
   });
@@ -426,7 +439,6 @@ describe("mobile chart limit order draft", () => {
       tpGc: 2374,
       gcAnchored: true,
       takeProfit1rEnabled: true,
-      takeProfitR: 1,
       autoSupertrendAfter1rEnabled: true,
     });
   });
@@ -439,15 +451,6 @@ describe("mobile chart limit order draft", () => {
         settings,
       }),
     ).toBeUndefined();
-  });
-
-  it("passes the custom partial take profit R to mobile limit orders", () => {
-    const draft = buildChartLimitOrderDraft({
-      entryPrice: 2360,
-      referencePrice: 2370,
-      settings: { ...settings, takeProfitR: 1.5 },
-    });
-    expect(draft?.takeProfitR).toBe(1.5);
   });
 
   it("sizes a chart bracket from the target risk and floors to the broker lot step", () => {
@@ -674,11 +677,9 @@ describe("live chart series identity", () => {
     ]);
     expect(GLOBAL_SUBSCRIBED_EVENTS).toEqual([
       "quote_update",
-      "market_data_status",
       "alert_event",
       "order_update",
       "account_update",
-      "status",
     ]);
     expect(BIG_TRADE_SUBSCRIBED_EVENTS).toEqual(["big_trade"]);
     expect(FOOTPRINT_SUBSCRIBED_EVENTS).toEqual(["footprint_update"]);
@@ -852,5 +853,45 @@ describe("MT5 account updates", () => {
       ],
       orders: [],
     });
+  });
+
+  it("compares floatingPnl and accountStateStale in mt5AccountsEqual to trigger re-renders", () => {
+    const current = {
+      accountId: "acct_usc",
+      login: 12345,
+      server: "Exness-Real",
+      tradeMode: "live",
+      currency: "USC",
+      balance: 100000,
+      equity: 100000,
+      floatingPnl: 0,
+      accountStateStale: false,
+    };
+
+    expect(mt5AccountsEqual(current, { ...current })).toBe(true);
+
+    expect(
+      mt5AccountsEqual(current, {
+        ...current,
+        accountStateStale: true,
+      }),
+    ).toBe(false);
+
+    expect(
+      mt5AccountsEqual(current, {
+        ...current,
+        floatingPnl: 12.34,
+      }),
+    ).toBe(false);
+  });
+
+  it("formats profit in raw USC or USD without approximate conversion and adds stale indicator", () => {
+    expect(formatProfit(12.34, "USC", false)).toBe("+12.34 USC");
+    expect(formatProfit(-50, "USC", false)).toBe("-50.00 USC");
+    expect(formatProfit(12.34, "USC", true)).toBe("+12.34 USC (stale)");
+    expect(formatProfit(25.5, "USD", false)).toBe("+$25.50");
+    expect(formatProfit(-10, "USD", true)).toBe("-$10.00 (stale)");
+    expect(formatProfit(undefined, "USC")).toBeUndefined();
+    expect(formatProfit(null, "USC")).toBeUndefined();
   });
 });

@@ -37,7 +37,7 @@ from hypothesis import strategies as st
 
 from app.app import create_app
 from app.config import Settings
-from app.engines.bar_aggregator import SUPPORTED_TFS
+from app.engines.session_calendar import CHART_TFS
 from app.rest.contract_state import ContractStateStore
 from app.storage.cache_store import CacheStore
 from app.storage.tick_store import TickStore
@@ -48,7 +48,6 @@ _CANDIDATES = ("GC 08-26", "GC 10-26", "GC 12-26")
 # The complete sets of *valid* identifiers; generated identifiers exclude these.
 _VALID_SYMBOLS = frozenset({_SYMBOL})
 _VALID_CONTRACTS = frozenset(_CANDIDATES)
-_VALID_TFS = frozenset(SUPPORTED_TFS)
 
 # A safe alphabet for generated identifiers: letters, digits, spaces and dashes.
 # It excludes quotes/backslashes/control characters so the identifier appears
@@ -70,7 +69,7 @@ def _identifier(max_size: int = 14):
 
 _unknown_symbol = _identifier().filter(lambda s: s not in _VALID_SYMBOLS)
 _unknown_contract = _identifier().filter(lambda s: s not in _VALID_CONTRACTS)
-_unknown_tf = _identifier().filter(lambda s: s not in _VALID_TFS)
+_unknown_tf = _identifier().filter(lambda s: s not in CHART_TFS)
 
 
 @pytest.fixture(scope="module")

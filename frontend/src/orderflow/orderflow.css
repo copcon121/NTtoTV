@@ -1,0 +1,204 @@
+.orderflow-page {
+  width: 100%;
+  height: 100%;
+  background: var(--gc-background);
+  color: var(--gc-text);
+  container-type: inline-size;
+  scrollbar-color: var(--gc-border) var(--gc-background);
+}
+.orderflow-page :is(.footprint-page-toolbar, .market-profile-toolbar) {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 34px;
+  padding: 4px 6px;
+  font-size: 12px;
+  background: var(--gc-background);
+  border-color: var(--gc-border);
+}
+.orderflow-navigation {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.footprint-page-zoom-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+[data-workspace-widget="true"] :is(.orderflow-navigation, .orderflow-page-name) { display: none; }
+.orderflow-page .orderflow-title {
+  display: inline-flex;
+  align-items: baseline;
+  flex: 0 0 auto;
+  gap: 5px;
+  min-width: 0;
+  padding: 0 3px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.orderflow-title strong { font-weight: 600; }
+.orderflow-title span { font-weight: 400; color: var(--gc-muted); }
+.orderflow-page :is(button, .footprint-page-back, .market-profile-link) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 5px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 7px;
+  color: var(--gc-text);
+  background: var(--gc-control);
+  border: 1px solid var(--gc-border);
+  border-radius: 4px;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.orderflow-page button:hover:enabled,
+.orderflow-navigation a:hover {
+  background: var(--workspace-hover);
+  border-color: var(--gc-accent);
+}
+.orderflow-page button:disabled { opacity: .45; cursor: default; }
+.orderflow-page button[aria-pressed="true"] {
+  color: var(--gc-accent-ink);
+  background: var(--gc-accent);
+  border-color: var(--gc-accent);
+}
+.orderflow-page button[aria-expanded="true"] {
+  color: var(--gc-accent-text, var(--gc-accent));
+  border-color: var(--gc-accent);
+}
+.orderflow-page :is(button, a, input, select):focus-visible {
+  outline: 2px solid var(--gc-accent);
+  outline-offset: -1px;
+}
+.orderflow-page :is(input, select) {
+  height: 27px;
+  min-width: 0;
+  padding: 0 6px;
+  color: var(--gc-text);
+  background: var(--gc-control);
+  border: 1px solid var(--gc-border);
+  border-radius: 4px;
+  font: inherit;
+}
+.orderflow-page input::placeholder { color: var(--gc-muted); }
+.orderflow-page input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  min-width: 15px;
+  padding: 0;
+}
+.orderflow-page :is(.footprint-page-form, .market-profile-form) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  flex: initial;
+  gap: 8px;
+}
+.orderflow-page :is(.footprint-page-form, .market-profile-form) label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--gc-muted);
+}
+.orderflow-page :is(.market-profile-segmented, .market-profile-drawing-tools) {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.orderflow-page :is(.market-profile-drawing-tools button, .market-profile-reload, .footprint-page-settings-button, .footprint-page-replay-button) {
+  width: 28px;
+  padding: 0;
+}
+.orderflow-page .footprint-page-replay-button.is-active {
+  color: var(--gc-accent-text, var(--gc-accent));
+  background: var(--gc-panel);
+}
+.orderflow-page .orderflow-status {
+  flex: 1 1 130px;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--gc-muted);
+  font-size: 11px;
+}
+.orderflow-menu, .orderflow-page .footprint-page-settings { position: static; }
+.orderflow-popover,
+.orderflow-page .footprint-page-settings-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  right: 6px;
+  left: auto;
+  width: min(280px, calc(100% - 12px));
+  max-height: calc(100dvh - 80px);
+  overflow: auto;
+  padding: 12px;
+  color: var(--gc-text);
+  background: var(--gc-panel);
+  border: 1px solid var(--gc-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px #0005;
+  font-size: 12px;
+}
+.orderflow-page .footprint-page-settings-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(560px, calc(100% - 12px));
+}
+.orderflow-popover-section + .orderflow-popover-section {
+  border-top: 1px solid var(--gc-border);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.orderflow-popover-section > strong {
+  display: block;
+  margin-bottom: 9px;
+}
+.orderflow-page .footprint-page-search { display: grid; grid-template-columns: 1fr; }
+.orderflow-page .footprint-page-search input[type="text"] { width: 154px; }
+.orderflow-popover button[type="submit"] { margin-left: auto; }
+.orderflow-page .footprint-page-settings-group { border-color: var(--gc-border); }
+.orderflow-page .footprint-page-settings-group legend { color: var(--gc-text); }
+.orderflow-ticks-setting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px;
+  align-items: center;
+  gap: 7px 10px;
+  min-width: 0;
+}
+.orderflow-ticks-setting > input { width: 100%; min-width: 0; }
+.orderflow-ticks-setting > small {
+  grid-column: 1 / -1;
+  color: var(--gc-muted);
+  line-height: 1.5;
+}
+@media (pointer: coarse) {
+  .orderflow-page .orderflow-ticks-setting > input { min-height: 44px; }
+}
+.orderflow-page :is(.footprint-page-chart-wrap, .footprint-page-canvas-shell, .market-profile-chart, .market-profile-canvas-shell) {
+  background: var(--gc-background);
+}
+@container (max-width: 560px) {
+  .orderflow-page .orderflow-status {
+    flex-basis: 100%;
+    text-align: left;
+    line-height: 1.4;
+    padding: 0 3px;
+  }
+  .orderflow-page .footprint-page-settings-panel { grid-template-columns: 1fr; }
+  .orderflow-page .footprint-page-settings-group-wide { grid-column: auto; }
+  .orderflow-page-name { display: none; }
+}

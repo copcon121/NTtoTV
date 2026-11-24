@@ -1,2 +1,0 @@
-PASS isolated original-JAR DTO: instanceof=false, public getters converted, STOP ignored, arbitrary class rejected
-{"kind":"iceberg_event","capture":"snapshot","generator":"GCZ6.COMEX@RITHMIC","alias":"GCZ6.COMEX@RITHMIC","orderId":"isolated-id","eventType":"DETECTION","timeNanos":1793314323123456789,"time":1793314323123,"priceLevel":40377,"price":4037.7,"side":"sell","eventSize":2,"totalSize":4}

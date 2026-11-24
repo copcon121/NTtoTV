@@ -7,9 +7,9 @@ export interface MarketOrderSettings {
   slDistanceGc: number;
   tpDistanceGc: number;
   takeProfit1rEnabled: boolean;
-  takeProfitR?: number;
   autoSupertrendAfter1rEnabled: boolean;
   sizingMode?: "lots" | "risk";
+  /** Amount in account currency, matching balance and the broker's tick value. */
   riskAmount?: number;
 }
 
@@ -23,6 +23,7 @@ export interface MarketOrderRow {
   action: "close" | "cancel";
   canBreakEven?: boolean;
   breakEvenPending?: boolean;
+  close50Pending?: boolean;
   canSupertrendTrail?: boolean;
   supertrendTrailing?: boolean;
   supertrendTrailingPending?: boolean;
@@ -58,6 +59,32 @@ function money(value: number | undefined): string | undefined {
   });
 }
 
+function formatAccountPnl(
+  value: number | null | undefined,
+  currency?: string,
+  stale?: boolean,
+): string | undefined {
+  if (value == null || !Number.isFinite(value)) return undefined;
+  const sign = value > 0 ? "+" : "";
+  const absFormatted = Math.abs(value).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const prefix = value < 0 ? "-" : sign;
+  const cur = currency?.trim().toUpperCase();
+  let text = "";
+  if (cur === "USC") {
+    text = `${prefix}${absFormatted} USC`;
+  } else if (cur === "USD" || cur === "$") {
+    text = `${prefix}$${absFormatted}`;
+  } else if (cur) {
+    text = `${prefix}${absFormatted} ${cur}`;
+  } else {
+    text = `${prefix}$${absFormatted}`;
+  }
+  return stale ? `${text} (stale)` : text;
+}
+
 export function MarketOrderBar({
   account,
   pending = false,
@@ -77,12 +104,21 @@ export function MarketOrderBar({
   onOrderRowCancel,
 }: MarketOrderBarProps) {
   const orderRowIdsRef = useRef<readonly string[]>([]);
-  const connected = account !== undefined;
+  const connected = account !== undefined && account.connected !== false;
   const balance = money(account?.balance);
+  const currency = account?.currency?.trim().toUpperCase();
+  const riskLabel = currency === "USD" || currency === "$"
+    ? "Risk $"
+    : currency ? `Risk ${currency}` : "Risk amount";
+  const floatingPnl = account?.floatingPnl;
+  const floatingPnlText = formatAccountPnl(
+    floatingPnl,
+    account?.currency,
+    account?.accountStateStale,
+  );
   const drawer = variant === "drawer";
   const expanded = !drawer || drawerOpen;
   const sizingMode = settings.sizingMode === "risk" ? "risk" : "lots";
-  const takeProfitR = settings.takeProfitR ?? 1;
   const riskAmount =
     typeof settings.riskAmount === "number" && Number.isFinite(settings.riskAmount)
       ? settings.riskAmount
@@ -122,13 +158,23 @@ export function MarketOrderBar({
       )}
       {expanded && (
         <>
-          <div className="market-order-main">
+          <div className={`market-order-main${stableOrderRows.length > 0 ? " has-order-rows" : ""}`}>
             <div className="market-order-meta">
               <span className={`account-badge ${account?.tradeMode === "live" ? "live" : "demo"}`}>
                 {account ? account.tradeMode.toUpperCase() : "NO ACCOUNT"}
               </span>
               {!account && <span>Trading locked</span>}
-              {balance && <span>Bal {balance}</span>}
+              {balance && <span>Bal {balance}{currency ? ` ${currency}` : ""}</span>}
+              {floatingPnlText && (
+                <span
+                  className={`account-floating-pnl${
+                    (floatingPnl ?? 0) < 0 ? " losing" : " winning"
+                  }${account?.accountStateStale ? " is-stale" : ""}`}
+                  title={account?.accountStateStale ? "Account metrics may be stale" : undefined}
+                >
+                  PnL {floatingPnlText}
+                </span>
+              )}
               <label className="market-order-size-control">
                 <span>Size</span>
                 <select
@@ -141,14 +187,16 @@ export function MarketOrderBar({
                   }
                 >
                   <option value="lots">Lots</option>
-                  <option value="risk">Risk $</option>
+                  <option value="risk">{riskLabel}</option>
                 </select>
               </label>
               {error && <span className="market-order-error">{error}</span>}
             </div>
             <div className="market-order-settings" aria-label="Market order settings">
-              <label>
-                <span>{sizingMode === "risk" ? "Risk $" : "Lots"}</span>
+              <label title={sizingMode === "risk"
+                ? "So tien rui ro tai SL, theo don vi tien te tai khoan. USC la cent: 100 USC = 1 USD."
+                : undefined}>
+                <span>{sizingMode === "risk" ? riskLabel : "Lots"}</span>
                 <NumberSettingInput
                   value={sizingMode === "risk" ? riskAmount : settings.volumeLots}
                   min={sizingMode === "risk" ? 1 : 0.01}
@@ -184,26 +232,17 @@ export function MarketOrderBar({
                     ? "auto-trade-toggle active take-profit-1r"
                     : "auto-trade-toggle take-profit-1r"
                 }
-                title={`Close 50% once a new Market or Limit order reaches +${takeProfitR}R`}
+                title="Close 50% once a new Market or Limit order reaches +1R"
               >
                 <input
                   type="checkbox"
                   checked={settings.takeProfit1rEnabled}
-                  aria-label={`Take profit 50% at ${takeProfitR}R`}
+                  aria-label="Take profit 50% at 1R"
                   onChange={(event) =>
                     update({ takeProfit1rEnabled: event.currentTarget.checked })
                   }
                 />
-                <span>TP 50%</span>
-              </label>
-              <label title="R multiple for the 50% partial take profit on new Market and Limit orders">
-                <span>R</span>
-                <NumberSettingInput
-                  value={takeProfitR}
-                  min={0.1}
-                  step="0.1"
-                  onCommit={(value) => update({ takeProfitR: value })}
-                />
+                <span>50% @ 1R</span>
               </label>
               <label
                 className={
@@ -211,20 +250,20 @@ export function MarketOrderBar({
                     ? "auto-trade-toggle active supertrend-after-1r"
                     : "auto-trade-toggle supertrend-after-1r"
                 }
-                title={`After the ${takeProfitR}R partial close, trail the remainder with the current SuperTrend settings`}
+                title="After the 1R partial close, trail the remainder with the current SuperTrend settings"
               >
                 <input
                   type="checkbox"
                   checked={settings.autoSupertrendAfter1rEnabled}
                   disabled={!settings.takeProfit1rEnabled}
-                  aria-label={`Auto SuperTrend trailing after ${takeProfitR}R`}
+                  aria-label="Auto SuperTrend trailing after 1R"
                   onChange={(event) =>
                     update({
                       autoSupertrendAfter1rEnabled: event.currentTarget.checked,
                     })
                   }
                 />
-                <span>ST @ {takeProfitR}R</span>
+                <span>ST @ 1R</span>
               </label>
             </div>
             <div className="market-order-actions">
@@ -234,10 +273,7 @@ export function MarketOrderBar({
                     type="button"
                     className="market-button sell"
                     disabled={pending}
-                    onClick={(event) => {
-                      if (event.detail > 1) return;
-                      onMarketOrder("sell");
-                    }}
+                    onClick={() => onMarketOrder("sell")}
                   >
                     SELL
                   </button>
@@ -245,10 +281,7 @@ export function MarketOrderBar({
                     type="button"
                     className="market-button buy"
                     disabled={pending}
-                    onClick={(event) => {
-                      if (event.detail > 1) return;
-                      onMarketOrder("buy");
-                    }}
+                    onClick={() => onMarketOrder("buy")}
                   >
                     BUY
                   </button>
@@ -278,6 +311,7 @@ export function MarketOrderBar({
                           disabled={
                             row.pending ||
                             row.breakEvenPending ||
+                            row.close50Pending ||
                             row.supertrendTrailingPending
                           }
                           onClick={() => onOrderRowBreakEven?.(row.id)}
@@ -294,6 +328,7 @@ export function MarketOrderBar({
                           disabled={
                             row.pending ||
                             row.breakEvenPending ||
+                            row.close50Pending ||
                             row.supertrendTrailingPending
                           }
                           aria-pressed={row.supertrendTrailing === true}
@@ -314,16 +349,22 @@ export function MarketOrderBar({
                           disabled={
                             row.pending ||
                             row.breakEvenPending ||
+                            row.close50Pending ||
                             row.supertrendTrailingPending
                           }
                           onClick={() => onOrderRowClose50Percent?.(row.id, row.volumeLots!)}
                         >
-                          50%
+                          {row.close50Pending ? "..." : "50%"}
                         </button>
                       )}
                       <button
                         type="button"
-                        disabled={row.pending || row.supertrendTrailingPending}
+                        disabled={
+                          row.pending ||
+                          row.breakEvenPending ||
+                          row.close50Pending ||
+                          row.supertrendTrailingPending
+                        }
                         onClick={() =>
                           row.action === "close"
                             ? onOrderRowClose?.(row.id)

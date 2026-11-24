@@ -1,0 +1,161 @@
+NTtoTV / GC Flow — Sửa local và phát hành lên Oracle
+===================================================
+
+Gói này có mã nguồn backend và frontend, bản build giao diện và các bài kiểm
+tra. Biểu đồ GC có menu timeframe mới với 1 Week (1W) và 1 Month (1M).
+Hãy chỉnh mã nguồn trong thư mục đã giải nén. Oracle tiếp tục phục vụ bản
+đang chạy cho đến khi bạn chủ động kích hoạt một release mới.
+
+1. Chuẩn bị
+-----------
+
+- Giải nén ZIP ra một thư mục bạn có quyền ghi, ví dụ C:\Projects\NTtoTV-Local.
+- Cài Python 3.11 và Node.js 24 kèm npm. Lần đầu cài thư viện cần Internet.
+- Mở hai cửa sổ PowerShell ở thư mục chứa file hướng dẫn này. Các lệnh dưới
+  đây dùng cổng 18001 cho backend và 19999 cho giao diện.
+
+2. Chạy backend
+---------------
+
+Trong cửa sổ PowerShell thứ nhất, chạy các lệnh sau:
+
+    cd backend
+    py -3.11 -m venv .venv
+    .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+Hai lệnh tạo môi trường và cài thư viện chỉ cần chạy lần đầu. Nếu máy dùng
+lệnh python thay cho py, kiểm tra python --version rồi chạy python -m venv .venv.
+
+Trong cùng cửa sổ, đặt cấu hình chạy local và khởi động:
+
+    $env:NTTOTV_DATA_DIR = Join-Path (Get-Location) 'data'
+    $env:NTTOTV_RITHMIC_ENABLED = '0'
+    $env:NTTOTV_EXECUTION_MODE = 'disabled'
+    $env:NTTOTV_TRADING_ENABLED = '0'
+    $env:NTTOTV_LIVE_TRADING_ENABLED = '0'
+    $env:NTTOTV_ANALYST_ENABLED = '0'
+    .\.venv\Scripts\python.exe -m uvicorn app.app:app --host 127.0.0.1 --port 18001
+
+Giữ cửa sổ này mở. Backend hoạt động khi
+http://127.0.0.1:18001/api/health trả về status "ok".
+
+3. Chạy giao diện
+-----------------
+
+Trong cửa sổ PowerShell thứ hai, bắt đầu từ thư mục đã giải nén:
+
+    cd frontend
+    npm.cmd ci
+    $env:VITE_BACKEND_HOST = '127.0.0.1'
+    $env:VITE_BACKEND_PORT = '18001'
+    $env:VITE_DEV_PORT = '19999'
+    npm.cmd run dev -- --host 127.0.0.1
+
+Lệnh npm.cmd ci chỉ cần chạy lần đầu hoặc khi package-lock.json thay đổi.
+Giữ cửa sổ này mở và truy cập http://127.0.0.1:19999/ trong trình duyệt.
+
+- Bấm nút timeframe trên toolbar rồi mở nhóm Days để chọn 1W hoặc 1M.
+  Bấm ngôi sao để ghim khung thời gian vào toolbar.
+- FP, MP và LQ mở Footprint, Market Profile và Liquidity.
+- Dùng Ctrl+C ở từng cửa sổ PowerShell để dừng. Lần sau chạy lại các lệnh
+  đặt biến môi trường và khởi động trong từng cửa sổ.
+
+4. Dữ liệu và tài khoản local
+----------------------------
+
+Gói ZIP không chứa dữ liệu thị trường, tài khoản, phiên đăng nhập hay khóa
+của VPS. Lần chạy đầu, backend tự tạo SQLite trong backend\data và biểu đồ
+có thể trống. /api/ready trả 503 khi nguồn Rithmic chưa đồng bộ.
+
+Nếu có quyền dùng Rithmic cho GC, mở http://127.0.0.1:19999/admin. Với một
+database mới, lần đăng nhập đầu tiên tạo tài khoản chủ local từ tên và mật
+khẩu do bạn đặt. Dùng thông tin kết nối và ứng dụng đã được Rithmic cấp quyền
+cho bạn, rồi bấm Save & connect. Theo dõi trạng thái Ticker Plant và History
+Plant trong trang Admin. 1W và 1M tổng hợp từ lịch sử nến ngày đã có trên máy.
+
+Chế độ chạy trong hướng dẫn tắt giao dịch. Lưu thư mục backend\data riêng nếu
+muốn giữ dữ liệu và cấu hình local khi chuyển phiên bản.
+
+5. Nếu gặp lỗi
+--------------
+
+- Không mở được trang: kiểm tra cả hai cửa sổ PowerShell còn chạy và truy
+  cập đúng http://127.0.0.1:19999/, không mở trực tiếp index.html.
+- API hoặc WebSocket lỗi: kiểm tra /api/health ở cổng 18001 và biến
+  VITE_BACKEND_PORT trong cửa sổ frontend. Nếu đổi cổng, sửa cả hai chỗ.
+- Muốn build lại sau khi sửa giao diện: chạy npm.cmd run build trong frontend.
+  Kết quả nằm ở frontend\dist.
+
+6. Build và đưa bản sửa lên Oracle
+----------------------------------
+
+Sau khi kiểm tra local, mở PowerShell tại thư mục dự án. Backend nằm trong
+backend\app, giao diện nằm trong frontend\src. Giữ RProtocolAPI.zip ở thư
+mục gốc để backend tìm được giao thức Rithmic.
+
+    Push-Location frontend
+    try {
+        npm.cmd run build
+        if ($LASTEXITCODE -ne 0) { throw 'Build frontend thất bại' }
+    } finally {
+        Pop-Location
+    }
+
+Chuẩn bị SSH alias oracle-a1 bằng cấu hình và khóa riêng của bạn. SSH config,
+private key và dữ liệu của production được quản lý riêng. Kiểm tra đường dẫn
+release hiện tại và lưu lại để có thể quay lui nếu cần:
+
+    $oracle = 'oracle-a1'
+    ssh.exe $oracle 'readlink -f /opt/nttotv/current'
+
+Đóng gói bản vừa build. Mỗi lần triển khai dùng một release ID mới:
+
+    $releaseId = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-local'
+    $archive = "nttotv-$releaseId.tar.gz"
+    $items = @(
+        'backend/app'
+        'backend/scripts'
+        'backend/requirements.txt'
+        'backend/requirements-linux-arm64.lock'
+        'backend/pyproject.toml'
+        'frontend/dist'
+        'deploy'
+        'RProtocolAPI.zip'
+    )
+    tar.exe -czf $archive --exclude=__pycache__ --exclude='*.pyc' @items
+    if ($LASTEXITCODE -ne 0) { throw 'Không tạo được release archive' }
+    tar.exe -tf $archive
+
+Chỉ đưa mã nguồn, bản build và các mẫu triển khai vào release. Dữ liệu
+backend\data, môi trường Python, node_modules và thông tin kết nối để riêng.
+
+Tải lên rồi kích hoạt khi bạn đã sẵn sàng restart dịch vụ nttotv:
+
+    $remoteArchive = "/tmp/$archive"
+    $remoteRelease = "/opt/nttotv/releases/$releaseId"
+    scp.exe $archive "${oracle}:$remoteArchive"
+    if ($LASTEXITCODE -ne 0) { throw 'Upload thất bại' }
+    $sha = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    ssh.exe $oracle "printf '%s  %s\n' '$sha' '$remoteArchive' | sha256sum -c"
+    if ($LASTEXITCODE -ne 0) { throw 'Checksum của archive không khớp' }
+    ssh.exe $oracle "test ! -e $remoteRelease && sudo install -d -o root -g root -m 0750 $remoteRelease && sudo tar -xzf $remoteArchive -C $remoteRelease && sudo bash $remoteRelease/deploy/linux/install-release.sh $remoteRelease"
+    if ($LASTEXITCODE -ne 0) { throw 'Cài release thất bại. Kiểm tra release đang hoạt động.' }
+
+Script cài thư viện Linux, chuyển /opt/nttotv/current sang release mới và
+restart backend. Caddy phục vụ giao diện từ frontend/dist của release đó.
+Chỉnh sửa ở local rồi phát hành bằng release mới, thay vì sửa file đang chạy
+trong /opt/nttotv/current.
+
+    ssh.exe $oracle 'readlink -f /opt/nttotv/current; systemctl is-active nttotv caddy'
+    Invoke-RestMethod 'https://oracle.gcflowpy.xyz/health'
+    $page = Invoke-WebRequest -UseBasicParsing 'https://oracle.gcflowpy.xyz/'
+    [regex]::Match($page.Content, '/assets/index-[^" ]+\.js').Value
+
+Đối chiếu tên bundle với frontend\dist\index.html trên máy local, rồi mở
+trang Oracle và kiểm tra thao tác vừa thay đổi. Sau khi xác nhận, có thể
+xóa bản upload tạm trên VPS bằng ssh.exe $oracle "rm -f $remoteArchive".
+
+Nếu cần quay lui sau khi đã kích hoạt, đặt $previous thành đường dẫn đầy
+đủ đã lưu ở trên. Chỉ dùng một release đã xác nhận hoạt động:
+
+    ssh.exe $oracle "sudo ln -sfn $previous /opt/nttotv/current.new && sudo mv -Tf /opt/nttotv/current.new /opt/nttotv/current && sudo systemctl restart nttotv"

@@ -235,3 +235,26 @@ def test_delayed_heatmap_sample_does_not_reopen_an_ended_line(tmp_path):
         assert [sample["size"] for sample in lines[0]["samples"]] == [900, 0]
     finally:
         store.close()
+
+
+@pytest.mark.unit
+def test_heatmap_upgrade_preserves_legacy_line_history(tmp_path):
+    path = tmp_path / "liquidity.sqlite"
+    store = LiquidityStore(path)
+    store.record(line(sequence=1, time=1000, action="start", size=600))
+    # Emulate a database written by the previous release.
+    store._writer.connection.execute("DROP TABLE liquidity_line_samples")
+    store.close()
+
+    store = LiquidityStore(path)
+    try:
+        _, lines = store.read("GC", "GC", 0, 10000)
+        assert lines[0]["startedAt"] == 1000
+        assert lines[0]["currentSize"] == 600
+        assert lines[0]["samples"] == []
+        store.record(line(sequence=2, time=5000, action="update", size=900))
+        _, lines = store.read("GC", "GC", 0, 10000)
+        assert lines[0]["startedAt"] == 1000
+        assert lines[0]["samples"] == [{"time": 5000, "size": 900, "active": True}]
+    finally:
+        store.close()

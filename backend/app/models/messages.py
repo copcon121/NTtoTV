@@ -1,6 +1,6 @@
-"""Typed serializers/deserializers for all WebSocket message types.
+"""Typed serializers/deserializers for chart WebSocket message types.
 
-Every message on `/ws/nt` and `/ws/chart` is a JSON object discriminated by a
+Every message on `/ws/chart` is a JSON object discriminated by a
 ``type`` field. This module defines the typed Python representations together
 with ``to_dict`` / ``from_dict`` (and a few ``from_*`` constructors) that map
 to and from the exact JSON shapes documented in the design's "WebSocket
@@ -13,16 +13,6 @@ Wire conventions (matching the design):
   snake_case and the (de)serializers bridge the two.
 * All ``time`` values are a Canonical_Timestamp (integer ms since the Unix
   epoch UTC; see ``app.models.timestamp``).
-* The two ``status`` messages differ by direction: NT_AddOn -> Backend carries
-  ``source`` (``NTStatusEvent``); Backend -> client carries an optional
-  ``reason`` (``ChartStatusEvent``).
-
-Channels:
-
-* ``/ws/nt`` data plane (NT_AddOn -> Backend): ``trade``, ``quote``,
-  ``status`` (``NTStatusEvent``).
-* ``/ws/nt`` control plane (Backend -> NT_AddOn): ``control``
-  (``ControlCommand``).
 * ``/ws/chart`` client -> Backend: ``subscribe``, ``unsubscribe``, ``pong``.
 * ``/ws/chart`` Backend -> client: ``bar_update``, ``quote_update``,
   ``volume_delta_update``, ``footprint_update``, ``fvg_signal_update``,
@@ -34,7 +24,7 @@ Channels:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, ClassVar
 
@@ -45,17 +35,13 @@ from .timestamp import CanonicalTimestamp
 __all__ = [
     # Enums
     "StatusState",
-    "ControlAction",
     "ImbalanceSide",
     "EventType",
-    # /ws/nt data plane (trade/quote reuse the canonical models)
+    # Canonical direct-feed JSON helpers
     "trade_to_dict",
     "trade_from_dict",
     "quote_to_dict",
     "quote_from_dict",
-    "NTStatusEvent",
-    # /ws/nt control plane
-    "ControlCommand",
     # /ws/chart client -> backend
     "Subscribe",
     "Unsubscribe",
@@ -81,7 +67,6 @@ __all__ = [
     "ChartStatusEvent",
     "Ping",
     # Dispatchers
-    "decode_nt_data_message",
     "decode_chart_client_message",
 ]
 
@@ -97,16 +82,6 @@ class StatusState(str, Enum):
     CONNECTED = "connected"
     DEGRADED = "degraded"
     DISCONNECTED = "disconnected"
-
-    def __str__(self) -> str:  # pragma: no cover - cosmetic
-        return self.value
-
-
-class ControlAction(str, Enum):
-    """Action carried by a ``control`` Control_Command. (Req 1.7, 1.8, 4.6)"""
-
-    SUBSCRIBE = "subscribe"
-    UNSUBSCRIBE = "unsubscribe"
 
     def __str__(self) -> str:  # pragma: no cover - cosmetic
         return self.value
@@ -172,7 +147,7 @@ def _expect_type(data: dict[str, Any], expected: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /ws/nt data plane (NT_AddOn -> Backend)
+# Canonical direct-feed JSON helpers
 # ---------------------------------------------------------------------------
 #
 # `trade` and `quote` map directly onto the canonical models from Task 2.1, so
@@ -197,7 +172,7 @@ def trade_to_dict(trade: NormalizedTrade) -> dict[str, Any]:
     }
     if trade.time_ticks is not None:
         payload["timeTicks"] = trade.time_ticks
-    if trade.source != "nt":
+    if trade.source != "rithmic":
         payload["source"] = trade.source
     if trade.source_time_nanos is not None:
         payload["sourceTimeNanos"] = trade.source_time_nanos
@@ -236,7 +211,7 @@ def trade_from_dict(data: dict[str, Any]) -> NormalizedTrade:
         time_ticks=(
             None if data.get("timeTicks") is None else int(data["timeTicks"])
         ),
-        source=str(data.get("source") or "nt"),
+        source=str(data.get("source") or "rithmic"),
         source_time_nanos=(
             None
             if data.get("sourceTimeNanos") is None
@@ -296,81 +271,6 @@ def quote_from_dict(data: dict[str, Any]) -> NormalizedQuote:
             None if data.get("bridgeTime") is None else int(data["bridgeTime"])
         ),
     )
-
-
-@dataclass(slots=True)
-class NTStatusEvent:
-    """`status` event on `/ws/nt` (NT_AddOn -> Backend). (Req 3.4, 20.1)
-
-    Carries ``source`` (e.g. ``"nt_addon"``) and a ``state`` of
-    connected/degraded/disconnected. ``contract`` MAY be included when the
-    status is contract-specific.
-    """
-
-    type: ClassVar[str] = "status"
-
-    source: str
-    state: StatusState
-    time: CanonicalTimestamp
-    contract: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {
-            "type": self.type,
-            "source": self.source,
-            "state": self.state.value,
-            "time": self.time,
-        }
-        if self.contract is not None:
-            out["contract"] = self.contract
-        return out
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "NTStatusEvent":
-        _expect_type(data, cls.type)
-        return cls(
-            source=data["source"],
-            state=StatusState(data["state"]),
-            time=int(data["time"]),
-            contract=data.get("contract"),
-        )
-
-
-# ---------------------------------------------------------------------------
-# /ws/nt control plane (Backend -> NT_AddOn)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(slots=True)
-class ControlCommand:
-    """`control` Control_Command (Backend -> NT_AddOn). (Req 1.7, 1.8, 4.6)
-
-    One contract per command; the Backend sends multiple commands when several
-    contracts change.
-    """
-
-    type: ClassVar[str] = "control"
-
-    action: ControlAction
-    contract: str
-    time: CanonicalTimestamp
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "type": self.type,
-            "action": self.action.value,
-            "contract": self.contract,
-            "time": self.time,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ControlCommand":
-        _expect_type(data, cls.type)
-        return cls(
-            action=ControlAction(data["action"]),
-            contract=data["contract"],
-            time=int(data["time"]),
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -599,7 +499,6 @@ class VolumeDeltaUpdate:
     open_delta: int
     close_delta: int
     cumulative_delta: int | None = None
-    source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -619,8 +518,6 @@ class VolumeDeltaUpdate:
         }
         if self.cumulative_delta is not None:
             out["cumulativeDelta"] = self.cumulative_delta
-        if self.source is not None:
-            out["source"] = self.source
         return out
 
     @classmethod
@@ -641,7 +538,6 @@ class VolumeDeltaUpdate:
             open_delta=int(data["openDelta"]),
             close_delta=int(data["closeDelta"]),
             cumulative_delta=None if raw_cum is None else int(raw_cum),
-            source=data.get("source"),
         )
 
 
@@ -856,7 +752,6 @@ class TduSignalUpdate:
     momentum_direction: int
     momentum_level: int
     delta_divergence: int
-    momentum_samples: list[tuple[int, float, int]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -868,8 +763,6 @@ class TduSignalUpdate:
             "momentumDirection": self.momentum_direction,
             "momentumLevel": self.momentum_level,
             "deltaDivergence": self.delta_divergence,
-            **({"momentumSamples": [list(sample) for sample in self.momentum_samples]}
-               if self.momentum_samples is not None else {}),
         }
 
     @classmethod
@@ -883,10 +776,6 @@ class TduSignalUpdate:
             momentum_direction=int(data["momentumDirection"]),
             momentum_level=int(data["momentumLevel"]),
             delta_divergence=int(data["deltaDivergence"]),
-            momentum_samples=(
-                [tuple(sample) for sample in data["momentumSamples"]]
-                if data.get("momentumSamples") is not None else None
-            ),
         )
 
 
@@ -1061,10 +950,11 @@ class MarketDataStatus:
     switched_at: CanonicalTimestamp | None
     reason: str | None
     sources: dict[str, dict[str, Any]]
-    history_sync: dict[str, Any] = field(default_factory=dict)
+    history_sync: dict[str, Any] | None = None
+    roll_pending: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        payload = {
+        out = {
             "type": self.type,
             "symbol": self.symbol,
             "time": self.time,
@@ -1074,9 +964,11 @@ class MarketDataStatus:
             "reason": self.reason,
             "sources": self.sources,
         }
-        if self.history_sync:
-            payload["historySync"] = self.history_sync
-        return payload
+        if self.history_sync is not None:
+            out["historySync"] = self.history_sync
+        if self.roll_pending is not None:
+            out["rollPending"] = self.roll_pending
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MarketDataStatus":
@@ -1091,7 +983,16 @@ class MarketDataStatus:
             ),
             reason=data.get("reason"),
             sources=dict(data.get("sources") or {}),
-            history_sync=dict(data.get("historySync") or {}),
+            history_sync=(
+                None
+                if data.get("historySync") is None
+                else dict(data["historySync"])
+            ),
+            roll_pending=(
+                None
+                if data.get("rollPending") is None
+                else dict(data["rollPending"])
+            ),
         )
 
 
@@ -1158,9 +1059,8 @@ class AlertEvent:
 class ChartStatusEvent:
     """`status` event on `/ws/chart` (Backend -> client). (Req 5.2, 20)
 
-    Differs from ``NTStatusEvent`` by carrying an optional ``reason`` (e.g.
-    ``"stream_gap"``) instead of a ``source``. ``contract`` MAY be included
-    when the status is contract-specific.
+    Carries an optional ``reason`` (for example ``"stream_gap"``) and an
+    optional physical contract when the status is contract-specific.
     """
 
     type: ClassVar[str] = "status"
@@ -1213,24 +1113,6 @@ class Ping:
 # ---------------------------------------------------------------------------
 # Inbound dispatchers (decode by the `type` discriminator)
 # ---------------------------------------------------------------------------
-
-
-def decode_nt_data_message(
-    data: dict[str, Any],
-) -> NormalizedTrade | NormalizedQuote | NTStatusEvent:
-    """Decode an inbound `/ws/nt` data-plane frame (NT_AddOn -> Backend).
-
-    Dispatches on the ``type`` discriminator to ``trade`` / ``quote`` /
-    ``status``. Raises ``ValueError`` for unknown types. (Req 1.1, 1.2, 4.1)
-    """
-    msg_type = data.get("type")
-    if msg_type == "trade":
-        return trade_from_dict(data)
-    if msg_type == "quote":
-        return quote_from_dict(data)
-    if msg_type == "status":
-        return NTStatusEvent.from_dict(data)
-    raise ValueError(f"unknown /ws/nt data message type: {msg_type!r}")
 
 
 def decode_chart_client_message(

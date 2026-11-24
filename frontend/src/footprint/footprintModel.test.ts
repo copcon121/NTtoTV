@@ -7,6 +7,8 @@ import {
   mergeFootprint,
   mergeFootprintCapped,
   selectDisplayBars,
+  selectChartDisplayBars,
+  groupFootprintRows,
   shouldRedraw,
 } from "./footprintModel";
 
@@ -42,6 +44,35 @@ function viewport(width = 300, height = 200): FootprintViewport {
 }
 
 describe("footprintModel — merge + select (Req 14.2)", () => {
+  it("selects historical chart bars by visible x coordinates instead of the trailing five", () => {
+    const bars = new Map(Array.from({ length: 20 }, (_, index) => [index * 60_000, fp(index * 60_000)]));
+    const vp = { ...viewport(300), barSpacing: 80, timeToX: (time: number) => time / 60_000 * 80 - 240 };
+    expect(selectChartDisplayBars(bars, vp).map((bar) => bar.time)).toEqual([180_000, 240_000, 300_000, 360_000, 420_000]);
+    expect(selectChartDisplayBars(bars, { ...vp, timeToX: () => null })).toEqual([]);
+    expect(selectChartDisplayBars(bars, { ...vp, barSpacing: Number.NaN })).toEqual([]);
+  });
+
+  it("bounds chart ladder work to the actual viewport density", () => {
+    const bars = new Map(Array.from({ length: 1000 }, (_, index) => [index, fp(index)]));
+    expect(selectChartDisplayBars(bars, { ...viewport(300), barSpacing: 80, timeToX: () => 100 })).toHaveLength(6);
+  });
+
+  it("groups thin tick rows without losing executed bid or ask volume", () => {
+    const bar = fp(0);
+    bar.rows = [
+      { price: 100.3, bid: 3, ask: 8, imbalance: null },
+      { price: 100.2, bid: 4, ask: 9, imbalance: null },
+      { price: 100.1, bid: 5, ask: 10, imbalance: null },
+      { price: 100.0, bid: 6, ask: 11, imbalance: null },
+    ];
+    const grouped = groupFootprintRows(bar, 0.1, 2);
+    expect(grouped.rows).toEqual([
+      { price: 100.25, bid: 7, ask: 17, imbalance: null },
+      { price: 100.05, bid: 11, ask: 21, imbalance: null },
+    ]);
+    expect(bar.rows).toHaveLength(4);
+  });
+
   it("merges bars by time (last-write-wins)", () => {
     let bars = new Map<number, FootprintUpdateMessage>();
     bars = mergeFootprint(bars, fp(0, 100.1));
@@ -121,6 +152,14 @@ describe("footprintModel — redraw decision (Req 14.6, 14.7)", () => {
     const prev = { bars: [bar], viewport: vp, scrollTopPx: 0 };
     const next = { bars: [bar], viewport: vp, scrollTopPx: 120 };
     expect(shouldRedraw(prev, next)).toBe(true);
+  });
+
+  it("redraws aligned ladders after time-scale spacing or coordinates change", () => {
+    const bar = fp(0);
+    const vp = { ...viewport(), barSpacing: 80, timeToX: () => 100 };
+    const previous = { bars: [bar], viewport: vp, layout: "chart" as const };
+    expect(shouldRedraw(previous, { ...previous, viewport: { ...vp, barSpacing: 100 } })).toBe(true);
+    expect(shouldRedraw(previous, { ...previous, viewport: { ...vp, timeToX: () => 120 } })).toBe(true);
   });
 
   it("redraws when a displayed bar's data changes", () => {

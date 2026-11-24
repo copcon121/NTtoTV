@@ -8,23 +8,19 @@ import type { DrawingState } from "../chart/drawings/types";
 import type { OutsideBarSettings } from "../chart/outsideBar";
 import type { MgannSwingSettings } from "../chart/mgannSwing";
 import type { MgannBreakSettings } from "../chart/mgannBreak";
-import type { GcPushMomentumSettings } from "../chart/gcPushMomentum";
 import type { XKontrolDisplaySettings } from "../chart/xKontrol";
 import type { SmcSettings } from "../chart/smc";
 import type { SweepReversalSettings } from "../chart/sweepReversal";
 import type { SupertrendSettings } from "../chart/supertrend";
 import type { Timeframe } from "../socket/messages";
-import type { TduSettings } from "../chart/tduSettings";
 
 export interface ProfileMarketOrderSettings {
   volumeLots: number;
   slDistanceGc: number;
   tpDistanceGc: number;
-  /** Close half of each new manual Market/Limit order at the configured R. */
+  /** Close half of each new manual Market/Limit order once it reaches +1R. */
   takeProfit1rEnabled?: boolean;
-  /** Partial take profit R multiple; older profiles default to 1. */
-  takeProfitR?: number;
-  /** Arm the current SuperTrend trailing configuration after the partial close. */
+  /** Arm the current SuperTrend trailing configuration after the 1R partial. */
   autoSupertrendAfter1rEnabled?: boolean;
   /** Optional sizing mode for backwards compatibility with older profiles. */
   sizingMode?: "lots" | "risk";
@@ -60,6 +56,8 @@ export interface ChartProfilePayload {
   version: 1;
   timeframe: Timeframe;
   chartBackgroundColor: string;
+  /** Candle spacing below which dense indicator overlays are hidden. */
+  denseOverlayMinBarSpacing?: number;
   /** Optional for backwards compatibility with profiles saved before Volume existed. */
   showVolume?: boolean;
   /** Optional for backwards compatibility with profiles saved before this toggle existed. */
@@ -68,29 +66,26 @@ export interface ChartProfilePayload {
   showXKontrol?: boolean;
   /** Optional level visibility for the XKontrol overlay. */
   xKontrol?: XKontrolDisplaySettings;
-  /** Optional for profiles saved before GC Push Momentum existed. */
-  showGcPushMomentum?: boolean;
   /** Original TDU triangles and candle/delta divergence overlay. */
   showTduSignals?: boolean;
-  /** Optional triangle level visibility and candle-shape filter. */
-  tduSettings?: TduSettings;
-  /** Optional volatility/threshold configuration for GC Push Momentum. */
-  gcPushMomentum?: GcPushMomentumSettings;
   /** Optional for backwards compatibility with profiles saved before this toggle existed. */
   showCvd?: boolean;
   /** Optional for backwards compatibility with profiles saved before this toggle existed. */
   showDailyVolumeProfile?: boolean;
   /** Optional session volume profile histogram width in CSS pixels. */
   dailyVolumeProfileWidth?: number;
-  /** Optional positive GC ticks per row; legacy session profiles use 2. */
-  dailyVolumeProfileRowTicks?: number;
   /** Optional flag to show the session developing POC and value-area paths. */
   showDailyVolumeProfileDevelopingPoc?: boolean;
+  /** Optional session volume profile row ticks (price grouping). */
+  dailyVolumeProfileRowTicks?: number;
+  /** Optional number of trading sessions included in the session volume profile. */
+  dailyVolumeProfileDays?: number;
   /** Optional for backwards compatibility with profiles saved before MGannSwing existed. */
   showMgannSwing?: boolean;
   /** Optional for backwards compatibility with profiles saved before MGannSwing existed. */
   mgannSwing?: MgannSwingSettings;
-  showFootprint: boolean;
+  /** Legacy setting from profiles saved before footprint zoom replaced the preview. */
+  showFootprint?: boolean;
   /** Optional for backwards compatibility with profiles saved before FVG Grader existed. */
   showFvgGrader?: boolean;
   /** Optional maximum number of FVG Grader signals to fetch/display on M1. */

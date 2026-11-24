@@ -11,7 +11,7 @@
 // the two Lightweight Charts APIs called out in the design research notes.
 //
 // Time conversion: backend bars carry a Canonical_Timestamp in **milliseconds**
-// since the Unix epoch and key bars by bucket start. NinjaTrader time-based
+// since the Unix epoch and key bars by bucket start. Source time-based
 // charts display bars at their closing time, so the adapter can apply a display
 // offset before converting ms -> Lightweight Charts' second-based timestamp.
 
@@ -87,20 +87,16 @@ import {
   TduSignalPrimitive,
   type RenderableTduSignal,
 } from "./TduSignalPrimitive";
-import {
-  MIN_DENSE_OVERLAY_BAR_SPACING,
-  normalizeDenseOverlayMinSpacing,
-  shouldRenderDenseOverlay,
-} from "./zoomVisibility";
+import { MIN_DENSE_OVERLAY_BAR_SPACING, normalizeDenseOverlayBarSpacing, shouldRenderDenseOverlay } from "./zoomVisibility";
 import type { TduSignalUpdateMessage } from "../socket/messages";
-import type { TduSettings } from "./tduSettings";
 import {
   WaveDeltaMboxPrimitive,
   type RenderableWaveDeltaMbox,
 } from "./WaveDeltaMboxPrimitive";
 import { SessionVolumeProfilePrimitive } from "./SessionVolumeProfilePrimitive";
 import { type Bar } from "../cache/types";
-import type { FvgSignalUpdateMessage } from "../socket/messages";
+import { DEFAULT_CHART_BACKGROUND } from "./theme";
+import type { FvgSignalUpdateMessage, Timeframe } from "../socket/messages";
 import { type FootprintViewport } from "../footprint/footprintModel";
 import type {
   DrawingPaneId,
@@ -108,6 +104,7 @@ import type {
   DrawingSeriesApi,
 } from "./drawings/types";
 import {
+  calendarBarEndMs,
   countdownBarStartMs,
   formatBarCountdown,
   remainingObservedBarTimeMs,
@@ -358,6 +355,12 @@ export interface AlertSignalMarker {
 
 export type OrderLineField = "entryGc" | "slGc" | "tpGc";
 
+export interface OrderLineDragUpdate {
+  id: string;
+  price: number;
+  startPrice?: number;
+}
+
 /**
  * One live order level drawn on the candle price scale. These are separate
  * from persisted drawings: the backend order store is the source of truth.
@@ -431,7 +434,7 @@ const DEFAULT_DELTA_COLORS: DeltaColors = {
 };
 
 const MZ_FOOTPRINT_COLORS = {
-  chartBg: "#d3d3d3",
+  chartBg: DEFAULT_CHART_BACKGROUND,
   candleUp: "#ffffff",
   candleDown: "#666666",
   candleWick: "#6f6f6f",
@@ -441,8 +444,14 @@ const MZ_FOOTPRINT_COLORS = {
 const BAR_COUNTDOWN_BACKGROUND_COLOR = "#1f1f1f";
 const BAR_COUNTDOWN_TEXT_COLOR = "#ffffff";
 const CHART_GRID_VISIBLE = false;
-const VOLUME_UP_COLOR = "rgba(38, 166, 154, 0.50)";
-const VOLUME_DOWN_COLOR = "rgba(239, 83, 80, 0.50)";
+export const VOLUME_BAR_OPACITY = 0.50;
+export const VOLUME_UP_COLOR = "rgba(38, 166, 154, 0.50)";
+export const VOLUME_DOWN_COLOR = "rgba(239, 83, 80, 0.50)";
+
+export interface VolumeBarPalette {
+  up: string;
+  down: string;
+}
 const WAVE_DELTA_TRANSPARENT_LINE_COLOR = "rgba(0, 0, 0, 0)";
 const WAVE_DELTA_MBOX_UP_FILL = "rgba(90, 130, 220, 0.45)";
 const WAVE_DELTA_MBOX_UP_BORDER = "rgba(90, 130, 220, 1)";
@@ -511,6 +520,29 @@ function relativeLuminance({ r, g, b }: { r: number; g: number; b: number }): nu
 
 function rgba({ r, g, b }: { r: number; g: number; b: number }, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+export function toVolumeColor(
+  color: string,
+  alpha = VOLUME_BAR_OPACITY,
+  fallback = VOLUME_UP_COLOR,
+): string {
+  const parsed = parseHexColor(color);
+  if (parsed !== null) {
+    return rgba(parsed, alpha);
+  }
+  const match = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(color.trim());
+  if (match !== null) {
+    return `rgba(${match[1]}, ${match[2]}, ${match[3]}, ${alpha})`;
+  }
+  return fallback;
+}
+
+export function toVolumePalette(rise?: string, fall?: string): VolumeBarPalette {
+  return {
+    up: rise ? toVolumeColor(rise, VOLUME_BAR_OPACITY, VOLUME_UP_COLOR) : VOLUME_UP_COLOR,
+    down: fall ? toVolumeColor(fall, VOLUME_BAR_OPACITY, VOLUME_DOWN_COLOR) : VOLUME_DOWN_COLOR,
+  };
 }
 
 export function chartContrastPalette(backgroundColor: string): ChartContrastPalette {
@@ -586,7 +618,7 @@ interface PriceLineDragConfig {
   handlers: {
     onPreview?: (id: string, price: number) => void;
     onCommit?: (id: string, price: number) => void;
-    onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
+    onCommitBatch?: (updates: readonly OrderLineDragUpdate[]) => void;
     snap?: (price: number) => number;
   };
 }
@@ -624,8 +656,10 @@ export interface LightweightChartsAdapterOptions {
   displayTimeOffsetMs?: number;
   /** Duration of the active timeframe; drives the right-axis bar countdown. */
   barCountdownDurationMs?: number;
+  barCountdownTimeframe?: Timeframe;
   /** Main chart background color. */
   chartBackgroundColor?: string;
+  chartTheme?: { background: string; text: string; rise: string; fall: string };
   /** Display timezone offset for the time axis, in minutes from UTC. */
   timezoneOffsetMinutes?: number;
   /** Optional candle recoloring for bullish/bearish outside bars. */
@@ -1452,14 +1486,17 @@ export function toGcPushEarlyDivergenceMarker(
   };
 }
 
-function toVolumeHistogram(
+export function toVolumeHistogram(
   bar: Bar,
   displayTimeOffsetMs: number,
+  palette?: VolumeBarPalette,
 ): HistogramData {
+  const upColor = palette?.up ?? VOLUME_UP_COLOR;
+  const downColor = palette?.down ?? VOLUME_DOWN_COLOR;
   return {
     time: toUtcTimestamp(bar.time, displayTimeOffsetMs),
     value: Math.max(0, bar.volume),
-    color: bar.close >= bar.open ? VOLUME_UP_COLOR : VOLUME_DOWN_COLOR,
+    color: bar.close >= bar.open ? upColor : downColor,
   };
 }
 
@@ -1554,9 +1591,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly supertrendMarkerByTime = new Map<number, SupertrendMarker>();
   private readonly deltaColors: DeltaColors;
   private candleBars: BarSeries = [];
-  private candleLastRenderedTime: number | undefined;
-  private volumeLastRenderedTime: number | undefined;
-  private deltaLastRenderedTime: number | undefined;
   private outsideBar: OutsideBarSettings;
   private readonly barsByTime = new Map<number, Bar>();
   private readonly volumeDeltaByTime = new Map<number, VolumeDeltaDatum>();
@@ -1572,7 +1606,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     number,
     GcPushMomentumPoint
   >();
-  private readonly gcPushMomentumDisplayByTime = new Map<number, HistogramData | undefined>();
   private gcPushMomentumPaneIndex: number | undefined;
   private gcPushMomentumVisible = false;
   private gcPushMomentumSettings: GcPushMomentumSettings = {
@@ -1587,14 +1620,20 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private mgannOverlayCacheRevision = -1;
   private mgannOverlayCache: MgannSwingOverlay | undefined;
   private mgannImpulseColors = new Map<number, string>();
-  private mgannImpulseReindexNeeded = false;
   private mgannRenderTimer: number | undefined;
   private denseOverlaysVisibleForZoom = true;
-  private denseOverlayMinSpacing = MIN_DENSE_OVERLAY_BAR_SPACING;
+  private denseOverlayMinBarSpacing = MIN_DENSE_OVERLAY_BAR_SPACING;
+  private hiddenCandleTimes = new Set<number>();
+  private footprintZoomSnapshot: {
+    range: { from: number; to: number };
+    priceRange: { from: number; to: number } | null;
+    autoScale: boolean;
+    anchorTime: number;
+  } | undefined;
   private readonly handleDenseOverlayZoomChange = (): void => {
     const visible = shouldRenderDenseOverlay(
       this.chart.timeScale().options().barSpacing,
-      this.denseOverlayMinSpacing,
+      this.denseOverlayMinBarSpacing,
     );
     if (visible === this.denseOverlaysVisibleForZoom) return;
     this.denseOverlaysVisibleForZoom = visible;
@@ -1629,20 +1668,21 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   private readonly pendingOrderLineCommits = new Map<string, number>();
   private selectedPriceLine: PriceLineSelection | undefined;
   private draggingPriceLine:
-    | { kind: PriceLineDragKind; id: string; pointerId: number }
+    | { kind: PriceLineDragKind; id: string; pointerId: number; startPrice: number; confirmedPrice: number }
     | undefined;
   private disposePriceLineDragListeners: (() => void) | undefined;
   private disposeRealtimeInteractionListeners: (() => void) | undefined;
   private realtimeInteractionActive = false;
-  private realtimeRenderFrame: number | undefined;
   private readonly deferredBarTimes = new Set<number>();
   private readonly deferredVolumeDeltaTimes = new Set<number>();
   private deferredSessionMarkers = false;
   private displayTimeOffsetMs: number;
   private readonly container: HTMLElement;
   private chartBackgroundColor: string;
+  private chartTheme: { background: string; text: string; rise: string; fall: string };
   private readonly barCountdownElement: HTMLDivElement;
   private barCountdownDurationMs: number;
+  private barCountdownTimeframe: Timeframe | undefined;
   private barCountdownVisible = true;
   private barCountdownTimer: number | undefined;
   private latestBar: Bar | undefined;
@@ -1667,8 +1707,15 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       DEFAULT_TIMEZONE_OFFSET_MINUTES,
     );
     this.barCountdownDurationMs = options.barCountdownDurationMs ?? 60_000;
+    this.barCountdownTimeframe = options.barCountdownTimeframe;
     this.chartBackgroundColor =
       options.chartBackgroundColor ?? MZ_FOOTPRINT_COLORS.chartBg;
+    this.chartTheme = options.chartTheme ?? {
+      background: this.chartBackgroundColor,
+      text: chartContrastPalette(this.chartBackgroundColor).text,
+      rise: MZ_FOOTPRINT_COLORS.candleUp,
+      fall: MZ_FOOTPRINT_COLORS.candleDown,
+    };
     const palette = chartContrastPalette(this.chartBackgroundColor);
 
     this.chart = createChart(container, {
@@ -1694,6 +1741,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         borderVisible: false,
         timeVisible: true,
         secondsVisible: false,
+        minBarSpacing: 0.5,
+        maxBarSpacing: 250,
         tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) =>
           formatTickMarkForOffset(
             time,
@@ -1709,12 +1758,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     });
 
     this.candleSeries = this.chart.addSeries(CandlestickSeries, {
-      upColor: MZ_FOOTPRINT_COLORS.candleUp,
-      downColor: MZ_FOOTPRINT_COLORS.candleDown,
-      borderUpColor: MZ_FOOTPRINT_COLORS.candleWick,
-      borderDownColor: MZ_FOOTPRINT_COLORS.candleWick,
-      wickUpColor: MZ_FOOTPRINT_COLORS.candleWick,
-      wickDownColor: MZ_FOOTPRINT_COLORS.candleWick,
+      upColor: this.chartTheme.rise,
+      downColor: this.chartTheme.fall,
+      borderUpColor: this.chartTheme.rise,
+      borderDownColor: this.chartTheme.fall,
+      wickUpColor: this.chartTheme.rise,
+      wickDownColor: this.chartTheme.fall,
       // Current (last) price line: a light dashed line like the alert lines.
       priceLineVisible: true,
       priceLineSource: PriceLineSource.LastBar,
@@ -1792,8 +1841,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
     // TradingView-style Volume indicator: a histogram overlaid at the bottom
     // of the main pane, on its own autoscaled price scale.
+    const volumePalette = this.volumePalette();
     this.volumeSeries = this.chart.addSeries(HistogramSeries, {
-      color: VOLUME_UP_COLOR,
+      color: volumePalette.up,
       priceScaleId: VOLUME_OVERLAY_PRICE_SCALE_ID,
       priceFormat: { type: "volume" },
       priceLineVisible: false,
@@ -1878,6 +1928,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const timeScale = this.chart.timeScale();
     this.denseOverlaysVisibleForZoom = shouldRenderDenseOverlay(
       timeScale.options().barSpacing,
+      this.denseOverlayMinBarSpacing,
     );
     timeScale.subscribeVisibleLogicalRangeChange(
       this.handleDenseOverlayZoomChange,
@@ -1888,12 +1939,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   /** The underlying chart instance (for layout chrome wired in task 12.7). */
   get chartApi(): IChartApi {
     return this.chart;
-  }
-
-  setDenseOverlayMinSpacing(value: number): void {
-    this.denseOverlayMinSpacing = normalizeDenseOverlayMinSpacing(value);
-    this.tduSignalPrimitive?.setMinBarSpacing(this.denseOverlayMinSpacing);
-    this.handleDenseOverlayZoomChange();
   }
 
   /** The candle series instance (for DrawingManager to attach primitives). */
@@ -2011,8 +2056,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   /** Change the active timeframe used by the right-axis current-bar countdown. */
-  setBarCountdownDuration(durationMs: number): void {
+  setBarCountdownDuration(durationMs: number, timeframe?: Timeframe): void {
     this.barCountdownDurationMs = durationMs;
+    this.barCountdownTimeframe = timeframe;
     this.gcPushMomentumSettings = normalizeGcPushMomentumSettings({
       ...this.gcPushMomentumSettings,
       barDurationMs: durationMs,
@@ -2020,7 +2066,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const latest = this.candleBars[this.candleBars.length - 1];
     const latestWasClosed =
       latest !== undefined && this.closedBarTimes.has(latest.time);
-    if (latest !== undefined && latest.time + durationMs <= Date.now()) {
+    if (latest !== undefined && this.currentBarEnd(latest.time) <= Date.now()) {
       this.closedBarTimes.add(latest.time);
     }
     const latestClosedChanged =
@@ -2117,6 +2163,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   /** Restyle the chart background without rebuilding the chart instance. */
   setChartBackgroundColor(color: string): void {
+    this.setChartTheme({ ...this.chartTheme, background: color });
+  }
+
+  setChartTheme(theme: { background: string; text: string; rise: string; fall: string }): void {
+    this.chartTheme = { ...theme };
+    const color = theme.background;
     this.chartBackgroundColor = color;
     const palette = chartContrastPalette(color);
     this.sessionVolumeProfilePrimitive?.setValueAreaLineColor(
@@ -2126,7 +2178,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       layout: {
         attributionLogo: false,
         background: { type: ColorType.Solid, color },
-        textColor: palette.text,
+        textColor: theme.text || palette.text,
       },
       grid: {
         vertLines: { color: palette.verticalGrid, visible: CHART_GRID_VISIBLE },
@@ -2139,9 +2191,92 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       },
     });
     this.candleSeries.applyOptions({
+      upColor: theme.rise,
+      downColor: theme.fall,
+      borderUpColor: theme.rise,
+      borderDownColor: theme.fall,
+      wickUpColor: theme.rise,
+      wickDownColor: theme.fall,
       priceLineColor: palette.priceLine,
     });
+    const volumePalette = this.volumePalette();
+    this.volumeSeries.applyOptions({
+      color: volumePalette.up,
+    });
+    this.renderVolumeSeries();
     this.renderSmcOverlay();
+  }
+
+  fitPriceScale(): void {
+    this.candleSeries.priceScale().applyOptions({ autoScale: true });
+  }
+
+  setDenseOverlayMinBarSpacing(spacing: number): void {
+    this.denseOverlayMinBarSpacing = normalizeDenseOverlayBarSpacing(spacing);
+    this.tduSignalPrimitive?.setMinimumBarSpacing(this.denseOverlayMinBarSpacing);
+    this.handleDenseOverlayZoomChange();
+  }
+
+  /** Hide native candles covered by a footprint ladder while retaining their price data. */
+  setHiddenCandleTimes(times: readonly number[]): void {
+    const next = new Set(times);
+    const changed = new Set(this.hiddenCandleTimes);
+    for (const time of next) {
+      if (!changed.delete(time)) changed.add(time);
+    }
+    if (changed.size === 0) return;
+    this.hiddenCandleTimes = next;
+    if (this.bulkBarsDirty) return;
+
+    for (const time of changed) {
+      // A forming bar queued during a gesture may not exist in the series yet.
+      if (this.deferredBarTimes.has(time)) continue;
+      this.updateCandleAt(this.candleBars.findIndex((bar) => bar.time === time));
+    }
+  }
+
+  /** Temporarily inspect a dragged region without changing the saved chart layout. */
+  zoomToFootprintRegion(region: { left: number; right: number; top: number; bottom: number }): boolean {
+    const scale = this.chart.timeScale();
+    const current = scale.getVisibleLogicalRange();
+    const first = scale.coordinateToLogical(region.left);
+    const last = scale.coordinateToLogical(region.right);
+    if (!current || first === null || last === null || this.candleBars.length === 0) return false;
+    const from = Math.max(0, Math.floor(Math.min(first, last)));
+    const to = Math.min(this.candleBars.length - 1, Math.ceil(Math.max(first, last)));
+    if (from > to) return false;
+    const priceScale = this.candleSeries.priceScale();
+    this.footprintZoomSnapshot ??= {
+      range: { from: Number(current.from), to: Number(current.to) },
+      priceRange: priceScale.getVisibleRange(),
+      autoScale: priceScale.options().autoScale,
+      anchorTime: this.candleBars[0].time,
+    };
+    const high = this.candleSeries.coordinateToPrice(region.top);
+    const low = this.candleSeries.coordinateToPrice(region.bottom);
+    const span = Math.max(2, to - from + 2);
+    const center = (from + to) / 2;
+    scale.setVisibleLogicalRange({ from: center - span / 2, to: center + span / 2 });
+    if (high !== null && low !== null && Math.abs(high - low) > 0) {
+      const padding = Math.abs(high - low) * 0.08;
+      priceScale.setVisibleRange({ from: Math.min(high, low) - padding, to: Math.max(high, low) + padding });
+    }
+    return true;
+  }
+
+  restoreFootprintZoom(): void {
+    const saved = this.footprintZoomSnapshot;
+    if (!saved) return;
+    this.footprintZoomSnapshot = undefined;
+    const shift = Math.max(0, this.candleBars.findIndex((bar) => bar.time === saved.anchorTime));
+    this.chart.timeScale().setVisibleLogicalRange({ from: saved.range.from + shift, to: saved.range.to + shift });
+    if (saved.priceRange) this.candleSeries.priceScale().setVisibleRange(saved.priceRange);
+    this.candleSeries.priceScale().applyOptions({ autoScale: saved.autoScale });
+  }
+
+  clearFootprintZoom(): void {
+    if (this.footprintZoomSnapshot) this.candleSeries.priceScale().applyOptions({ autoScale: true });
+    this.footprintZoomSnapshot = undefined;
   }
 
   /** Bulk-load the full candle series. Delta history is loaded separately. */
@@ -2154,7 +2289,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       const bar = this.candleBars[index];
       if (
         index < this.candleBars.length - 1 ||
-        bar.time + this.barCountdownDurationMs <= now
+        this.currentBarEnd(bar.time) <= now
       ) {
         this.closedBarTimes.add(bar.time);
       }
@@ -2181,24 +2316,9 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   /** Apply a single incremental candle update. */
   updateBar(bar: Bar, closed?: boolean): void {
-    if (
-      bar.time > (this.candleBars[this.candleBars.length - 1]?.time ?? bar.time) &&
-      this.replayMomentumIndex >= 0
-    ) {
-      // Preserve the preceding bucket's final calculation before advancing its
-      // bounded warmup window. Only forming snapshots of one bucket coalesce.
-      if (this.replayMomentumFrame !== undefined) {
-        window.cancelAnimationFrame(this.replayMomentumFrame);
-        this.replayMomentumFrame = undefined;
-      }
-      const pendingIndex = this.replayMomentumIndex;
-      this.replayMomentumIndex = -1;
-      this.updateGcPushMomentumAt(pendingIndex);
-    }
     const wasClosed = this.closedBarTimes.has(bar.time);
     const result = applyBarUpdate(this.candleBars, bar);
     this.candleBars = result.bars;
-    if (result.kind === "insert") this.mgannImpulseReindexNeeded = true;
     if (result.kind === "append" && result.index === this.xKontrolEngine.length) {
       this.xKontrolEngine.appendBar(result.bar);
     } else if (
@@ -2224,29 +2344,46 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     if (result.kind === "noop") {
       if (closedStateChanged) {
         this.invalidateMgannOverlay();
-        this.deferredBarTimes.add(bar.time);
-        this.markGcPushMomentumDirty(result.index);
-        this.scheduleRealtimeRender();
+        this.scheduleMgannRender();
       }
+      this.scheduleGcPushMomentumUpdate(result.index);
       return;
     }
     this.invalidateMgannOverlay();
-    // Retain every model/closed-state update, but paint each affected bucket
-    // once per frame. Transport bursts must not replay intermediate snapshots
-    // and full-history indicator scans before the browser can paint the price.
-    this.deferredBarTimes.add(bar.time);
-    this.markGcPushMomentumDirty(result.index);
-    if (
-      (result.kind === "append" || result.kind === "insert") &&
-      utcPlus7SessionHighlightHour(bar.time, this.displayTimeOffsetMs) !== undefined
-    ) {
-      this.deferredSessionMarkers = true;
+    if (this.realtimeInteractionActive) {
+      // Keep the data model current but defer canvas invalidation until the pan
+      // gesture ends. Usually this set contains only the live bar's timestamp.
+      this.deferredBarTimes.add(bar.time);
+      if (result.kind === "append" || result.kind === "insert") {
+        this.deferredSessionMarkers = true;
+      }
+    } else {
+      // Keep the primary price/volume path incremental even when the heavier
+      // mGann overlays are enabled. Their full-history series are refreshed in
+      // one coalesced pass below.
+      this.updateCandleAt(result.index);
+      this.updateCandleAt(result.index + 1);
+      // Session markers only exist on the two highlighted session boundaries.
+      // Most Replay appends do not change this collection, so avoid replacing
+      // the marker plugin data (and invalidating the chart) for every candle.
+      if (
+        (result.kind === "append" || result.kind === "insert") &&
+        utcPlus7SessionHighlightHour(bar.time, this.displayTimeOffsetMs) !== undefined
+      ) {
+        this.renderSessionMarkers();
+      }
+      if (this.volumeVisible) {
+        this.updateVolumeAt(result.index);
+      }
+      this.renderXKontrolSignals();
+      this.scheduleGcPushMomentumUpdate(result.index);
+      this.scheduleMgannRender();
     }
-    this.scheduleRealtimeRender();
     this.barsByTime.set(
       toUtcTimestamp(bar.time, this.displayTimeOffsetMs) as number,
       { ...bar },
     );
+    this.renderTduSignals();
     const previousLatestTime = this.latestBar?.time;
     if (this.latestBar === undefined || bar.time >= this.latestBar.time) {
       if (previousLatestTime === undefined || bar.time > previousLatestTime) {
@@ -2345,10 +2482,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     this.renderGcPushMomentumSeries();
   }
 
-  setTduSettings(settings: TduSettings): void {
-    this.tduSignalPrimitive?.setSettings(settings);
-  }
-
   setTduSignalsVisible(visible: boolean): void {
     this.tduSignalsVisible = visible;
     this.tduSignalPrimitive?.setVisible(visible);
@@ -2432,7 +2565,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       if (!this.waveDeltaVisible && !this.mgannSwingVisible) return;
       const overlay = this.currentMgannOverlay();
       if (this.shouldRenderMgannImpulseWaves()) {
-        this.updateMgannImpulseCandles(overlay);
+        this.renderCandleSeries(overlay);
       }
       this.renderWaveDeltaSeries(overlay);
       if (this.mgannSwingVisible) {
@@ -2487,63 +2620,33 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   private renderCandleSeries(overlay?: MgannSwingOverlay): void {
-    const impulseColors = this.shouldRenderMgannImpulseWaves()
+    this.mgannImpulseColors = this.shouldRenderMgannImpulseWaves()
       ? this.mgannImpulseColorsByIndex(overlay ?? this.currentMgannOverlay())
       : new Map<number, string>();
-    this.mgannImpulseColors = impulseColors;
-    this.mgannImpulseReindexNeeded = false;
-    this.candleSeries.setData(
-      this.candleBars.map((bar, index) =>
-        toCandle(
-          bar,
-          this.displayTimeOffsetMs,
-          this.candleBars[index - 1],
-          this.outsideBar,
-          {
-            bars: this.candleBars,
-            index,
-            deltaByTime: this.volumeDeltaByTime,
-          },
-          this.fvgGraderVisible ? this.fvgSignalsByTime.get(bar.time) : undefined,
-          impulseColors.get(index),
-          isSessionHighlightTimeframeDuration(this.barCountdownDurationMs),
-        ),
-      ),
-    );
-    this.candleLastRenderedTime = this.candleBars[this.candleBars.length - 1]?.time;
+    this.candleSeries.setData(this.candleBars.map((_, index) => this.candleDataAt(index)));
   }
 
-  private updateMgannImpulseCandles(overlay: MgannSwingOverlay): void {
-    if (this.mgannImpulseReindexNeeded) {
-      this.renderCandleSeries(overlay);
-      return;
-    }
-    const previous = this.mgannImpulseColors;
-    const next = this.mgannImpulseColorsByIndex(overlay);
-    this.mgannImpulseColors = next;
-    const indexes = new Set([...previous.keys(), ...next.keys()]);
-    for (const index of [...indexes].sort((a, b) => a - b)) {
-      if (previous.get(index) !== next.get(index)) this.updateCandleAt(index);
-    }
+  private volumePalette(): VolumeBarPalette {
+    return toVolumePalette(this.chartTheme.rise, this.chartTheme.fall);
   }
 
   private renderVolumeSeries(): void {
+    const palette = this.volumePalette();
     this.volumeSeries.setData(
       this.candleBars.map((bar) =>
-        toVolumeHistogram(bar, this.displayTimeOffsetMs),
+        toVolumeHistogram(bar, this.displayTimeOffsetMs, palette),
       ),
     );
-    this.volumeLastRenderedTime = this.candleBars[this.candleBars.length - 1]?.time;
   }
 
   private renderVolumeDeltaSeries(): void {
-    const points = [...this.volumeDeltaByTime.values()].sort((a, b) => a.time - b.time);
     this.deltaSeries.setData(
-      points.map((point) =>
+      [...this.volumeDeltaByTime.values()]
+        .sort((a, b) => a.time - b.time)
+        .map((point) =>
           toVolumeDelta(point, this.deltaColors, this.displayTimeOffsetMs),
         ),
     );
-    this.deltaLastRenderedTime = points[points.length - 1]?.time;
   }
 
   private ensureGcPushMomentumPane(): void {
@@ -2693,19 +2796,17 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     points: readonly GcPushMomentumPoint[],
   ): void {
     const waveStates = this.gcPushMomentumWaveStates(points);
-    this.gcPushMomentumDisplayByTime.clear();
-    const histograms = points.map((point) => {
-      const histogram = toGcPushMomentumHistogram(
-        point,
-        this.closedBarTimes.has(point.time),
-        this.displayTimeOffsetMs,
-        this.gcPushMomentumSettings.displayMode,
-        waveStates.get(point.time),
-      );
-      this.gcPushMomentumDisplayByTime.set(point.time, histogram);
-      return histogram;
-    });
-    this.gcPushMomentumSeries?.setData(histograms);
+    this.gcPushMomentumSeries?.setData(
+      points.map((point) =>
+        toGcPushMomentumHistogram(
+          point,
+          this.closedBarTimes.has(point.time),
+          this.displayTimeOffsetMs,
+          this.gcPushMomentumSettings.displayMode,
+          waveStates.get(point.time),
+        ),
+      ),
+    );
     this.gcPushMomentumPushSeries?.setData(
       points.map((point) =>
         toGcPushMomentumPushLine(point, this.displayTimeOffsetMs),
@@ -2776,7 +2877,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         delta === undefined
           ? (signal?.deltaDivergence ?? 0)
           : historicalDivergence;
-      if (momentumLevel === 0 && deltaDivergence === 0 && !signal?.momentumSamples?.length) {
+      if (momentumLevel === 0 && deltaDivergence === 0) {
         continue;
       }
       signals.push({
@@ -2788,7 +2889,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         momentumDirection,
         momentumLevel,
         deltaDivergence,
-        momentumSamples: signal?.momentumSamples,
       });
     }
     this.tduSignalPrimitive.setSignals(signals);
@@ -2852,9 +2952,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.renderGcPushMomentumSeries();
       return;
     }
-    // A coalesced close/open burst can first dirty the preceding bucket.
-    // Always include the newest bucket in the small live-tail repaint.
-    index = this.candleBars.length - 1;
 
     const windowSize = this.gcPushMomentumCalculationWindow();
     const from = Math.max(0, this.candleBars.length - windowSize);
@@ -2885,11 +2982,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       const historicalUpdate = currentIndex < this.candleBars.length - 1;
       if (point === undefined) {
         this.gcPushMomentumPointByTime.delete(bar.time);
-        if (
-          this.gcPushMomentumDisplayByTime.has(bar.time) &&
-          this.gcPushMomentumDisplayByTime.get(bar.time) === undefined
-        ) continue;
-        this.gcPushMomentumDisplayByTime.set(bar.time, undefined);
         const whitespace = {
           time: toUtcTimestamp(bar.time, this.displayTimeOffsetMs),
         };
@@ -2897,33 +2989,25 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         this.gcPushMomentumPushSeries?.update(whitespace, historicalUpdate);
         this.gcPushMomentumSignalSeries?.update(whitespace, historicalUpdate);
       } else {
-        const previousPoint = this.gcPushMomentumPointByTime.get(point.time);
         this.gcPushMomentumPointByTime.set(point.time, point);
-        const histogram = toGcPushMomentumHistogram(
-          point,
-          this.closedBarTimes.has(point.time),
-          this.displayTimeOffsetMs,
-          this.gcPushMomentumSettings.displayMode,
-          waveStates.get(point.time),
+        series.update(
+          toGcPushMomentumHistogram(
+            point,
+            this.closedBarTimes.has(point.time),
+            this.displayTimeOffsetMs,
+            this.gcPushMomentumSettings.displayMode,
+            waveStates.get(point.time),
+          ),
+          historicalUpdate,
         );
-        const previousHistogram = this.gcPushMomentumDisplayByTime.get(point.time);
-        if (
-          previousHistogram?.value !== histogram.value ||
-          previousHistogram?.color !== histogram.color
-        ) {
-          this.gcPushMomentumDisplayByTime.set(point.time, histogram);
-          series.update(histogram, historicalUpdate);
-        }
-        if (previousPoint?.smoothedPush !== point.smoothedPush) {
-          this.gcPushMomentumPushSeries?.update(
-            toGcPushMomentumPushLine(point, this.displayTimeOffsetMs), historicalUpdate,
-          );
-        }
-        if (previousPoint?.signal !== point.signal) {
-          this.gcPushMomentumSignalSeries?.update(
-            toGcPushMomentumSignalLine(point, this.displayTimeOffsetMs), historicalUpdate,
-          );
-        }
+        this.gcPushMomentumPushSeries?.update(
+          toGcPushMomentumPushLine(point, this.displayTimeOffsetMs),
+          historicalUpdate,
+        );
+        this.gcPushMomentumSignalSeries?.update(
+          toGcPushMomentumSignalLine(point, this.displayTimeOffsetMs),
+          historicalUpdate,
+        );
       }
     }
     if (this.trimGcPushMomentumDisplayPoints()) {
@@ -2937,14 +3021,15 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   }
 
   /**
-   * Coalesce bar and delta projections, including live transport bursts.
+   * Bar and delta projections arrive in the same React commit during Replay.
+   * Coalesce their identical momentum recalculation into one animation frame.
    */
   private scheduleGcPushMomentumUpdate(index: number): void {
-    if (!this.gcPushMomentumVisible || index < 0) return;
-    // Both bar and delta messages describe the same live bucket. Compute from
-    // their latest combined state once per frame, including outside Replay.
-    // Keep the earliest changed index so a history correction still rebuilds.
-    this.markGcPushMomentumDirty(index);
+    if (!this.bulkRenderCoalescing) {
+      this.updateGcPushMomentumAt(index);
+      return;
+    }
+    this.replayMomentumIndex = Math.max(this.replayMomentumIndex, index);
     if (this.replayMomentumFrame !== undefined) return;
     this.replayMomentumFrame = window.requestAnimationFrame(() => {
       this.replayMomentumFrame = undefined;
@@ -2952,13 +3037,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       this.replayMomentumIndex = -1;
       this.updateGcPushMomentumAt(pendingIndex);
     });
-  }
-
-  private markGcPushMomentumDirty(index: number): void {
-    if (!this.gcPushMomentumVisible || index < 0) return;
-    this.replayMomentumIndex = this.replayMomentumIndex < 0
-      ? index
-      : Math.min(this.replayMomentumIndex, index);
   }
 
   private renderWaveDeltaSeries(overlay?: MgannSwingOverlay): void {
@@ -3109,8 +3187,13 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     if (index < 0 || index >= this.candleBars.length) {
       return;
     }
+    this.candleSeries.update(this.candleDataAt(index), index < this.candleBars.length - 1);
+  }
+
+  private candleDataAt(index: number): CandlestickData {
+    const bar = this.candleBars[index];
     const candle = toCandle(
-      this.candleBars[index],
+      bar,
       this.displayTimeOffsetMs,
       this.candleBars[index - 1],
       this.outsideBar,
@@ -3119,29 +3202,27 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         index,
         deltaByTime: this.volumeDeltaByTime,
       },
-      this.fvgGraderVisible
-        ? this.fvgSignalsByTime.get(this.candleBars[index].time)
-        : undefined,
+      this.fvgGraderVisible ? this.fvgSignalsByTime.get(bar.time) : undefined,
       this.mgannImpulseColors.get(index),
       isSessionHighlightTimeframeDuration(this.barCountdownDurationMs),
     );
-    const time = this.candleBars[index].time;
-    this.candleSeries.update(
-      candle, this.candleLastRenderedTime !== undefined && time < this.candleLastRenderedTime,
-    );
-    this.candleLastRenderedTime = Math.max(this.candleLastRenderedTime ?? time, time);
+    return this.hiddenCandleTimes.has(bar.time)
+      ? { ...candle, color: "transparent", borderColor: "transparent", wickColor: "transparent" }
+      : candle;
   }
 
   private updateVolumeAt(index: number): void {
     if (index < 0 || index >= this.candleBars.length) {
       return;
     }
-    const time = this.candleBars[index].time;
     this.volumeSeries.update(
-      toVolumeHistogram(this.candleBars[index], this.displayTimeOffsetMs),
-      this.volumeLastRenderedTime !== undefined && time < this.volumeLastRenderedTime,
+      toVolumeHistogram(this.candleBars[index], this.displayTimeOffsetMs, this.volumePalette()),
+      index < this.candleBars.length - 1,
     );
-    this.volumeLastRenderedTime = Math.max(this.volumeLastRenderedTime ?? time, time);
+  }
+
+  private currentBarEnd(start: number): number {
+    return calendarBarEndMs(start, this.barCountdownTimeframe) ?? start + this.barCountdownDurationMs;
   }
 
   private updateBarCountdown(): void {
@@ -3151,8 +3232,10 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       return;
     }
     const now = Date.now();
-    const remaining =
-      this.latestBarUsesObservedCountdown &&
+    const calendarEnd = calendarBarEndMs(bar.time, this.barCountdownTimeframe);
+    const remaining = calendarEnd !== undefined
+      ? calendarEnd - now
+      : this.latestBarUsesObservedCountdown &&
       this.latestBarFirstSeenAtMs !== undefined
         ? remainingObservedBarTimeMs(
             this.latestBarFirstSeenAtMs,
@@ -3171,7 +3254,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const top = (y as number) + 10;
     if (
       remaining <= 0 ||
-      remaining > this.barCountdownDurationMs ||
+      (calendarEnd === undefined && remaining > this.barCountdownDurationMs) ||
       y === null ||
       scaleWidth <= 0 ||
       top + labelHeight > paneHeight
@@ -3504,9 +3587,25 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const next = { ...point };
     this.volumeDeltaByTime.set(point.time, next);
     this.invalidateMgannOverlay();
-    this.deferredVolumeDeltaTimes.add(point.time);
-    this.markGcPushMomentumDirty(this.candleBars.findIndex(bar => bar.time === point.time));
-    this.scheduleRealtimeRender();
+    if (this.realtimeInteractionActive) {
+      this.deferredVolumeDeltaTimes.add(point.time);
+      return;
+    }
+    if (this.volumeDeltaVisible) {
+      this.deltaSeries.update(
+        toVolumeDelta(next, this.deltaColors, this.displayTimeOffsetMs),
+      );
+    }
+    if (this.shouldRenderMgannImpulseWaves()) {
+      const index = this.candleBars.findIndex((bar) => bar.time === point.time);
+      this.updateCandleAt(index);
+      this.updateCandleAt(index + 1);
+    }
+    this.scheduleGcPushMomentumUpdate(
+      this.candleBars.findIndex((bar) => bar.time === point.time),
+    );
+    this.renderTduSignals();
+    this.scheduleMgannRender();
   }
 
   /** Bulk-load FVG Signal Grader candle colors. */
@@ -3722,18 +3821,12 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     }
 
     for (const line of lines) {
-      const pendingPrice = this.pendingOrderLineCommits.get(line.id);
-      // Account/profit updates can redraw these levels during a pointer drag.
-      // Keep the preview until release so a stale server level cannot be sent
-      // back as the user's chosen price.
-      const dragPrice =
-        this.draggingPriceLine?.kind === "order" &&
-        this.draggingPriceLine.id === line.id
-          ? this.orderLineMeta.get(line.id)?.price
-          : undefined;
-      const displayPrice = dragPrice ?? pendingPrice ?? line.price;
+      const drag = this.draggingPriceLine;
+      const dragging = drag?.kind === "order" && drag.id === line.id;
+      if (dragging) drag.confirmedPrice = line.price;
+      const pendingPrice = dragging ? this.orderLineMeta.get(line.id)?.price : this.pendingOrderLineCommits.get(line.id);
       const displayLine =
-        displayPrice === line.price ? line : { ...line, price: displayPrice };
+        pendingPrice === undefined ? line : { ...line, price: pendingPrice };
       const existing = this.orderLinesById.get(line.id);
       const selected = this.isPriceLineSelected("order", line.id);
       if (existing) {
@@ -3789,6 +3882,8 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       width: Math.max(1, Math.round(paneSize.width || width)),
       height: viewportHeight,
       textColor: palette.text,
+      barSpacing: this.chart.timeScale().options().barSpacing,
+      timeToX: (time) => this.chart.timeScale().timeToCoordinate(toUtcTimestamp(time, this.displayTimeOffsetMs)),
       priceToY: (price) =>
         this.candleSeries.priceToCoordinate(price) ?? viewportHeight / 2,
     };
@@ -3820,7 +3915,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
   subscribeOrderDrag(handlers: {
     onPreview?: (id: string, price: number) => void;
     onCommit?: (id: string, price: number) => void;
-    onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
+    onCommitBatch?: (updates: readonly OrderLineDragUpdate[]) => void;
     snap?: (price: number) => number;
   }): () => void {
     return this.subscribePriceLineDrag(
@@ -3838,7 +3933,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     handlers: {
       onPreview?: (id: string, price: number) => void;
       onCommit?: (id: string, price: number) => void;
-      onCommitBatch?: (updates: readonly { id: string; price: number }[]) => void;
+      onCommitBatch?: (updates: readonly OrderLineDragUpdate[]) => void;
       snap?: (price: number) => number;
     },
   ): () => void {
@@ -3894,7 +3989,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       const config = this.priceLineDragConfigs.get(kind);
       const meta = config?.metaById.get(id);
       if (!config || !meta || meta.editable === false) return;
-      this.draggingPriceLine = { kind, id, pointerId: e.pointerId };
+      this.draggingPriceLine = { kind, id, pointerId: e.pointerId, startPrice: meta.price, confirmedPrice: meta.price };
       this.setChartPointerInteractions(false);
       this.container.style.cursor = "ns-resize";
       handle.classList.add("is-dragging");
@@ -3969,7 +4064,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         this.draggingPriceLine !== undefined &&
         this.draggingPriceLine.pointerId === e.pointerId
       ) {
-        this.endSelectedPriceLineDrag(e);
+        this.endSelectedPriceLineDrag(e, false);
       }
     };
 
@@ -4095,7 +4190,11 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
       }
     }
     this.selectedPriceLine = undefined;
-    this.draggingPriceLine = undefined;
+    if (this.draggingPriceLine) {
+      this.draggingPriceLine = undefined;
+      this.setChartPointerInteractions(true);
+      this.container.style.cursor = "";
+    }
     this.hideAllPriceLineHandles();
   }
 
@@ -4144,8 +4243,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         : [...this.orderLineMeta]
             .filter(([, meta]) =>
               meta.orderId === selected.orderId &&
-              meta.editable !== false &&
-              meta.field !== "entryGc"
+              meta.editable !== false
             )
             .map(([id]) => ({ kind: "order" as const, id }));
     const activeHandleKeys = new Set<string>();
@@ -4187,7 +4285,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     handle.style.setProperty("--price-line-handle-color", meta.color);
   }
 
-  private endSelectedPriceLineDrag(e: PointerEvent): void {
+  private endSelectedPriceLineDrag(e: PointerEvent, commit = true): void {
     const drag = this.draggingPriceLine;
     if (drag === undefined) return;
     this.draggingPriceLine = undefined;
@@ -4202,10 +4300,19 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     const meta = config?.metaById.get(drag.id);
     if (meta !== undefined) {
       if (drag.kind === "order") {
+        const price = meta.price;
+        const start = config?.handlers.snap?.(drag.startPrice) ?? drag.startPrice;
+        if (!commit || meta.editable === false || price === start ||
+            (!config?.handlers.onCommitBatch && !config?.handlers.onCommit)) {
+          meta.price = drag.confirmedPrice;
+          config?.linesById.get(drag.id)?.applyOptions({ price: drag.confirmedPrice });
+          this.positionSelectedPriceLineHandles();
+          return;
+        }
         if (config?.handlers.onCommitBatch) {
-          config.handlers.onCommitBatch([{ id: drag.id, price: meta.price }]);
+          config.handlers.onCommitBatch([{ id: drag.id, price, startPrice: drag.startPrice }]);
         } else {
-          config?.handlers.onCommit?.(drag.id, meta.price);
+          config?.handlers.onCommit?.(drag.id, price);
         }
       } else {
         config?.handlers.onCommit?.(drag.id, meta.price);
@@ -4705,19 +4812,7 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     };
   }
 
-  private scheduleRealtimeRender(): void {
-    if (this.realtimeInteractionActive || this.realtimeRenderFrame !== undefined) return;
-    this.realtimeRenderFrame = window.requestAnimationFrame(() => {
-      this.realtimeRenderFrame = undefined;
-      if (!this.realtimeInteractionActive) this.flushDeferredRealtimeUpdates();
-    });
-  }
-
   private flushDeferredRealtimeUpdates(): void {
-    if (this.realtimeRenderFrame !== undefined) {
-      window.cancelAnimationFrame(this.realtimeRenderFrame);
-      this.realtimeRenderFrame = undefined;
-    }
     const dirtyIndexes = [...this.deferredBarTimes]
       .map((time) => this.candleBars.findIndex((bar) => bar.time === time))
       .filter((index) => index >= 0);
@@ -4728,14 +4823,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
     for (const index of dirtyIndexes) {
       candleIndexes.add(index);
       candleIndexes.add(index + 1);
-    }
-    if (this.shouldRenderMgannImpulseWaves()) {
-      for (const time of this.deferredVolumeDeltaTimes) {
-        const index = this.candleBars.findIndex((bar) => bar.time === time);
-        if (index < 0) continue;
-        candleIndexes.add(index);
-        candleIndexes.add(index + 1);
-      }
     }
     for (const index of [...candleIndexes].sort((left, right) => left - right)) {
       this.updateCandleAt(index);
@@ -4757,14 +4844,20 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
         if (point !== undefined) {
           this.deltaSeries.update(
             toVolumeDelta(point, this.deltaColors, this.displayTimeOffsetMs),
-            this.deltaLastRenderedTime !== undefined && time < this.deltaLastRenderedTime,
           );
-          this.deltaLastRenderedTime = Math.max(this.deltaLastRenderedTime ?? time, time);
         }
       }
     }
-    if (this.replayMomentumIndex >= 0) {
-      this.scheduleGcPushMomentumUpdate(this.replayMomentumIndex);
+    if (hasBarUpdates || hasDeltaUpdates) {
+      const momentumIndexes = new Set(dirtyIndexes);
+      for (const time of this.deferredVolumeDeltaTimes) {
+        const index = this.candleBars.findIndex((bar) => bar.time === time);
+        if (index >= 0) momentumIndexes.add(index);
+      }
+      const earliestIndex = Math.min(...momentumIndexes);
+      if (Number.isFinite(earliestIndex)) {
+        this.updateGcPushMomentumAt(earliestIndex);
+      }
     }
     if (hasBarUpdates || hasDeltaUpdates) {
       this.scheduleMgannRender();
@@ -4779,10 +4872,6 @@ export class LightweightChartsAdapter implements ChartSeriesPort {
 
   /** Release the chart instance and its DOM. */
   dispose(): void {
-    if (this.realtimeRenderFrame !== undefined) {
-      window.cancelAnimationFrame(this.realtimeRenderFrame);
-      this.realtimeRenderFrame = undefined;
-    }
     if (this.bulkRenderFrame !== undefined) {
       window.cancelAnimationFrame(this.bulkRenderFrame);
       this.bulkRenderFrame = undefined;

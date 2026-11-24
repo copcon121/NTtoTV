@@ -1,6 +1,6 @@
 import type { Timeframe } from "../socket/messages";
 import type { AnchorPoint } from "./drawings/types";
-import { barDurationForTimeframe } from "./barCountdown";
+import { barDurationForTimeframe, barEndForTimeframe } from "./barCountdown";
 
 const TIMEFRAME_DISPLAY_OFFSET_MS: Record<Timeframe, number> = {
   "15s": 0,
@@ -13,22 +13,17 @@ const TIMEFRAME_DISPLAY_OFFSET_MS: Record<Timeframe, number> = {
   "1h": 0,
   "4h": 0,
   "1D": 0,
+  "1W": 0,
+  "1M": 0,
 };
 
 export function displayOffsetForTimeframe(timeframe: Timeframe): number {
   return TIMEFRAME_DISPLAY_OFFSET_MS[timeframe];
 }
 
-/**
- * The footprint overlay can be viewed on every sub-minute/M1 chart.
- */
+/** Chart footprint aggregates M1 ladders into candles of one minute or longer. */
 export function footprintEnabledForTimeframe(timeframe: Timeframe): boolean {
-  return timeframe === "15s" || timeframe === "30s" || timeframe === "1m";
-}
-
-/** FVG grading is backed by finalized footprint bars on 30s and M1. */
-export function fvgGraderEnabledForTimeframe(timeframe: Timeframe): boolean {
-  return timeframe === "30s" || timeframe === "1m";
+  return barDurationForTimeframe(timeframe) >= 60_000;
 }
 
 /** GC Push Momentum is calibrated and fed with exact delta on M1 and M5. */
@@ -53,14 +48,13 @@ export function fixedRangeMsFromAnchors(
   if (!Number.isFinite(first) || !Number.isFinite(second)) return null;
 
   const displayOffsetMs = displayOffsetForTimeframe(timeframe);
-  const durationMs = barDurationForTimeframe(timeframe);
   const minDisplayMs = Math.min(first, second) * 1000;
   const maxDisplayMs = Math.max(first, second) * 1000;
   return {
     from: Math.max(0, Math.round(minDisplayMs - displayOffsetMs)),
     to: Math.max(
       0,
-      Math.round(maxDisplayMs + (durationMs - displayOffsetMs) - 1),
+      Math.round(barEndForTimeframe(maxDisplayMs - displayOffsetMs, timeframe) - 1),
     ),
   };
 }

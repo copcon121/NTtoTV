@@ -166,13 +166,6 @@ function styleFor(zone: RenderableSmcZone): ZoneStyle {
 }
 
 function lineStyleFor(line: RenderableSmcLine): LineStyle {
-  if (line.kind === "fib_382") {
-    return { color: "#ff9800", width: 1, dash: [] };
-  }
-  if (line.kind === "fib_50") {
-    return { color: "#4caf50", width: 1, dash: [] };
-  }
-
   const color = line.direction === 1
     ? line.scope === "internal"
       ? "#00bfff"
@@ -315,15 +308,11 @@ class SmcOverlayRenderer implements IPrimitivePaneRenderer {
         ctx.stroke();
 
         const labelX = Math.round(view.labelX * scope.horizontalPixelRatio);
-        const isFib = view.line.kind === "fib_382" || view.line.kind === "fib_50";
-        const textX = isFib
-          ? Math.min(x1, x2) + 4 * scope.horizontalPixelRatio
-          : x1 + (labelX - x1) / 2;
+        const textX = x1 + (labelX - x1) / 2;
         const textYOffset =
           (view.line.direction === 1 ? -6 : 6) * scope.verticalPixelRatio;
         ctx.setLineDash([]);
         ctx.fillStyle = style.color;
-        ctx.textAlign = isFib ? "left" : "center";
         ctx.fillText(view.line.label, textX, y + textYOffset);
       }
 

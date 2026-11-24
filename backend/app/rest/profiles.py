@@ -29,7 +29,7 @@ from ..models.auth import AuthenticatedUser
 from ..models.timestamp import now_ms
 from ..storage.cache_store import CacheStore
 from ..storage.records import ProfileRecord
-from .alerts import get_cache, _runtime_alert_engine
+from .alerts import get_cache
 from .auth import get_current_user
 from .errors import bad_request, not_found, validation_error
 
@@ -196,9 +196,6 @@ async def save_my_profile(
         updated_at=now,
     )
     cache.upsert_profile(rec)
-    engine = _runtime_alert_engine(request)
-    if engine is not None:
-        engine.refresh_fail_break_profile(rec.id)
     return {"profile": _profile_to_dict(rec)}
 
 
@@ -310,9 +307,6 @@ async def save_profile(
         updated_at=now,
     )
     cache.upsert_profile(rec)
-    engine = _runtime_alert_engine(request)
-    if engine is not None:
-        engine.refresh_fail_break_profile(rec.id)
     return {"profile": _profile_to_dict(rec)}
 
 

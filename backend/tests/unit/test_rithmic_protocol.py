@@ -33,7 +33,7 @@ def test_login_contains_bookmap_profile_and_is_locked_to_ticker_plant() -> None:
     frame = build_login_request(
         user="test-user",
         password="test-password",
-        app_name="Bookmap",
+        app_name="NTtoTV Rithmic Connector",
         app_version="7.4.0.21",
         system_name="Rithmic Test",
         mac_addresses=("00:11:22:33:44:55",),
@@ -46,7 +46,7 @@ def test_login_contains_bookmap_profile_and_is_locked_to_ticker_plant() -> None:
     assert fields[TEMPLATE_ID_FIELD] == [(0, 10)]
     assert fields[153621] == [(0, 1)]
     assert fields[153644] == [(0, 0)]
-    assert fields[130002] == [(2, b"Bookmap")]
+    assert fields[130002] == [(2, b"NTtoTV Rithmic Connector")]
     assert fields[131803] == [(2, b"7.4.0.21")]
     assert fields[153628] == [(2, b"Rithmic Test")]
     assert fields[144108] == [(2, b"00:11:22:33:44:55")]

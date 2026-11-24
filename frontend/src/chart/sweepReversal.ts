@@ -1,7 +1,7 @@
 import { type Bar } from "../cache/types";
 
 export const SWEEP_REVERSAL_TIMEFRAMES = [
-  "15s", "30s", "1m", "3m", "5m", "15m", "30m", "1h", "4h", "1D",
+  "15s", "1m", "3m", "5m", "15m", "30m", "1h", "4h", "1D",
 ] as const;
 
 export interface SweepReversalSettings {

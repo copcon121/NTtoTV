@@ -1,0 +1,16 @@
+[Unit]
+Description=Online backup of NTtoTV SQLite databases
+After=nttotv.service
+
+[Service]
+Type=oneshot
+User=nttotv
+Group=nttotv
+WorkingDirectory=/opt/nttotv/current/backend
+ExecStart=/opt/nttotv/current/deploy/linux/backup-nttotv.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nttotv

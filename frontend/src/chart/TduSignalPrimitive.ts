@@ -11,13 +11,7 @@ import type {
   Time,
 } from "lightweight-charts";
 
-import {
-  MIN_DENSE_OVERLAY_BAR_SPACING,
-  normalizeDenseOverlayMinSpacing,
-  shouldRenderDenseOverlay,
-} from "./zoomVisibility";
-import { normalizeTduSettings, tduMomentumForSettings, type TduSettings } from "./tduSettings";
-import type { TduMomentumSample } from "../socket/messages";
+import { MIN_DENSE_OVERLAY_BAR_SPACING, normalizeDenseOverlayBarSpacing, shouldRenderDenseOverlay } from "./zoomVisibility";
 
 export interface RenderableTduSignal {
   time: Time;
@@ -28,7 +22,6 @@ export interface RenderableTduSignal {
   momentumDirection: number;
   momentumLevel: number;
   deltaDivergence: number;
-  momentumSamples?: readonly TduMomentumSample[];
 }
 
 interface ViewSignal {
@@ -48,10 +41,7 @@ function px(value: number, ratio: number): number {
 }
 
 class TduSignalRenderer implements IPrimitivePaneRenderer {
-  constructor(
-    private readonly signals: readonly ViewSignal[],
-    private readonly settings: TduSettings,
-  ) {}
+  constructor(private readonly signals: readonly ViewSignal[]) {}
 
   draw(target: CanvasRenderingTarget2D): void {
     target.useBitmapCoordinateSpace((scope) => {
@@ -96,26 +86,10 @@ class TduSignalRenderer implements IPrimitivePaneRenderer {
           ctx.strokeRect(left, top, boxWidth, boxHeight);
         }
 
-        const momentum = tduMomentumForSettings(signal, this.settings);
-        const level = Math.max(0, Math.min(3, Math.trunc(momentum.level)));
-        if (level === 0 || momentum.direction === 0) continue;
-        if (
-          (level === 1 && !this.settings.showLevel1) ||
-          (level === 2 && !this.settings.showLevel2) ||
-          (level === 3 && !this.settings.showLevel3)
-        ) continue;
+        const level = Math.max(0, Math.min(3, Math.trunc(signal.momentumLevel)));
+        if (level === 0 || signal.momentumDirection === 0) continue;
 
-        // Doji and small bodies dominated by one or both wicks have no clear
-        // candle direction. Recheck the current OHLC on every draw so live bars
-        // can hide/reveal their triangles without discarding momentum state.
-        const range = signal.high - signal.low;
-        const body = Math.abs(signal.close - signal.open);
-        if (
-          this.settings.filterSmallBody &&
-          (range <= 0 || body <= range * this.settings.minBodyPercent / 100)
-        ) continue;
-
-        const isBuy = momentum.direction > 0;
+        const isBuy = signal.momentumDirection > 0;
         const colors = isBuy ? BUY_COLORS : SELL_COLORS;
         const centerY = (Number(view.openY) + Number(view.closeY)) / 2;
         const step = triangleHeight * 2;
@@ -151,10 +125,7 @@ class TduSignalPaneView implements IPrimitivePaneView {
       return;
     }
     const timeScale = chart.timeScale();
-    if (!shouldRenderDenseOverlay(
-      timeScale.options().barSpacing,
-      this.source.minBarSpacing,
-    )) {
+    if (!shouldRenderDenseOverlay(timeScale.options().barSpacing, this.source.minimumBarSpacing)) {
       this.signals = [];
       return;
     }
@@ -184,7 +155,7 @@ class TduSignalPaneView implements IPrimitivePaneView {
   }
 
   renderer(): IPrimitivePaneRenderer {
-    return new TduSignalRenderer(this.signals, this.source.settings);
+    return new TduSignalRenderer(this.signals);
   }
 
   zOrder(): PrimitivePaneViewZOrder {
@@ -200,13 +171,7 @@ export class TduSignalPrimitive implements ISeriesPrimitive<Time> {
   chart: IChartApiBase<Time> | undefined;
   series: ISeriesApi<"Candlestick", Time> | undefined;
   visible = true;
-  settings: TduSettings = normalizeTduSettings();
-  minBarSpacing = MIN_DENSE_OVERLAY_BAR_SPACING;
-
-  setMinBarSpacing(value: number): void {
-    this.minBarSpacing = normalizeDenseOverlayMinSpacing(value);
-    this.requestUpdateFn?.();
-  }
+  minimumBarSpacing = MIN_DENSE_OVERLAY_BAR_SPACING;
 
   get signals(): readonly RenderableTduSignal[] {
     return this.signalsInternal;
@@ -222,8 +187,8 @@ export class TduSignalPrimitive implements ISeriesPrimitive<Time> {
     this.requestUpdateFn?.();
   }
 
-  setSettings(settings: Partial<TduSettings>): void {
-    this.settings = normalizeTduSettings(settings);
+  setMinimumBarSpacing(spacing: number): void {
+    this.minimumBarSpacing = normalizeDenseOverlayBarSpacing(spacing);
     this.requestUpdateFn?.();
   }
 

@@ -27,8 +27,7 @@ DEFAULT_RESOLVER_QUOTE_WEIGHT = 0.1
 # User-facing symbols supported by the platform. v1 ships GC only; the Frontend
 # presents the symbol as ``GC`` (Req 10.1, 18.1).
 DEFAULT_SUPPORTED_SYMBOLS = ("GC",)
-# The installed 9router exposes an OpenAI-compatible API on this machine.
-DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:20128/v1"
+DEFAULT_OPENAI_BASE_URL = "https://gcflowpy.xyz/9router/v1"
 DEFAULT_RPROTOCOL_ARCHIVE = Path(__file__).resolve().parents[2] / "RProtocolAPI.zip"
 
 # Configured GC Candidate_Contract list. The REST contracts endpoints surface
@@ -39,15 +38,30 @@ DEFAULT_RPROTOCOL_ARCHIVE = Path(__file__).resolve().parents[2] / "RProtocolAPI.
 DEFAULT_GC_CANDIDATE_CONTRACTS = ("GC 06-26", "GC 08-26", "GC 10-26", "GC 12-26")
 
 
+def _secret_from_env_or_file(value_name: str, file_name: str) -> str | None:
+    value = os.getenv(value_name)
+    if value:
+        return value
+    path = os.getenv(file_name)
+    if not path:
+        return None
+    try:
+        return Path(path).read_text(encoding="utf-8").rstrip("\r\n")
+    except OSError:
+        return None
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable backend settings."""
 
-    host: str = "127.0.0.1"
-    port: int = 8000
+    host: str = field(default_factory=lambda: os.getenv("NTTOTV_HOST", "127.0.0.1"))
+    port: int = field(default_factory=lambda: int(os.getenv("NTTOTV_PORT", "8000")))
 
     # Storage locations (relative to the working directory by default).
-    data_dir: Path = DEFAULT_DATA_DIR
+    data_dir: Path = field(
+        default_factory=lambda: Path(os.getenv("NTTOTV_DATA_DIR", str(DEFAULT_DATA_DIR)))
+    )
     cache_db_name: str = "app.sqlite"
     ticks_subdir: str = "ticks"
     liquidity_db_name: str = "liquidity.sqlite"
@@ -59,51 +73,10 @@ class Settings:
     chart_pong_timeout_s: int = 60
     chart_send_timeout_s: float = 2.0
 
-    # NT_AddOn connection liveness (see Requirements 4.7, 4.8).
-    nt_status_timeout_s: int = 15
-
-    # Realtime market-source arbitration. Production remains NT-first until the
-    # Local/test default stays NT; production promotes Bookmap through the
-    # environment while keeping NT warm as the automatic fallback.
-    market_data_preferred_source: str = field(
-        default_factory=lambda: os.getenv(
-            "NTTOTV_MARKET_DATA_PREFERRED_SOURCE", "nt"
-        ).strip().lower()
-    )
-    # Isolate the direct feed: disable BM/NT ingress and all automatic fallback.
-    market_data_rithmic_only: bool = field(
-        default_factory=lambda: os.getenv("NTTOTV_MARKET_DATA_RITHMIC_ONLY", "0") == "1"
-    )
-    market_data_cold_start_grace_ms: int = field(
-        default_factory=lambda: int(
-            os.getenv("NTTOTV_MARKET_DATA_COLD_START_GRACE_MS", "5000")
-        )
-    )
-    bookmap_stale_ms: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_BOOKMAP_STALE_MS", "5000"))
-    )
-    bookmap_qualify_ms: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_BOOKMAP_QUALIFY_MS", "2000"))
-    )
-    bookmap_recover_ms: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_BOOKMAP_RECOVER_MS", "10000"))
-    )
-    market_data_min_hold_ms: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_MARKET_DATA_MIN_HOLD_MS", "30000"))
-    )
-    nt_feed_stale_ms: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_NT_FEED_STALE_MS", "10000"))
-    )
-
-    # Direct Rithmic Ticker Plant connector.  It is deliberately disabled and
-    # shadow-only by default: enabling it warms its own source engines and
-    # records source-tagged raw L1, but cannot participate in NT/Bookmap source
-    # arbitration until a separate promotion change is made.
+    # Direct Rithmic Ticker Plant connector. It is the sole authoritative
+    # realtime source; a disconnect moves the application to degraded state.
     rithmic_enabled: bool = field(
-        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_ENABLED", "0") == "1"
-    )
-    rithmic_shadow_mode: bool = field(
-        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_SHADOW_MODE", "1") != "0"
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_ENABLED", "1") == "1"
     )
     rithmic_uri: str = field(
         default_factory=lambda: os.getenv(
@@ -114,7 +87,10 @@ class Settings:
         default_factory=lambda: os.getenv("NTTOTV_RITHMIC_USER"), repr=False
     )
     rithmic_password: str | None = field(
-        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_PASSWORD"), repr=False
+        default_factory=lambda: _secret_from_env_or_file(
+            "NTTOTV_RITHMIC_PASSWORD", "NTTOTV_RITHMIC_PASSWORD_FILE"
+        ),
+        repr=False,
     )
     rithmic_system_name: str = field(
         default_factory=lambda: os.getenv(
@@ -123,11 +99,38 @@ class Settings:
     )
     rithmic_app_name: str = field(
         default_factory=lambda: os.getenv(
-            "NTTOTV_RITHMIC_APP_NAME", "Bookmap"
+            "NTTOTV_RITHMIC_APP_NAME", "NTtoTV Rithmic Connector"
         )
     )
     rithmic_app_version: str = field(
-        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_APP_VERSION", "7.4.0.21")
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_APP_VERSION", "1.0.0")
+    )
+    rithmic_template_version: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_TEMPLATE_VERSION", "5.55")
+    )
+    rithmic_user_message: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_USER_MESSAGE", "nttotv-probe")
+    )
+    rithmic_mac_addresses: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            value.strip().upper()
+            for value in os.getenv(
+                "NTTOTV_RITHMIC_MAC_ADDRESSES", "B5:8F:D4:CC:FE:11"
+            ).split(",")
+            if value.strip()
+        )
+    )
+    rithmic_os_platform: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_OS_PLATFORM", "linux")
+    )
+    rithmic_os_version: str = field(
+        default_factory=lambda: os.getenv("NTTOTV_RITHMIC_OS_VERSION", "10.0.17763")
+    )
+    rithmic_aggregated_quotes: bool = field(
+        default_factory=lambda: os.getenv(
+            "NTTOTV_RITHMIC_AGGREGATED_QUOTES", "0"
+        ).strip().lower()
+        in {"1", "true", "yes", "on"}
     )
     rithmic_exchange: str = field(
         default_factory=lambda: os.getenv("NTTOTV_RITHMIC_EXCHANGE", "COMEX")
@@ -175,33 +178,43 @@ class Settings:
     rithmic_reconnect_max_s: float = field(
         default_factory=lambda: float(os.getenv("NTTOTV_RITHMIC_RECONNECT_MAX_S", "30"))
     )
-
-    # Read-only History Plant audits are separate from realtime arbitration.
     rithmic_history_enabled: bool = field(
         default_factory=lambda: os.getenv("NTTOTV_RITHMIC_HISTORY_ENABLED", "1") == "1"
     )
     rithmic_history_audit_s: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_RITHMIC_HISTORY_AUDIT_S", "300"))
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_RITHMIC_HISTORY_AUDIT_S", "300")
+        )
     )
     rithmic_history_initial_lookback_days: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_RITHMIC_HISTORY_INITIAL_LOOKBACK_DAYS", "30"))
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_RITHMIC_HISTORY_INITIAL_LOOKBACK_DAYS", "30")
+        )
     )
     rithmic_history_request_timeout_s: float = field(
-        default_factory=lambda: float(os.getenv("NTTOTV_RITHMIC_HISTORY_REQUEST_TIMEOUT_S", "120"))
+        default_factory=lambda: float(
+            os.getenv("NTTOTV_RITHMIC_HISTORY_REQUEST_TIMEOUT_S", "120")
+        )
     )
     rithmic_history_quiet_s: float = field(
-        default_factory=lambda: float(os.getenv("NTTOTV_RITHMIC_HISTORY_QUIET_S", "2"))
+        default_factory=lambda: float(
+            os.getenv("NTTOTV_RITHMIC_HISTORY_QUIET_S", "2")
+        )
     )
     rithmic_history_weekly_byte_limit: int = field(
-        default_factory=lambda: int(os.getenv("NTTOTV_RITHMIC_HISTORY_WEEKLY_BYTE_LIMIT", "38000000000"))
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_RITHMIC_HISTORY_WEEKLY_BYTE_LIMIT", "38000000000")
+        )
+    )
+    rithmic_front_month_poll_s: int = field(
+        default_factory=lambda: int(
+            os.getenv("NTTOTV_RITHMIC_FRONT_MONTH_POLL_S", "21600")
+        )
     )
 
     # Raw tick retention (see Requirements 7.4, 7.5). This is a calendar-day
-    # count including today's UTC shard. Keep three months for ML/replay.
-    # Derived footprints remain persistent (no automatic cache deletion).
-    tick_retention_days: int = field(
-        default_factory=lambda: max(1, int(os.getenv("NTTOTV_TICK_RETENTION_DAYS", "90")))
-    )
+    # count including today's UTC shard; v1 keeps today and yesterday only.
+    tick_retention_days: int = 2
     # Compact threshold events and persistent-line lifecycles only. Raw depth
     # is deliberately never written by the backend.
     liquidity_retention_hours: int = field(
@@ -264,55 +277,16 @@ class Settings:
         default_factory=lambda: int(os.getenv("NTTOTV_BASIS_STALE_AFTER_MS", "5000"))
     )
 
-    # Experimental analyst. Disabled by default and isolated in a separate
-    # SQLite database so it can be removed without touching the market cache.
-    analyst_enabled: bool = field(
-        default_factory=lambda: os.getenv("NTTOTV_ANALYST_ENABLED", "0") == "1"
-    )
-    mp_planner_enabled: bool = field(
-        default_factory=lambda: os.getenv("NTTOTV_MP_PLANNER_ENABLED", "0") == "1"
-    )
-    # MP can use the local Muse gateway without changing the other analysts.
-    mp_llm_provider: str = field(
-        default_factory=lambda: os.getenv("NTTOTV_MP_LLM_PROVIDER", "openai")
-    )
-    mp_llm_api_key: str | None = field(
-        default_factory=lambda: os.getenv("NTTOTV_MP_LLM_API_KEY")
-    )
-    mp_llm_base_url: str = field(
-        default_factory=lambda: os.getenv("NTTOTV_MP_LLM_BASE_URL", "http://127.0.0.1:18610/v1")
-    )
-    mp_llm_model: str = field(
-        default_factory=lambda: os.getenv("NTTOTV_MP_LLM_MODEL", "muse-chat")
-    )
+    # Retained so startup can locate the legacy database for migration.
     analyst_db_name: str = field(
         default_factory=lambda: os.getenv("NTTOTV_ANALYST_DB_NAME", "analyst.sqlite")
     )
-    analyst_event_provider: str = field(
-        default_factory=lambda: os.getenv("NTTOTV_ANALYST_EVENT_PROVIDER", "mock")
-    )
-    analyst_manual_provider: str = field(
-        default_factory=lambda: os.getenv("NTTOTV_ANALYST_MANUAL_PROVIDER", "real")
-    )
-    analyst_tick_size: float = field(
-        default_factory=lambda: float(os.getenv("NTTOTV_ANALYST_TICK_SIZE", "0.1"))
-    )
-    analyst_event_cooldown_s: int = field(
-        default_factory=lambda: int(
-            os.getenv("NTTOTV_ANALYST_EVENT_COOLDOWN_S", "1800")
-        )
-    )
-    analyst_scanner_queue_size: int = field(
-        default_factory=lambda: int(
-            os.getenv("NTTOTV_ANALYST_SCANNER_QUEUE_SIZE", "1")
-        )
-    )
-    analyst_m1_internal_enabled: bool = field(
-        default_factory=lambda: os.getenv("NTTOTV_ANALYST_M1_INTERNAL_ENABLED", "1")
-        != "0"
+    ai_scan_enabled: bool = field(
+        default_factory=lambda: os.getenv("NTTOTV_AI_SCAN_ENABLED", "1") == "1"
     )
     openai_api_key: str | None = field(
-        default_factory=lambda: os.getenv("NTTOTV_OPENAI_API_KEY")
+        default_factory=lambda: os.getenv("NINEROUTER_API_KEY") or os.getenv("NTTOTV_OPENAI_API_KEY"),
+        repr=False,
     )
     openai_base_url: str = field(
         default_factory=lambda: os.getenv(
@@ -321,24 +295,11 @@ class Settings:
         )
     )
     llm_model: str = field(
-        default_factory=lambda: os.getenv("NTTOTV_LLM_MODEL", "cx/gpt-6.1-sol")
+        default_factory=lambda: os.getenv("NTTOTV_LLM_MODEL", "ag/gemini-3.8-flash-high")
     )
     llm_reasoning_effort: str = field(
         default_factory=lambda: os.getenv("NTTOTV_LLM_REASONING_EFFORT", "medium")
     )
-    llm_manual_reasoning_effort: str = field(
-        default_factory=lambda: os.getenv(
-            "NTTOTV_LLM_MANUAL_REASONING_EFFORT",
-            "high",
-        )
-    )
-    llm_event_reasoning_effort: str = field(
-        default_factory=lambda: os.getenv(
-            "NTTOTV_LLM_EVENT_REASONING_EFFORT",
-            os.getenv("NTTOTV_LLM_REASONING_EFFORT", "high"),
-        )
-    )
-
     @property
     def cache_db_path(self) -> Path:
         return self.data_dir / self.cache_db_name

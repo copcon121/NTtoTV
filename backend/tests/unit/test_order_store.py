@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 from app.models.orders import OrderKind, OrderRecord, OrderSide, OrderSource, OrderStatus
@@ -61,7 +59,6 @@ def _order(
         created_at=1,
         updated_at=1,
         take_profit_1r_enabled=True,
-        take_profit_r=1.5,
         auto_supertrend_after_1r_enabled=True,
         trailing_timeframe="5m",
         trailing_period=14,
@@ -83,7 +80,6 @@ def test_order_store_round_trip_and_version(cache: CacheStore):
     assert saved is not None
     assert saved.entry_gc == 2350.0
     assert saved.take_profit_1r_enabled is True
-    assert saved.take_profit_r == 1.5
     assert saved.auto_supertrend_after_1r_enabled is True
     assert saved.trailing_timeframe == "5m"
     assert saved.trailing_period == 14
@@ -98,7 +94,6 @@ def test_order_store_round_trip_and_version(cache: CacheStore):
     updated = cache.orders.read(created.id, user_id)
     assert updated is not None
     assert updated.sl_gc == 2348.0
-    assert updated.take_profit_r == 1.5
     assert updated.version == 2
 
 
@@ -119,33 +114,3 @@ def test_order_duplicate_idempotency_same_user_rejected(cache: CacheStore):
 
     with pytest.raises(Exception):
         cache.orders.create(_order(cache, "u1", "same", "ord_2"))
-
-
-@pytest.mark.unit
-def test_submission_claim_is_atomic_across_threads(cache: CacheStore):
-    from concurrent.futures import ThreadPoolExecutor
-    from threading import Barrier
-
-    orders = [_order(cache, "u1", "same", f"ord_{i}") for i in range(4)]
-    ready = Barrier(len(orders))
-
-    def claim(order):
-        ready.wait(timeout=5)
-        return cache.orders.create_once(order)
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        assert sum(pool.map(claim, orders)) == 1
-    assert len(cache.orders.list_for_user(orders[0].user_id)) == 1
-
-
-@pytest.mark.unit
-def test_existing_orders_migrate_to_one_r(cache: CacheStore, tmp_path):
-    order = cache.orders.create(_order(cache, "u1", "old-order"))
-    cache.close()
-    path = tmp_path / "app.sqlite"
-    with sqlite3.connect(path) as connection:
-        connection.execute("ALTER TABLE orders DROP COLUMN take_profit_r")
-    with CacheStore(path) as reopened:
-        saved = reopened.orders.read(order.id, order.user_id)
-        assert saved.take_profit_r == 1.0
-        assert saved.take_profit_1r_enabled is True

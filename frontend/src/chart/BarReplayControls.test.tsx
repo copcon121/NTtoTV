@@ -1,9 +1,7 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { BarReplayControls, type BarReplayControlsProps } from "./BarReplayControls";
-
-afterEach(cleanup);
 
 function props(overrides: Partial<BarReplayControlsProps> = {}): BarReplayControlsProps {
   return {
@@ -44,14 +42,5 @@ describe("BarReplayControls", () => {
     expect(screen.getByRole("option", { name: "20x" })).toBeInTheDocument();
     expect(screen.queryByText(/25\/100/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Live" })).toBeInTheDocument();
-  });
-
-  it("locks playback during timeframe loading while keeping Live available", () => {
-    render(<BarReplayControls {...props({ phase: "active", loading: true, disabled: true })} />);
-    expect(screen.getByRole("status")).toHaveTextContent("Loading replay history");
-    expect(screen.getByRole("button", { name: "Play" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Step" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Live" })).toBeEnabled();
   });
 });

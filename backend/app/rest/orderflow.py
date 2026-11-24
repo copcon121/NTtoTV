@@ -27,15 +27,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 
 from ..config import settings as default_settings
-from ..engines.big_trade_engine import BigTradeEngine
-from ..engines.bookmap_big_trade_engine import BookmapBigTradeEngine
+from ..engines.direct_feed_big_trade_engine import DirectFeedBigTradeEngine
 from ..engines.footprint_engine import (
     DEFAULT_TICK_SIZE,
     DEFAULT_VALUE_AREA_PERCENT,
     FOOTPRINT_TIMEFRAME,
-    FOOTPRINT_TIMEFRAMES,
 )
-from ..engines.fvg_signal_engine import FVG_SIGNAL_TIMEFRAME, FVG_SIGNAL_TIMEFRAMES
+from ..engines.fvg_signal_engine import FVG_SIGNAL_TIMEFRAME
+from ..engines.session_calendar import CALENDAR_TFS, CHART_TFS
 from ..engines.volume_delta_engine import VolumeDeltaEngine
 from ..models.timestamp import now_ms
 from ..storage.cache_store import CacheStore
@@ -96,6 +95,7 @@ async def iceberg_history(
         limit=limit, min_volume=min_volume, frm=frm, to=to,
     )
 
+
 @router.get("/orderflow/si-stops")
 async def si_stop_history(
     request: Request,
@@ -121,11 +121,6 @@ async def si_stop_history(
     return runtime.pipeline.si_stop_snapshot(limit=limit, min_volume=min_volume, frm=frm, to=to)
 
 
-# Supported volume-delta timeframes mirror the Bar_Aggregator's set.
-from ..engines.bar_aggregator import SUPPORTED_TFS as _SUPPORTED_TFS_LIST
-
-_SUPPORTED_TFS = frozenset(_SUPPORTED_TFS_LIST)
-
 # Default footprint bar count returned by the footprint endpoint. (Req 18.6)
 DEFAULT_FOOTPRINT_COUNT = 5
 MAX_FOOTPRINT_COUNT = 500
@@ -133,6 +128,8 @@ DEFAULT_FOOTPRINT_CONTEXT = 3
 MAX_FOOTPRINT_CONTEXT = 500
 # Read cap shared with the history cache cap, bounding range scans.
 MAX_ROWS = 5000
+# Read cap specifically for fixed-range delta profiles allowing multi-session aggregation.
+MAX_DELTA_PROFILE_ROWS = 12000
 DELTA_PROFILE_SOURCE_FOOTPRINT = "footprint_cache"
 DELTA_PROFILE_SOURCE_MINUTE_BARS = "minute_bars"
 DELTA_PROFILE_SOURCES = frozenset(
@@ -152,7 +149,7 @@ def _validate_symbol_tf(
 ) -> None:
     if not state.is_known_symbol(symbol):
         raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
-    if tf not in _SUPPORTED_TFS:
+    if tf not in CHART_TFS:
         raise not_found(
             f"Unknown timeframe {tf!r} for symbol {symbol!r}", field="tf"
         )
@@ -181,7 +178,7 @@ def _rebuild_volume_delta(
     to: int,
     *,
     raw_contract: str | None = None,
-    source: str = "nt",
+    source: str = "rithmic",
 ) -> list[VolumeDeltaRecord]:
     """Rebuild per-bar volume-delta summaries from raw Tick_Store ticks.
 
@@ -191,20 +188,14 @@ def _rebuild_volume_delta(
     snapshot, in ascending ``time`` order. This is why switching to a timeframe
     that has no precomputed rows still shows delta candles. (Req 13, 11.5, 8.5)
 
-    NT trade prints carry no same-print bid/ask, so the trade stream is merged
-    with the recorded quote stream by time: each trade is classified against the
-    most recent prevailing quote's bid/ask (matching MyVolumeDelta) instead of
-    falling back to the tick rule. (Req 13.2, 13.3)
+    Rithmic trade prints already carry the authoritative aggressor side used by
+    the live pipeline, so a rebuild reads only that source and never merges feeds.
     """
-    engine = VolumeDeltaEngine(timeframe=tf, zero_baseline=source == "bookmap")
+    engine = VolumeDeltaEngine(timeframe=tf, zero_baseline=True)
     final: dict[int, VolumeDeltaRecord] = {}
     order: list[int] = []
     physical_contract = raw_contract or contract
-    trades = (
-        tick_store.read_range(physical_contract, frm, to, source="bookmap")
-        if source == "bookmap"
-        else _trades_with_prevailing_quote(tick_store, physical_contract, frm, to)
-    )
+    trades = tick_store.read_range(physical_contract, frm, to, source="rithmic")
     for trade in trades:
         update = engine.on_trade(trade)
         if update is None:
@@ -228,39 +219,6 @@ def _rebuild_volume_delta(
     return [final[time] for time in order]
 
 
-def _trades_with_prevailing_quote(
-    tick_store: TickStore,
-    contract: str,
-    frm: int,
-    to: int,
-):
-    """Yield trades over ``[frm, to]`` with bid/ask backfilled from the quote
-    book prevailing at each trade's time.
-
-    Merges the ascending trade and quote streams by ``(time, sequence)``: a
-    quote at time <= the trade updates the prevailing book, which is stamped
-    onto any trade that lacks a same-print snapshot. Mirrors the live pipeline's
-    backfill so the rebuild classifies identically. (Req 13.2, 13.3)
-    """
-    trades = list(tick_store.read_range(contract, frm, to, source="nt"))
-    quotes = list(tick_store.read_quotes(contract, frm, to))
-    qi = 0
-    nq = len(quotes)
-    book: tuple[float | None, float | None] | None = None
-    for trade in trades:
-        # Advance the quote cursor through every quote at or before this trade.
-        while qi < nq and quotes[qi].time <= trade.time:
-            book = (quotes[qi].bid, quotes[qi].ask)
-            qi += 1
-        if trade.bid is None and trade.ask is None and book is not None:
-            trade.bid, trade.ask = book
-            if trade.best_bid is None:
-                trade.best_bid = book[0]
-            if trade.best_ask is None:
-                trade.best_ask = book[1]
-        yield trade
-
-
 def _rebuild_big_trades(
     tick_store: TickStore,
     symbol: str,
@@ -269,25 +227,21 @@ def _rebuild_big_trades(
     to: int,
     *,
     raw_contract: str | None = None,
-    source: str = "nt",
+    source: str = "rithmic",
 ) -> tuple[list[BigTradeRecord], bool]:
     """Rebuild BigTrade markers from exactly one raw market-data source."""
     physical_contract = raw_contract or contract
     out: list[BigTradeRecord] = []
     had_raw_trades = False
-    if source in ("bookmap", "rithmic"):
-        engine = BookmapBigTradeEngine()
-        trades = tick_store.read_range(
-            physical_contract, frm, to, source=source
-        )
-    else:
-        engine = BigTradeEngine(dedupe_repeated_timestamp_runs=True)
-        trades = _trades_with_prevailing_quote(
-            tick_store, physical_contract, frm, to
-        )
+    engine = DirectFeedBigTradeEngine()
+    trades = tick_store.read_range(
+        physical_contract, frm, to, source="rithmic"
+    )
 
+    last_flush_clock = to
     for trade in trades:
         had_raw_trades = True
+        last_flush_clock = max(last_flush_clock, trade.received_at or trade.time)
         for bt in engine.on_trade(trade):
             out.append(
                 BigTradeRecord(
@@ -301,10 +255,7 @@ def _rebuild_big_trades(
                     source=source,
                 )
             )
-    if isinstance(engine, BookmapBigTradeEngine):
-        pending = engine.flush_all()
-    else:
-        pending = engine.flush(physical_contract)
+    pending = engine.flush_idle(last_flush_clock + engine.idle_ms)
     for bt in pending:
         out.append(
             BigTradeRecord(
@@ -380,8 +331,6 @@ def _tdu_signal_to_dict(rec: TduSignalRecord) -> dict[str, Any]:
         "momentumDirection": rec.momentum_direction,
         "momentumLevel": rec.momentum_level,
         "deltaDivergence": rec.delta_divergence,
-        **({"momentumSamples": [list(sample) for sample in rec.momentum_samples]}
-           if rec.momentum_samples is not None else {}),
     }
 
 
@@ -767,7 +716,7 @@ def _minute_bar_profile_to_dict(
 ) -> dict[str, Any]:
     """Approximate NT Order Flow Volume Profile with Resolution=Minute.
 
-    NinjaTrader's minute resolution is bar-based rather than trade-ladder based:
+    The minute resolution is bar-based rather than trade-ladder based:
     each 1-minute OHLCV bar contributes its volume across every tick row touched
     by that bar's low/high range. This intentionally differs from the footprint
     source, which uses actual bid/ask volume at price.
@@ -855,7 +804,7 @@ def _minute_bar_profile_to_dict(
 async def get_volume_delta(
     request: Request,
     symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
-    tf: str = Query(..., description="Timeframe (15s,30s,1m,3m,5m,15m,30m,1h,4h,1D)"),
+    tf: str = Query(..., description="Chart timeframe, e.g. 1m, 1D, 1W or 1M"),
     contract: str | None = Query(
         None, description="GC contract; defaults to the Active_Contract"
     ),
@@ -906,6 +855,8 @@ async def get_volume_delta(
             raw_contract=_raw_rebuild_contract(state, symbol, resolved),
             source=_raw_rebuild_source(request),
         )
+        if tf in CALENDAR_TFS and frm is not None:
+            rebuilt = [row for row in rebuilt if row.time >= frm]
         rows = rebuilt[-effective_limit:]
         source = "rebuild"
     return {
@@ -920,9 +871,6 @@ async def get_volume_delta(
 @router.get("/orderflow/footprint")
 async def get_footprint(
     symbol: str = Query(..., description="User-facing symbol, e.g. 'GC'"),
-    tf: str = Query(
-        FOOTPRINT_TIMEFRAME, description="Footprint timeframe (30s or 1m)"
-    ),
     contract: str | None = Query(
         None, description="GC contract; defaults to the Active_Contract"
     ),
@@ -930,7 +878,7 @@ async def get_footprint(
         DEFAULT_FOOTPRINT_COUNT,
         ge=1,
         le=MAX_FOOTPRINT_COUNT,
-        description="Number of most-recent footprint bars to return",
+        description="Number of most-recent M1 footprint bars to return",
     ),
     frm: int | None = Query(
         None,
@@ -938,9 +886,12 @@ async def get_footprint(
         ge=0,
         description="Inclusive start Canonical_Timestamp (ms) for session history",
     ),
+    to: int | None = Query(
+        None, ge=0, description="Inclusive end Canonical_Timestamp (ms) for chart history",
+    ),
     at: int | None = Query(
         None,
-        description="Bar open Canonical_Timestamp (ms) to center history on",
+        description="M1 bar open Canonical_Timestamp (ms) to center history on",
     ),
     context: int = Query(
         DEFAULT_FOOTPRINT_CONTEXT,
@@ -951,28 +902,34 @@ async def get_footprint(
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
-    """Return latest, ranged, or centered footprint bars with ladders. (Req 18.6)"""
+    """Return latest, ranged, or centered M1 footprint bars with ladders. (Req 18.6)"""
     if not state.is_known_symbol(symbol):
         raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
-    if tf not in FOOTPRINT_TIMEFRAMES:
-        raise bad_request("Footprint supports only 30s and 1m", field="tf")
     resolved = _resolve_contract(state, symbol, contract)
+
+    if frm is not None and to is not None and frm > to:
+        raise bad_request("from must be <= to", field="from")
+    if at is not None and to is not None:
+        raise bad_request("to cannot be combined with centered history", field="to")
 
     target_found: bool | None = None
     if at is None:
         read_limit = MAX_ROWS if frm is not None else count
         bars = cache.read_footprint_bars(
-            symbol, resolved, tf, frm, None, read_limit
+            symbol, resolved, FOOTPRINT_TIMEFRAME, frm, to,
+            read_limit + 1 if frm is not None and to is not None else read_limit,
         )
+        if frm is not None and to is not None and len(bars) > MAX_ROWS:
+            raise bad_request("Footprint range exceeds 5000 M1 bars; zoom in", field="from")
     else:
         before = cache.read_footprint_bars_before(
-            symbol, resolved, tf, at, context
+            symbol, resolved, FOOTPRINT_TIMEFRAME, at, context
         )
         target = cache.read_footprint_bars(
-            symbol, resolved, tf, at, at, 1
+            symbol, resolved, FOOTPRINT_TIMEFRAME, at, at, 1
         )
         after = cache.read_footprint_bars_after(
-            symbol, resolved, tf, at, context
+            symbol, resolved, FOOTPRINT_TIMEFRAME, at, context
         )
         target_found = len(target) > 0
         bars = [*before, *target, *after]
@@ -981,14 +938,14 @@ async def get_footprint(
     if bars:
         levels_by_time = _footprint_levels_by_time(
             cache.read_footprint_levels_range(
-                symbol, resolved, tf, bars[0].time, bars[-1].time
+                symbol, resolved, FOOTPRINT_TIMEFRAME, bars[0].time, bars[-1].time
             )
         )
 
     body: dict[str, Any] = {
         "symbol": symbol,
         "contract": resolved,
-        "tf": tf,
+        "tf": FOOTPRINT_TIMEFRAME,
         "bars": [
             _footprint_bar_to_dict(bar, levels_by_time.get(bar.time, []))
             for bar in bars
@@ -1005,7 +962,7 @@ async def get_fvg_signals(
     contract: str | None = Query(
         None, description="GC contract; defaults to the Active_Contract"
     ),
-    tf: str = Query(FVG_SIGNAL_TIMEFRAME, description="FVG timeframe (30s or 1m)"),
+    tf: str = Query(FVG_SIGNAL_TIMEFRAME, description="Timeframe; only 1m is supported"),
     frm: int | None = Query(
         None, alias="from", description="Inclusive start Canonical_Timestamp (ms)"
     ),
@@ -1016,11 +973,13 @@ async def get_fvg_signals(
     state: ContractStateStore = Depends(get_contract_state),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
-    """Return confirmed FVG signal-grader candle colors."""
+    """Return confirmed M1 FVG signal-grader candle colors."""
     if not state.is_known_symbol(symbol):
         raise not_found(f"Unknown symbol {symbol!r}", field="symbol")
-    if tf not in FVG_SIGNAL_TIMEFRAMES:
-        raise not_found("FVG signals support only 30s and 1m", field="tf")
+    if tf != FVG_SIGNAL_TIMEFRAME:
+        raise not_found(
+            f"FVG signals only support tf={FVG_SIGNAL_TIMEFRAME!r}", field="tf"
+        )
     resolved = _resolve_contract(state, symbol, contract)
     if frm is not None and to is not None and frm > to:
         raise bad_request("'from' must be less than or equal to 'to'", field="from")
@@ -1028,12 +987,12 @@ async def get_fvg_signals(
         raise bad_request("'limit' must be a positive integer", field="limit")
     effective_limit = MAX_ROWS if limit is None else min(limit, MAX_ROWS)
     rows = cache.read_fvg_signals(
-        symbol, resolved, tf, frm, to, effective_limit
+        symbol, resolved, FVG_SIGNAL_TIMEFRAME, frm, to, effective_limit
     )
     return {
         "symbol": symbol,
         "contract": resolved,
-        "tf": tf,
+        "tf": FVG_SIGNAL_TIMEFRAME,
         "signals": [_fvg_signal_to_dict(row) for row in rows],
     }
 
@@ -1113,11 +1072,11 @@ async def get_delta_profile(
             FOOTPRINT_TIMEFRAME,
             frm,
             to,
-            MAX_ROWS + 1,
+            MAX_DELTA_PROFILE_ROWS + 1,
         )
-        if len(bars) > MAX_ROWS:
+        if len(bars) > MAX_DELTA_PROFILE_ROWS:
             raise bad_request(
-                f"Delta profile range exceeds {MAX_ROWS} M1 bars",
+                f"Delta profile range exceeds {MAX_DELTA_PROFILE_ROWS} M1 bars",
                 field="to",
             )
         return _minute_bar_profile_to_dict(
@@ -1136,11 +1095,11 @@ async def get_delta_profile(
         FOOTPRINT_TIMEFRAME,
         frm,
         to,
-        MAX_ROWS + 1,
+        MAX_DELTA_PROFILE_ROWS + 1,
     )
-    if len(bars) > MAX_ROWS:
+    if len(bars) > MAX_DELTA_PROFILE_ROWS:
         raise bad_request(
-            f"Delta profile range exceeds {MAX_ROWS} M1 footprint bars",
+            f"Delta profile range exceeds {MAX_DELTA_PROFILE_ROWS} M1 footprint bars",
             field="to",
         )
     if not bars:
@@ -1240,9 +1199,7 @@ async def get_big_trades(
         source=rebuild_source,
     )
     if had_raw_trades:
-        replaced_sources = {rebuild_source}
-        if rebuild_source == "nt":
-            replaced_sources.add("legacy")
+        replaced_sources = {rebuild_source, "legacy"}
         preserved = [row for row in cached if row.source not in replaced_sources]
         rows = sorted(
             [*preserved, *rebuilt],

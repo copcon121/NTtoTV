@@ -17,7 +17,6 @@ from ..storage.cache_store import CacheStore
 from .alerts import get_cache
 from .auth import get_current_user
 from .errors import ApiError, bad_request, conflict, not_found
-from .trading import run_trading_operation
 
 router = APIRouter(prefix="/api/mt5", tags=["mt5"])
 
@@ -455,7 +454,7 @@ async def mt5_close_position(
             return backend.close_position(order)
 
     try:
-        result = await run_trading_operation(request, user.id, _blocking)
+        result = await asyncio.to_thread(_blocking)
     except ApiError:
         raise
     except Exception as exc:
@@ -474,23 +473,6 @@ async def mt5_patch_position(
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
     body = await _json_body(request)
-    return await run_trading_operation(
-        request, user.id, _patch_position, ticket, request, user, cache, body
-    )
-
-
-def _patch_position(
-    ticket: int,
-    request: Request,
-    user: AuthenticatedUser,
-    cache: CacheStore,
-    body: dict[str, Any],
-) -> dict[str, Any]:
-    break_even = body.get("breakEven", False)
-    if not isinstance(break_even, bool):
-        raise bad_request("'breakEven' must be a boolean", field="breakEven")
-    if break_even and any(field in body for field in ("entryGc", "slGc", "tpGc")):
-        raise bad_request("Break-even cannot be combined with price edits", field="breakEven")
     account = cache.users.read_mt5_account(user.id)
     if account is None:
         raise not_found("MT5 account is not connected", field="account")
@@ -513,16 +495,6 @@ def _patch_position(
                 field="brokerPositionTicket",
             )
             order = _order_from_position_row(row, user.id, account.id, account.symbol_broker)
-            if break_even:
-                entry = _number_or_bad_request(row, "entryBroker")
-                if entry is None or entry <= 0:
-                    raise conflict("Broker entry is unavailable", field="breakEven")
-                tick = backend.symbol_tick(user.id, account.id, account.symbol_broker)
-                stop = symbol_map.round_price(entry)
-                gap = tick.bid - stop if order.side is OrderSide.BUY else stop - tick.ask
-                if gap + 1e-9 < symbol_info.stops_level:
-                    raise bad_request("Break-even is inside the current broker stops level", field="breakEven")
-                order.sl_broker = stop
             if "slGc" in body:
                 order.sl_broker = _nullable_gc_to_broker(body, "slGc", basis, symbol_map)
             if "tpGc" in body:
@@ -558,17 +530,6 @@ async def mt5_cancel_order(
     user: AuthenticatedUser = Depends(get_current_user),
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
-    return await run_trading_operation(
-        request, user.id, _cancel_pending_order, ticket, request, user, cache
-    )
-
-
-def _cancel_pending_order(
-    ticket: int,
-    request: Request,
-    user: AuthenticatedUser,
-    cache: CacheStore,
-) -> dict[str, Any]:
     account = cache.users.read_mt5_account(user.id)
     if account is None:
         raise not_found("MT5 account is not connected", field="account")
@@ -599,18 +560,6 @@ async def mt5_patch_order(
     cache: CacheStore = Depends(get_cache),
 ) -> dict[str, Any]:
     body = await _json_body(request)
-    return await run_trading_operation(
-        request, user.id, _patch_pending_order, ticket, request, user, cache, body
-    )
-
-
-def _patch_pending_order(
-    ticket: int,
-    request: Request,
-    user: AuthenticatedUser,
-    cache: CacheStore,
-    body: dict[str, Any],
-) -> dict[str, Any]:
     account = cache.users.read_mt5_account(user.id)
     if account is None:
         raise not_found("MT5 account is not connected", field="account")

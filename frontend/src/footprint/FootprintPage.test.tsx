@@ -141,6 +141,7 @@ describe("FootprintPage", () => {
   it("defaults to 500 bars while keeping the full intraday limit available", () => {
     render(<FootprintPage />);
 
+    fireEvent.click(screen.getByRole("button", { name: "Data" }));
     const barsInput = screen.getByRole("spinbutton", { name: "Bars" });
     expect(barsInput).toHaveValue(500);
     expect(barsInput).toHaveAttribute("max", "1440");
@@ -229,5 +230,25 @@ describe("FootprintPage", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(settingsButton).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("renders zoom controls and handles zoom in, zoom out, and latest buttons", () => {
+    render(
+      <StrictMode>
+        <FootprintPage />
+      </StrictMode>,
+    );
+
+    const zoomIn = screen.getByRole("button", { name: "Zoom in" });
+    const zoomOut = screen.getByRole("button", { name: "Zoom out" });
+    const latest = screen.getByRole("button", { name: "Latest" });
+
+    expect(zoomIn).toBeInTheDocument();
+    expect(zoomOut).toBeInTheDocument();
+    expect(latest).toBeInTheDocument();
+
+    fireEvent.click(zoomIn);
+    fireEvent.click(zoomOut);
+    fireEvent.click(latest);
   });
 });
